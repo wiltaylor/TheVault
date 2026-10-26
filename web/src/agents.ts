@@ -172,6 +172,8 @@ export function agentForm(a: Agent): AgentForm {
       ...(a.permissions.browser ? { browser: true } : {}),
       // Likewise only when the agent has a list (skills S6).
       ...(a.permissions.skills ? { skills: [...a.permissions.skills] } : {}),
+      // And only when on (script-tools T7).
+      ...(a.permissions.scripts?.run_code ? { scripts: { run_code: true } } : {}),
     },
     triggers: a.triggers.map((t) => ({ ...t })),
   };
@@ -285,6 +287,17 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
     ],
   },
   {
+    // Script tools (script-tools T1 to T3): running code needs the Run wscript code switch too.
+    group: "Scripts",
+    tools: [
+      ["run_script", "Run wscript code"],
+      ["list_tools", "List script tools"],
+      ["get_tool", "Read a script tool"],
+      ["propose_tool_change", "Create and change script tools"],
+      ["propose_tool_delete", "Delete script tools"],
+    ],
+  },
+  {
     group: "Outbox",
     tools: [
       ["draft_email", "Draft emails"],
@@ -331,6 +344,7 @@ export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
   { key: "taxonomies", label: "Ask before changing taxonomies" },
   { key: "agents", label: "Ask before changing agents" },
   { key: "skills", label: "Ask before changing skills" },
+  { key: "tools", label: "Ask before changing script tools" },
 ];
 
 /** The internet switches, in order, with their labels (ai D28). */

@@ -397,6 +397,10 @@ function SettingsTab(p: AgentTabProps) {
 export const OUTBOX_WARNING =
   "Emails, SMS messages and calendar invites this agent drafts are sent at once, in your name, without you seeing them first.";
 
+/** What the Permissions tab warns of with Run wscript code on (script-tools T7). */
+export const RUN_CODE_WARNING =
+  "It can read and change anything in the vault, call any web host and read script secrets.";
+
 /** What the Permissions tab says of the Browser automation switch (browser B6). */
 export const BROWSER_NOTE =
   "Lets this agent run commands in the browser box and drive a browser as you watch. Web pages can try to instruct it.";
@@ -478,7 +482,7 @@ function PermissionsTab(p: AgentTabProps) {
                 <input
                   type="checkbox"
                   role="switch"
-                  checked={perms().confirm[s.key]}
+                  checked={perms().confirm[s.key] ?? true}
                   onChange={(e) => setPerms({ confirm: { ...perms().confirm, [s.key]: e.currentTarget.checked } })}
                 />{" "}
                 {s.label}
@@ -523,6 +527,31 @@ function PermissionsTab(p: AgentTabProps) {
           <Show when={perms().outbox?.send_without_review}>
             <p class="agent-perm-note" role="note">
               {OUTBOX_WARNING}
+            </p>
+          </Show>
+        </div>
+        <h3>Scripts</h3>
+        <div class="ai-confirm">
+          <label class="ai-confirm-switch">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={perms().scripts?.run_code ?? false}
+              onChange={(e) => {
+                const on = e.currentTarget.checked;
+                // Off is no scripts block at all, as the agent file holds it only when on.
+                p.setDraft((d) => {
+                  const { scripts: _, ...rest } = d.permissions;
+                  return { ...d, permissions: on ? { ...rest, scripts: { run_code: true } } : rest };
+                });
+              }}
+            />{" "}
+            Run wscript code
+          </label>
+          <p class="muted">Gives the agent the run_script tool, which runs wscript code it writes, with no limits on what it reaches.</p>
+          <Show when={perms().scripts?.run_code}>
+            <p class="agent-perm-note" role="note">
+              {RUN_CODE_WARNING}
             </p>
           </Show>
         </div>

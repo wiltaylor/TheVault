@@ -38,6 +38,8 @@ const Integrations = page(() => import("./pages/Integrations"), "Integrations");
 const Settings = page(() => import("./pages/Settings"), "Settings");
 const ScheduledEditor = page(() => import("./pages/Scheduled"), "ScheduledEditor");
 const ScheduledList = page(() => import("./pages/Scheduled"), "ScheduledList");
+const ToolsList = page(() => import("./pages/Tools"), "ToolsList");
+const ToolEditor = page(() => import("./pages/Tools"), "ToolEditor");
 const Trash = page(() => import("./pages/Trash"), "Trash");
 const TaxonomyEditor = page(() => import("./pages/TaxonomyEditor"), "TaxonomyEditor");
 const TaxonomyList = page(() => import("./pages/TaxonomyEditor"), "TaxonomyList");
@@ -75,6 +77,9 @@ export function paneRoutes() {
         <Route path="/scheduled" component={ScheduledList} />
         <Route path="/scheduled/new" component={ScheduledEditor} />
         <Route path="/scheduled/:name" component={ScheduledEditor} />
+        <Route path="/tools" component={ToolsList} />
+        <Route path="/tools/new" component={ToolEditor} />
+        <Route path="/tools/:name" component={ToolEditor} />
         <Route path={["/tasks", "/tasks/new", "/tasks/:name"]} component={MovedToScheduled} />
         <Route path="/taxonomies" component={TaxonomyList} />
         <Route path="/taxonomies/new" component={TaxonomyEditor} />

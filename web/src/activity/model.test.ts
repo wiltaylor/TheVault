@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityItem } from "../api";
 import { activityOf } from "./live";
-import { actorLabel, dayLabel, logHref, matches, mergeItems, nestTurns, subjectOf } from "./model";
+import { actorLabel, dayLabel, logHref, matches, mergeItems, nestTurns, scriptRunLine, subjectOf } from "./model";
 
 function item(id: string, over: Partial<ActivityItem> = {}): ActivityItem {
   return {
@@ -81,5 +81,18 @@ describe("activity entries", () => {
     expect(activityOf(item("2"))?.id).toBe("2");
     expect(activityOf(null)).toBeNull();
     expect(activityOf({ item: { id: 3 } })).toBeNull();
+  });
+});
+
+describe("scriptRunLine", () => {
+  it("says what an ai.script entry ran, how it ended and which version (script-tools T6)", () => {
+    const vault = item("9", {
+      kind: "ai.script",
+      detail: { tool: "count_tagged", outcome: "ok", ms: 12, instructions: 340, script: { kind: "vault", script: "count_tagged", hash: "0123456789abcdef", generation: 7 } },
+    });
+    expect(scriptRunLine(vault)).toBe("count_tagged · ok · 12 ms · 340 instructions · version 0123456789ab (scripts/count_tagged.ws at generation 7)");
+    const code = item("10", { kind: "ai.script", detail: { tool: "run_script", outcome: "error", error_kind: "timeout", script: { kind: "code", hash: "ffff" } } });
+    expect(scriptRunLine(code)).toBe("run_script · failed (timeout) · version ffff (code)");
+    expect(scriptRunLine(item("11", { kind: "ai.tool" }))).toBeNull();
   });
 });

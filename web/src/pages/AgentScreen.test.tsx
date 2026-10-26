@@ -696,6 +696,43 @@ describe("the Permissions tab", () => {
     await waitFor(() => expect(putAgent).toHaveBeenCalled());
     expect((sent().permissions as { browser?: boolean }).browser ?? false).toBe(false);
   });
+
+  it("shows Run wscript code off, warns once it is on, and saves permissions.scripts.run_code", async () => {
+    const { RUN_CODE_WARNING } = await import("./AgentScreen");
+    await open();
+    const p = await tab("Permissions");
+    const sw = p.getByRole("switch", { name: "Run wscript code" });
+    expect(sw).not.toBeChecked();
+    expect(p.queryByText(RUN_CODE_WARNING)).toBeNull();
+    fireEvent.click(sw);
+    expect(p.getByRole("note")).toHaveTextContent(RUN_CODE_WARNING);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { scripts?: { run_code: boolean } }).scripts).toEqual({ run_code: true });
+  });
+
+  it("sends no scripts block once Run wscript code is turned off", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, scripts: { run_code: true } } }));
+    await open();
+    const p = await tab("Permissions");
+    const sw = p.getByRole("switch", { name: "Run wscript code" });
+    expect(sw).toBeChecked();
+    fireEvent.click(sw);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect("scripts" in (sent().permissions as object)).toBe(false);
+  });
+
+  it("has the Tools confirmation switch, on unless the agent turned it off", async () => {
+    await open();
+    const p = await tab("Permissions");
+    const sw = p.getByRole("switch", { name: "Ask before changing script tools" });
+    expect(sw).toBeChecked();
+    fireEvent.click(sw);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { confirm: { tools?: boolean } }).confirm.tools).toBe(false);
+  });
 });
 
 describe("the Triggers tab", () => {

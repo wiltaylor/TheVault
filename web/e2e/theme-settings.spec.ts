@@ -62,6 +62,7 @@ test("types, taxonomies, scheduled scripts, secrets, API tokens, devices, integr
     ["Types", "Types", "/settings/types"],
     ["Taxonomies", "Taxonomies", "/settings/taxonomies"],
     ["Scheduled", "Scheduled", "/settings/scheduled"],
+    ["Tools", "Tools", "/settings/tools"],
     ["Secrets", "Secrets", "/settings/secrets"],
     ["API tokens", "API tokens", "/settings/tokens"],
     ["Integrations", "Integrations", "/settings/integrations"],
@@ -71,7 +72,7 @@ test("types, taxonomies, scheduled scripts, secrets, API tokens, devices, integr
     await expect(page).toHaveURL(new RegExp(`${path}$`));
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
-  await expect(tabs.getByRole("link")).toHaveText(["General", "Types", "Taxonomies", "Scheduled", "Secrets", "API tokens", "Devices", "Integrations", "AI"]);
+  await expect(tabs.getByRole("link")).toHaveText(["General", "Types", "Taxonomies", "Scheduled", "Tools", "Secrets", "API tokens", "Devices", "Integrations", "AI"]);
 });
 
 test("old admin addresses go to their place under settings", async ({ page }) => {

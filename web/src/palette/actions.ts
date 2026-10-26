@@ -52,6 +52,7 @@ const SETTINGS: [string, string, string[]][] = [
   ["/settings/types", "Types", ["schema", "fields", "templates"]],
   ["/settings/taxonomies", "Taxonomies", ["terms", "tags", "categories"]],
   ["/settings/scheduled", "Scheduled", ["tasks", "cron", "jobs", "scripts"]],
+  ["/settings/tools", "Tools", ["script tools", "wscript", "agent tools"]],
   ["/settings/secrets", "Secrets", ["keys", "passwords"]],
   ["/settings/tokens", "API tokens", ["access", "agents"]],
   ["/settings/ai", "AI", ["AI accounts", "API keys", "models", "Sign in with ChatGPT", "usage"]],

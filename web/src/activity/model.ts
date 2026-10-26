@@ -228,6 +228,33 @@ export function timeOf(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/**
+ * What an `ai.script` entry ran, as one line (script-tools T6): the tool, how it ended, how long it
+ * took and how many instructions, and the version that ran, by the first characters of its hash.
+ * Null for any other entry.
+ */
+export function scriptRunLine(item: Pick<ActivityItem, "kind" | "detail">): string | null {
+  if (item.kind !== "ai.script") return null;
+  const d = (item.detail ?? {}) as Record<string, Json>;
+  const parts: string[] = [String(d.tool ?? "script")];
+  const kind = typeof d.error_kind === "string" ? ` (${d.error_kind})` : "";
+  parts.push(d.outcome === "ok" ? "ok" : `failed${kind}`);
+  if (typeof d.ms === "number") parts.push(`${d.ms} ms`);
+  if (typeof d.instructions === "number") parts.push(`${d.instructions} instructions`);
+  const ref = d.script && typeof d.script === "object" && !Array.isArray(d.script) ? d.script : null;
+  if (ref) {
+    const hash = typeof ref.hash === "string" ? ref.hash.slice(0, 12) : "";
+    const where =
+      ref.kind === "skill"
+        ? `skill ${String(ref.skill ?? "")} ${String(ref.path ?? "")}`.trim()
+        : ref.kind === "vault"
+          ? `scripts/${String(ref.script ?? "")}.ws${typeof ref.generation === "number" ? ` at generation ${ref.generation}` : ""}`
+          : "code";
+    parts.push(`version ${hash} (${where})`);
+  }
+  return parts.join(" · ");
+}
+
 /** A detail value as text. */
 export function detailText(v: Json): string {
   if (typeof v === "string") return v;

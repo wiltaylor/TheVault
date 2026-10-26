@@ -29,6 +29,7 @@ import { TaxonomyProposalCard } from "./TaxonomyProposalCard";
 import { TypeProposalCard } from "./TypeProposalCard";
 import { outboxItemHref } from "../outbox/model";
 import { SkillProposalCard, skillHref } from "./SkillProposalCard";
+import { ToolProposalCard, toolHref } from "./ToolProposalCard";
 import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged, viewThread } from "./running";
 import {
   type Applied,
@@ -41,6 +42,7 @@ import {
   type DraftRef,
   type NoteOp,
   type BrowserRef,
+  type ScriptStep,
   type Part,
   type Proposal,
   type ProposalOp,
@@ -155,6 +157,16 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked a delete of ${s("path")} from skill ${s("name")}`;
     case "propose_skill_delete":
       return `Checked a delete of skill ${s("name")}`;
+    case "run_script":
+      return "Ran wscript code";
+    case "list_tools":
+      return "Listed the script tools";
+    case "get_tool":
+      return `Read tool ${s("name")}`;
+    case "propose_tool_change":
+      return `Checked tool ${s("name")}`;
+    case "propose_tool_delete":
+      return `Checked a delete of tool ${s("name")}`;
     default:
       return `Called ${name}`;
   }
@@ -258,6 +270,15 @@ export function activeLabel(name: string, input: Json): string {
     case "propose_skill_file_delete":
     case "propose_skill_delete":
       return "Checking a skill change";
+    case "run_script":
+      return "Running wscript code";
+    case "list_tools":
+      return "Listing the script tools";
+    case "get_tool":
+      return "Reading a script tool";
+    case "propose_tool_change":
+    case "propose_tool_delete":
+      return "Checking a tool change";
     default:
       return `Running ${name}`;
   }
@@ -304,7 +325,18 @@ const TYPE_TOOLS = new Set([
   "propose_skill_file_change",
   "propose_skill_file_delete",
   "propose_skill_delete",
+  // And the script tool tools (script-tools T3).
+  "list_tools",
+  "get_tool",
+  "propose_tool_change",
+  "propose_tool_delete",
 ]);
+
+/** What a script step says once done (script-tools T6): its outcome and how long it took. */
+function scriptStatus(s: ScriptStep): string {
+  const took = s.ms !== undefined ? ` in ${s.ms} ms` : "";
+  return s.outcome === "ok" ? `ok${took}` : `failed${s.error_kind ? ` (${s.error_kind})` : ""}${took}`;
+}
 
 /** The host of `url`, or `url` itself when it is not a URL. */
 export function hostOf(url: string): string {
@@ -356,10 +388,17 @@ function WebLabel(props: { name: string; input: Json }) {
   );
 }
 
+/** The code a run_script step ran, from its input. */
+function codeOf(input: Json): string {
+  const o = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  return typeof o.code === "string" ? o.code : "";
+}
+
 function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
   const status = () => {
     if (!props.part.done) return "running";
     if (props.part.isError) return "failed";
+    if (props.part.script) return scriptStatus(props.part.script);
     if (props.part.browser) return browserStatus(props.part.browser);
     if (props.part.asset) return props.part.asset.filename;
     if (props.part.web) return props.part.web.title || props.part.web.media_type || "done";
@@ -432,6 +471,30 @@ function ToolStep(props: { part: Extract<Part, { kind: "tool" }> }) {
             <Show when={b().stderr}>
               <pre class="ai-step-output ai-step-stderr" aria-label="Errors">
                 {b().stderr}
+              </pre>
+            </Show>
+          </div>
+        )}
+      </Show>
+      <Show when={props.part.name === "run_script" ? codeOf(props.part.input) : ""}>
+        {(code) => (
+          <pre class="ai-step-output" aria-label="Code">
+            {code()}
+          </pre>
+        )}
+      </Show>
+      <Show when={props.part.script}>
+        {(s) => (
+          <div class="ai-step-script">
+            <p class="muted">
+              {s().instructions !== undefined ? `${s().instructions} instructions` : ""}
+              <Show when={s().ref?.hash}>
+                {(h) => <span title={h()}>{` · version ${h().slice(0, 12)}`}</span>}
+              </Show>
+            </p>
+            <Show when={s().log}>
+              <pre class="ai-step-output" aria-label="Log">
+                {s().log}
               </pre>
             </Show>
           </div>
@@ -738,7 +801,12 @@ export function AppliedCard(props: { applied: Applied }) {
     const x = props.applied;
     return "skill_name" in x ? x : undefined;
   };
+  const tool = (): AppliedTool | undefined => {
+    const x = props.applied;
+    return "tool_name" in x ? x : undefined;
+  };
   return (
+    <Show when={tool()} fallback={
     <Show when={skill()} fallback={
       <Show when={memory()} fallback={<ChangeAppliedCard applied={props.applied} />}>
         {(m) => <MemoryAppliedCard applied={m()} />}
@@ -746,6 +814,33 @@ export function AppliedCard(props: { applied: Applied }) {
     }>
       {(s) => <SkillAppliedCard applied={s()} />}
     </Show>
+    }>
+      {(x) => <ToolAppliedCard applied={x()} />}
+    </Show>
+  );
+}
+
+type AppliedTool = Extract<Applied, { tool_name: string }>;
+
+const TOOL_DID: Record<AppliedTool["op"], string> = {
+  tool_create: "Created tool",
+  tool_change: "Changed tool",
+  tool_delete: "Deleted tool",
+};
+
+/** A script tool change the AI made itself (script-tools T3), linking to the tool. */
+function ToolAppliedCard(props: { applied: AppliedTool }) {
+  const a = () => props.applied;
+  return (
+    <section class="ai-proposal ai-applied-card" aria-label={`${TOOL_DID[a().op]} ${a().tool_name}`}>
+      <p class="ai-proposal-head" role="status">
+        {TOOL_DID[a().op]}{" "}
+        <Show when={a().op !== "tool_delete"} fallback={<strong>{a().tool_name}</strong>}>
+          <a href={toolHref(a().tool_name)}>{a().tool_name}</a>
+        </Show>
+      </p>
+      <p class="muted">Made without asking, as the agent's permissions allow.</p>
+    </section>
   );
 }
 
@@ -1436,6 +1531,7 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                         <Match when={part.kind === "agent_proposal" && part}>{(p) => <AgentProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "memory_proposal" && part}>{(p) => <MemoryProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "skill_proposal" && part}>{(p) => <SkillProposalCard part={p()} turn={t()} index={i()} />}</Match>
+                        <Match when={part.kind === "tool_proposal" && part}>{(p) => <ToolProposalCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
                         <Match when={part.kind === "download" && part}>{(p) => <DownloadCard part={p()} turn={t()} index={i()} />}</Match>
                         <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>

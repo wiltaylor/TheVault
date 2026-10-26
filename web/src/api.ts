@@ -402,6 +402,68 @@ export interface Script {
   problems: ScriptProblem[];
 }
 
+/** The kinds a script tool's param may be (script-tools T2). */
+export type ToolParamKind = "string" | "int" | "float" | "bool" | "json" | "list";
+
+/** One `param <name> { ... }` of a script tool. */
+export interface ToolParam {
+  name: string;
+  kind: ToolParamKind;
+  /** A list param's item kind. */
+  of?: string | null;
+  description?: string | null;
+  required: boolean;
+}
+
+/** A script tool, `tools/<name>.wcl` (script-tools T2), as `GET /api/tools` lists it. An invalid one has `valid: false` and its problems. */
+export interface ScriptToolSummary {
+  name: string;
+  valid: boolean;
+  problems: string[];
+  description?: string | null;
+  script?: string | null;
+  function?: string | null;
+  params?: ToolParam[] | null;
+  allow_domains?: string[] | null;
+  secrets?: string[] | null;
+  timeout?: number | null;
+}
+
+/** `GET /api/tools/{name}`: the tool file, parsed, and the source of the script it names. */
+export interface ScriptTool {
+  name: string;
+  wcl: string;
+  valid: boolean;
+  problems: string[];
+  tool: ScriptToolSummary | null;
+  script: string | null;
+  script_source: string | null;
+}
+
+/** The version of a script that ran (script-tools T6). */
+export interface ScriptRef {
+  kind: "vault" | "skill" | "code";
+  hash: string;
+  tool?: string;
+  script?: string;
+  tool_hash?: string;
+  generation?: number;
+  skill?: string;
+  path?: string;
+}
+
+/** `POST /api/tools/{name}/run`: what the tool's function returned, or why it failed. */
+export interface ToolRun {
+  ok: boolean;
+  result?: Json;
+  error?: string | null;
+  kind?: string | null;
+  log?: string;
+  duration_ms?: number;
+  instructions?: number;
+  script?: ScriptRef | null;
+}
+
 /** One run of a scheduled task. Times are milliseconds since the epoch (D10). */
 export interface TaskRun {
   id: number;
@@ -545,6 +607,11 @@ export interface AgentPermissions {
    * then.
    */
   skills?: string[] | null;
+  /**
+   * Scripts (script-tools T7): `run_code` offers the `run_script` tool, full access. Off when
+   * absent; absent from a server before script tools.
+   */
+  scripts?: { run_code: boolean };
 }
 
 /** An agent's Outbox switches (outbox X2). */
@@ -790,6 +857,8 @@ export interface AiConfirm {
   agents: boolean;
   /** Creating, changing and deleting skills and their files (skills S9). */
   skills: boolean;
+  /** Creating, changing and deleting script tools (script-tools T3); absent from a server before them. */
+  tools?: boolean;
 }
 
 /** A model a provider offers now (ai D6). */
@@ -832,6 +901,9 @@ export interface AiAccounts {
 /** What an applied skill change did (skills S9). */
 export type SkillOp = "skill_create" | "skill_change" | "skill_file" | "skill_file_delete" | "skill_delete";
 
+/** What an applied script tool change did (script-tools T3). */
+export type ToolOp = "tool_create" | "tool_change" | "tool_delete";
+
 /** What `POST /api/ai/apply` did (ai D23): a note's change with its new version, or a type's. */
 export type AiApplied =
   | { op: "update" | "create" | "archive" | "unarchive" | "delete"; note_id: string; version: string }
@@ -840,6 +912,7 @@ export type AiApplied =
   | { op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string }
   | { op: "agent_memory_create" | "agent_memory_change" | "agent_memory_delete"; memory_id: string; memory_agent: string; version?: string }
   | { op: SkillOp; skill_name: string; path?: string }
+  | { op: ToolOp; tool_name: string; script_name?: string | null }
   | { op: "download"; asset_id: string; filename: string; media_type?: string; size?: number; url?: string };
 
 /** A poll of a chat turn's events through an app's embedded server (ai D23). */
@@ -1686,6 +1759,16 @@ export const api = {
   /** Store a script as sent. The answer says why it would not compile, if it would not. */
   putScript: (name: string, source: string) => request<Script>("PUT", `/api/scripts/${enc(name)}`, { source }),
   deleteScript: (name: string) => request<unknown>("DELETE", `/api/scripts/${enc(name)}`),
+  /** Every script tool, valid or not (script-tools T2). */
+  tools: async () => (await request<{ tools: ScriptToolSummary[] }>("GET", "/api/tools")).tools,
+  tool: (name: string) => request<ScriptTool>("GET", `/api/tools/${enc(name)}`),
+  /** Write a tool file (admin), with the script it names written alongside when `script_source` is given. */
+  putTool: (name: string, wcl: string, script_source?: string | null) =>
+    request<ScriptTool>("PUT", `/api/tools/${enc(name)}`, script_source == null ? { wcl } : { wcl, script_source }),
+  /** Delete a tool (admin); its script goes too when nothing else names it. */
+  deleteTool: (name: string) => request<{ name: string; deleted: boolean; script_deleted: string | null }>("DELETE", `/api/tools/${enc(name)}`),
+  /** Run a tool with `params` (admin). */
+  runTool: (name: string, params: Record<string, Json>) => request<ToolRun>("POST", `/api/tools/${enc(name)}/run`, { params }),
   tasks: async () => (await request<{ tasks: Task[] }>("GET", "/api/tasks")).tasks,
   task: (name: string) => request<Task>("GET", `/api/tasks/${enc(name)}`),
   putTask: (name: string, wcl: string) => request<Task>("PUT", `/api/tasks/${enc(name)}`, { wcl }),

@@ -32,6 +32,7 @@ import {
   type Json,
   type NoteDoc,
   type SkillOp,
+  type ToolOp,
   ApiError,
   type StoredProposal,
   type StreamEvent,
@@ -277,6 +278,35 @@ export interface SkillProposal {
   proposer?: string;
 }
 
+/**
+ * A script tool change the model proposed (script-tools T3): the tool file `tools/<name>.wcl`
+ * and, when the change carries it, the script the tool names; or a delete, which also deletes
+ * the script when nothing else names it. Not written until the user applies it.
+ */
+export interface ToolProposal {
+  id: string;
+  kind: "tool";
+  op: "create" | "change" | "delete";
+  name: string;
+  exists?: boolean;
+  /** The tool file's WCL before and after; null when there is none. */
+  before: string | null;
+  after: string | null;
+  /** The script the tool names. */
+  script?: string | null;
+  script_exists?: boolean;
+  script_before: string | null;
+  /** The script's new source; null when the change leaves the script as it is. */
+  script_after: string | null;
+  /** A delete also deletes the script. */
+  script_delete?: boolean;
+  problems: string[];
+  proposer?: string;
+}
+
+/** What the card says when the tool changed after the proposal (script-tools T3). */
+export const TOOL_CHANGED = "This tool changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
+
 /** What the card says when the skill changed after the proposal (skills S9). */
 export const SKILL_CHANGED = "This skill changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
@@ -308,7 +338,20 @@ export type Applied =
   | { id: string; op: "taxonomy_change" | "taxonomy_create" | "taxonomy_delete"; taxonomy_name: string; notes?: number }
   | { id: string; op: "agent_change" | "agent_create" | "agent_delete"; agent_name: string }
   | { id: string; op: "agent_memory_create" | "agent_memory_change" | "agent_memory_delete"; memory_id: string; memory_agent: string; version?: string }
-  | { id: string; op: SkillOp; skill_name: string; path?: string };
+  | { id: string; op: SkillOp; skill_name: string; path?: string }
+  | { id: string; op: ToolOp; tool_name: string; script_name?: string | null };
+
+/** A script run's step, from its `tool_result` summary (script-tools T6). */
+export interface ScriptStep {
+  tool: string;
+  outcome: "ok" | "error";
+  error_kind?: string | null;
+  ms?: number;
+  instructions?: number;
+  log?: string;
+  /** The version that ran: its hash, and for a vault tool the commit generation. */
+  ref?: { kind?: string; hash?: string; generation?: number; skill?: string; script?: string } | null;
+}
 
 /** A file the model asked to download into the vault as an asset (ai D27). */
 export interface DownloadProposal {
@@ -354,6 +397,8 @@ export type Part =
       draft?: DraftRef;
       /** What a browser step did (browser B5). */
       browser?: BrowserRef;
+      /** What a script run did: run_script or a script tool (script-tools T6). */
+      script?: ScriptStep;
     }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
@@ -361,6 +406,7 @@ export type Part =
   | { kind: "agent_proposal"; proposal: AgentProposal; state: ProposalState; error?: string }
   | { kind: "memory_proposal"; proposal: MemoryProposal; state: ProposalState; error?: string }
   | { kind: "skill_proposal"; proposal: SkillProposal; state: ProposalState; error?: string }
+  | { kind: "tool_proposal"; proposal: ToolProposal; state: ProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null }
   /** Where the thread was compacted: the model reads `summary` in place of what came before. */
   | { kind: "compaction"; summary: string; reason: string };
@@ -588,6 +634,18 @@ export function skillDone(p: SkillProposal, done?: AiApplied): string {
   }
 }
 
+/** What a tool proposal is, for an outcome line (script-tools T3). */
+export function toolWhat(p: ToolProposal): string {
+  if (p.op === "delete") return `delete of tool ${p.name}`;
+  return p.op === "create" ? `new tool ${p.name}` : `change to tool ${p.name}`;
+}
+
+/** What an applied tool proposal did, for an outcome line. */
+export function toolDone(p: ToolProposal): string {
+  if (p.op === "delete") return p.script_delete && p.script ? `deleted tool ${p.name} and its script ${p.script}` : `deleted tool ${p.name}`;
+  return p.op === "create" ? `created tool ${p.name}` : `changed tool ${p.name}`;
+}
+
 /** The notices the server put in the turn's new messages, such as a round limit or a cut-off. */
 function noticesOf(data: { messages?: unknown }): Part[] {
   if (!Array.isArray(data.messages)) return [];
@@ -725,7 +783,7 @@ export const NOTE_GONE = "This note is no longer there, so nothing was applied."
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
   return (
-    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "skill_proposal" || p.kind === "download") &&
+    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "skill_proposal" || p.kind === "tool_proposal" || p.kind === "download") &&
     (p.state === "open" || p.state === "failed")
   );
 }
@@ -741,6 +799,7 @@ function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boo
     assets?: FoundAsset[];
     draft?: DraftRef;
     browser?: BrowserRef;
+    script?: Record<string, unknown>;
   };
   p.done = true;
   p.isError = isError;
@@ -759,6 +818,19 @@ function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boo
     // Only a JPEG data URL is shown as a thumbnail: the server makes it, and nothing else is trusted as an image source.
     const thumbnail = typeof b.thumbnail === "string" && b.thumbnail.startsWith("data:image/jpeg;base64,") ? b.thumbnail : undefined;
     p.browser = { ...b, thumbnail };
+  }
+  const sc = summary.script;
+  if (sc && typeof sc === "object") {
+    const ref = (sc.ref ?? sc.script ?? null) as ScriptStep["ref"];
+    p.script = {
+      tool: String(sc.tool ?? p.name),
+      outcome: sc.outcome === "ok" ? "ok" : "error",
+      error_kind: typeof sc.error_kind === "string" ? sc.error_kind : null,
+      ms: typeof sc.ms === "number" ? sc.ms : undefined,
+      instructions: typeof sc.instructions === "number" ? sc.instructions : undefined,
+      log: typeof sc.log === "string" ? sc.log : undefined,
+      ref: ref && typeof ref === "object" ? ref : null,
+    };
   }
   const d = summary.draft;
   if (d && typeof d.note_id === "string")
@@ -809,6 +881,19 @@ function eventPart(event: string, d: Record<string, unknown>): Part | null {
           before: typeof d.before === "string" ? d.before : null,
           after: typeof d.after === "string" ? d.after : null,
           issues: Array.isArray(d.issues) ? (d.issues as SkillProposal["issues"]) : [],
+        },
+        state: "open",
+      };
+    case "tool_proposal":
+      return {
+        kind: "tool_proposal",
+        proposal: {
+          ...(d as unknown as ToolProposal),
+          before: typeof d.before === "string" ? d.before : null,
+          after: typeof d.after === "string" ? d.after : null,
+          script_before: typeof d.script_before === "string" ? d.script_before : null,
+          script_after: typeof d.script_after === "string" ? d.script_after : null,
+          problems: Array.isArray(d.problems) ? (d.problems as unknown[]).map(String) : [],
         },
         state: "open",
       };
@@ -1102,7 +1187,8 @@ function createConversation(agent: string, id: string | null) {
       case "taxonomy_proposal":
       case "agent_proposal":
       case "agent_memory_proposal":
-      case "skill_proposal": {
+      case "skill_proposal":
+      case "tool_proposal": {
         // A re-read turn's proposal, applied or discarded meanwhile, shows as it stands.
         const stored = replay.get(String(d.id));
         push((stored && storedPart(stored)) || eventPart(e.event, d)!);
@@ -1121,6 +1207,8 @@ function createConversation(agent: string, id: string | null) {
           void skillsChanged().catch(() => undefined);
           break;
         }
+        // A tool change shows on the Tools page when it next loads (script-tools T3).
+        if (applied.op.startsWith("tool_")) break;
         void settle(
           applied.op === "type_change" || applied.op === "type_create" || applied.op === "type_delete"
             ? "type"
@@ -1570,6 +1658,7 @@ function createConversation(agent: string, id: string | null) {
       else if (p.kind === "agent_proposal") await applyAgentProposal(turn, i);
       else if (p.kind === "memory_proposal") await applyMemoryProposal(turn, i);
       else if (p.kind === "skill_proposal") await applySkillProposal(turn, i);
+      else if (p.kind === "tool_proposal") await applyToolProposal(turn, i);
       else await applyTypeProposal(turn, i);
       const after = chat.turns[turn]?.parts[i];
       if (!after || !("state" in after) || after.state !== "applied") return;
@@ -1771,6 +1860,50 @@ function createConversation(agent: string, id: string | null) {
     discarded(p.proposal);
   }
 
+  function setToolProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "tool_proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+      }),
+    );
+  }
+
+  /**
+   * Apply a tool proposal with POST /api/ai/apply (script-tools T3): the tool file and its
+   * script in one commit, or the delete. The server writes nothing when either changed since the
+   * proposal (a 409). It needs admin.
+   */
+  async function applyToolProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "tool_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    setToolProposal(turn, part, { state: "applying" });
+    try {
+      await api.aiApply(p.proposal);
+      setToolProposal(turn, part, { state: "applied" });
+      record(p.proposal.id, `[Applied by the user: ${toolDone(p.proposal)}]`);
+      notify();
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
+      const error = stale ? TOOL_CHANGED : e instanceof Error ? e.message : String(e);
+      setToolProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${toolWhat(p.proposal)}: ${error}]`);
+    }
+  }
+
+  function discardToolProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "tool_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setToolProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${toolWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
   function setSkillProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
     setChat(
       "turns",
@@ -1909,6 +2042,8 @@ function createConversation(agent: string, id: string | null) {
       discardMemoryProposal,
       applySkillProposal,
       discardSkillProposal,
+      applyToolProposal,
+      discardToolProposal,
     };
     return self;
   });
@@ -2132,6 +2267,8 @@ export function createChatSession(options: ChatOptions = {}) {
       discardMemoryProposal: (turn: number, part: number) => current().discardMemoryProposal(turn, part),
       applySkillProposal: (turn: number, part: number) => current().applySkillProposal(turn, part),
       discardSkillProposal: (turn: number, part: number) => current().discardSkillProposal(turn, part),
+      applyToolProposal: (turn: number, part: number) => current().applyToolProposal(turn, part),
+      discardToolProposal: (turn: number, part: number) => current().discardToolProposal(turn, part),
     };
   });
 }
@@ -2171,6 +2308,8 @@ export const applyMemoryProposal = panel.applyMemoryProposal;
 export const discardMemoryProposal = panel.discardMemoryProposal;
 export const applySkillProposal = panel.applySkillProposal;
 export const discardSkillProposal = panel.discardSkillProposal;
+export const applyToolProposal = panel.applyToolProposal;
+export const discardToolProposal = panel.discardToolProposal;
 
 /** The conversation the cards below act on: the panel's, unless the agent screen provides its own. */
 export const ChatContext = createContext<ChatSession>(panel);

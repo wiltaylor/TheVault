@@ -22,6 +22,7 @@ import {
   categoryIcon,
   categoryLabel,
   detailText,
+  scriptRunLine,
   matches,
   mergeItems,
   nestTurns,
@@ -285,6 +286,20 @@ export function Log() {
           </Show>
         </div>
         <Show when={expanded()}>
+          <Show when={scriptRunLine(it())}>
+            {(line) => (
+              <p class="log-script" data-testid="log-script">
+                {line()}
+              </p>
+            )}
+          </Show>
+          <Show when={it().kind === "ai.script" && typeof it().detail?.log === "string" && (it().detail?.log as string)}>
+            {(log) => (
+              <pre class="log-script-log" aria-label="Script log">
+                {log()}
+              </pre>
+            )}
+          </Show>
           <dl class="log-detail">
             <dt>Kind</dt>
             <dd>{it().kind}</dd>
