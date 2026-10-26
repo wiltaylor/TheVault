@@ -8,6 +8,8 @@ import { Outbox } from "./pages/Outbox";
 import { NoteHistoryRedirect } from "./history/redirect";
 import { NewNote, NoteView } from "./pages/NoteView";
 import { Search } from "./pages/Search";
+// The AI panel is in the main bundle, so the session page that shares its conversation view is too.
+import { SubagentSession } from "./ai/SubagentSession";
 import { MovedToScheduled, MovedToSettings, SettingsLayout } from "./pages/SettingsLayout";
 import { TypeList } from "./pages/TypeList";
 
@@ -92,6 +94,7 @@ export function paneRoutes() {
       </Route>
       <Route path="/integrations/google/callback" component={GoogleCallback} />
       <Route path={["/agents/:name", "/agents/:name/:section", "/agents/:name/:section/:tab"]} component={AgentScreen} />
+      <Route path="/subagent/:agent/:thread" component={SubagentSession} />
       <Route path="/skills" component={Skills} />
       <Route path={["/skills/:name", "/skills/:name/:tab"]} component={SkillScreen} />
       <Route path="/trash" component={Trash} />

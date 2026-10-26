@@ -17,7 +17,7 @@
 // screen and the panel each choose their thread by themselves, and the screen sends no open note.
 
 import { For, type JSX, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount } from "solid-js";
-import { type AgentThreadSummary, api } from "../api";
+import { type AgentThreadSummary, api, isSubSession } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { NameInput } from "../components/PinnedTree";
 import { errorText } from "../pages/TypeEditor";
@@ -83,7 +83,8 @@ export function AgentChat(props: {
       // A thread that stopped running since the last read answered: a new reply, unless open.
       const was = new Set(threads().filter((t) => t.running).map((t) => t.id));
       for (const t of got.threads) if (was.has(t.id) && !t.running) turnEnded(t.id);
-      setThreads(got.threads);
+      // Sub agent sessions are listed only under their parent (subagents U5).
+      setThreads(got.threads.filter((t) => !isSubSession(t.origin)));
       setError(null);
       clearTimeout(poll);
       if (got.threads.some((t) => t.running)) poll = setTimeout(() => void refresh(), RUNNING_POLL_MS);

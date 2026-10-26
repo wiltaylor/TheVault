@@ -1,9 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
-import { aiAccounts, alone, dropAccount, useAccount, withDefault } from "./ai";
+import { type Fake, type Running, aiAccounts, alone, dropAccount, startFake, useAccount, withDefault } from "./ai";
 import { activePane, expect, logIn, test } from "./fixtures";
 
 // The AI panel (ai D14, D23) against the fake Anthropic API, which an account of the worker's own
@@ -18,54 +13,6 @@ import { activePane, expect, logIn, test } from "./fixtures";
 // line, the model dropdown at the box's foot chooses the model a turn uses, starting from an
 // agent's own model when it names one, and the session picker's search, Archive and Delete act on
 // the chosen session.
-
-const repo = fileURLToPath(new URL("../..", import.meta.url));
-
-function binary(env: string, name: string): string {
-  const path = process.env[env] ?? join(repo, "target", "debug", name);
-  if (!existsSync(path)) throw new Error(`${path} is missing. Run \`cargo build -p server -p testkit --bins\`.`);
-  return path;
-}
-
-interface Fake {
-  base_url: string;
-  api_key: string;
-}
-
-/** A fake AI API run as a child process: its address and key, and its commands on standard input. */
-interface Running {
-  fake: Fake;
-  /** Send a command and wait until it has taken effect. */
-  tell: (line: string) => Promise<Record<string, unknown>>;
-  stop: () => void;
-}
-
-/** Start `name` (see `testkit-fake-anthropic` and `testkit-fake-openai`) and wait for its address. */
-async function startFake(env: string, name: string, args: string[] = []): Promise<Running> {
-  const proc: ChildProcess = spawn(binary(env, name), args, { stdio: ["pipe", "pipe", "inherit"] });
-  const answers: ((line: string) => void)[] = [];
-  const fake = await new Promise<Fake>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${name} did not report its address`)), 30_000);
-    const lines = createInterface({ input: proc.stdout! });
-    lines.once("line", (line) => {
-      clearTimeout(timer);
-      resolve(JSON.parse(line) as Fake);
-      lines.on("line", (answer) => answers.shift()?.(answer));
-    });
-    proc.once("exit", (code) => reject(new Error(`${name} exited with ${code}`)));
-  });
-  return {
-    fake,
-    tell: async (line) => {
-      const answer = new Promise<string>((resolve) => answers.push(resolve));
-      proc.stdin!.write(`${line}\n`);
-      const got = JSON.parse(await answer) as Record<string, unknown>;
-      expect(got.error).toBeUndefined();
-      return got;
-    },
-    stop: () => proc.kill(),
-  };
-}
 
 let anthropic: Running;
 let fake: Fake;

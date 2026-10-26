@@ -46,6 +46,7 @@ const NAMES: [RegExp, string, string?][] = [
   [/^\/trash/, "Trash"],
   [/^\/archive/, "Archive"],
   [/^\/agents\//, "Agent"],
+  [/^\/subagent\//, "Sub agent", "bot"],
   [/^\/skills\/?$/, "Skills", "book-open"],
   [/^\/skills\//, "Skill", "book-open"],
   [/^\/outbox/, "Outbox", "send"],

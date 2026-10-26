@@ -723,6 +723,46 @@ describe("the Permissions tab", () => {
     expect("scripts" in (sent().permissions as object)).toBe(false);
   });
 
+  it("has the Sub agents switch, its max and the agents it may delegate to, saved as permissions.subagents", async () => {
+    agentsList.mockResolvedValue({
+      agents: [
+        { name: "inbox_triage", label: "Inbox triage", built_in: false },
+        { name: "writer", label: "Writer", built_in: false },
+      ],
+      tools: TOOLS,
+    });
+    const { refreshAgents } = await import("../agents");
+    await refreshAgents();
+    await open();
+    const p = await tab("Permissions");
+    const sw = p.getByRole("switch", { name: "Start sub agents" });
+    expect(sw).not.toBeChecked();
+    expect(p.queryByLabelText("Sub agents at once")).toBeNull();
+    fireEvent.click(sw);
+    const max = p.getByLabelText("Sub agents at once") as HTMLInputElement;
+    expect(max.value).toBe("4");
+    fireEvent.change(max, { target: { value: "12" } });
+    expect(max.value).toBe("8");
+    fireEvent.change(max, { target: { value: "2" } });
+    const group = within(p.getByRole("group", { name: "Agents it may delegate to" }));
+    // Every agent but this one.
+    expect(group.queryByRole("checkbox", { name: /Inbox triage/ })).toBeNull();
+    fireEvent.click(group.getByRole("checkbox", { name: /Writer/ }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { subagents?: unknown }).subagents).toEqual({ allow: true, max: 2, agents: ["writer"] });
+  });
+
+  it("sends no subagents block once Sub agents are back to the default", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, subagents: { allow: true, max: 4, agents: [] } } }));
+    await open();
+    const p = await tab("Permissions");
+    fireEvent.click(p.getByRole("switch", { name: "Start sub agents" }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect("subagents" in (sent().permissions as object)).toBe(false);
+  });
+
   it("has the Tools confirmation switch, on unless the agent turned it off", async () => {
     await open();
     const p = await tab("Permissions");

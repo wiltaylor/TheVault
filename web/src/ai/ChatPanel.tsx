@@ -9,9 +9,25 @@
 // Android apps, whose chat runs on the home server. `Conversation` is the view the panel and the
 // agent screen share, with the provider and model picker at the foot of its message box.
 
-import { For, type JSX, Match, Show, Switch, createEffect, createMemo, createRoot, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import {
+  For,
+  type JSX,
+  Match,
+  Show,
+  Switch,
+  createContext,
+  createEffect,
+  createMemo,
+  createRoot,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+  untrack,
+  useContext,
+} from "solid-js";
 import { agentLabel, agents } from "../agents";
-import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl } from "../api";
+import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl, isSubSession } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { formatValue } from "../components/Render";
 import { Spinner } from "../components/SyncStatus";
@@ -46,6 +62,7 @@ import {
   type Part,
   type Proposal,
   type ProposalOp,
+  type ProposalState,
   chat,
   inApp,
   newConversation,
@@ -54,6 +71,9 @@ import {
   panelSession,
   pending,
   setAgent,
+  skillWhat,
+  subagentOf,
+  toolWhat,
   useChatSession,
 } from "./store";
 import "./chat.css";
@@ -167,6 +187,8 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked tool ${s("name")}`;
     case "propose_tool_delete":
       return `Checked a delete of tool ${s("name")}`;
+    case "start_subagent":
+      return s("agent") ? `Delegated to ${s("agent")}` : "Started a sub agent";
     default:
       return `Called ${name}`;
   }
@@ -279,6 +301,8 @@ export function activeLabel(name: string, input: Json): string {
     case "propose_tool_change":
     case "propose_tool_delete":
       return "Checking a tool change";
+    case "start_subagent":
+      return "Waiting for sub agents";
     default:
       return `Running ${name}`;
   }
@@ -1342,6 +1366,219 @@ function sizeText(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** Whether the conversation shown is a sub agent's session, read only (subagents U6). */
+const ReadOnly = createContext(false);
+
+/** Whether `part` is a sub agent's proposal or change whose block is in `parts`, which shows it. */
+function underBlock(part: Part, parts: readonly Part[]): boolean {
+  const id = subagentOf(part);
+  return id !== null && parts.some((p) => p.kind === "tool" && p.id === id && p.name === "start_subagent");
+}
+
+/** What a proposal is, for its line in a read-only session (subagents U4). */
+export function proposalLine(p: Part): string {
+  switch (p.kind) {
+    case "proposal": {
+      const x = p.proposal;
+      const title = typeof x.title === "string" && x.title ? x.title : "note_id" in x ? x.note_id : "Untitled";
+      return `${HEADS[x.op]} ${title}`;
+    }
+    case "download":
+      return p.proposal.source === "browser" ? `Proposed save of ${p.proposal.path ?? ""} from the browser box` : `Proposed download of ${p.proposal.filename}`;
+    case "type_proposal":
+      return p.proposal.op === "delete" ? `Proposed delete of type ${p.proposal.name}` : p.proposal.exists ? `Proposed change to type ${p.proposal.name}` : `Proposed new type ${p.proposal.name}`;
+    case "taxonomy_proposal":
+      return p.proposal.op === "delete" ? `Proposed delete of taxonomy ${p.proposal.name}` : p.proposal.exists ? `Proposed change to taxonomy ${p.proposal.name}` : `Proposed new taxonomy ${p.proposal.name}`;
+    case "agent_proposal":
+      return p.proposal.op === "delete" ? `Proposed delete of agent ${p.proposal.name}` : p.proposal.exists ? `Proposed change to agent ${p.proposal.name}` : `Proposed new agent ${p.proposal.name}`;
+    case "memory_proposal":
+      return p.proposal.op === "create" ? `Proposed a new memory of ${p.proposal.memory_agent}` : p.proposal.op === "change" ? `Proposed a change to a memory of ${p.proposal.memory_agent}` : `Proposed forgetting a memory of ${p.proposal.memory_agent}`;
+    case "skill_proposal":
+      return `Proposed ${skillWhat(p.proposal)}`;
+    case "tool_proposal":
+      return `Proposed ${toolWhat(p.proposal)}`;
+    default:
+      return "Proposed a change";
+  }
+}
+
+/** Where a proposal stands, for its line in a read-only session. */
+const STANDS: Record<ProposalState, string> = {
+  open: "waiting for the user in the chat that started this sub agent",
+  applying: "being applied",
+  applied: "applied",
+  discarded: "discarded",
+  failed: "failed",
+  stale: "can no longer apply",
+};
+
+/** A proposal in a sub agent's session (subagents U4): what it is and where it stands, with no Apply or Discard. */
+function ReadOnlyProposal(props: { part: Part }) {
+  const state = () => ("state" in props.part ? props.part.state : "open");
+  const error = () => ("error" in props.part ? props.part.error : undefined);
+  return (
+    <p class="ai-proposal ai-proposal-read-only" role="status">
+      {proposalLine(props.part)}: {STANDS[state()]}
+      {error() ? ` (${error()})` : ""}
+    </p>
+  );
+}
+
+/** One part of an answer: text, a tool step or a sub agent's block, a card, a notice. */
+function PartView(props: { part: Part; parts: readonly Part[]; turn: number; index: number }) {
+  const readOnly = useContext(ReadOnly);
+  const proposal = () => props.part.kind !== "applied" && "proposal" in props.part;
+  return (
+    <Show when={!(readOnly && proposal())} fallback={<ReadOnlyProposal part={props.part} />}>
+      <Switch>
+        <Match when={props.part.kind === "text" && props.part}>{(p) => <Markdown text={p().text} />}</Match>
+        <Match when={props.part.kind === "tool" && props.part}>
+          {(p) => (
+            <Switch fallback={<ToolStep part={p()} />}>
+              <Match when={p().name === "start_subagent"}>
+                <SubagentBlock part={p()} parts={props.parts} turn={props.turn} />
+              </Match>
+              <Match when={!p().isError && p().draft}>{(d) => <DraftCard draft={d()} />}</Match>
+            </Switch>
+          )}
+        </Match>
+        <Match when={props.part.kind === "proposal" && props.part}>{(p) => <ProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "type_proposal" && props.part}>{(p) => <TypeProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "taxonomy_proposal" && props.part}>{(p) => <TaxonomyProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "agent_proposal" && props.part}>{(p) => <AgentProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "memory_proposal" && props.part}>{(p) => <MemoryProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "skill_proposal" && props.part}>{(p) => <SkillProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "tool_proposal" && props.part}>{(p) => <ToolProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "applied" && props.part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
+        <Match when={props.part.kind === "download" && props.part}>{(p) => <DownloadCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "notice" && props.part}>{(p) => <Notice part={p()} />}</Match>
+        <Match when={props.part.kind === "compaction" && props.part}>
+          {(p) => (
+            <details class="ai-compaction" data-testid="compaction">
+              <summary>
+                {p().reason === "command" ? "Compacted" : "Compacted on its own"}: the model reads this summary in place of the
+                conversation above
+              </summary>
+              <Markdown text={p().summary} />
+            </details>
+          )}
+        </Match>
+      </Switch>
+    </Show>
+  );
+}
+
+/** Where sub agent session `thread` of agent `agent` opens, read only (subagents U6). */
+export function subagentHref(agent: string, thread: string): string {
+  return `/subagent/${encodeURIComponent(agent)}/${encodeURIComponent(thread)}`;
+}
+
+/** Seconds as people read them: 42s, 3m 05s. */
+function elapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/** What a sub agent's block says of where it stands. */
+const SUB_STATUS: Record<string, string> = { done: "done", failed: "failed", stopped: "stopped" };
+
+/**
+ * A `start_subagent` step (subagents U6): "Sub agent: <task>" or "Delegated to <agent>: <task>",
+ * its live status with the tool it runs and its round, the time it has taken, its result once
+ * done, and the proposals it raised. The title opens its session beside the chat, read only;
+ * Stop stops it alone.
+ */
+function SubagentBlock(props: { part: Extract<Part, { kind: "tool" }>; parts: readonly Part[]; turn: number }) {
+  const input = () => (props.part.input && typeof props.part.input === "object" && !Array.isArray(props.part.input) ? props.part.input : {}) as Record<string, Json>;
+  const task = () => (typeof input().task === "string" ? (input().task as string) : "");
+  const delegated = () => props.part.sub?.delegated ?? (typeof input().agent === "string" && input().agent ? (input().agent as string) : null);
+  const label = () => {
+    const d = delegated();
+    if (!d) return null;
+    const a = agents().find((x) => x.name === d);
+    return a ? agentLabel(a) : d;
+  };
+  const sub = () => props.part.sub;
+  const status = () => {
+    if (!props.part.done) return "running";
+    const s = sub()?.status;
+    return s && s !== "running" ? s : props.part.isError ? "failed" : "done";
+  };
+  const [now, setNow] = createSignal(Date.now());
+  const timer = setInterval(() => setNow(Date.now()), 1000);
+  onCleanup(() => clearInterval(timer));
+  const took = () => {
+    const s = sub();
+    if (s?.ms !== undefined && status() !== "running") return elapsed(s.ms);
+    if (typeof s?.started_ms !== "number") return null;
+    return elapsed((s.ended_ms ?? (status() === "running" ? now() : s.started_ms)) - s.started_ms);
+  };
+  const doing = () => {
+    const s = sub();
+    const round = s?.rounds ? `round ${s.rounds}` : "starting";
+    return s?.tool ? `${activeLabel(s.tool, null)}, ${round}` : round;
+  };
+  const href = () => {
+    const s = sub();
+    return s?.thread && s.agent ? subagentHref(s.agent, s.thread) : null;
+  };
+  const mine = () =>
+    props.parts.flatMap((p, i) => (subagentOf(p) === props.part.id ? [i] : []));
+  const head = () => (label() ? `Delegated to ${label()}: ${task()}` : `Sub agent: ${task()}`);
+  return (
+    <section class={`ai-sub ai-sub-${status()}`} aria-label={head()}>
+      <p class="ai-sub-head">
+        <TypeIcon name="bot" size={14} />{" "}
+        <Show when={href()} fallback={<strong>{head()}</strong>}>
+          {(h) => (
+            <a
+              class="ai-sub-open"
+              href={h()}
+              title="Open this sub agent's session beside the chat"
+              onClick={(e) => {
+                if (wantsNewTab(e)) return;
+                e.preventDefault();
+                openBeside(paneAt(e.currentTarget), h(), (path) => path.startsWith("/subagent/"));
+              }}
+            >
+              {head()}
+            </a>
+          )}
+        </Show>
+      </p>
+      <p class="ai-sub-status muted">
+        <span role="status">{status() === "running" ? `Running: ${doing()}` : SUB_STATUS[status()]}</span>
+        <Show when={took()}>{(t) => <span class="ai-sub-time"> · {t()}</span>}</Show>
+        <Show when={status() !== "running" && sub()?.rounds !== undefined}>
+          <span> · {sub()!.rounds === 1 ? "1 round" : `${sub()!.rounds} rounds`}</span>
+        </Show>
+        <Show when={status() === "running" && sub()?.turn}>
+          {(turn) => (
+            <>
+              {" "}
+              <button type="button" class="link" onClick={() => void api.aiTurnStop(turn()).catch(() => undefined)}>
+                Stop
+              </button>
+            </>
+          )}
+        </Show>
+      </p>
+      <Show when={props.part.isError && props.part.message}>
+        <p class="muted">{props.part.message}</p>
+      </Show>
+      <Show when={status() !== "running" && sub()?.answer}>
+        {(a) => (
+          <details class="ai-sub-result">
+            <summary>Result</summary>
+            <Markdown text={a()} />
+          </details>
+        )}
+      </Show>
+      <For each={mine()}>{(i) => <PartView part={props.parts[i]!} parts={props.parts} turn={props.turn} index={i} />}</For>
+    </section>
+  );
+}
+
 /**
  * How near the end, in pixels, still counts as at the end: scrolling up by more stops following
  * the conversation, and scrolling back down to within it follows again.
@@ -1355,7 +1592,14 @@ const AT_END_PX = 4;
  * starts a new line. `noteId` is the note open beside it, if any. While it shows a thread, that thread has
  * no "New reply" (agents G17).
  */
-export function Conversation(props: { session: ChatSession; noteId?: () => string; empty?: JSX.Element; placeholder?: string }) {
+export function Conversation(props: {
+  session: ChatSession;
+  noteId?: () => string;
+  empty?: JSX.Element;
+  placeholder?: string;
+  /** A sub agent's session (subagents U6): no box to ask in, no Edit or Fork, and proposals shown as they stand, with Stop while it runs. */
+  readOnly?: boolean;
+}) {
   const s = props.session;
   const chat = s.chat;
   const [draft, setDraft] = createSignal("");
@@ -1500,7 +1744,8 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
   }
   return (
     <ChatContext.Provider value={s}>
-      <div class="ai-conversation">
+      <ReadOnly.Provider value={props.readOnly === true}>
+      <div class="ai-conversation" classList={{ "ai-read-only": props.readOnly === true }}>
       <div class="ai-scroll" ref={scroller} data-testid="ai-scroll">
       <Show when={chat.turns.length === 0 && !chat.loading}>{props.empty}</Show>
       <Show when={chat.loading}>
@@ -1516,40 +1761,15 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                 <>
                   <For each={turn.parts}>
                     {(part, i) => (
-                      <Switch>
-                        <Match when={part.kind === "text" && part}>{(p) => <Markdown text={p().text} />}</Match>
-                        <Match when={part.kind === "tool" && part}>
-                          {(p) => (
-                            <Show when={!p().isError && p().draft} fallback={<ToolStep part={p()} />}>
-                              {(d) => <DraftCard draft={d()} />}
-                            </Show>
-                          )}
-                        </Match>
-                        <Match when={part.kind === "proposal" && part}>{(p) => <ProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                        <Match when={part.kind === "type_proposal" && part}>{(p) => <TypeProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                        <Match when={part.kind === "taxonomy_proposal" && part}>{(p) => <TaxonomyProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                        <Match when={part.kind === "agent_proposal" && part}>{(p) => <AgentProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                        <Match when={part.kind === "memory_proposal" && part}>{(p) => <MemoryProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                        <Match when={part.kind === "skill_proposal" && part}>{(p) => <SkillProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                        <Match when={part.kind === "tool_proposal" && part}>{(p) => <ToolProposalCard part={p()} turn={t()} index={i()} />}</Match>
-                        <Match when={part.kind === "applied" && part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
-                        <Match when={part.kind === "download" && part}>{(p) => <DownloadCard part={p()} turn={t()} index={i()} />}</Match>
-                        <Match when={part.kind === "notice" && part}>{(p) => <Notice part={p()} />}</Match>
-                        <Match when={part.kind === "compaction" && part}>
-                          {(p) => (
-                            <details class="ai-compaction" data-testid="compaction">
-                              <summary>
-                                {p().reason === "command" ? "Compacted" : "Compacted on its own"}: the model reads this summary in place of the
-                                conversation above
-                              </summary>
-                              <Markdown text={p().summary} />
-                            </details>
-                          )}
-                        </Match>
-                      </Switch>
+                      // A sub agent's proposals and changes stand under its block (subagents U4).
+                      <Show when={!underBlock(part, turn.parts)}>
+                        <PartView part={part} parts={turn.parts} turn={t()} index={i()} />
+                      </Show>
                     )}
                   </For>
-                  <ApplyAll turn={t()} parts={turn.parts} />
+                  <Show when={!props.readOnly}>
+                    <ApplyAll turn={t()} parts={turn.parts} />
+                  </Show>
                 </>
               }>
                 {/* `/update-skills` shows as a compact notice, not a bubble (skills S6). */}
@@ -1572,7 +1792,7 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
                 <Show when={!turn.notice && turn.text}>
                   <p class="ai-question">{turn.text}</p>
                 </Show>
-                <Show when={turn.at !== undefined && !turn.notice && !chat.streaming}>
+                <Show when={turn.at !== undefined && !turn.notice && !chat.streaming && !props.readOnly}>
                   <div class="ai-question-actions">
                     <button type="button" class="link" aria-label="Edit this message" title="Edit this message: it and everything after it leave the conversation" onClick={() => void editTurn(t())}>
                       Edit
@@ -1602,6 +1822,23 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
         </For>
       </ol>
       </div>
+      <Show when={props.readOnly}>
+        <div class="ai-form ai-form-read-only">
+          <div class="ai-form-status">
+            <Show when={chat.streaming && chat.activity}>
+              <ActivityLine />
+            </Show>
+          </div>
+          <Show when={chat.streaming}>
+            <div class="ai-form-foot">
+              <button type="button" onClick={s.stop}>
+                Stop
+              </button>
+            </div>
+          </Show>
+        </div>
+      </Show>
+      <Show when={!props.readOnly}>
       <form
         class="ai-form"
         onSubmit={(e) => {
@@ -1735,7 +1972,9 @@ export function Conversation(props: { session: ChatSession; noteId?: () => strin
           </Show>
         </div>
       </form>
+      </Show>
       </div>
+      </ReadOnly.Provider>
     </ChatContext.Provider>
   );
 }
@@ -1836,7 +2075,8 @@ function ThreadPicker() {
       // A thread that stopped running since the last read answered: a new reply, unless open.
       const was = new Set(threads().filter((t) => t.running).map((t) => t.id));
       for (const t of got.threads) if (was.has(t.id) && !t.running) turnEnded(t.id);
-      setThreads(got.threads);
+      // Sub agent sessions are listed only under their parent (subagents U5).
+      setThreads(got.threads.filter((t) => !isSubSession(t.origin)));
       if (got.threads.some((t) => t.running)) poll = setTimeout(() => void refresh(), RUNNING_POLL_MS);
     } catch {
       if (mine === asked) setThreads([]);

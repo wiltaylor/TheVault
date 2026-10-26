@@ -36,6 +36,7 @@ import {
   ApiError,
   type StoredProposal,
   type StreamEvent,
+  type SubSession,
   api,
   streamTurn,
 } from "../api";
@@ -341,6 +342,27 @@ export type Applied =
   | { id: string; op: SkillOp; skill_name: string; path?: string }
   | { id: string; op: ToolOp; tool_name: string; script_name?: string | null };
 
+/**
+ * A sub agent's block (subagents U6): its session as the `subagent` events, the thread's
+ * `subagents` and the step's result say.
+ */
+export type SubBlock = Partial<SubSession> & {
+  /** Its turn in the turn routes, while it runs; null for a sub agent of an unattended run. */
+  turn?: string | null;
+  /** The tool it runs now. */
+  tool?: string | null;
+  /** Its answer, once done. */
+  answer?: string | null;
+  ms?: number;
+};
+
+/** The `start_subagent` call a proposal or change of a sub agent's came from, if any (subagents U4). */
+export function subagentOf(p: Part): string | null {
+  const data = p.kind === "applied" ? p.applied : "proposal" in p ? p.proposal : null;
+  const id = data ? (data as unknown as Record<string, unknown>).subagent : null;
+  return typeof id === "string" ? id : null;
+}
+
 /** A script run's step, from its `tool_result` summary (script-tools T6). */
 export interface ScriptStep {
   tool: string;
@@ -399,6 +421,8 @@ export type Part =
       browser?: BrowserRef;
       /** What a script run did: run_script or a script tool (script-tools T6). */
       script?: ScriptStep;
+      /** A `start_subagent` step's sub agent (subagents U6). */
+      sub?: SubBlock;
     }
   | { kind: "proposal"; proposal: Proposal; state: ProposalState; error?: string; created?: string }
   | { kind: "type_proposal"; proposal: TypeProposal; state: TypeProposalState; error?: string }
@@ -800,6 +824,7 @@ function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boo
     draft?: DraftRef;
     browser?: BrowserRef;
     script?: Record<string, unknown>;
+    subagent?: Record<string, unknown>;
   };
   p.done = true;
   p.isError = isError;
@@ -830,6 +855,21 @@ function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boo
       instructions: typeof sc.instructions === "number" ? sc.instructions : undefined,
       log: typeof sc.log === "string" ? sc.log : undefined,
       ref: ref && typeof ref === "object" ? ref : null,
+    };
+  }
+  const sub = summary.subagent;
+  if (sub && typeof sub === "object") {
+    const status = sub.outcome === "done" || sub.outcome === "failed" || sub.outcome === "stopped" ? sub.outcome : undefined;
+    p.sub = {
+      ...p.sub,
+      ...(typeof sub.thread === "string" ? { thread: sub.thread } : {}),
+      ...(typeof sub.agent === "string" ? { agent: sub.agent } : {}),
+      ...(status ? { status } : {}),
+      ...(typeof sub.rounds === "number" ? { rounds: sub.rounds } : {}),
+      ...(typeof sub.tools === "number" ? { tools: sub.tools } : {}),
+      ...(typeof sub.ms === "number" ? { ms: sub.ms } : {}),
+      answer: typeof sub.answer === "string" ? sub.answer : null,
+      tool: null,
     };
   }
   const d = summary.draft;
@@ -989,6 +1029,9 @@ export function turnsFromThread(t: AgentThread): Turn[] {
       if (c.type === "text" && m.role === "assistant") turn.parts.push({ kind: "text", text: c.text });
       else if (c.type === "tool_call") {
         const step: Extract<Part, { kind: "tool" }> = { kind: "tool", id: c.id, name: c.name, input: c.input, done: false, isError: false, notes: [] };
+        // A sub agent's block opens its session from the thread's list of them (subagents U6).
+        const session = (t.subagents ?? []).find((x) => x.call === c.id);
+        if (session) step.sub = { ...session };
         const got = steps[c.id];
         if (got) fillStep(step, got.summary, got.is_error === true);
         turn.parts.push(step);
@@ -996,7 +1039,8 @@ export function turnsFromThread(t: AgentThread): Turn[] {
         const step = turn.parts.find((p) => p.kind === "tool" && p.id === c.id);
         if (step?.kind === "tool" && !step.done) fillStep(step, null, c.is_error === true);
         for (const p of proposals) {
-          if (p.data.id !== c.id) continue;
+          // A sub agent's proposals stand under its block (subagents U4).
+          if (p.data.id !== c.id && p.data.subagent !== c.id) continue;
           const part = storedPart(p);
           if (part) turn.parts.push(part);
         }
@@ -1239,6 +1283,22 @@ function createConversation(agent: string, id: string | null) {
         appendMessages(d);
         for (const n of noticesOf(d)) push(n);
         break;
+      case "subagent": {
+        // A sub agent's block as it runs (subagents U6).
+        const i = lastTurn();
+        const at = chat.turns[i]?.parts.findIndex((p) => p.kind === "tool" && p.id === d.id) ?? -1;
+        if (at < 0) break;
+        setChat(
+          "turns",
+          i,
+          "parts",
+          at,
+          produce((p) => {
+            if (p.kind === "tool") p.sub = { ...p.sub, ...(d as SubBlock) };
+          }),
+        );
+        break;
+      }
       case "context": {
         if (typeof d.used === "number" && typeof d.window === "number") setChat("context", { used: d.used, window: d.window });
         break;

@@ -2,7 +2,7 @@
 // both make (create, enable or disable, delete), and the vocabulary the agent screen edits.
 
 import { createRoot, createSignal } from "solid-js";
-import { type Agent, type AgentForm, type AgentSummary, type AiConfirm, type AiWeb, api } from "./api";
+import { type Agent, type AgentForm, type AgentSubagents, type AgentSummary, type AiConfirm, type AiWeb, api } from "./api";
 import { appInfo } from "./inApp";
 import { keepSame } from "./keepSame";
 
@@ -151,6 +151,11 @@ export function agentLabel(a: Pick<AgentSummary, "name" | "label">): string {
   return a.label?.trim() || a.name;
 }
 
+/** Whether a sub agent permission is the default: off, four at once, no agents (subagents U2). */
+export function isDefaultSubagents(s: AgentSubagents | undefined): boolean {
+  return !s || (!s.allow && s.max === 4 && s.agents.length === 0);
+}
+
 /** The form `PUT /api/agents/{name}` takes for `a`: the parsed agent without what GET adds. */
 export function agentForm(a: Agent): AgentForm {
   return {
@@ -174,6 +179,8 @@ export function agentForm(a: Agent): AgentForm {
       ...(a.permissions.skills ? { skills: [...a.permissions.skills] } : {}),
       // And only when on (script-tools T7).
       ...(a.permissions.scripts?.run_code ? { scripts: { run_code: true } } : {}),
+      // And only when the agent has more than the default (subagents U2).
+      ...(isDefaultSubagents(a.permissions.subagents) ? {} : { subagents: { ...a.permissions.subagents!, agents: [...a.permissions.subagents!.agents] } }),
     },
     triggers: a.triggers.map((t) => ({ ...t })),
   };

@@ -509,7 +509,10 @@ export interface Task {
 export interface AgentThreadSummary {
   id: string;
   title: string;
-  /** `user`, or `trigger:<name>` for a thread a trigger started. */
+  /**
+   * `user`, `trigger:<name>` for a thread a trigger started, or `subagent:<thread>` for a sub
+   * agent's session, which the list leaves out (subagents U5).
+   */
   origin?: string | null;
   last_activity?: string | null;
   /** How many proposals wait for the user. */
@@ -558,6 +561,34 @@ export interface AgentThread extends AgentThreadSummary {
   compaction?: { summary: string; upto: number; at_ms: number; before: number; reason: string } | null;
   /** How full the context was after the thread's last model call. */
   context?: { used: number; window: number } | null;
+  /** In a sub agent's session: the thread, turn and tool call that started it (subagents U5). */
+  parent?: { thread: string; turn: string; call: string } | null;
+  /** The sub agent sessions this thread's `start_subagent` calls started, in order. */
+  subagents?: SubSession[];
+}
+
+/** One sub agent session a thread started (subagents U5, U6), as its block shows it. */
+export interface SubSession {
+  /** The `start_subagent` call's id. */
+  call: string;
+  /** The session's thread. */
+  thread: string;
+  /** The agent whose thread it is: the parent's own for a throwaway sub agent. */
+  agent: string;
+  /** The agent delegated to by name; absent for a throwaway sub agent. */
+  delegated?: string | null;
+  task: string;
+  n: number;
+  status: "running" | "done" | "failed" | "stopped";
+  rounds: number;
+  tools: number;
+  started_ms: number;
+  ended_ms?: number | null;
+}
+
+/** Whether a thread of `origin` is a sub agent's session, listed only under its parent (subagents U5). */
+export function isSubSession(origin: string | null | undefined): boolean {
+  return typeof origin === "string" && origin.startsWith("subagent:");
 }
 
 /** One line of `GET /api/agents` (agents G2). An agent whose file does not check has `error`. */
@@ -612,6 +643,20 @@ export interface AgentPermissions {
    * absent; absent from a server before script tools.
    */
   scripts?: { run_code: boolean };
+  /**
+   * Sub agents (subagents U2): `allow` offers `start_subagent`, `max` sub agents at once, and
+   * `agents` the agents it may delegate to by name. Off when absent; absent from a server before
+   * sub agents.
+   */
+  subagents?: AgentSubagents;
+}
+
+/** An agent's sub agent permission (subagents U2). */
+export interface AgentSubagents {
+  allow: boolean;
+  /** 1 to 8. */
+  max: number;
+  agents: string[];
 }
 
 /** An agent's Outbox switches (outbox X2). */

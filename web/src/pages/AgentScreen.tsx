@@ -34,7 +34,9 @@ import {
   WEB_SWITCHES,
   agentForm,
   agentLabel,
+  isDefaultSubagents,
   agentTools,
+  agents,
   agentsVersion,
   refreshAgents,
   toolGroups,
@@ -43,6 +45,7 @@ import {
   type Agent,
   type AgentEffort,
   type AgentForm,
+  type AgentSubagents,
   type AiAccounts,
   type AiModel,
   type AiStatus,
@@ -405,10 +408,94 @@ export const RUN_CODE_WARNING =
 export const BROWSER_NOTE =
   "Lets this agent run commands in the browser box and drive a browser as you watch. Web pages can try to instruct it.";
 
+/** What the Permissions tab says of the Sub agents switch (subagents U2). */
+export const SUBAGENTS_NOTE =
+  "Lets this agent hand parts of a task to sub agents with start_subagent: throwaway copies of itself, or the agents ticked below. A sub agent never has more than this agent, and cannot start sub agents of its own. Only an admin turns this on.";
+
+/**
+ * The Permissions tab's sub agent settings (subagents U2): the switch, how many run at once, and
+ * the agents it may delegate to by name, every agent but itself.
+ */
+function SubagentsSection(props: {
+  agent: string;
+  subagents: AgentSubagents | undefined;
+  set: (s: AgentSubagents) => void;
+}) {
+  const now = (): AgentSubagents => props.subagents ?? { allow: false, max: 4, agents: [] };
+  const others = createMemo(() =>
+    agents()
+      .filter((a) => a.name !== props.agent && !a.error)
+      .sort((a, b) => agentLabel(a).localeCompare(agentLabel(b))),
+  );
+  // An agent the list names that the vault no longer has stays listed, to be unticked.
+  const gone = () => now().agents.filter((n) => !others().some((a) => a.name === n));
+  const toggle = (name: string, on: boolean) => {
+    const rest = now().agents.filter((n) => n !== name);
+    props.set({ ...now(), agents: on ? [...rest, name] : rest });
+  };
+  return (
+    <div class="ai-confirm agent-subagents">
+      <label class="ai-confirm-switch">
+        <input
+          type="checkbox"
+          role="switch"
+          checked={now().allow}
+          onChange={(e) => props.set({ ...now(), allow: e.currentTarget.checked })}
+        />{" "}
+        Start sub agents
+      </label>
+      <p class="muted">{SUBAGENTS_NOTE}</p>
+      <Show when={now().allow}>
+        <label class="agent-check">
+          <span>At most this many at once</span>
+          <input
+            type="number"
+            min={1}
+            max={8}
+            value={now().max}
+            aria-label="Sub agents at once"
+            onChange={(e) => {
+              const n = Math.round(Number(e.currentTarget.value));
+              props.set({ ...now(), max: Number.isFinite(n) ? Math.min(8, Math.max(1, n)) : 4 });
+            }}
+          />
+        </label>
+        <fieldset class="agent-tool-group" aria-label="Agents it may delegate to">
+          <legend>Agents it may delegate to</legend>
+          <Show when={others().length > 0 || gone().length > 0} fallback={<p class="muted">There are no other agents.</p>}>
+            <For each={others()}>
+              {(a) => (
+                <label class="agent-check">
+                  <input type="checkbox" checked={now().agents.includes(a.name)} onChange={(e) => toggle(a.name, e.currentTarget.checked)} />{" "}
+                  {agentLabel(a)} <code class="muted">{a.name}</code>
+                </label>
+              )}
+            </For>
+            <For each={gone()}>
+              {(n) => (
+                <label class="agent-check">
+                  <input type="checkbox" checked onChange={(e) => toggle(n, e.currentTarget.checked)} /> <code>{n}</code>{" "}
+                  <span class="muted">(no such agent)</span>
+                </label>
+              )}
+            </For>
+          </Show>
+        </fieldset>
+      </Show>
+    </div>
+  );
+}
+
 function PermissionsTab(p: AgentTabProps) {
   const perms = () => p.draft.permissions;
   const setPerms = (patch: Partial<AgentForm["permissions"]>) =>
     p.setDraft((d) => ({ ...d, permissions: { ...d.permissions, ...patch } }));
+  // The default is no subagents block at all, as the agent file holds it only otherwise.
+  const setSubagents = (sub: AgentSubagents) =>
+    p.setDraft((d) => {
+      const { subagents: _, ...rest } = d.permissions;
+      return { ...d, permissions: isDefaultSubagents(sub) ? rest : { ...rest, subagents: sub } };
+    });
   // The server's tools, and any the file names that this server no longer has.
   const all = createMemo(() => {
     const known = agentTools();
@@ -555,6 +642,8 @@ function PermissionsTab(p: AgentTabProps) {
             </p>
           </Show>
         </div>
+        <h3>Sub agents</h3>
+        <SubagentsSection agent={p.agent.name} subagents={perms().subagents} set={setSubagents} />
         <h3>Browser</h3>
         <div class="ai-confirm">
           <label class="ai-confirm-switch">

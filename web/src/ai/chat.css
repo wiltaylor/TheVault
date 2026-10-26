@@ -923,3 +923,76 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A sub agent's block in the parent chat (subagents U6): its task, which opens its session
+   beside the chat, its status and time, its result, and the proposals it raised. */
+.ai-sub {
+  margin: 0 0 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  font-size: 0.92em;
+}
+
+.ai-sub-failed,
+.ai-sub-stopped {
+  border-left-color: var(--danger);
+}
+
+.ai-sub-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.2rem;
+  font-weight: 600;
+}
+
+.ai-sub-status {
+  margin: 0 0 0.25rem;
+  font-size: 0.9em;
+}
+
+.ai-sub-result {
+  margin: 0.2rem 0 0.35rem;
+}
+
+.ai-sub-result summary {
+  cursor: pointer;
+}
+
+.ai-sub .ai-proposal {
+  margin-top: 0.35rem;
+}
+
+/* A proposal in a sub agent's read-only session: what it is and where it stands. */
+.ai-proposal-read-only {
+  font-size: 0.9em;
+}
+
+/* A sub agent's session, read only, in a pane of its own. */
+.ai-sub-session {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 18rem;
+}
+
+.ai-sub-session-bar {
+  padding: 0.25rem 0 0.5rem;
+}
+
+.ai-sub-session-bar h1 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.ai-sub-session-bar p {
+  margin: 0.2rem 0 0;
+}
+
+.ai-form-read-only {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

@@ -132,15 +132,19 @@ export function closePane(pane: string) {
 
 /**
  * Show `url` in a pane beside `pane`: the pane in the same tab that shows it already becomes
- * active, else a new pane opens on `pane`'s right. The browser box's desktop opens this way from
+ * active, or one whose page `reuse` accepts goes there, else a new pane opens on `pane`'s right. The browser box's desktop opens this way from
  * an agent's conversation (browser B4).
  */
-export function openBeside(pane: string, url: string) {
+export function openBeside(pane: string, url: string, reuse?: (path: string) => boolean) {
   const w = ws();
   const tab = w.tabs.find((t) => M.panesOf(t.layout).includes(pane)) ?? w.tabs.find((t) => t.id === w.active);
-  const path = url.split("?")[0];
-  const shown = tab && M.panesOf(tab.layout).find((p) => p !== pane && M.location(w, p).split("?")[0] === path);
+  const path = url.split("?")[0]!;
+  const fits = reuse ?? ((p: string) => p === path);
+  const shown = tab && M.panesOf(tab.layout).find((p) => p !== pane && fits(M.location(w, p).split("?")[0]!));
   if (shown) {
+    // A pane beside that shows another page of the kind goes to this one, as a sub agent's
+    // session pane does when another block is clicked (subagents U6).
+    if (M.location(w, shown).split("?")[0] !== path) navigatePane(shown, url);
     activatePane(shown);
     return;
   }
