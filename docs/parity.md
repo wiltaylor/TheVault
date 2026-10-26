@@ -136,6 +136,11 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Open a script | `Scripts.tsx` | `GET /api/scripts/{name}` | `vault script get <name>` | |
 | Create or save a script, and see compile problems | `Scripts.tsx` | `PUT /api/scripts/{name}` | `vault script put <name> -f <file>` | |
 | Delete a script | `Scripts.tsx` | `DELETE /api/scripts/{name}` | `vault script delete <name>` | |
+| List script tools and their problems | `pages/Tools.tsx` | `GET /api/tools` | `vault tool list` | |
+| Open a script tool with its script | `Tools.tsx` | `GET /api/tools/{name}` | `vault tool get <name>` | |
+| Save a script tool and its script | `Tools.tsx` | `PUT /api/tools/{name}` | `vault tool put <name> -f <tool.wcl> -s <script.ws>` | |
+| Delete a script tool | `Tools.tsx` | `DELETE /api/tools/{name}` | `vault tool delete <name>` | |
+| Run a script tool | `Tools.tsx` | `POST /api/tools/{name}/run` | `vault tool run <name> -p name=value` | |
 | List tasks | `pages/Tasks.tsx` | `GET /api/tasks` | `vault task list` | |
 | Open a task with its runs | `Tasks.tsx` | `GET /api/tasks/{name}`, `GET /api/tasks/{name}/runs?limit=` | `vault task get <name>`, `vault task history <name> --limit <n>` | |
 | Pick a task's script and secrets | `Tasks.tsx` | `GET /api/scripts`, `GET /api/secrets` | `vault script list`, `vault secret list` | |
@@ -244,6 +249,11 @@ The listing has 86 routes. `/api/test/clock` is left out of the listing on purpo
 | `GET /api/scripts/{name}` | `vault script get` | Scripts | |
 | `PUT /api/scripts/{name}` | `vault script put` | Scripts | |
 | `DELETE /api/scripts/{name}` | `vault script delete` | Scripts | |
+| `GET /api/tools` | `vault tool list` | Settings > Tools | |
+| `GET /api/tools/{name}` | `vault tool get` | Settings > Tools | |
+| `PUT /api/tools/{name}` | `vault tool put` | Settings > Tools | |
+| `DELETE /api/tools/{name}` | `vault tool delete` | Settings > Tools | |
+| `POST /api/tools/{name}/run` | `vault tool run` | Settings > Tools: Run | |
 | `GET /api/assets` | `vault asset list` | Asset field, asset block, images and files library | |
 | `POST /api/assets/cleanup` | `vault asset cleanup [--dry-run]` | Images and files: Clean up | |
 | `GET /api/assets/trash` | `vault asset trash` | Images and files: Recently deleted | |

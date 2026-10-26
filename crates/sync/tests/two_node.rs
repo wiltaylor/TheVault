@@ -681,11 +681,55 @@ fn a_skill_with_a_binary_asset_reaches_the_device_and_its_delete_follows() {
 
     admin.send(admin.client.delete(server.url("/api/skills/pdf")), 200);
     phone.sync();
-    assert_eq!(
-        phone.call("GET", "/api/skills", None, 200)["skills"],
-        json!([])
-    );
+    // Only the shipped wscript skill is left (script-tools T5).
+    let names: Vec<Value> = phone.call("GET", "/api/skills", None, 200)["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].clone())
+        .collect();
+    assert_eq!(names, [json!("wscript")]);
     phone.call("GET", "/api/skills/pdf", None, 404);
+}
+
+#[test]
+fn a_script_tool_reaches_the_device_read_only() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Http::admin(&server);
+    let phone = Device::pair(&server, "Phone");
+    phone.sync();
+    let wcl = "description = \"Greet.\"\nscript = \"greet\"\nfunction = \"run\"\n";
+    let script = "fn run(params: Value) -> string { \"hi\" }\n";
+    admin.send(
+        admin
+            .client
+            .put(server.url("/api/tools/greet"))
+            .json(&json!({ "wcl": wcl, "script_source": script })),
+        200,
+    );
+    phone.sync();
+    // The tool file and its script both sync, as scripts do (script-tools T8).
+    let tool = phone.call("GET", "/api/tools/greet", None, 200);
+    assert_eq!(tool["script_source"], script);
+    assert_eq!(tool["valid"], true, "{tool}");
+    assert_eq!(
+        phone.call("GET", "/api/tools", None, 200)["tools"][0]["name"],
+        "greet"
+    );
+    // Writing and running a tool is the web app's.
+    let refused = phone.call("PUT", "/api/tools/greet", Some(json!({ "wcl": wcl })), 403);
+    assert_eq!(refused["error"], "needs_web_app");
+    phone.call(
+        "POST",
+        "/api/tools/greet/run",
+        Some(json!({ "params": {} })),
+        403,
+    );
+
+    admin.send(admin.client.delete(server.url("/api/tools/greet")), 200);
+    phone.sync();
+    phone.call("GET", "/api/tools/greet", None, 404);
+    phone.call("GET", "/api/scripts/greet", None, 404);
 }
 
 #[test]

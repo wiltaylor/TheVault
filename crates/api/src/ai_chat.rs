@@ -29,7 +29,11 @@
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
 //! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
-//! (`crate::brave`, ai D26). Events:
+//! (`crate::brave`, ai D26). An agent with `permissions.scripts.run_code` runs its own wscript
+//! with `run_script`, and every agent may call the vault's valid script tools and, once it has
+//! opened a skill, the skill's own (`crate::ai_scripts`, script-tools T1 to T4); the tool files
+//! are proposed with `propose_tool_change` and `propose_tool_delete` under the `tools` switch.
+//! Events:
 //!
 //! | Event | Data |
 //! |---|---|
@@ -42,6 +46,7 @@
 //! | `agent_proposal` | an agent change for the user to apply (agents G20), `kind` always `agent` and `proposer` the agent that proposed it: `create` and `change` `{id, kind, op, name, label, exists, before, after, issues, proposer}`; `delete` `{id, kind, op, name, label, before, proposer}` |
 //! | `agent_memory_proposal` | a change to another agent's memories for the user to apply (agents G21), `kind` always `agent_memory`: `{id, kind, op, memory_agent, agent_label, memory_id, base_version, title, text, before, proposer}`, `op` `create` (`memory_id`, `base_version` and `before` null), `change` (`title` and `text` the new ones, `before` `{title, text}`) or `delete` |
 //! | `skill_proposal` | a skill change for the user to apply (skills S9), `kind` always `skill`: `{id, kind, op, name, path?, exists, before, after, issues, base, proposer, ...}`, `op` `create`, `change`, `file`, `file_delete` or `delete` (`crate::ai_skill_changes`) |
+//! | `tool_proposal` | a script tool change for the user to apply (script-tools T3), `kind` always `tool`: `{id, kind, op, name, exists, before, after, script, script_exists, script_before, script_after, script_delete, problems, proposer}`, `op` `create`, `change` or `delete` (`crate::ai_scripts`) |
 //! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change`, `type_create` and `type_delete`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `context` | `{used, window}` after each model call: the tokens the call took in and gave back, and the account's context window |
 //! | `compacting` | `{reason}`: a thread's compaction started, `auto` because its last call filled `compact_at` of the window, or `command` for `/compact` (`compact: true`) |
@@ -275,6 +280,7 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     ]
     .iter()
     .chain(crate::ai_skill_changes::PROPOSE_TOOLS.iter())
+    .chain(crate::ai_scripts::PROPOSE_TOOLS.iter())
     .any(|t| p.allows_tool(t));
     if admin { Scope::Admin } else { Scope::Write }
 }
@@ -307,6 +313,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
         | "propose_skill_file_change"
         | "propose_skill_file_delete"
         | "propose_skill_delete" => "skills",
+        "propose_tool_change" | "propose_tool_delete" => "tools",
         "download_asset" | "browser_save" | "browser_capture" => "downloads",
         _ => return None,
     })
@@ -362,6 +369,12 @@ pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
     )
     .into_iter()
     .map(|t| t.name)
+    .chain(
+        crate::ai_scripts::offered(w, agent, &[])
+            .specs
+            .into_iter()
+            .map(|t| t.name),
+    )
     .collect()
 }
 
@@ -891,6 +904,8 @@ struct Direct {
     memories: bool,
     /// Skill creates, changes and deletes (skills S9).
     skills: bool,
+    /// Script tool creates, changes and deletes (script-tools T3).
+    tools: bool,
 }
 
 impl Direct {
@@ -906,6 +921,7 @@ impl Direct {
             agents: !confirm.agents && scope.allows(Scope::Admin),
             memories: !confirm.agents && write,
             skills: !confirm.skills && scope.allows(Scope::Admin),
+            tools: !confirm.tools && scope.allows(Scope::Admin),
         }
     }
 
@@ -921,6 +937,7 @@ impl Direct {
             "agents" => self.agents,
             "agent_memories" => self.memories,
             "skills" => self.skills,
+            "tools" => self.tools,
             _ => false,
         }
     }
@@ -930,7 +947,10 @@ impl Direct {
         match event {
             "type_proposal" => self.types,
             "taxonomy_proposal" => self.taxonomies,
-            "agent_proposal" => self.agents,
+            // Turning on an agent's Run wscript code waits for an admin's Apply, whatever the
+            // switch says (script-tools T1).
+            "agent_proposal" => self.agents && p["grants_run_code"] != true,
+            "tool_proposal" => self.tools,
             "agent_memory_proposal" => self.memories,
             "skill_proposal" => self.skills,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
@@ -957,6 +977,7 @@ fn confirm_of(agent: &Agent) -> ai::Confirm {
         taxonomies: c.taxonomies,
         agents: c.agents,
         skills: c.skills,
+        tools: c.tools,
     }
 }
 
@@ -1034,6 +1055,15 @@ fn setup(
              title {title:?}. \"This note\" means it; read it with get_note.\n",
             n.type_name
         ));
+    }
+    // What the agent can do with wscript, so it opens the wscript skill first (script-tools T5).
+    let scripts = crate::ai_scripts::offered(w, agent, &[]);
+    let skills_offered = crate::ai_skills::uses_skills(agent)
+        && agent
+            .permissions
+            .allows_skill(crate::ai_scripts::WSCRIPT_SKILL);
+    if let Some(note) = crate::ai_scripts::prompt_note(&scripts, skills_offered) {
+        system.push_str(&note);
     }
     // The skills come last, the thread's snapshot, so what comes before stays a stable prefix
     // (skills S6).
@@ -1177,6 +1207,7 @@ impl Turn {
                 | "agent_proposal"
                 | "agent_memory_proposal"
                 | "skill_proposal"
+                | "tool_proposal"
                 | "applied"
         );
         if proposal && let Some(a) = &self.agent_name {
@@ -1311,7 +1342,7 @@ impl Turn {
             setup.browser.is_some(),
             uses_skills,
         );
-        let offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        let base_offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         let mut history = history;
         if let Some(pending) = &self.compact {
             match self.compact(&setup, pending).await {
@@ -1342,12 +1373,19 @@ impl Turn {
             }
             let mut messages = history.clone();
             messages.extend(added.iter().cloned());
+            // The script tools this round: run_script, the vault's tools and those of the skills
+            // the thread has opened so far, read afresh each round (script-tools T2, T4).
+            let scripts = self.script_tools(&setup, &messages).await;
+            let mut round_tools = tools.clone();
+            round_tools.extend(scripts.specs.iter().cloned());
+            let mut offered = base_offered.clone();
+            offered.extend(scripts.specs.iter().map(|t| t.name.clone()));
             let messages = self.hydrate(messages).await;
             let req = Request {
                 model: setup.model.clone(),
                 system: Some(setup.system.clone()),
                 messages,
-                tools: tools.clone(),
+                tools: round_tools,
                 schema: None,
                 effort: setup.effort,
                 max_tokens: None,
@@ -1495,6 +1533,37 @@ impl Turn {
                         return;
                     }
                     results.push(Content::tool_result(c.id, out.content, true));
+                    continue;
+                }
+                // A script tool (script-tools T1, T2, T4): it runs as the agent, its changes made
+                // at once.
+                if c.error.is_none()
+                    && let Some(target) = scripts.target(&c.name)
+                {
+                    let w = self.writer.clone();
+                    let agent = setup.agent.clone();
+                    let target = target.clone();
+                    let call = c.clone();
+                    let got = tokio::task::spawn_blocking(move || {
+                        crate::ai_scripts::call(&w, &agent, &target, &call)
+                    })
+                    .await
+                    .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::ToolResult {
+                        id: c.id,
+                        content: cut(&got.content, RESULT_LIMIT),
+                        is_error: got.is_error,
+                        parts: Vec::new(),
+                    });
                     continue;
                 }
                 if c.name == "read_asset" && c.error.is_none() {
@@ -1675,6 +1744,26 @@ impl Turn {
             added.push(Message::tool_results(results));
             self.persist(added).await;
         }
+    }
+
+    /// The script tools a round offers: those of the vault, `run_script` when the agent may run
+    /// code, and the tools of every skill opened in the thread, its whole transcript when it has
+    /// one (a compaction keeps no tool calls) and `messages` besides.
+    async fn script_tools(
+        &self,
+        setup: &Setup,
+        messages: &[Message],
+    ) -> crate::ai_scripts::ScriptTools {
+        let mut seen: Vec<Message> = self.log().map(|l| l.base.clone()).unwrap_or_default();
+        seen.extend(messages.iter().cloned());
+        let w = self.writer.clone();
+        let agent = setup.agent.clone();
+        tokio::task::spawn_blocking(move || {
+            let opened = crate::ai_scripts::opened_skills(&seen);
+            crate::ai_scripts::offered(&w, &agent, &opened)
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// `messages` with every image part loaded from the vault, for a provider request (ai D19).
@@ -2280,6 +2369,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     .into_iter()
     .chain(crate::ai_skills::tool_specs())
     .chain(crate::ai_skill_changes::tool_specs())
+    .chain(crate::ai_scripts::tool_specs())
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
     .chain(crate::ai_outbox::tool_specs())
@@ -2473,6 +2563,7 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
             }
         }
         o if o.starts_with("skill_") => crate::ai_skill_changes::made_line(&done),
+        o if o.starts_with("tool_") => crate::ai_scripts::made_line(&done),
         _ => format!("The type {name} was changed."),
     };
     let mut content = done.clone();
@@ -2633,6 +2724,9 @@ pub fn apply_change(
     if event == "skill_proposal" {
         return crate::ai_skill_changes::apply_skill(w, p);
     }
+    if event == "tool_proposal" {
+        return crate::ai_scripts::apply_tool(w, p);
+    }
     if event != "proposal" {
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
@@ -2777,6 +2871,10 @@ fn propose_or_read(
         "propose_skill_delete" => {
             crate::ai_skill_changes::propose_delete(w, agent, &call.id, input)
         }
+        "list_tools" => crate::ai_scripts::list(w),
+        "get_tool" => crate::ai_scripts::get(w, input),
+        "propose_tool_change" => crate::ai_scripts::propose_change(w, agent, &call.id, input),
+        "propose_tool_delete" => crate::ai_scripts::propose_delete(w, agent, &call.id, input),
         n if agent_memory::is_cross_tool(n) => {
             agent_memory::run_cross(w, agent, &call.id, n, input)
         }

@@ -35,24 +35,41 @@ use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
-/// The name of every tool the chat can offer, which `permissions.tools` may name.
+/// The name of every built-in tool the chat can offer, which `permissions.tools` may name, with
+/// `run_script` (script-tools T1).
 pub fn tool_names() -> Vec<String> {
     crate::ai_chat::tool_specs()
         .into_iter()
-        .chain([crate::brave::tool_spec()])
+        .chain([
+            crate::brave::tool_spec(),
+            crate::ai_scripts::run_script_spec(),
+        ])
         .map(|t| t.name)
         .collect()
 }
 
-/// The issues for each tool `agent` names that the server does not have.
-pub(crate) fn unknown_tools(agent: &Agent) -> Vec<Issue> {
-    let known = tool_names();
+/// Every name `permissions.tools` may name in `w`'s vault: the built-in tools and the vault's
+/// script tools (script-tools T2).
+pub(crate) fn known_tools(w: &Writer) -> Vec<String> {
+    let mut known = tool_names();
+    for (name, _) in w.tool_files().unwrap_or_default() {
+        if !known.contains(&name) {
+            known.push(name);
+        }
+    }
+    known
+}
+
+/// The issues for each tool an agent names that `known` lacks. A skill's tool,
+/// `<skill>__<tool>`, is taken as it is: the skill's tools are read when the agent opens it
+/// (script-tools T4).
+fn unknown_in(known: &[String], agent: &Agent) -> Vec<Issue> {
     agent
         .permissions
         .tools
         .iter()
         .flatten()
-        .filter(|t| !known.contains(t))
+        .filter(|t| !known.contains(t) && !t.contains(crate::script_tools::SKILL_TOOL_SEPARATOR))
         .map(|t| {
             Issue::new(
                 "permissions.tools",
@@ -60,6 +77,13 @@ pub(crate) fn unknown_tools(agent: &Agent) -> Vec<Issue> {
             )
         })
         .collect()
+}
+
+/// The check of the tools an agent file names, against the tools of `w`'s vault, for
+/// [`Writer::check_agent`] and [`Writer::put_agent`].
+pub(crate) fn tool_check(w: &Writer) -> impl FnOnce(&Agent) -> Vec<Issue> + use<> {
+    let known = known_tools(w);
+    move |agent| unknown_in(&known, agent)
 }
 
 /// The parsed agent as the routes answer it, and as `PUT` takes it back.
@@ -100,6 +124,12 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), json!(v)))
         .collect();
+    let scripts: serde_json::Map<String, Value> = p
+        .scripts
+        .switches()
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), json!(v)))
+        .collect();
     json!({
         "tools": p.tools,
         "types": p.types,
@@ -108,6 +138,7 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         "outbox": outbox,
         "browser": p.browser,
         "skills": p.skills,
+        "scripts": scripts,
     })
 }
 
@@ -188,6 +219,7 @@ fn summary_json(name: &str, agent: &Result<Agent, Invalid>) -> Value {
 
 /// `GET /api/agents`.
 pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
+    let w2 = w.clone();
     let mut agents = blocking(w, |w| {
         let all = w.agents()?;
         Ok::<_, ApiError>(
@@ -215,7 +247,8 @@ pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
             v
         })
         .collect();
-    Ok(Json(json!({ "agents": agents, "tools": tool_names() })))
+    let tools = blocking(w2, |w| Ok::<_, ApiError>(known_tools(w))).await?;
+    Ok(Json(json!({ "agents": agents, "tools": tools })))
 }
 
 /// The response to a read or a write: the agent with its WCL, and the name of the account it
@@ -297,6 +330,9 @@ pub struct PermissionsForm {
     /// The skills offered (skills S6); absent is every valid skill.
     #[serde(default)]
     skills: Option<Vec<String>>,
+    /// The script switches (script-tools T7); absent is every switch off.
+    #[serde(default)]
+    scripts: BTreeMap<String, bool>,
 }
 
 #[derive(Deserialize)]
@@ -359,6 +395,14 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
         if !p.outbox.set(&k, on) {
             issues.push(Issue::new(
                 format!("permissions.outbox.{k}"),
+                "is not a switch",
+            ));
+        }
+    }
+    for (k, on) in f.permissions.scripts {
+        if !p.scripts.set(&k, on) {
+            issues.push(Issue::new(
+                format!("permissions.scripts.{k}"),
                 "is not a switch",
             ));
         }
@@ -452,7 +496,8 @@ pub async fn put(
     };
     let (wcl, agent, account) = blocking(w, move |w| {
         let _acting = writer::acting_as(&by);
-        let (wcl, agent) = w.put_agent(&name, &source, unknown_tools)?;
+        let check = tool_check(w);
+        let (wcl, agent) = w.put_agent(&name, &source, check)?;
         let account = crate::ai_settings::agent_account_name(w, &agent);
         Ok::<_, ApiError>((wcl, agent, account))
     })

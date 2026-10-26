@@ -37,6 +37,7 @@ An agent's permissions are its own: nothing is inherited from Settings > AI.
 - **Outbox** (`permissions.outbox.send_without_review`, off by default): "Send from the Outbox without review". Off, what the agent drafts waits in the Outbox's Draft tab for you. On, its drafts are created ready and sent at once. See [Drafting into the Outbox](#drafting-into-the-outbox).
 - **Browser automation** (`permissions.browser`, off by default): the browser box tools. See [Driving the browser box](#driving-the-browser-box).
 - **Skills** (`permissions.skills`): **All skills**, or **Only these skills** from the vault's skills. See [Using skills](#using-skills).
+- **Run wscript code** (`permissions.scripts.run_code`, off by default): the `run_script` tool, full access to the vault, the web and script secrets. See [Running wscript](#running-wscript).
 
 In a chat, the person or token running it still caps what the agent can change: an agent never writes more than its caller could.
 
@@ -149,6 +150,22 @@ The panel shows a skill proposal as a card: the `SKILL.md` or file lines removed
 The confirmation switch is "Ask before changing skills" (`permissions.confirm.skills`, on by default, written to the agent file only when off). With it off, the tool makes the change at once on the home server, whoever runs the turn with at least `write`, so in the desktop and Android apps too, and the panel shows it as made; a `read` caller gets the proposal. An unattended run with the switch on is not offered the four propose tools. An agent cannot give another agent the switch off when it is on for itself (see [No escalation](#agents-that-manage-agents)).
 
 Once a skill exists, the agent that created it may call `use_skill` on it at once when its **Skills** permission offers it. The thread's "Available skills" list does not change: type `/update-skills` to give the thread the new list.
+
+## Running wscript
+
+Agents run wscript three ways (script-tools T1 to T6). The built-in `wscript` skill teaches the language and the vault API; an agent that can run scripts is told to open it first.
+
+- **Its own code, with `run_script {code, function, args}`.** Offered only when the agent file sets `permissions { scripts { run_code = true } }`, the agent screen's **Run wscript code** switch. `code` is a whole wscript unit; `function` (default `main`) is called with `args`, JSON text of an array, each element a `Value`. It answers the return value as JSON, the log, the time taken and the instructions used, or the compile or run-time error to fix.
+- **A script tool of the vault**, `tools/<name>.wcl` with its script (see [Tool files](vault-format.md#tool-files)), offered under its name when it is valid and the agent's tools list, if it has one, names it. Settings > Tools lists, edits and runs them, and shows why an invalid one is not offered.
+- **A skill's script tool**, `skills/<skill>/tools/<tool>.wcl` with the skill's own `scripts/<script>.ws`, offered as `<skill>__<tool>` from the round after the agent calls `use_skill` on the skill, for the rest of the thread.
+
+Safety:
+
+- **Run wscript code is full access.** The code reaches every `vault` function on every note type (the agent's `permissions.types` do not limit it), HTTP to any host, the `ai` module, and every script secret by name, for up to five minutes and 50 million instructions. Its changes are made at once, as the agent, with no proposal. Only an admin grants it: agent files need `admin`, an agent may propose it for another agent only when it has it itself, an agent never changes its own file, and such a change always waits for an admin's Apply, whatever the agent's "Ask before changing agents" switch says; a `write` token from an app gets "Only an admin turns on Run wscript code".
+- **A tool's author decides what it can reach.** A tool runs with the modules a task has, but only the hosts in its `allow_domains` and the secrets in its `secrets`, with no `fs` directories, within its `timeout`. Its changes are made at once as the calling agent: the agent's confirmation switches do not turn them into proposals. Writing a tool needs `admin`; an agent proposes one with `propose_tool_change {name, wcl, script_source}` (the tool file and, when given, its script, in one commit) or `propose_tool_delete {name}` (the script goes too when nothing else names it), under "Ask before changing script tools" (`permissions.confirm.tools`, on by default). With the switch off, and with `admin`, the change is made at once. `list_tools` and `get_tool` read.
+- **Every run is logged with its version.** Each run is an `ai.script` entry in the [activity log](activity.md): the agent, the thread and turn, the tool or `run_script`, the outcome and error kind, the time, the instructions, the start of the log, and the script that ran: for a vault tool the SHA-256 of its script and of its tool file and the vault generation they were read at, for a skill's tool the skill, the script's path and its hash, and for `run_script` the hash of the code, whose whole text stays in the thread as the tool call's input.
+
+Scripts run on the home server only. The apps send their turns there, so nothing runs on a device, and the apps show Settings > Tools in the web app only.
 
 ## Threads
 

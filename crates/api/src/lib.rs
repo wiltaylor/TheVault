@@ -11,9 +11,9 @@
 //! builder's model (D8).
 //!
 //! `/api/batch` applies many note writes in one commit, or dry-runs them, and `/api/upsert` writes
-//! a note matched by a key field (D32). Assets, templates, taxonomies, scripts and note canvases
-//! each have their own routes, `/api/schema` describes every type and taxonomy, and
-//! `/api/openapi.json` lists every endpoint.
+//! a note matched by a key field (D32). Assets, templates, taxonomies, scripts, script tools
+//! (`/api/tools`, script-tools T2) and note canvases each have their own routes, `/api/schema`
+//! describes every type and taxonomy, and `/api/openapi.json` lists every endpoint.
 //!
 //! Notifications for the user, from scripts, agents and the server, live under
 //! `/api/notifications`. `/api/activity` pages the activity log, admin only (activity Y3). `/api/events` streams notification and note changes to open clients as
@@ -76,6 +76,7 @@ mod ai_assets;
 mod ai_browser;
 mod ai_chat;
 mod ai_outbox;
+mod ai_scripts;
 mod ai_settings;
 mod ai_skill_changes;
 mod ai_skills;
@@ -99,6 +100,7 @@ mod notifications;
 mod openapi;
 mod pins;
 mod query;
+mod script_tools;
 mod skills;
 mod sync;
 mod tasks;
@@ -288,6 +290,11 @@ fn build() -> Built {
         .get("/api/scripts/{name}", defs::script)
         .put("/api/scripts/{name}", defs::put_script)
         .delete("/api/scripts/{name}", defs::delete_script)
+        .get("/api/tools", script_tools::list)
+        .get("/api/tools/{name}", script_tools::read)
+        .put("/api/tools/{name}", script_tools::put)
+        .delete("/api/tools/{name}", script_tools::delete)
+        .post("/api/tools/{name}/run", script_tools::run_route)
         .get("/api/agents", agent_files::list)
         .get("/api/agents/{name}", agent_files::read)
         .put("/api/agents/{name}", agent_files::put)
@@ -485,6 +492,8 @@ pub fn router(
     // Only the server runs agent triggers (agents G10): the embedded app servers come through
     // `owner_router`, which installs no runner.
     scheduler.set_agent_runner(Arc::new(agent_runs::TriggerRunner::new(writer.clone())));
+    // Only the server runs agents' scripts (script-tools T1), on the host the tasks run on.
+    script_tools::register(&writer, scheduler.host());
     let browser = browser::Config::from_env();
     let mut app = assemble(
         writer,

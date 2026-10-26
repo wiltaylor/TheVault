@@ -21,6 +21,7 @@ regex = "1"
 reqwest = { workspace = true, features = ["json", "stream"] }
 scheduler.workspace = true
 schema.workspace = true
+script.workspace = true
 script-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

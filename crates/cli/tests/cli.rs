@@ -700,9 +700,10 @@ fn init_starter_writes_files_that_all_validate() {
         .collect();
     assert_eq!(written, ids);
 
-    // Every WCL file is already canonical.
+    // Every WCL file is already canonical. Scripts and skills (the shipped `wscript` skill) are
+    // not WCL.
     for (path, bytes) in files(dir) {
-        if path.extension().is_some_and(|e| e == "ws") {
+        if path.extension().is_some_and(|e| e == "ws") || path.starts_with("skills") {
             continue;
         }
         let text = String::from_utf8(bytes).unwrap();
@@ -1255,6 +1256,27 @@ fn every_command_prints_json() {
     run("task show-run", &["tick", &ran["id"].to_string()], "");
     run("task delete", &["tick"], "");
     run("script delete", &["tick"], "");
+
+    // Script tools (script-tools T2): the script, then the tool naming it.
+    run(
+        "script put",
+        &["greet"],
+        "use vault\nfn run(params: Value) -> Result[Value, string] {\n    let who = params.get(\"who\").unwrap().as_string().unwrap()\n    Ok(Value::String(\"Hello, \" + who))\n}\n",
+    );
+    let put = run(
+        "tool put",
+        &["greet"],
+        "description = \"Greet someone.\"\nscript = \"greet\"\nfunction = \"run\"\n\nparam who {\n  kind = \"string\"\n  required = true\n}\n",
+    );
+    assert_eq!(put["valid"], true, "{put}");
+    let listed = run("tool list", &[], "");
+    assert_eq!(listed["tools"][0]["name"], "greet", "{listed}");
+    run("tool get", &["greet"], "");
+    let greeted = run("tool run", &["greet", "-p", "who=Ann"], "");
+    assert_eq!(greeted["result"], "Hello, Ann", "{greeted}");
+    let deleted = run("tool delete", &["greet"], "");
+    // Nothing else names its script, so it goes too.
+    assert_eq!(deleted["script_deleted"], "greet", "{deleted}");
 
     let token = run("token create", &["agent", "--scope", "read"], "");
     assert!(token["secret"].is_string());

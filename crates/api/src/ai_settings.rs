@@ -638,6 +638,8 @@ pub struct ConfirmBody {
     agents: Option<bool>,
     #[serde(default)]
     skills: Option<bool>,
+    #[serde(default)]
+    tools: Option<bool>,
 }
 
 /// A partial `web`: each internet tool switch sent replaces the stored one (ai D28).
@@ -690,6 +692,7 @@ pub async fn put_settings(
                     (&mut to.taxonomies, c.taxonomies),
                     (&mut to.skills, c.skills),
                     (&mut to.agents, c.agents),
+                    (&mut to.tools, c.tools),
                 ] {
                     if let Some(v) = value {
                         *slot = v;
@@ -713,11 +716,8 @@ pub async fn put_settings(
                 check.set_system_prompt(&p).map_err(api_error)?;
                 agent.system_prompt = check.system_prompt;
             }
-            w.put_agent(
-                schema::ASSISTANT_AGENT,
-                &agent.to_wcl(),
-                crate::agent_files::unknown_tools,
-            )?;
+            let check = crate::agent_files::tool_check(w);
+            w.put_agent(schema::ASSISTANT_AGENT, &agent.to_wcl(), check)?;
         }
         if fetch_private.is_some() || context.auto_compact.is_some() || context.compact_at.is_some()
         {

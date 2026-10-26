@@ -207,6 +207,11 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     if !get && under(path, "/api/skills") {
         return Route::NeedsWebApp;
     }
+    // Script tools are definitions too, and run only on the home server (script-tools T1, T2):
+    // writing and running one needs `admin`.
+    if !get && under(path, "/api/tools") {
+        return Route::NeedsWebApp;
+    }
     if path == "/api/events" && get {
         return Route::Events;
     }
@@ -923,9 +928,14 @@ mod tests {
             (Method::DELETE, "/api/skills/pdf/files/a.txt"),
             (Method::DELETE, "/api/skills/pdf"),
             (post.clone(), "/api/skills/import"),
+            (Method::PUT, "/api/tools/count"),
+            (Method::DELETE, "/api/tools/count"),
+            (post.clone(), "/api/tools/count/run"),
         ] {
             assert_eq!(route(&method, path), Route::NeedsWebApp, "{method} {path}");
         }
+        assert_eq!(route(&get, "/api/tools"), Route::Local);
+        assert_eq!(route(&get, "/api/tools/count"), Route::Local);
         assert_eq!(
             route(&get, &format!("/api/notes/{id}/history")),
             Route::History

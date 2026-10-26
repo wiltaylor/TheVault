@@ -194,7 +194,32 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "DELETE",
         "/api/scripts/{name}",
-        "Delete a script no handler or task names",
+        "Delete a script no handler, task or tool names",
+    ),
+    (
+        "GET",
+        "/api/tools",
+        "Every script tool, with whether it is valid and its problems",
+    ),
+    (
+        "GET",
+        "/api/tools/{name}",
+        "Read a script tool's file, its problems and its script's source",
+    ),
+    (
+        "PUT",
+        "/api/tools/{name}",
+        "Create or replace a script tool, and its script with it",
+    ),
+    (
+        "DELETE",
+        "/api/tools/{name}",
+        "Delete a script tool, and its script when nothing else names it",
+    ),
+    (
+        "POST",
+        "/api/tools/{name}/run",
+        "Run a script tool with parameters",
     ),
     (
         "GET",

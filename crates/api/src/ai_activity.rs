@@ -2,7 +2,10 @@
 //! `ai.turn.end` (agent, account, kind, model, thread, origin; at the end the tokens, time and
 //! outcome), `ai.tool` for each tool call with a short summary of its arguments, `ai.browser` for
 //! each browser command with its exit code, `ai.skill` for each `use_skill`, `read_skill_file`
-//! and `install_skill_in_browser` with the skill and file (skills S7), and `ai.proposal` and `ai.applied` for the changes
+//! and `install_skill_in_browser` with the skill and file (skills S7), `ai.script` for each
+//! script an agent runs (`run_script`, a vault tool or a skill's tool) with its tool, the version
+//! of the script that ran (`script`, the reference `crate::script_tools` describes), the outcome,
+//! the time, the instructions and the start of its log (script-tools T6), and `ai.proposal` and `ai.applied` for the changes
 //! the turn proposed or made. Model message text and the notes a tool writes are never copied:
 //! only names, ids, titles, query text, hosts and the first characters of a command.
 //!
@@ -151,6 +154,10 @@ fn change_line(event: &str, p: &Value) -> String {
         "agent_proposal" => format!("agent{}", name.unwrap_or_default()),
         "agent_memory_proposal" => format!("memory{}", title.unwrap_or_default()),
         "skill_proposal" => format!("skill{}", name.unwrap_or_default()),
+        "tool_proposal" => format!("tool{}", name.unwrap_or_default()),
+        _ if op.starts_with("tool_") => {
+            format!("tool {}", p["tool_name"].as_str().unwrap_or_default())
+        }
         _ if op.starts_with("skill_") => {
             format!("skill {}", p["skill_name"].as_str().unwrap_or_default())
         }
@@ -258,7 +265,23 @@ impl TurnActivity {
             detail["error"] = json!(one_line(m, 200));
         }
         let mut line = format!("{name} {}", args_line(&args));
-        let kind = if let Some(s) = summary.get("skill").filter(|s| s.is_object()) {
+        let kind = if let Some(s) = summary.get("script").filter(|s| s.is_object()) {
+            detail["script"] = s["ref"].clone();
+            detail["outcome"] = s["outcome"].clone();
+            detail["error_kind"] = s["error_kind"].clone();
+            detail["ms"] = s["ms"].clone();
+            detail["instructions"] = s["instructions"].clone();
+            detail["log"] = s["log"].clone();
+            if let Some(e) = s["error"].as_str() {
+                detail["error"] = json!(one_line(e, 200));
+            }
+            let ms = s["ms"].as_u64().unwrap_or(0);
+            line = match s["error_kind"].as_str() {
+                None => format!("{name} ok in {ms} ms"),
+                Some(k) => format!("{name} failed ({k}) in {ms} ms"),
+            };
+            "ai.script"
+        } else if let Some(s) = summary.get("skill").filter(|s| s.is_object()) {
             detail["skill"] = s["name"].clone();
             if let Some(p) = s["path"].as_str() {
                 detail["path"] = json!(one_line(p, ARG_CHARS));
@@ -282,7 +305,7 @@ impl TurnActivity {
         } else {
             "ai.tool"
         };
-        if is_error {
+        if is_error && kind != "ai.script" {
             line.push_str(" (failed)");
         }
         self.record(self.entry(kind, line.trim().to_owned(), detail));

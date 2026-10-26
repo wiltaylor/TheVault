@@ -4,7 +4,7 @@ Scripts are wscript files, `scripts/<name>.ws`. They run as type handlers (`docs
 
 ## What each kind of run can use
 
-| Module | `before_*` handlers, migrations | `after_*` handlers | Scheduled scripts | Device handlers and commands |
+| Module | `before_*` handlers, migrations | `after_*` handlers | Scheduled scripts, script tools, `run_script` | Device handlers and commands |
 |--------|---------------------------------|--------------------|-------------------|------------------------------|
 | `vault` | yes | yes | yes | yes |
 | `http` | no | yes | yes | no |
@@ -14,9 +14,11 @@ Scripts are wscript files, `scripts/<name>.ws`. They run as type handlers (`docs
 | `device` | no | no | no | yes |
 | `value`, `json`, `math`, `regex` | yes | yes | yes | yes |
 
+AI agents run scripts too (script-tools T1 to T4), with the modules a scheduled script has: a script tool (`tools/<name>.wcl`, `docs/vault-format.md` "Tool files") within its own `allow_domains`, `secrets` and `timeout`, and an agent's own code through `run_script`, which reaches any host and every secret, for up to five minutes. Neither has `fs` directories. Their changes are recorded as made by `agent <name>`. A tool's function takes one `Value`, the map of its parameters; every argument the host passes, to any entry function, arrives as a `Value`. [AI agents in the vault](ai-agents.md#running-wscript) says who may run what.
+
 A script that uses a module its kind of run lacks does not compile. wscript's own `fs`, `process` and `time` modules are never available.
 
-Each run has limits: 50 million instructions, a call depth of 256, a wall-clock time limit (a task's `timeout`, 30 seconds by default, and five minutes for the Outbox's `outbox_send` handler), 1 MiB per HTTP response, 16 MiB per file or asset read, 10,000 rows per `vault::query`, and 64 KiB of log.
+Each run has limits: 50 million instructions, a call depth of 256, a wall-clock time limit (a task's or a script tool's `timeout`, 30 seconds by default, and five minutes for the Outbox's `outbox_send` handler and an agent's `run_script`), 1 MiB per HTTP response, 16 MiB per file or asset read, 10,000 rows per `vault::query`, and 64 KiB of log.
 
 ## Conventions
 

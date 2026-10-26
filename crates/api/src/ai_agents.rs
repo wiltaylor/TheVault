@@ -168,6 +168,14 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
             ));
         }
     }
+    // Running its own wscript (script-tools T1): full access, so only an agent that has it may
+    // propose it, and only an admin's Apply grants it ([`grants_run_code`]).
+    if tp.scripts.run_code && !bp.scripts.run_code {
+        problems.push(
+            "it would turn on Run wscript code (permissions.scripts.run_code), which is off for this agent"
+                .to_owned(),
+        );
+    }
     // Browser automation (browser B6): only an agent that has it may give it.
     if tp.browser && !bp.browser {
         problems.push(
@@ -234,7 +242,7 @@ pub(crate) fn propose_change(
     }
     let before = w.read_agent(name).ok();
     let (after, agent) = w
-        .check_agent(name, wcl, crate::agent_files::unknown_tools)
+        .check_agent(name, wcl, crate::agent_files::tool_check(w))
         .map_err(|e| {
             refused(
                 e,
@@ -278,8 +286,33 @@ pub(crate) fn propose_change(
         "after": after,
         "issues": [],
         "proposer": by.name,
+        "grants_run_code": grants(w, name, &agent),
     });
     Ok(out(content, names, Some(proposal)))
+}
+
+/// Whether writing `agent` as agent `name` turns on `run_code`, which it does not have now.
+fn grants(w: &Writer, name: &str, agent: &Agent) -> bool {
+    agent.permissions.scripts.run_code
+        && !agent_named(w, name)
+            .ok()
+            .flatten()
+            .is_some_and(|a| a.permissions.scripts.run_code)
+}
+
+/// Whether agent proposal `p` would turn on `run_code` for its agent (script-tools T1): such a
+/// change is never made by a tool on its own, and only a caller with `admin` applies it.
+pub(crate) fn grants_run_code(w: &Writer, p: &Value) -> bool {
+    let (Some(name), Some(after)) = (p["name"].as_str(), p["after"].as_str()) else {
+        return false;
+    };
+    if p["op"] == "delete" {
+        return false;
+    }
+    match Agent::parse(name, after) {
+        Ok(agent) => grants(w, name, &agent),
+        Err(_) => false,
+    }
 }
 
 /// `propose_agent_delete`: check the agent exists, is not built in and is not the proposing
@@ -380,7 +413,7 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
         .as_str()
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
     if let Some(by) = &by {
-        let (_, agent) = w.check_agent(name, after, crate::agent_files::unknown_tools)?;
+        let (_, agent) = w.check_agent(name, after, crate::agent_files::tool_check(w))?;
         let problems = escalation(by, &agent);
         if !problems.is_empty() {
             return Err(ApplyError::Refused(format!(
@@ -390,7 +423,7 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             )));
         }
     }
-    w.put_agent(name, after, crate::agent_files::unknown_tools)?;
+    w.put_agent(name, after, crate::agent_files::tool_check(w))?;
     let op = if before.is_some() {
         "agent_change"
     } else {

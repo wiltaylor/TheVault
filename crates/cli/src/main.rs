@@ -269,6 +269,9 @@ enum Command {
     /// wscript files in scripts/.
     #[command(subcommand)]
     Script(Script),
+    /// Script tools in tools/, which AI agents call.
+    #[command(subcommand)]
+    Tool(Tool),
     /// Scheduled tasks and their runs.
     #[command(subcommand)]
     Task(Task),
@@ -594,8 +597,36 @@ enum Script {
         #[arg(long, short)]
         file: Option<PathBuf>,
     },
-    /// Delete a script no handler or task names.
+    /// Delete a script no handler, task or tool names.
     Delete { name: String },
+}
+
+#[derive(Subcommand)]
+enum Tool {
+    /// Every script tool, with whether it is valid and its problems.
+    List,
+    /// Read a script tool's file, its problems and its script's source.
+    Get { name: String },
+    /// Create or replace a script tool from its WCL file, and with --script its script too.
+    Put {
+        name: String,
+        /// The tool file (WCL); standard input when absent.
+        #[arg(long, short)]
+        file: Option<PathBuf>,
+        /// The source of the script the tool names, written with it.
+        #[arg(long, short)]
+        script: Option<PathBuf>,
+    },
+    /// Delete a script tool, and its script when nothing else names it.
+    Delete { name: String },
+    /// Run a script tool with parameters.
+    Run {
+        name: String,
+        /// A parameter, as name=value. A value that reads as JSON (a number, true, a list) is
+        /// sent as that; anything else as a string.
+        #[arg(long = "param", short = 'p', value_name = "NAME=VALUE")]
+        params: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1063,6 +1094,22 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
             ),
             Script::Delete { name } => api.delete(&["api", "scripts", &name]),
         },
+        Command::Tool(t) => match t {
+            Tool::List => api.get(&["api", "tools"]),
+            Tool::Get { name } => api.get(&["api", "tools", &name]),
+            Tool::Put { name, file, script } => {
+                let mut body = json!({ "wcl": read_text(file.as_deref())? });
+                if let Some(path) = script {
+                    body["script_source"] = json!(read_text(Some(&path))?);
+                }
+                api.put(&["api", "tools", &name], body)
+            }
+            Tool::Delete { name } => api.delete(&["api", "tools", &name]),
+            Tool::Run { name, params } => api.post(
+                &["api", "tools", &name, "run"],
+                json!({ "params": tool_params(&params)? }),
+            ),
+        },
         Command::Task(t) => match t {
             Task::List => api.get(&["api", "tasks"]),
             Task::Get { name } => api.get(&["api", "tasks", &name]),
@@ -1406,6 +1453,23 @@ fn pairs(raw: &[String]) -> Result<Value, Fail> {
             .split_once('=')
             .ok_or_else(|| Fail::new("usage", format!("{r:?} is not OLD=NEW")))?;
         out.insert(old.to_owned(), json!(new));
+    }
+    Ok(Value::Object(out))
+}
+
+/// `name=value` tool parameters as a JSON map: a value that reads as JSON (a number, a bool,
+/// null, a list or a map) as that, any other value as a string (script-tools T2).
+fn tool_params(raw: &[String]) -> Result<Value, Fail> {
+    let mut out = Map::new();
+    for r in raw {
+        let (name, value) = r
+            .split_once('=')
+            .ok_or_else(|| Fail::new("usage", format!("{r:?} is not NAME=VALUE")))?;
+        let v = match serde_json::from_str::<Value>(value) {
+            Ok(v) if !v.is_string() => v,
+            _ => json!(value),
+        };
+        out.insert(name.to_owned(), v);
     }
     Ok(Value::Object(out))
 }

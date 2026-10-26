@@ -277,6 +277,18 @@ pub fn use_skill(w: &Writer, agent: &Agent, input: &Value, browser: bool) -> Rea
             "Follow the instructions. Paths in them are relative to the skill's folder: read those files with read_skill_file. {scripts}"
         ),
     });
+    // The skill's own script tools, offered from the next round (script-tools T4).
+    let tools: Vec<String> = crate::script_tools::skill_tool_names(&skill)
+        .iter()
+        .filter_map(|t| crate::script_tools::skill_tool_name(&skill.name, t))
+        .filter(|t| agent.permissions.allows_tool(t))
+        .collect();
+    if !tools.is_empty() {
+        content["tools"] = json!(tools);
+        content["tools_note"] = json!(
+            "These are the skill's script tools (its tools/ folder). They are your tools from your next step on, for the rest of this conversation, when they are valid."
+        );
+    }
     if let Some(l) = &md.license {
         content["license"] = json!(l);
     }
