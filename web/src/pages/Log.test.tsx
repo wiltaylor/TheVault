@@ -108,10 +108,15 @@ const lastCall = () => activity.mock.calls[activity.mock.calls.length - 1]![0] a
 
 describe("the Log page", () => {
   it("lists entries newest first, grouped by day, with time, actor, category and summary", async () => {
+    // Ages measured from local midnight, so the first two are today and the third yesterday
+    // whatever the time of day the test runs.
+    const midnight = new Date(NOW);
+    midnight.setHours(0, 0, 0, 0);
+    const sinceMidnight = NOW - midnight.getTime();
     log = [
-      entry({ ago: 2 * HOUR, summary: "Created Groceries" }),
-      entry({ ago: 1000, summary: "Updated Groceries" }),
-      entry({ ago: 26 * HOUR, summary: "Logged in", category: "auth", kind: "auth.login" }),
+      entry({ ago: Math.floor(sinceMidnight / 2), summary: "Created Groceries" }),
+      entry({ ago: Math.min(1000, Math.floor(sinceMidnight / 4)), summary: "Updated Groceries" }),
+      entry({ ago: sinceMidnight + 2 * HOUR, summary: "Logged in", category: "auth", kind: "auth.login" }),
     ];
     await open();
     await waitFor(() => expect(summaries()).toEqual(["Updated Groceries", "Created Groceries", "Logged in"]));
