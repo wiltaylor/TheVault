@@ -1,21 +1,30 @@
-//! Text extracted from uploaded PDF assets, for full-text search.
+//! Text extracted from uploaded assets, for full-text search: PDFs, Word documents (`.docx`),
+//! spreadsheets (`.xlsx`, `.xls`, `.ods`) and CSV files, each a [`TextKind`] known by its file
+//! name's extension and checked by its first bytes.
 //!
-//! A PDF's text is extracted once, when it is uploaded or when a rebuild finds a PDF with no
-//! text yet, and kept in `.vault/asset-text/v1/<ULID>.txt`. Assets never change, so the file
-//! stays good until the asset is deleted. A PDF the extractors could not read keeps an empty
-//! file, so a rebuild does not try it again, and `<ULID>.unreadable` beside it holding why. Like the rest of the index, the folder is derived
-//! data: delete it and the next rebuild extracts every PDF again.
+//! An asset's text is extracted once, when it is uploaded or when a rebuild finds an asset of
+//! one of those kinds with no text yet, and kept in `.vault/asset-text/v1/<ULID>.txt`. Assets
+//! never change, so the file stays good until the asset is deleted. A file the extractors could
+//! not read keeps an empty file, so a rebuild does not try it again, and `<ULID>.unreadable`
+//! beside it holding why. Like the rest of the index, the folder is derived data: delete it and
+//! the next rebuild extracts every asset's text again.
 //!
-//! A note's full-text document takes in the text of every PDF it names, in a field or in a
-//! block's `asset` item, so a search for a word inside a PDF finds the notes holding it.
+//! A note's full-text document takes in the text of every asset it names, in a field or in a
+//! block's `asset` item, so a search for a word inside a PDF or a spreadsheet finds the notes
+//! holding it.
 //!
-//! Extraction runs on a thread of its own, capped at [`MAX_PDF_BYTES`] of input,
-//! [`EXTRACT_TIMEOUT`] of time and [`MAX_TEXT`] of output. pdf-extract reads the text first;
-//! when it fails or panics, which it does on some real PDFs, lopdf's more tolerant extractor
-//! reads what it can. When both fail, as they do on a PDF whose cross-reference table lopdf
-//! refuses, the table is rebuilt from the objects in the file and both try again. A panic on
-//! that thread is caught and prints nothing: its message becomes the reason the caller logs. A thread that runs past its time cannot be stopped: it is left
-//! to finish, and while [`MAX_RUNNING`] are still running no new extraction starts.
+//! Extraction runs on a thread of its own, capped at [`MAX_EXTRACT_BYTES`] of input,
+//! [`EXTRACT_TIMEOUT`] of time and [`MAX_TEXT`] of output; a zip, which a docx, xlsx or ods
+//! is, is never unpacked past [`crate::MAX_UNZIPPED_BYTES`]. [`crate::office`] lays out the
+//! text of a document or spreadsheet. A CSV file's text is the file itself, read at once.
+//!
+//! pdf-extract reads a PDF's text first; when it fails or panics, which it does on some real
+//! PDFs, lopdf's more tolerant extractor reads what it can. When both fail, as they do on a PDF
+//! whose cross-reference table lopdf refuses, the table is rebuilt from the objects in the file
+//! and both try again. A panic on an extraction thread is caught and prints nothing: its
+//! message becomes the reason the caller logs. A thread that runs past its time cannot be
+//! stopped: it is left to finish, and while [`MAX_RUNNING`] are still running no new
+//! extraction starts.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -27,15 +36,16 @@ use std::time::Duration;
 
 use schema::{Doc, Value};
 
+use crate::office::{self, OLE_MAGIC, ZIP_MAGIC};
 use crate::{Result, io_err, pdf_repair};
 
-/// The largest PDF whose text is extracted, in bytes.
-pub const MAX_PDF_BYTES: usize = 50 * 1024 * 1024;
+/// The largest file whose text is extracted, in bytes.
+pub const MAX_EXTRACT_BYTES: usize = 50 * 1024 * 1024;
 
-/// How long one extraction may take before its PDF counts as unreadable.
+/// How long one extraction may take before its file counts as unreadable.
 pub const EXTRACT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The most text kept from one PDF, in bytes.
+/// The most text kept from one file, in bytes.
 pub const MAX_TEXT: usize = 2 * 1024 * 1024;
 
 /// The most extractions running at once, counting any that ran past their time.
@@ -44,20 +54,20 @@ pub const MAX_RUNNING: usize = 4;
 static RUNNING: AtomicUsize = AtomicUsize::new(0);
 
 /// The name of the threads extraction runs on, whose panics the hook keeps quiet.
-const THREAD: &str = "pdf-text";
+const THREAD: &str = "asset-text";
 
-/// What extracting a PDF's text came to.
+/// What extracting a file's text came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Extracted {
-    /// The PDF's text, white space collapsed, at most [`MAX_TEXT`] bytes. It may be empty: a
-    /// scanned PDF has no text.
+    /// The file's text, at most [`MAX_TEXT`] bytes, a PDF's or a document's with white space
+    /// collapsed. It may be empty: a scanned PDF has no text.
     Text(String),
     /// pdf-extract failed for `reason`, and the fallback extractor, or either extractor once
     /// the PDF's xref table was rebuilt, read `text`, tidied as for [`Extracted::Text`] and
     /// never empty.
     Recovered { text: String, reason: String },
-    /// The file is too large, is not a PDF, could not be read by either extractor or ran past
-    /// its time, for `reason`, one line. Kept as no text.
+    /// The file is too large, is not of its kind, could not be read or ran past its time, for
+    /// `reason`, one line. Kept as no text.
     Failed(String),
     /// Too many extractions are running: try again later. Nothing is kept.
     Busy,
@@ -66,19 +76,95 @@ pub enum Extracted {
 /// What the index holds of an asset's text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredText {
-    /// The text extracted, empty for a PDF with none, such as a scan.
+    /// The text extracted, empty for a file with none, such as a scanned PDF.
     Text(String),
-    /// The PDF was kept as unreadable, for the reason given.
+    /// The file was kept as unreadable, for the reason given.
     Unreadable(String),
-    /// No text has been extracted: the asset is not a PDF, or its extraction has not run yet.
+    /// No text has been extracted: the asset is of no [`TextKind`], or its extraction has not
+    /// run yet.
     NotExtracted,
+}
+
+/// The kinds of file whose text is extracted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextKind {
+    /// `.pdf`.
+    Pdf,
+    /// A Word document, `.docx`.
+    Document,
+    /// An Excel or OpenDocument spreadsheet: `.xlsx`, `.xls` or `.ods`.
+    Spreadsheet,
+    /// `.csv`.
+    Csv,
+}
+
+impl TextKind {
+    /// The kind of an asset called `filename`, by its extension, or `None` when its text is
+    /// not extracted.
+    pub fn of(filename: &str) -> Option<TextKind> {
+        let (_, ext) = filename.rsplit_once('.')?;
+        Some(match ext.to_ascii_lowercase().as_str() {
+            "pdf" => TextKind::Pdf,
+            "docx" => TextKind::Document,
+            "xlsx" | "xls" | "ods" => TextKind::Spreadsheet,
+            "csv" => TextKind::Csv,
+            _ => return None,
+        })
+    }
 }
 
 /// Whether an asset called `filename` is a PDF, by its extension.
 pub fn is_pdf(filename: &str) -> bool {
-    filename
-        .rsplit_once('.')
-        .is_some_and(|(_, e)| e.eq_ignore_ascii_case("pdf"))
+    TextKind::of(filename) == Some(TextKind::Pdf)
+}
+
+/// Extract the text of `bytes`, a file of `kind`, within the caps in the module documentation.
+pub fn extract_text(kind: TextKind, bytes: Vec<u8>) -> Extracted {
+    match kind {
+        TextKind::Pdf => extract_pdf_text(bytes),
+        TextKind::Document => extract_office(bytes, EXTRACT_TIMEOUT, kind, office::docx_text),
+        TextKind::Spreadsheet => extract_office(bytes, EXTRACT_TIMEOUT, kind, office::sheet_text),
+        TextKind::Csv if bytes.len() > MAX_EXTRACT_BYTES => too_large(),
+        TextKind::Csv => Extracted::Text(office::csv_text(&bytes)),
+    }
+}
+
+fn too_large() -> Extracted {
+    Extracted::Failed(format!("larger than {MAX_EXTRACT_BYTES} bytes"))
+}
+
+/// The text `read` takes from `bytes`, a document or spreadsheet, on an extraction thread.
+pub(crate) fn extract_office(
+    bytes: Vec<u8>,
+    timeout: Duration,
+    kind: TextKind,
+    read: Extractor,
+) -> Extracted {
+    if bytes.len() > MAX_EXTRACT_BYTES {
+        return too_large();
+    }
+    let zip = bytes.starts_with(ZIP_MAGIC);
+    match kind {
+        TextKind::Document if !zip => {
+            return Extracted::Failed(if bytes.starts_with(OLE_MAGIC) {
+                "not a Word document: an OLE file, such as an old .doc or a password-protected \
+                 document"
+                    .to_owned()
+            } else {
+                "not a Word document: no zip header".to_owned()
+            });
+        }
+        TextKind::Spreadsheet if !zip && !bytes.starts_with(OLE_MAGIC) => {
+            return Extracted::Failed("not a spreadsheet: no zip or OLE header".to_owned());
+        }
+        _ => {}
+    }
+    let tidied = kind == TextKind::Document;
+    run(bytes, timeout, move |bytes| match guarded(read, &bytes) {
+        Ok(text) if tidied => Extracted::Text(tidy(&text)),
+        Ok(text) => Extracted::Text(office::cap(text)),
+        Err(reason) => Extracted::Failed(one_line(&reason)),
+    })
 }
 
 impl Extracted {
@@ -91,7 +177,7 @@ impl Extracted {
     }
 }
 
-/// An extractor: the text of a PDF, or why it has none.
+/// An extractor: the text of a file, or why it has none.
 type Extractor = fn(&[u8]) -> std::result::Result<String, String>;
 
 /// Extract the text of the PDF `bytes`, within the caps in the module documentation.
@@ -124,12 +210,38 @@ pub(crate) fn extract_with(
     extract: Extractor,
     fallback: Extractor,
 ) -> Extracted {
-    if bytes.len() > MAX_PDF_BYTES {
-        return Extracted::Failed(format!("larger than {MAX_PDF_BYTES} bytes"));
+    if bytes.len() > MAX_EXTRACT_BYTES {
+        return too_large();
     }
     if !looks_like_pdf(&bytes) {
         return Extracted::Failed("no PDF header".to_owned());
     }
+    run(bytes, timeout, move |bytes| {
+        match read(extract, fallback, &bytes) {
+            Extracted::Failed(reason) => match pdf_repair::rebuild_xref(&bytes)
+                .map(|fixed| read(extract, fallback, &fixed))
+            {
+                Some(Extracted::Text(text)) if text.is_empty() => Extracted::Text(text),
+                Some(Extracted::Text(text) | Extracted::Recovered { text, .. }) => {
+                    Extracted::Recovered {
+                        text,
+                        reason: format!("{reason}; read after rebuilding its xref table"),
+                    }
+                }
+                _ => Extracted::Failed(reason),
+            },
+            out => out,
+        }
+    })
+}
+
+/// What `job` makes of `bytes`, run on an extraction thread of its own when a slot is free,
+/// or [`Extracted::Failed`] once it runs past `timeout`.
+fn run(
+    bytes: Vec<u8>,
+    timeout: Duration,
+    job: impl FnOnce(Vec<u8>) -> Extracted + Send + 'static,
+) -> Extracted {
     quiet_panics_on_extraction_threads();
     // Take a slot, or give up when every slot is taken.
     if RUNNING
@@ -144,21 +256,7 @@ pub(crate) fn extract_with(
     let spawned = std::thread::Builder::new()
         .name(THREAD.to_owned())
         .spawn(move || {
-            let out = match read(extract, fallback, &bytes) {
-                Extracted::Failed(reason) => match pdf_repair::rebuild_xref(&bytes)
-                    .map(|fixed| read(extract, fallback, &fixed))
-                {
-                    Some(Extracted::Text(text)) if text.is_empty() => Extracted::Text(text),
-                    Some(Extracted::Text(text) | Extracted::Recovered { text, .. }) => {
-                        Extracted::Recovered {
-                            text,
-                            reason: format!("{reason}; read after rebuilding its xref table"),
-                        }
-                    }
-                    _ => Extracted::Failed(reason),
-                },
-                out => out,
-            };
+            let out = job(bytes);
             RUNNING.fetch_sub(1, Ordering::SeqCst);
             let _ = tx.send(out);
         });
@@ -424,7 +522,7 @@ mod tests {
             Extracted::Failed("no PDF header".to_owned())
         );
         let mut big = b"%PDF-1.4\n".to_vec();
-        big.resize(MAX_PDF_BYTES + 1, b' ');
+        big.resize(MAX_EXTRACT_BYTES + 1, b' ');
         assert!(matches!(
             extract_with(big, EXTRACT_TIMEOUT, ok, ok),
             Extracted::Failed(r) if r.starts_with("larger than")

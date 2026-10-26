@@ -2132,7 +2132,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "read_asset",
-            "Read an attached file by its asset id. An image (PNG, JPEG, GIF, WebP) comes back as the image itself, scaled down when large; a PDF or text file as its text, cut at 40000 characters; anything else as its id, filename, media type and size. At most 8 images per question.",
+            "Read an attached file by its asset id. An image (PNG, JPEG, GIF, WebP) comes back as the image itself, scaled down when large; a PDF, Word document (docx), spreadsheet (xlsx, xls, ods, csv) or text file as its text, cut at 40000 characters; anything else as its id, filename, media type and size. At most 8 images per question.",
             json!({ "id": { "type": "string", "description": "The asset's 26-character id." } }),
         ),
         tool(

@@ -12,6 +12,9 @@ use testkit::{
     AiSeed, AnthropicMessage, FakeAnthropic, FakeOpenAi, OpenAiResponse, TestAccount, TestServer,
 };
 
+#[path = "../../index/tests/support/office.rs"]
+mod office;
+
 const MEMO: &str = r#"label = "Memo"
 
 field body {
@@ -856,6 +859,61 @@ fn read_asset_returns_a_pdfs_text_and_metadata_for_other_files() {
             assert_eq!(d["is_error"], false, "{d}");
             assert!(!d.to_string().contains("zephyrine"), "{d}");
             assert!(!d.to_string().contains("slate"), "{d}");
+        }
+    }
+}
+
+#[test]
+fn read_asset_returns_the_text_of_word_and_excel_files_saying_what_it_is() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let docx = api.upload("Report.docx", office::sample_docx());
+    let xlsx = api.upload("Budget.xlsx", office::sample_xlsx());
+    let broken = api.upload("broken.docx", b"not a zip".to_vec());
+    let csv = api.upload("people.csv", b"name,town\nAda,Puddlecombe\n".to_vec());
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use("toolu_docx", "read_asset", json!({ "id": docx }))
+            .tool_use("toolu_xlsx", "read_asset", json!({ "id": xlsx }))
+            .tool_use("toolu_bad", "read_asset", json!({ "id": broken }))
+            .tool_use("toolu_csv", "read_asset", json!({ "id": csv })),
+    );
+    fake.push(AnthropicMessage::text("Read them."));
+    let events = api.chat(json!([user("Read the files.")]));
+    let body = fake.message_requests()[1].json();
+
+    let got = result_text(&anthropic_result(&body, "toolu_docx"));
+    assert_eq!(got["text"], office::SAMPLE_DOCX_TEXT, "{got}");
+    assert!(
+        got["note"]
+            .as_str()
+            .unwrap()
+            .contains("extracted from a Word document"),
+        "{got}"
+    );
+    let got = result_text(&anthropic_result(&body, "toolu_xlsx"));
+    assert_eq!(got["text"], office::SAMPLE_XLSX_TEXT, "{got}");
+    assert!(
+        got["note"]
+            .as_str()
+            .unwrap()
+            .contains("2 sheets: Budget, Notes"),
+        "{got}"
+    );
+    let got = result_text(&anthropic_result(&body, "toolu_bad"));
+    assert!(got.get("text").is_none(), "{got}");
+    assert!(
+        got["note"].as_str().unwrap().contains("no zip header"),
+        "{got}"
+    );
+    let got = result_text(&anthropic_result(&body, "toolu_csv"));
+    assert_eq!(got["media_type"], "text/csv");
+    assert_eq!(got["text"], "name,town\nAda,Puddlecombe\n");
+    for (n, d) in &events {
+        if n == "tool_result" {
+            assert_eq!(d["is_error"], false, "{d}");
+            assert!(!d.to_string().contains("marshwiggle"), "{d}");
         }
     }
 }

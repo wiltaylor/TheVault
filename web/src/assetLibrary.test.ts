@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { TypeDef } from "./api";
 import {
+  ASSET_FILTERS,
   assetIdOf,
   assetName,
   extension,
@@ -41,16 +42,28 @@ describe("the assets library model", () => {
     expect(kindLabel("report.pdf", "pdf")).toBe("PDF");
     expect(kindLabel("song.mp3", "audio")).toBe("MP3 audio");
     expect(kindLabel("export.zip", "other")).toBe("ZIP file");
+    expect(kindLabel("Plan.docx", "document")).toBe("DOCX document");
+    expect(kindLabel("budget.xlsx", "spreadsheet")).toBe("XLSX spreadsheet");
+    expect(kindLabel("people.csv", "spreadsheet")).toBe("CSV spreadsheet");
     expect(kindLabel("README", "other")).toBe("File");
     expect(kindOf("a.webp")).toBe("image");
     expect(kindOf("a.PDF")).toBe("pdf");
     expect(kindOf("a.mp4")).toBe("video");
     expect(kindOf("a.bin")).toBe("other");
+    for (const name of ["a.docx", "a.DOC", "a.odt"]) expect(kindOf(name)).toBe("document");
+    for (const name of ["a.xlsx", "a.xls", "a.ods", "a.CSV"]) expect(kindOf(name)).toBe("spreadsheet");
+    expect(kindIcon("document")).toBe("file-pen-line");
+    expect(kindIcon("spreadsheet")).toBe("file-spreadsheet");
     expect(kindIcon("pdf")).toBe("file-text");
     expect(kindIcon(undefined)).toBe("file");
     expect(usedText(0)).toBe("Not used");
     expect(usedText(1)).toBe("Used by 1 note");
     expect(usedText(3)).toBe("Used by 3 notes");
+  });
+
+  it("filters by documents and spreadsheets beside images and PDFs, as the server counts them", () => {
+    expect(ASSET_FILTERS.map((f) => f.id)).toEqual(["all", "image", "pdf", "document", "spreadsheet", "other", "unused"]);
+    expect(ASSET_FILTERS.map((f) => f.label)).toEqual(["All", "Images", "PDFs", "Documents", "Spreadsheets", "Other", "Unused"]);
   });
 
   it("says how a note uses an asset, with the field's label", () => {

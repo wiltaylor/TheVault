@@ -4,7 +4,7 @@
 
 import { createRoot, createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
-import type { AssetHow, AssetKind, FieldDef, TypeDef } from "./api";
+import type { AssetFilter, AssetHow, AssetKind, FieldDef, TypeDef } from "./api";
 import { type TypeListView, loadTypeView, saveTypeView } from "./typeList";
 
 /** The key the library's view is kept under among the types' views. No type name has a colon. */
@@ -35,9 +35,28 @@ export function extension(filename: string): string {
   return dot > 0 && dot < filename.length - 1 ? filename.slice(dot + 1).toUpperCase() : "";
 }
 
-const KIND_WORD: Record<AssetKind, string> = { image: "image", pdf: "PDF", audio: "audio", video: "video", other: "file" };
+const KIND_WORD: Record<AssetKind, string> = {
+  image: "image",
+  pdf: "PDF",
+  document: "document",
+  spreadsheet: "spreadsheet",
+  audio: "audio",
+  video: "video",
+  other: "file",
+};
 
-/** "PNG image", "PDF", "MP3 audio", "ZIP file", or "File" for a name with no extension. */
+/** The library's filters, in the order they show, with their labels. */
+export const ASSET_FILTERS: { id: AssetFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "image", label: "Images" },
+  { id: "pdf", label: "PDFs" },
+  { id: "document", label: "Documents" },
+  { id: "spreadsheet", label: "Spreadsheets" },
+  { id: "other", label: "Other" },
+  { id: "unused", label: "Unused" },
+];
+
+/** "PNG image", "PDF", "DOCX document", "CSV spreadsheet", "MP3 audio", "ZIP file", or "File" for a name with no extension. */
 export function kindLabel(filename: string, kind: AssetKind): string {
   if (kind === "pdf") return "PDF";
   const ext = extension(filename);
@@ -51,6 +70,10 @@ export function kindIcon(kind: AssetKind | undefined): string {
       return "image";
     case "pdf":
       return "file-text";
+    case "document":
+      return "file-pen-line";
+    case "spreadsheet":
+      return "file-spreadsheet";
     case "audio":
       return "file-audio";
     case "video":
@@ -65,6 +88,8 @@ export function kindOf(filename: string): AssetKind {
   const ext = extension(filename).toLowerCase();
   if (["png", "jpg", "jpeg", "gif", "webp", "avif", "svg"].includes(ext)) return "image";
   if (ext === "pdf") return "pdf";
+  if (["docx", "doc", "odt"].includes(ext)) return "document";
+  if (["xlsx", "xls", "ods", "csv"].includes(ext)) return "spreadsheet";
   if (["mp3", "wav"].includes(ext)) return "audio";
   if (["mp4", "webm"].includes(ext)) return "video";
   return "other";

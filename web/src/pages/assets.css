@@ -30,8 +30,16 @@
   background: color-mix(in srgb, var(--palette-orange) 10%, var(--panel));
 }
 
+/* Seven filters are wider than a phone: the group scrolls rather than overflowing the page. */
+.assets-filters {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
 .assets-filters button {
   gap: 0.4rem;
+  flex: none;
 }
 
 .assets-filter-count {

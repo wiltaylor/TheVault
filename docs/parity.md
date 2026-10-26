@@ -77,7 +77,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Insert or replace an image or file | `blocks/MediaBlocks.tsx` | `POST /api/assets?filename=` | `vault asset upload <path> [--filename]` | |
 | Show an image or download an asset | `MediaBlocks.tsx`, `canvas/CanvasNodes.tsx` | `GET /api/assets/{id}` | `vault asset get <id> --out <file>` | |
 | Show an asset block's name and size | `MediaBlocks.tsx` | `GET /api/assets` | `vault asset list` | |
-| Browse images and files as cards or a sortable list, search names and PDF text, filter by kind or to the unused ones | `pages/Assets.tsx` | `GET /api/assets?kind=&unused=&q=&sort=&dir=&cursor=&limit=` | `vault asset list [--unused] [--kind] [--search]` | |
+| Browse images and files as cards or a sortable list, search names and the text of PDFs, documents and spreadsheets, filter by kind or to the unused ones | `pages/Assets.tsx` | `GET /api/assets?kind=&unused=&q=&sort=&dir=&cursor=&limit=` | `vault asset list [--unused] [--kind] [--search]` | |
 | Open an asset like a note: preview, file name, type, size, upload time | `pages/AssetView.tsx` | `GET /api/assets/{id}/usage`, `GET /api/assets/{id}` | `vault asset usage <id>`, `vault asset get <id> --out <file>` | |
 | See the notes, trashed notes and types using an asset | Right sidebar beside an asset (`components/AssetUsage.tsx`) | `GET /api/assets/{id}/usage` | `vault asset usage <id>` | |
 | Rename an asset's file | `pages/AssetView.tsx` | `PATCH /api/assets/{id}` | `vault asset rename <id> <filename>` | |

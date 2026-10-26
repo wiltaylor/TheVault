@@ -139,10 +139,10 @@ When a plan answer reports how much of the plan's limits is used, the server kee
 A call sends the provider the prompt and any text the caller includes:
 
 - A script sends what it passes to `ai::complete` or `ai::chat`, which can include note content.
-- The AI panel sends the conversation and the results of the note tools the model calls, such as the notes it searches and reads, and the attachments it reads with `read_asset`: an image itself, a PDF's or text file's text.
+- The AI panel sends the conversation and the results of the note tools the model calls, such as the notes it searches and reads, and the attachments it reads with `read_asset`: an image itself, the text of a PDF, Word document, spreadsheet or text file.
 - The Test button sends only "Reply with OK."
 - With a Brave Search key stored, a `web_search` call sends Brave the query the model wrote; see [Web search](#web-search).
-- A `fetch_url` or `download_asset` call requests the address the model chose from the web, as TheVault, and `fetch_url` sends the provider what it read: a page's text, a PDF's text or an image. See [Read pages and download files](#read-pages-and-download-files).
+- A `fetch_url` or `download_asset` call requests the address the model chose from the web, as TheVault, and `fetch_url` sends the provider what it read: a page's text, the text of a PDF, Word document or spreadsheet, or an image. See [Read pages and download files](#read-pages-and-download-files).
 - An OpenAI-compatible account sends its extra headers with every request.
 
 Nothing else from the vault is sent. Responses API requests set `store: false`, so OpenAI keeps no stored response for later reuse. Chat Completions requests carry no such field; the service's own policy decides what it keeps. Each provider's own data policy applies to what it receives.
@@ -241,7 +241,7 @@ With a Brave Search API key stored in Settings > Integrations > Brave Search ([W
 
 - The server reads at most 5 MiB. The result starts with the final URL, after redirects, and the media type, then says the content is the page's and not the user's.
 - HTML: the page's `<title>`, then its readable text as Markdown-like plain text: headings as `#` lines, paragraphs, lists as `- ` or `1. ` lines, links as `[text](url)` made absolute. Scripts, styles, navigation, page headers and footers, asides, forms and hidden elements are dropped.
-- `text/*`, JSON and XML: the text. A PDF: its text, through the extractor the index uses for PDF assets.
+- `text/*`, JSON and XML: the text. A PDF, a Word document (`.docx`) or a spreadsheet (`.xlsx`, `.xls`, `.ods`): its text, through the extractor the index uses for those assets, the document or spreadsheet with the note `read_asset` gives.
 - Text of every kind is cut at 40,000 characters with a marker.
 - An image: the image itself, sent to the provider and scaled as [Attachments](#attachments) says, counting toward the 8 images per question. It is held for this question only; a later question gets a text saying it is gone, and the model can fetch it again.
 - Anything else: the final URL, media type and size.
@@ -276,6 +276,7 @@ The model reads a note's attached files with `read_asset`, by the asset ids `get
 | `image/png`, `image/jpeg`, `image/gif`, `image/webp` | The image itself, sent to the provider. An image over 3.75 MiB or with a long edge over 2,000 pixels is sent as a JPEG (quality 85) scaled to 1,568 pixels on its long edge |
 | Another image type, such as AVIF or SVG | The image converted the same way when the server can decode it; the server decodes only the four types above, so these get the metadata |
 | `application/pdf` | The text the index extracted from it, cut at 40,000 characters with a marker. A PDF kept as unreadable, or with no text layer, gets the metadata and a note saying why |
+| Word (`.docx`) and spreadsheets (`.xlsx`, `.xls`, `.ods`) | The text the index extracted from it, cut at 40,000 characters with a marker, and a note saying it is extracted text and, for a spreadsheet, naming its sheets. A document's text is its headers, paragraphs as lines, table rows as cells joined by ` \| `, footnotes and footers; a spreadsheet's is each sheet as a `# Sheet: <name>` line and its rows as CSV, with values as last calculated and dates as `YYYY-MM-DD`. A file kept as unreadable gets the metadata and a note saying why. A legacy `.doc` file gets the metadata |
 | `text/*` and JSON, which includes Markdown and CSV | The file's text, cut at 40,000 characters with a marker |
 | Anything else | The metadata: id, file name, media type and size |
 

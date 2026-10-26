@@ -11,6 +11,9 @@ use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
 use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, FakeWeb, Reply, TestAccount, TestServer};
 
+#[path = "../../index/tests/support/office.rs"]
+mod office;
+
 const MODEL: &str = "claude-opus-5";
 
 struct Api {
@@ -323,6 +326,61 @@ fn fetch_url_reads_a_pdfs_text_and_cuts_a_long_text() {
         &text[text.len() - 100..]
     );
     assert!(text.len() < 41_000, "{}", text.len());
+}
+
+#[test]
+fn fetch_url_reads_the_text_of_word_and_excel_files_and_a_download_is_searchable() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    let web = FakeWeb::start();
+    api.anthropic(&fake, on(), true);
+    // Served as octet-stream: the type comes from the name.
+    web.route(
+        "/files/Report.docx",
+        bytes_reply("application/octet-stream", office::sample_docx()),
+    );
+    api.call(
+        &fake,
+        "fetch_url",
+        json!({ "url": web.url("/files/Report.docx") }),
+    );
+    let text = result_text(&result(&fake));
+    assert!(
+        text.contains(
+            "Media type: application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("extracted from a Word document"), "{text}");
+    assert!(text.contains("Quillwort seed | 12"), "{text}");
+
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, on(), true);
+    let xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    web.route("/budget", bytes_reply(xlsx, office::sample_xlsx()));
+    api.call(&fake, "fetch_url", json!({ "url": web.url("/budget") }));
+    let text = result_text(&result(&fake));
+    assert!(text.contains("2 sheets: Budget, Notes"), "{text}");
+    assert!(text.contains("Ask about marshwiggle"), "{text}");
+
+    // A downloaded spreadsheet takes the extension its type suggests, and its text is kept.
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({ "downloads": false }), true);
+    let events = api.call(
+        &fake,
+        "download_asset",
+        json!({ "url": web.url("/budget"), "filename": "budget" }),
+    );
+    assert_eq!(last(&events, "applied")["filename"], "budget.xlsx");
+    let found: Value = api
+        .client
+        .get(api.server.url("/api/assets?q=marshwiggle"))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(found["assets"][0]["filename"], "budget.xlsx", "{found}");
 }
 
 #[test]

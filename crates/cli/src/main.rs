@@ -465,10 +465,10 @@ enum Asset {
         /// Only the assets no note, note in the trash or type uses.
         #[arg(long)]
         unused: bool,
-        /// Only `image`, `pdf` or `other` assets.
+        /// Only `image`, `pdf`, `document`, `spreadsheet` or `other` assets.
         #[arg(long)]
         kind: Option<String>,
-        /// Words in the file name, or in a PDF's text.
+        /// Words in the file name, or in the text of a PDF, document or spreadsheet.
         #[arg(long)]
         search: Option<String>,
     },

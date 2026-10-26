@@ -14,6 +14,9 @@ tantivy.workspace = true
 vocab.workspace = true
 pdf-extract.workspace = true
 lopdf.workspace = true
+calamine.workspace = true
+quick-xml.workspace = true
+zip.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

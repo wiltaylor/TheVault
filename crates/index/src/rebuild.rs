@@ -95,8 +95,9 @@ pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<Rebuild
     Ok(RebuildReport { indexed, failures })
 }
 
-/// Extract the text of every PDF asset that has none kept yet. A PDF that cannot be read keeps
-/// no text, so it is not tried again.
+/// Extract the text of every asset of a [`asset_text::TextKind`] that has none kept yet: PDFs,
+/// Word documents, spreadsheets and CSV files. One that cannot be read keeps no text, so it is
+/// not tried again.
 fn extract_missing(index: &mut Index, vault: &store::Vault) -> Result<()> {
     let root = vault.root().join("assets");
     let Ok(entries) = std::fs::read_dir(&root) else {
@@ -115,20 +116,20 @@ fn extract_missing(index: &mut Index, vault: &store::Vault) -> Result<()> {
         let Some(file) = files.flatten().find(|e| e.path().is_file()) else {
             continue;
         };
-        if !asset_text::is_pdf(&file.file_name().to_string_lossy()) {
+        let Some(kind) = asset_text::TextKind::of(&file.file_name().to_string_lossy()) else {
             continue;
-        }
+        };
         let too_big = file
             .metadata()
-            .is_ok_and(|m| m.len() > asset_text::MAX_PDF_BYTES as u64);
+            .is_ok_and(|m| m.len() > asset_text::MAX_EXTRACT_BYTES as u64);
         let extracted = if too_big {
             asset_text::Extracted::Failed(format!(
                 "larger than {} bytes",
-                asset_text::MAX_PDF_BYTES
+                asset_text::MAX_EXTRACT_BYTES
             ))
         } else {
             match std::fs::read(file.path()) {
-                Ok(bytes) => asset_text::extract_pdf_text(bytes),
+                Ok(bytes) => asset_text::extract_text(kind, bytes),
                 Err(_) => continue,
             }
         };

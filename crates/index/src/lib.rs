@@ -33,6 +33,7 @@
 
 mod asset_text;
 mod graph;
+mod office;
 mod pdf_repair;
 mod project;
 mod rebuild;
@@ -45,10 +46,11 @@ use rusqlite::Connection;
 use schema::{Doc, NoteReport, Schema};
 
 pub use asset_text::{
-    EXTRACT_TIMEOUT, Extracted, MAX_PDF_BYTES, MAX_RUNNING, MAX_TEXT, StoredText, extract_pdf_text,
-    is_pdf,
+    EXTRACT_TIMEOUT, Extracted, MAX_EXTRACT_BYTES, MAX_RUNNING, MAX_TEXT, StoredText, TextKind,
+    extract_pdf_text, extract_text, is_pdf,
 };
 pub use graph::{Graph, GraphEdge, GraphNode};
+pub use office::MAX_UNZIPPED_BYTES;
 pub use project::mentions;
 pub use rebuild::{Failure, RebuildReport};
 pub use search::{Hit, SearchPage};
@@ -131,7 +133,7 @@ impl Index {
 
     /// Open an index at explicit paths. A full-text index that is missing, or was written with
     /// another schema, is created empty, and the index is then behind whatever generation
-    /// `index.db` recorded. PDF text is kept in `asset-text/v1/` beside `search_dir`.
+    /// `index.db` recorded. Asset text is kept in `asset-text/v1/` beside `search_dir`.
     pub fn open_at(db: &Path, search_dir: &Path) -> Result<Index> {
         let conn = Connection::open(db)?;
         sql::init(&conn)?;
@@ -157,8 +159,9 @@ impl Index {
 
     /// Keep what extracting asset `id`'s text came to. Notes indexed from now on take the text
     /// in; notes already indexed do so when next saved or rebuilt. [`Extracted::Busy`] keeps
-    /// nothing, so a later rebuild tries again. A PDF pdf-extract could not read is logged in
-    /// one line on standard error, once, since it is kept and not tried again.
+    /// nothing, so a later rebuild tries again. A PDF pdf-extract could not read, or any file
+    /// kept as unreadable, is logged in one line on standard error, once, since it is kept and
+    /// not tried again.
     pub fn set_asset_text(&mut self, id: &str, extracted: &Extracted) -> Result<()> {
         match extracted {
             Extracted::Text(t) => self.assets.set(id, t),
@@ -167,7 +170,7 @@ impl Index {
                 self.assets.set(id, text)
             }
             Extracted::Failed(reason) => {
-                eprintln!("asset {id}: PDF text not extracted, kept as unreadable: {reason}");
+                eprintln!("asset {id}: text not extracted, kept as unreadable: {reason}");
                 self.assets.set_unreadable(id, reason)
             }
             Extracted::Busy => Ok(()),

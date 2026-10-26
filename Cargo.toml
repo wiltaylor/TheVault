@@ -33,6 +33,10 @@ tantivy = "0.26"
 pdf-extract = "0.12"
 # pdf-extract's own lopdf, as the fallback text extractor. pdf-extract turns its default features off.
 lopdf = { version = "0.42", default-features = false }
+# The text of Excel and OpenDocument spreadsheet assets (xlsx, xls, ods), for search.
+calamine = { version = "0.37", default-features = false }
+# The text of Word (docx) assets: their XML parts, read from the zip.
+quick-xml = "0.42"
 thiserror = "2"
 ulid = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }

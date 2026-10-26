@@ -93,8 +93,8 @@ pub use devices::{
 pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
 pub use index::{
-    Archived, AssetHow, AssetUse, Extracted, Graph, GraphEdge, GraphNode, StoredText,
-    extract_pdf_text,
+    Archived, AssetHow, AssetUse, Extracted, Graph, GraphEdge, GraphNode, StoredText, TextKind,
+    extract_pdf_text, extract_text,
 };
 pub use note::{
     ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json, value_wcl,

@@ -52,10 +52,10 @@ pub(crate) fn check_filename(name: &str) -> Result<()> {
 }
 
 impl Writer {
-    /// Store `bytes` as a new asset called `filename`. A PDF's text is then extracted for
-    /// full-text search, with no lock held, before this returns: a note saved naming the asset
-    /// afterwards is found by words inside it. A PDF whose text cannot be read is stored all
-    /// the same.
+    /// Store `bytes` as a new asset called `filename`. The text of a PDF, Word document,
+    /// spreadsheet or CSV file ([`index::TextKind`]) is then extracted for full-text search,
+    /// with no lock held, before this returns: a note saved naming the asset afterwards is found
+    /// by words inside it. A file whose text cannot be read is stored all the same.
     pub fn put_asset(&self, filename: &str, bytes: Vec<u8>) -> Result<Asset> {
         self.put_asset_as(&ulid::Ulid::new().to_string(), filename, bytes)
     }
@@ -163,14 +163,14 @@ impl Writer {
             inner.index.advance(generation)?;
             asset
         };
-        if index::is_pdf(filename) {
-            let extracted = if size <= index::MAX_PDF_BYTES as u64 {
+        if let Some(kind) = index::TextKind::of(filename) {
+            let extracted = if size <= index::MAX_EXTRACT_BYTES as u64 {
                 match self.vault.read(&asset.path()) {
-                    Ok(bytes) => index::extract_pdf_text(bytes),
+                    Ok(bytes) => index::extract_text(kind, bytes),
                     Err(e) => index::Extracted::Failed(e.to_string()),
                 }
             } else {
-                index::Extracted::Failed(format!("larger than {} bytes", index::MAX_PDF_BYTES))
+                index::Extracted::Failed(format!("larger than {} bytes", index::MAX_EXTRACT_BYTES))
             };
             let _ = self.lock().index.set_asset_text(&asset.id, &extracted);
         }
@@ -194,8 +194,9 @@ impl Writer {
 
     fn put_asset_as(&self, id: &str, filename: &str, bytes: Vec<u8>) -> Result<Asset> {
         check_filename(filename)?;
-        let pdf =
-            (index::is_pdf(filename) && bytes.len() <= index::MAX_PDF_BYTES).then(|| bytes.clone());
+        let kind = index::TextKind::of(filename);
+        let text_of =
+            (kind.is_some() && bytes.len() <= index::MAX_EXTRACT_BYTES).then(|| bytes.clone());
         let asset = {
             let _w = self.write_lock();
             let mut inner = self.lock();
@@ -208,12 +209,13 @@ impl Writer {
             inner.index.advance(generation)?;
             asset
         };
-        if index::is_pdf(filename) {
-            let extracted = match pdf {
-                Some(bytes) => index::extract_pdf_text(bytes),
-                None => {
-                    index::Extracted::Failed(format!("larger than {} bytes", index::MAX_PDF_BYTES))
-                }
+        if let Some(kind) = kind {
+            let extracted = match text_of {
+                Some(bytes) => index::extract_text(kind, bytes),
+                None => index::Extracted::Failed(format!(
+                    "larger than {} bytes",
+                    index::MAX_EXTRACT_BYTES
+                )),
             };
             // The asset is stored; text that cannot be kept only means search misses it.
             let _ = self.lock().index.set_asset_text(&asset.id, &extracted);

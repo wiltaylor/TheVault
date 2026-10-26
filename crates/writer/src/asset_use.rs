@@ -181,7 +181,8 @@ impl Writer {
         self.read_index(|index, _| index.asset_text_matches(id, &part))
     }
 
-    /// The text the index extracted from asset `id`, a PDF, or why it has none.
+    /// The text the index extracted from asset `id`, such as a PDF or a spreadsheet, or why it
+    /// has none.
     pub fn asset_text(&self, id: &str) -> index::StoredText {
         self.read_index(|index, _| index.asset_text(id))
     }

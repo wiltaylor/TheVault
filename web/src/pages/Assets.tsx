@@ -10,6 +10,7 @@ import {
   assetUrl,
 } from "../api";
 import {
+  ASSET_FILTERS,
   ASSET_PAGE,
   assetsChanged,
   assetsRevision,
@@ -35,18 +36,11 @@ import "./assets.css";
 /** How long typing waits before the search runs. */
 const TYPING_MS = 250;
 
-const FILTERS: { id: AssetFilter; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "image", label: "Images" },
-  { id: "pdf", label: "PDFs" },
-  { id: "other", label: "Other" },
-  { id: "unused", label: "Unused" },
-];
 
 
 /**
  * Every uploaded file (D22), as cards or a sortable list like a type's notes, with a search over
- * file names and PDF text, filters by kind and for what nothing uses, and a cleanup that deletes
+ * file names and the text of PDFs, documents and spreadsheets, filters by kind and for what nothing uses, and a cleanup that deletes
  * the unused files into the asset trash, from which they can be restored for 30 days.
  */
 export function Assets() {
@@ -233,7 +227,7 @@ export function Assets() {
           <SearchIcon />
           <input
             type="search"
-            placeholder="Search file names and PDF text"
+            placeholder="Search file names and file text"
             aria-label="Search images and files"
             value={draft()}
             onInput={(e) => type(e.currentTarget.value)}
@@ -251,7 +245,7 @@ export function Assets() {
           />
         </div>
         <div class="segmented assets-filters" role="group" aria-label="Show">
-          <For each={FILTERS}>
+          <For each={ASSET_FILTERS}>
             {(f) => (
               <button type="button" aria-pressed={filter() === f.id} onClick={() => setFilter(f.id)}>
                 <span>{f.label}</span>

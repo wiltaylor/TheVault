@@ -186,7 +186,7 @@ export interface Asset {
 }
 
 /** What an asset is, by its file name. */
-export type AssetKind = "image" | "pdf" | "audio" | "video" | "other";
+export type AssetKind = "image" | "pdf" | "document" | "spreadsheet" | "audio" | "video" | "other";
 
 /** An asset in the library listing: with its kind, upload time and how much uses it. */
 export interface AssetSummary extends Asset {
@@ -201,8 +201,8 @@ export interface AssetSummary extends Asset {
   types: number;
 }
 
-/** The library filters: by kind, or only what nothing uses. */
-export type AssetFilter = "all" | "image" | "pdf" | "other" | "unused";
+/** The library filters: by kind, or only what nothing uses. `other` is audio, video and the rest. */
+export type AssetFilter = "all" | "image" | "pdf" | "document" | "spreadsheet" | "other" | "unused";
 
 export interface AssetQuery {
   filter?: AssetFilter;
@@ -221,7 +221,7 @@ export interface AssetPage {
   next: string | null;
   /** The assets nothing uses, in the whole library. */
   unused: { count: number; size: number };
-  counts: Record<"all" | "image" | "pdf" | "other" | "unused", number>;
+  counts: Record<AssetFilter, number>;
 }
 
 /** A way a note names an asset: `field` is the asset field, or the content field holding the block. */

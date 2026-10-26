@@ -156,11 +156,16 @@ pub(crate) fn ulid_ms(id: &str) -> Option<u64> {
     })
 }
 
-/// What a file is, by its name: `image`, `pdf`, `audio`, `video` or `other`.
+/// What a file is, by its name: `image`, `pdf`, `document` (a Word or OpenDocument text),
+/// `spreadsheet` (Excel, OpenDocument or CSV), `audio`, `video` or `other`.
 fn kind_of(filename: &str) -> &'static str {
     let ty = content_type(filename);
     if ty == "application/pdf" {
         "pdf"
+    } else if DOCUMENT_TYPES.contains(&ty) {
+        "document"
+    } else if SPREADSHEET_TYPES.contains(&ty) {
+        "spreadsheet"
     } else if let Some(k) = ["image", "audio", "video"]
         .into_iter()
         .find(|k| ty.starts_with(&format!("{k}/")))
@@ -170,6 +175,24 @@ fn kind_of(filename: &str) -> &'static str {
         "other"
     }
 }
+
+/// The media types of the `document` kind.
+const DOCUMENT_TYPES: [&str; 3] = [
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "application/vnd.oasis.opendocument.text",
+];
+
+/// The media types of the `spreadsheet` kind.
+const SPREADSHEET_TYPES: [&str; 4] = [
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "text/csv; charset=utf-8",
+];
+
+/// The filters by kind, as `kind=` takes them and `counts` totals them.
+const KIND_FILTERS: [&str; 5] = ["image", "pdf", "document", "spreadsheet", "other"];
 
 fn summary_json(s: &AssetSummary) -> Value {
     let mut v = asset_json(&s.asset);
@@ -185,11 +208,11 @@ fn summary_json(s: &AssetSummary) -> Value {
 
 #[derive(Deserialize, Default)]
 pub struct ListQuery {
-    /// `image`, `pdf` or `other` (neither).
+    /// `image`, `pdf`, `document`, `spreadsheet` or `other` (none of those).
     kind: Option<String>,
     /// Only assets nothing uses.
     unused: Option<bool>,
-    /// Words in the file name, or in a PDF's text.
+    /// Words in the file name, or in the text extracted from a PDF, document or spreadsheet.
     q: Option<String>,
     /// `uploaded` (the default), `name`, `size`, `kind` or `used`.
     sort: Option<String>,
@@ -230,7 +253,7 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
                     .into_iter()
                     .filter(|s| {
                         s.asset.filename.to_lowercase().contains(&t)
-                            || (kind_of(&s.asset.filename) == "pdf"
+                            || (writer::TextKind::of(&s.asset.filename).is_some()
                                 && w.asset_text_holds(&s.asset.id, &t))
                     })
                     .collect(),
@@ -241,7 +264,7 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
     // How many of what the search found each filter would show.
     let mut counts = serde_json::Map::new();
     counts.insert("all".into(), json!(found.len()));
-    for k in ["image", "pdf", "other"] {
+    for k in KIND_FILTERS {
         let n = found
             .iter()
             .filter(|s| matches_kind(&s.asset.filename, k))
@@ -280,13 +303,13 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
     })))
 }
 
-/// Whether the file is of `kind` as a filter means it: `other` is neither an image nor a PDF,
-/// and an empty kind or `all` is anything.
+/// Whether the file is of `kind` as a filter means it: `other` is none of the other filters'
+/// kinds, so audio and video too, and an empty kind or `all` is anything.
 fn matches_kind(filename: &str, kind: &str) -> bool {
     let k = kind_of(filename);
     match kind {
-        "image" | "pdf" => k == kind,
-        "other" => k != "image" && k != "pdf",
+        "other" => !matches!(k, "image" | "pdf" | "document" | "spreadsheet"),
+        _ if KIND_FILTERS.contains(&kind) => k == kind,
         _ => true,
     }
 }
@@ -623,7 +646,14 @@ pub(crate) fn content_type(filename: &str) -> &'static str {
         "svg" => "image/svg+xml",
         "pdf" => "application/pdf",
         "json" => "application/json",
-        "txt" | "md" | "csv" | "html" | "htm" => "text/plain; charset=utf-8",
+        "txt" | "md" | "html" | "htm" => "text/plain; charset=utf-8",
+        "csv" => "text/csv; charset=utf-8",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc" => "application/msword",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls" => "application/vnd.ms-excel",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
         "mp4" => "video/mp4",
@@ -675,6 +705,40 @@ mod tests {
     #[test]
     fn serves_pdf_as_pdf() {
         assert_eq!(content_type("Report.PDF"), "application/pdf");
+    }
+
+    #[test]
+    fn office_files_and_csv_have_their_own_types_and_kinds() {
+        assert_eq!(
+            content_type("Plan.DOCX"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(
+            content_type("b.xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        assert_eq!(content_type("old.xls"), "application/vnd.ms-excel");
+        assert_eq!(content_type("data.csv"), "text/csv; charset=utf-8");
+        for (name, kind) in [
+            ("a.docx", "document"),
+            ("a.doc", "document"),
+            ("a.odt", "document"),
+            ("a.xlsx", "spreadsheet"),
+            ("a.xls", "spreadsheet"),
+            ("a.ods", "spreadsheet"),
+            ("a.csv", "spreadsheet"),
+            ("a.pdf", "pdf"),
+            ("a.txt", "other"),
+        ] {
+            assert_eq!(kind_of(name), kind, "{name}");
+        }
+        assert!(matches_kind("a.xlsx", "spreadsheet"));
+        assert!(!matches_kind("a.xlsx", "other"));
+        assert!(!matches_kind("a.docx", "other"));
+        assert!(matches_kind("a.mp3", "other"));
+        assert!(matches_kind("a.zip", "other"));
+        assert!(matches_kind("a.docx", "document"));
+        assert!(!matches_kind("a.docx", "pdf"));
     }
 
     #[test]

@@ -9,7 +9,11 @@
 //!   way when it can be decoded, which with the decoders built in it cannot, so it is metadata.
 //! - A PDF is the text the index extracted, cut at [`TEXT_LIMIT`] characters, or metadata when
 //!   the PDF was kept as unreadable.
-//! - `text/*` and JSON (Markdown is `text/*`) is the file's text, cut at [`TEXT_LIMIT`].
+//! - A Word document (`.docx`) or a spreadsheet (`.xlsx`, `.xls`, `.ods`) is the text the index
+//!   extracted, cut the same way, with a note saying it is extracted text and, for a
+//!   spreadsheet, naming its sheets; or metadata when it was kept as unreadable.
+//! - `text/*` and JSON (Markdown and CSV are `text/*`) is the file's text, cut at
+//!   [`TEXT_LIMIT`].
 //! - Anything else is metadata: the id, file name, media type and size.
 //!
 //! The transcript holds an image only as a reference, [`Part::Image`]: [`hydrate`] loads it
@@ -25,7 +29,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use image::{ImageReader, codecs::jpeg::JpegEncoder};
 use serde_json::{Value, json};
-use writer::{StoredText, Writer};
+use writer::{StoredText, TextKind, Writer};
 
 /// The most images `read_asset` sends in one user turn.
 pub const IMAGE_LIMIT: usize = 8;
@@ -199,6 +203,33 @@ pub fn read_asset(w: &Writer, input: &Value, may_send_image: bool, images: &Imag
             }
         }
     }
+    if let Some(kind @ (TextKind::Document | TextKind::Spreadsheet)) = TextKind::of(&asset.filename)
+    {
+        let what = if kind == TextKind::Document {
+            "Word document"
+        } else {
+            "spreadsheet"
+        };
+        match w.asset_text(&asset.id) {
+            StoredText::Text(text) if !text.trim().is_empty() => {
+                meta["note"] = json!(extracted_note(kind, &text));
+                meta["text"] = json!(cut(&text, TEXT_LIMIT, asset.size, false));
+                return done(meta, "text", Vec::new());
+            }
+            StoredText::Text(_) => {
+                meta["note"] = json!(format!("The {what} holds no text."));
+            }
+            StoredText::Unreadable(reason) => {
+                meta["note"] = json!(format!(
+                    "The {what}'s text could not be read and it is kept as unreadable: {reason}"
+                ));
+            }
+            StoredText::NotExtracted => {
+                meta["note"] = json!(format!("The {what}'s text has not been extracted yet."));
+            }
+        }
+        return done(meta, "metadata", Vec::new());
+    }
     if media == "application/pdf" {
         match w.asset_text(&asset.id) {
             StoredText::Text(text) if !text.trim().is_empty() => {
@@ -237,6 +268,29 @@ pub fn read_asset(w: &Writer, input: &Value, may_send_image: bool, images: &Imag
         };
     }
     done(meta, "metadata", Vec::new())
+}
+
+/// What the text of a Word document or spreadsheet, `text`, is, for the model: extracted text,
+/// and for a spreadsheet the sheets it holds, from its `# Sheet: ` lines.
+pub fn extracted_note(kind: TextKind, text: &str) -> String {
+    if kind == TextKind::Document {
+        return "The text extracted from a Word document: each paragraph is a line, and each \
+                table row a line of its cells joined by \" | \". Formatting and pictures are left \
+                out."
+            .to_owned();
+    }
+    let sheets: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("# Sheet: "))
+        .collect();
+    format!(
+        "The text extracted from an Excel or OpenDocument spreadsheet, {} sheet{}: {}. Each \
+         sheet starts with a \"# Sheet: <name>\" line, then its rows as CSV, with cell values \
+         as last calculated and dates as YYYY-MM-DD.",
+        sheets.len(),
+        if sheets.len() == 1 { "" } else { "s" },
+        sheets.join(", ")
+    )
 }
 
 /// Image asset `id` as it is sent, prepared once a turn.
