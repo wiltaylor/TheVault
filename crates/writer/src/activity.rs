@@ -157,6 +157,7 @@ impl Writer {
                 "agent" => "agent",
                 "task" => "task",
                 "script" => "script",
+                "tool" => "tool",
                 _ => continue,
             };
             let (act, verb) = match (existed, exists) {

@@ -235,6 +235,9 @@ pub struct Outcome {
     pub result: Result<Json, Error>,
     /// `vault::log`, `print` and `println` output, up to [`Limits::max_log`] bytes.
     pub log: String,
+    /// The bytecode instructions the run used: 0 for one that never started, such as a script
+    /// that does not compile.
+    pub instructions: u64,
 }
 
 /// A run's extra time to finish after its deadline before [`Host::run`] stops waiting for it.
@@ -341,6 +344,25 @@ impl Host {
         compile(self.contexts.for_kind(kind), name, source).map(|_| ())
     }
 
+    /// Check that `source` compiles for `kind` of run and exports `function`, answering how many
+    /// arguments it takes, without running it.
+    pub fn entry(
+        &self,
+        kind: Kind,
+        name: &str,
+        source: &str,
+        function: &str,
+    ) -> Result<usize, Error> {
+        let unit = compile(self.contexts.for_kind(kind), name, source)?;
+        unit.exports
+            .get(function)
+            .map(|(_, sig)| sig.params.len())
+            .ok_or_else(|| Error::Entry {
+                script: name.to_owned(),
+                message: format!("there is no function {function:?}"),
+            })
+    }
+
     /// Run `job` on a worker and wait for it to end.
     pub fn run(&self, job: Job) -> Outcome {
         let limits = Limits {
@@ -392,6 +414,7 @@ fn failed(e: Error) -> Outcome {
     Outcome {
         result: Err(e),
         log: String::new(),
+        instructions: 0,
     }
 }
 
@@ -490,6 +513,9 @@ impl Engine {
             timed_out: false,
         });
         let called = self.vm.call_values(&unit, &function, args);
+        let instructions = limits
+            .instructions
+            .saturating_sub(self.vm.fuel().unwrap_or(0));
         let run = run::finish().expect("the run started above");
         let result = match called {
             Ok(v) => match convert::returned(v, &unit.defs) {
@@ -502,6 +528,7 @@ impl Engine {
         Outcome {
             result,
             log: run.log,
+            instructions,
         }
     }
 }

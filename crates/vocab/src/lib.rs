@@ -23,7 +23,11 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// closed list of three); and the planner's built-in `weeklynote`, `monthlynote`,
 /// `quarterlynote` and `yearlynote` types, whose templates hold the template-only
 /// `period_calendar` block, an unknown block that makes an older reader refuse the type.
-pub const FORMAT_VERSION: u32 = 5;
+/// 6: script tools (script-tools T2, T4, T7, T8): the synced `tools/` folder of tool files,
+/// `tools/<name>.wcl`, an unknown folder an older device refuses; a skill's own `tools/` and
+/// `scripts/`; and the agent permission keys `permissions { scripts { run_code } }` and
+/// `confirm { tools }`, which an older reader refuses as an unknown permissions block and switch.
+pub const FORMAT_VERSION: u32 = 6;
 
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]

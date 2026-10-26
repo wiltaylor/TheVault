@@ -16,13 +16,14 @@ use crate::{Error, Result, Writer};
 
 /// The folders whose files devices sync: folder, file extension, and the kind the feed names.
 /// A type file holds its templates, so a template change is a change to its type.
-pub const SYNCED_FILES: [(&str, &str, &str); 6] = [
+pub const SYNCED_FILES: [(&str, &str, &str); 7] = [
     ("types", ".wcl", "type"),
     ("taxonomies", ".wcl", "taxonomy"),
     ("scripts", ".ws", "script"),
     ("tasks", ".wcl", "task"),
     ("devices", ".wcl", "device"),
     ("agents", ".wcl", "agent"),
+    ("tools", ".wcl", "tool"),
 ];
 
 /// The feed's kind and the name of synced file `path`, such as `("type", "memo")` for
@@ -207,6 +208,11 @@ mod tests {
         assert_eq!(
             synced_file("agents/assistant.wcl"),
             Some(("agent", "assistant"))
+        );
+        assert_eq!(synced_file("tools/greet.wcl"), Some(("tool", "greet")));
+        assert_eq!(
+            synced_file("skills/pdf/tools/fill.wcl"),
+            Some(("skill", "pdf"))
         );
         assert_eq!(synced_file("skills/pdf/SKILL.md"), Some(("skill", "pdf")));
         assert_eq!(

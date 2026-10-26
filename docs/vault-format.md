@@ -24,6 +24,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 - [Canvas](#canvas)
 - [Taxonomy files](#taxonomy-files)
 - [Task files](#task-files)
+- [Tool files](#tool-files)
 - [Agent files](#agent-files)
 - [Device files](#device-files)
 - [Skills](#skills)
@@ -39,6 +40,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 | Taxonomy | `taxonomies/<taxonomy>.wcl` | `schema/taxonomy.wcl` | `vault/taxonomies/status.wcl` |
 | Task | `tasks/<task>.wcl` | `schema/task.wcl` | `vault/tasks/daily_digest.wcl` |
 | Agent | `agents/<agent>.wcl` | `schema/agent.wcl` | `vault/agents/inbox_triage.wcl` |
+| Script tool | `tools/<tool>.wcl` | none: see [Tool files](#tool-files) | none |
 | Device file | `devices/<platform>.wcl` | `schema/device.wcl` | `vault/devices/android.wcl` |
 | Skill | `skills/<name>/SKILL.md` and any other files in the folder | none: not WCL, see [Skills](#skills) | none |
 | Canvas | A `canvas` content block, or a `canvas` field value in a note | `schema/common.wcl` | `vault/notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl` |
@@ -2466,6 +2468,55 @@ read_paths    = ["/srv/inbox"]
 write_paths   = ["/srv/exports"]
 ```
 
+## Tool files
+
+`tools/<tool>.wcl` defines one script tool (script-tools T2): a function of a script that AI agents call as a tool, named after the file. The name is a lowercase identifier, `[a-z][a-z0-9_]*`, and must not be the name of a tool the server has itself, such as `get_note` or `run_script`.
+
+| Item | Form | Default | Meaning |
+|------|------|---------|---------|
+| `description` | string | required | What the model reads about the tool: what it does and when to call it. At most 4000 characters |
+| `script` | string | required | The script name, the stem of `scripts/<script>.ws` |
+| `function` | string | required | The function in that script to call. It takes one argument, a `Value` map of the parameters, so adding a parameter does not change its signature |
+| `allow_domains` | list of strings | `[]` | Host names that HTTP host functions may reach, as a task's. `["*"]` allows any host |
+| `secrets` | list of strings | `[]` | Secret names the script may read and write, as a task's |
+| `timeout` | int | `30` | Wall-clock limit for one run, in seconds, from 1 to 300 |
+| `param <name> { ... }` | block | none | One parameter, below. A tool may have none |
+
+A `param` block, labelled with the parameter name (`[a-z][a-z0-9_]*`):
+
+| Item | Form | Default | Meaning |
+|------|------|---------|---------|
+| `kind` | string | required | `string`, `int`, `float`, `bool`, `json` or `list` |
+| `of` | string | `"string"` | For a `list`: the kind of its items, `string`, `int`, `float` or `bool` |
+| `description` | string | none | What the model reads about the parameter |
+| `required` | bool | `false` | Whether the model must give it. An optional parameter the model leaves out reaches the script as `null` |
+
+```wcl
+description   = "Count the open tasks that carry a tag. Use it before planning a week."
+script        = "count_tagged"
+function      = "run"
+allow_domains = ["api.example.com"]
+secrets       = ["example_key"]
+timeout       = 60
+
+param tag {
+  kind        = "string"
+  description = "The tag, such as \"Garden\"."
+  required    = true
+}
+
+param limit {
+  kind        = "int"
+  description = "Count at most this many."
+}
+```
+
+The model sees the tool under its name, with a strict JSON schema of the parameters: every parameter is listed, and an optional one may be `null`. A `json` parameter is sent as JSON text and reaches the script parsed. The script's function is called with a map of every parameter (`params.get("tag")`), runs with the modules a task has (`vault`, `value`, `json`, `math`, `regex`, `http`, `ai`, `secrets`, and `fs` with no directories), within the tool's `allow_domains`, `secrets` and `timeout`, and its return value goes back to the model as JSON. `Err(message)` is a tool error the model reads. The script's note changes are made directly as the calling agent (`agent <name>`), whatever the agent's own confirmation switches say: the tool's author decided what it does. Every run is recorded in the activity log with the content hash of the script that ran and the vault generation it was read at.
+
+A tool whose file does not parse, whose script is missing, does not compile, or lacks the function (taking one argument) is offered to no agent; the Tools page and `GET /api/tools` show why. An agent offers a tool only when its `permissions.tools` list, if it has one, names it.
+
+A skill may hold tools of its own (script-tools T4): `skills/<skill>/tools/<tool>.wcl`, in this same form, whose `script` names a script in the skill's own folder, `skills/<skill>/scripts/<script>.ws`. A skill's tools are offered to an agent from the round after it calls `use_skill` on the skill, named `<skill>__<tool>`, and stay for the rest of the thread.
+
 ## Agent files
 
 `agents/<agent>.wcl` defines one agent (agents G1): an AI chat with its own model, system prompt, permissions and triggers. Agent files are definitions like types and tasks: they are in backups, they sync to devices, and changing one needs `admin`. Every item is optional, so an empty file is an agent with every default.
@@ -2488,13 +2539,14 @@ The `permissions` block holds the agent's own permissions (agents G4). Nothing i
 
 | Item | Form | Default | Meaning |
 |------|------|---------|---------|
-| `tools` | list of tool names | every tool the server offers | The chat tools the agent may use, such as `"search_notes"` or `"propose_edit"`. The server refuses a name it has no tool for when the file is saved. `[]` allows none |
+| `tools` | list of tool names | every tool the server offers | The chat tools the agent may use, such as `"search_notes"` or `"propose_edit"`, including `"run_script"`, a vault script tool by its name ([Tool files](#tool-files)) and a skill's script tool as `"<skill>__<tool>"`. The server refuses a name it has no tool for when the file is saved, except a skill's tool, which is read when the agent opens the skill. `[]` allows none |
 | `types` | list of type names | every type | The note types the agent may read and change. Each must exist when the file is saved. `[]` allows none |
 | `browser` | bool | `false` | Browser automation (browser B6): `true` offers the browser box tools `browser_run`, `browser_file`, `browser_save` and `browser_capture` when the server has a box. Apart from `tools`: no tools list does not include them, and a tools list cannot name them. Written only when `true`; an app from before the browser box refuses an agent file holding it, so a release ships the apps first (see [Releasing a format change](android-release.md#releasing-a-format-change)) |
 | `skills` | list of skill names | every valid skill | The skills the agent is offered (skills S6), by folder name, such as `["pdf-forms"]`. A name need not exist when the file is saved: a skill the vault lacks, or one with errors, is simply not offered. `[]` offers none, and leaves out the skill tools. Written only when set; an app from before skills refuses an agent file holding it, as it does `browser` and `outbox`, so a release ships the apps first (see [Releasing a format change](android-release.md#releasing-a-format-change)) |
-| `confirm { ... }` | block | every switch `true` | The confirmation switches of ai D22: `notes`, `archive`, `delete`, `types`, `downloads`, `taxonomies`, `agents` (agent creates, changes and deletes, agents G20) and `skills` (skill creates, changes and deletes, skills S9, written only when `false`), each a bool. `true` means the agent proposes the change for the user to apply; `false` means it makes the change itself. A switch left out is `true` |
+| `confirm { ... }` | block | every switch `true` | The confirmation switches of ai D22: `notes`, `archive`, `delete`, `types`, `downloads`, `taxonomies`, `agents` (agent creates, changes and deletes, agents G20), `skills` (skill creates, changes and deletes, skills S9, written only when `false`) and `tools` (script tool creates, changes and deletes, script-tools T3, written only when `false`), each a bool. `true` means the agent proposes the change for the user to apply; `false` means it makes the change itself. A switch left out is `true` |
 | `web { ... }` | block | every switch `true` | The internet switches of ai D28: `search`, `read` and `download`, each a bool. A tool switched off is not offered. A switch left out is `true` |
 | `outbox { ... }` | block | every switch `false` | The Outbox switch of outbox X2: `send_without_review`, a bool. `true` lets the agent create Outbox items as `ready`, so they send without the user's review. A switch left out is `false`. An app from before the Outbox refuses an agent file holding it, so a release ships the apps first (see [Releasing a format change](android-release.md#releasing-a-format-change)) |
+| `scripts { ... }` | block | every switch `false` | The script switch of script-tools T1: `run_code`, a bool. `true` offers the `run_script` tool, which runs wscript the agent writes with full access: every vault function, HTTP to any host and every script secret, its changes made at once as the agent. Only an admin grants it: an agent may propose it for another agent only when it has it itself, and such a change always waits for an admin's Apply. Written only when `true` |
 
 A `trigger` block is labelled with its name and holds a `prompt`, the first user message of each run (a string, not blank, at most 32000 characters), and one of a schedule, a note event or a mention, never two. The prompt is required, except in a mention trigger.
 
@@ -2555,6 +2607,8 @@ How triggers run, what an unattended run may do, and their limits are in [AI age
 The vault ships one agent, `agents/assistant.wcl`, labelled "Assistant": the chat panel's default (agents G6). It names no account, model or system prompt, so it runs on the default account of Settings > AI, and it allows every tool and type and has no triggers. It can be edited like any agent, but it cannot be deleted, and `enabled = false` is refused for it. A server that does not find it writes it on start, as it does the other shipped files (see [Shipped defaults and upgrades](#shipped-defaults-and-upgrades)).
 
 Agent files raised the format version to 2 (D27): an app from before them cannot sync the `agents/` folder, so it stops syncing and asks to be updated.
+
+Script tools raised the format version to 6 (script-tools T8): the `tools/` folder, a skill's own `tools/`, and the `scripts { ... }` block and the `tools` confirmation switch of an agent file, which an app from before them refuses, so it stops syncing and asks to be updated. Publish the new app builds with the server.
 
 `account` raised the format version to 5 (accounts A10): an app from before AI accounts refuses an agent file holding it, since its `provider` is a closed list of three and `account` an unknown item, so it stops syncing and asks to be updated. Publish the new app builds with the server (see [Releasing a format change](android-release.md#releasing-a-format-change)). On every start, the home server rewrites an agent file that names a `provider` to name the account the migration made for it, `account = "<name>"`, in one commit authored `task server`; a provider no account was made for is left as it is. A device's local vault leaves the file to the home server.
 

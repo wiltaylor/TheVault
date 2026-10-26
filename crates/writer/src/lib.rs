@@ -55,6 +55,7 @@ mod shipped;
 mod skills;
 mod terms;
 mod time;
+mod tools;
 mod types;
 
 use std::collections::{HashMap, HashSet};
@@ -111,6 +112,7 @@ pub use shipped::{
 pub use skills::{
     MAX_SKILL_ZIP, RESERVED_SKILL_NAMES, Skill, SkillFileInfo, skill_dir, skill_media_type,
 };
+pub use tools::{TOOLS_DIR, ToolSnapshot, tool_path};
 pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
 
 /// What [`Writer::check_type`] found: the type file as the write would store it.

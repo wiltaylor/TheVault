@@ -231,6 +231,9 @@ pub struct Confirm {
     /// The skill propose tools (skills S9).
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub skills: bool,
+    /// `propose_tool_change` and `propose_tool_delete` (script-tools T3).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub tools: bool,
 }
 
 impl Default for Confirm {
@@ -244,6 +247,7 @@ impl Default for Confirm {
             taxonomies: true,
             agents: true,
             skills: true,
+            tools: true,
         }
     }
 }
@@ -264,6 +268,7 @@ impl Confirm {
             "taxonomies": self.taxonomies,
             "agents": self.agents,
             "skills": self.skills,
+            "tools": self.tools,
         })
     }
 }

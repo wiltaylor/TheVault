@@ -22,7 +22,8 @@
 //!
 //! Changes go through `writer`, whose [`Vault`] implementation is the write path (D13, D30). HTTP
 //! calls reach only the hosts on the job's allowlist, or any host when it holds `"*"`, and never
-//! follow redirects (D10). A script reads only the secrets its job names, and cannot list them
+//! follow redirects (D10). A script reads only the secrets its job names, or every secret when
+//! they hold [`ALL_SECRETS`] (an agent's `run_script`, script-tools T1), and cannot list them
 //! (D10). File access reaches only the job's directories, never the vault itself. The `ai`
 //! module reads the AI credentials itself, so a script names neither them nor the providers'
 //! hosts, and can never read a key (ai D13).
@@ -132,11 +133,15 @@ impl Extensions for Server {
 /// The largest value `secrets::set` stores (google-sync D21).
 pub const MAX_SECRET_VALUE: usize = 64 * 1024;
 
-/// Whether the running job names secret `name`.
+/// A job's `secrets` entry that grants every secret, which only an agent's `run_script` names
+/// (script-tools T1). A task or handler file cannot: `*` is not a secret name.
+pub const ALL_SECRETS: &str = "*";
+
+/// Whether the running job names secret `name`, or every secret.
 fn granted(name: &str) -> Result<bool, HostError> {
     run::with(|r| {
         r.remaining()?;
-        Ok(r.job.secrets.iter().any(|s| s == name))
+        Ok(r.job.secrets.iter().any(|s| s == name || s == ALL_SECRETS))
     })
 }
 

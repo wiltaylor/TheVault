@@ -185,6 +185,12 @@ impl Scheduler {
         &self.writer
     }
 
+    /// The script host the tasks run on, which agents' script tools run on too (script-tools
+    /// T1, T2).
+    pub fn host(&self) -> &Arc<Host> {
+        &self.host
+    }
+
     pub fn now_ms(&self) -> i64 {
         self.clock.now_ms()
     }

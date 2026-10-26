@@ -32,7 +32,7 @@ pub const AGENT_PROVIDERS: [&str; 3] = ["anthropic", "openai", "chatgpt"];
 pub const AGENT_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// The confirmation switches of `permissions.confirm` (ai D22).
-pub const CONFIRM_SWITCHES: [&str; 8] = [
+pub const CONFIRM_SWITCHES: [&str; 9] = [
     "notes",
     "archive",
     "delete",
@@ -41,6 +41,7 @@ pub const CONFIRM_SWITCHES: [&str; 8] = [
     "taxonomies",
     "agents",
     "skills",
+    "tools",
 ];
 
 /// The internet switches of `permissions.web` (ai D28).
@@ -48,6 +49,9 @@ pub const WEB_SWITCHES: [&str; 3] = ["search", "read", "download"];
 
 /// The Outbox switches of `permissions.outbox` (outbox X2).
 pub const OUTBOX_SWITCHES: [&str; 1] = ["send_without_review"];
+
+/// The script switches of `permissions.scripts` (script-tools T1, T7).
+pub const SCRIPT_SWITCHES: [&str; 1] = ["run_code"];
 
 /// The note changes a trigger's `on` may name (agents G10).
 pub const TRIGGER_OPS: [&str; 3] = ["create", "update", "delete"];
@@ -117,6 +121,8 @@ pub struct Permissions {
     /// The skills the agent is offered (skills S6), by name; `None` is every valid skill.
     /// Written only when set: an app from before skills refuses a permission it does not know.
     pub skills: Option<Vec<String>>,
+    /// Running wscript (script-tools T1). Written only when on.
+    pub scripts: Scripts,
 }
 
 impl Permissions {
@@ -161,6 +167,8 @@ pub struct Confirm {
     /// Skill creates, changes and deletes (skills S9). Written only when off, so a file without
     /// it still reads in an app from before it.
     pub skills: bool,
+    /// Script tool creates, changes and deletes (script-tools T3). Written only when off.
+    pub tools: bool,
 }
 
 impl Default for Confirm {
@@ -174,13 +182,14 @@ impl Default for Confirm {
             taxonomies: true,
             agents: true,
             skills: true,
+            tools: true,
         }
     }
 }
 
 impl Confirm {
     /// The switches in [`CONFIRM_SWITCHES`] order.
-    pub fn switches(&self) -> [(&'static str, bool); 8] {
+    pub fn switches(&self) -> [(&'static str, bool); 9] {
         [
             ("notes", self.notes),
             ("archive", self.archive),
@@ -190,6 +199,7 @@ impl Confirm {
             ("taxonomies", self.taxonomies),
             ("agents", self.agents),
             ("skills", self.skills),
+            ("tools", self.tools),
         ]
     }
 
@@ -204,6 +214,7 @@ impl Confirm {
             "taxonomies" => &mut self.taxonomies,
             "agents" => &mut self.agents,
             "skills" => &mut self.skills,
+            "tools" => &mut self.tools,
             _ => return false,
         };
         *slot = on;
@@ -274,6 +285,43 @@ impl Outbox {
             _ => return false,
         }
         true
+    }
+}
+
+/// What the agent may do with wscript (script-tools T1, T7). A switch left out of the file is
+/// `false`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Scripts {
+    /// The `run_script` tool: wscript code the agent writes, run with full access to the vault,
+    /// any web host and every script secret. Only an admin grants it.
+    pub run_code: bool,
+}
+
+impl Scripts {
+    /// The switches in [`SCRIPT_SWITCHES`] order.
+    pub fn switches(&self) -> [(&'static str, bool); 1] {
+        [("run_code", self.run_code)]
+    }
+
+    /// Set switch `name`, one of [`SCRIPT_SWITCHES`]. `false` for any other name.
+    pub fn set(&mut self, name: &str, on: bool) -> bool {
+        match name {
+            "run_code" => self.run_code = on,
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// Whether `name` can be named in `permissions.tools`: a tool name, or a skill's script tool,
+/// `<skill>__<tool>` (script-tools T4).
+pub fn is_tool_name(name: &str) -> bool {
+    if is_name(name) {
+        return true;
+    }
+    match name.split_once("__") {
+        Some((skill, tool)) => crate::skills::is_skill_name(skill) && is_name(tool),
+        None => false,
     }
 }
 
@@ -655,6 +703,19 @@ impl Agent {
                 }
                 out.push_str("  }\n");
             }
+            let on: Vec<_> = p
+                .scripts
+                .switches()
+                .into_iter()
+                .filter(|(_, on)| *on)
+                .collect();
+            if !on.is_empty() {
+                out.push_str("\n  scripts {\n");
+                for (name, _) in on {
+                    field(&mut out, "    ", name, "true");
+                }
+                out.push_str("  }\n");
+            }
             out.push_str("}\n");
         }
         for t in &self.triggers {
@@ -842,10 +903,10 @@ impl Reader<'_> {
             d,
             &["tools", "types", "browser", "skills"],
             "permissions.",
-            "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... } or outbox { ... }",
+            "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... }, outbox { ... } or scripts { ... }",
         );
         let mut p = Permissions {
-            tools: self.names(d, "tools", "permissions.tools", "tool"),
+            tools: self.names_by(d, "tools", "permissions.tools", "tool", is_tool_name),
             types: self.names(d, "types", "permissions.types", "type"),
             browser: self
                 .bool(d, "browser", "permissions.browser")
@@ -866,10 +927,11 @@ impl Reader<'_> {
                 "confirm" => &CONFIRM_SWITCHES,
                 "web" => &WEB_SWITCHES,
                 "outbox" => &OUTBOX_SWITCHES,
+                "scripts" => &SCRIPT_SWITCHES,
                 _ => {
                     self.c.fail(
                         &format!("permissions > {}", b.name()),
-                        "is not a permissions block: use confirm { ... }, web { ... } or outbox { ... }",
+                        "is not a permissions block: use confirm { ... }, web { ... }, outbox { ... } or scripts { ... }",
                     );
                     continue;
                 }
@@ -904,6 +966,7 @@ impl Reader<'_> {
                 match b.kind.as_str() {
                     "confirm" => p.confirm.set(name, on),
                     "outbox" => p.outbox.set(name, on),
+                    "scripts" => p.scripts.set(name, on),
                     _ => p.web.set(name, on),
                 };
             }

@@ -635,3 +635,41 @@ fn an_agent_names_its_account_and_a_provider_still_reads() {
     assert_eq!(at("account = 3\n"), ["account"]);
     assert_eq!(at("provider = \"gemini\"\n"), ["provider"]);
 }
+
+#[test]
+fn script_permissions_and_the_tools_switch_read_and_write_back() {
+    let src = r#"permissions {
+  tools = ["run_script", "count_tagged", "brand-kit__fill"]
+
+  confirm {
+    tools = false
+  }
+
+  scripts {
+    run_code = true
+  }
+}
+"#;
+    let a = Agent::parse("scripter", src).unwrap();
+    assert!(a.permissions.scripts.run_code);
+    assert!(!a.permissions.confirm.tools);
+    assert!(a.permissions.allows_tool("brand-kit__fill"));
+    let back = Agent::parse("scripter", &a.to_wcl()).unwrap();
+    assert_eq!(back, a);
+    assert!(a.to_wcl().contains("scripts {"), "{}", a.to_wcl());
+
+    // Absent, both are their defaults and neither is written.
+    let plain = Agent::parse("plain", "").unwrap();
+    assert!(!plain.permissions.scripts.run_code);
+    assert!(plain.permissions.confirm.tools);
+    assert!(!plain.to_wcl().contains("scripts"));
+
+    assert_eq!(
+        at("permissions {\n  scripts {\n    run_code = 1\n    eval = true\n  }\n}\n"),
+        ["permissions.scripts.eval", "permissions.scripts.run_code"]
+    );
+    assert_eq!(
+        at("permissions {\n  tools = [\"Bad__x\", \"a__B\"]\n}\n"),
+        ["permissions.tools", "permissions.tools"]
+    );
+}

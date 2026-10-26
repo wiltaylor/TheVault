@@ -19,6 +19,7 @@ mod note;
 mod queryviews;
 mod skills;
 mod taxonomy;
+mod tools;
 mod types;
 
 use std::collections::BTreeMap;
@@ -27,8 +28,9 @@ use std::fmt;
 pub use agents::{
     AGENT_EFFORTS, AGENT_PROMPT_MAX, AGENT_PROVIDERS, ASSISTANT_AGENT, Agent, CONFIRM_SWITCHES,
     Confirm as AgentConfirm, IMPLICIT_MENTION, Mention as MentionTrigger, NoteEvent,
-    OUTBOX_SWITCHES, Outbox as AgentOutbox, Permissions as AgentPermissions, Schedule, TRIGGER_OPS,
-    Trigger, WEB_SWITCHES, Web as AgentWeb, When as TriggerWhen, parse_cron,
+    OUTBOX_SWITCHES, Outbox as AgentOutbox, Permissions as AgentPermissions, SCRIPT_SWITCHES,
+    Schedule, Scripts as AgentScripts, TRIGGER_OPS, Trigger, WEB_SWITCHES, Web as AgentWeb,
+    When as TriggerWhen, is_tool_name, parse_cron,
 };
 pub use blocks::{
     ADMONITION_KINDS, ARROWS, AdmonitionPreset, CANVAS_HEIGHT_DEFAULT, CANVAS_HEIGHT_MAX,
@@ -55,6 +57,10 @@ pub use skills::{
     is_skill_name, parse_skill_md, skill_name_problem, split_frontmatter,
 };
 pub use taxonomy::{Taxonomy, Term};
+pub use tools::{
+    ScriptTool, TOOL_DESCRIPTION_MAX, TOOL_LIST_ITEM_KINDS, TOOL_PARAM_KINDS, TOOL_TIMEOUT_DEFAULT,
+    TOOL_TIMEOUT_MAX, ToolParam,
+};
 pub use types::{
     Accept, DictValues, EVENTS, FieldDef, FieldKind, Handler, LIST_PAGE_SIZE_MAX,
     LIST_PAGE_SIZE_MIN, LIST_PAGE_VIEWS, ListPage, OnDelete, RESERVED_FIELDS, RangeOf, Reference,

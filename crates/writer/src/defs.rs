@@ -566,6 +566,10 @@ impl Writer {
         if !self.device_files_naming(name)?.is_empty() {
             roles.push(ScriptRole::Device);
         }
+        // A tool's script runs with the modules a task has (script-tools T2).
+        if self.tools_naming(name) {
+            roles.push(ScriptRole::Task);
+        }
         if roles.is_empty() {
             if uses_device_module(source) {
                 return Ok(vec![ScriptProblem {
@@ -590,30 +594,13 @@ impl Writer {
             .collect())
     }
 
-    /// Delete `scripts/<name>.ws`, unless a type's handler, a task or a device file names it.
+    /// Delete `scripts/<name>.ws`, unless a type's handler, a task, a device file or a tool
+    /// names it.
     pub fn delete_script(&self, name: &str) -> Result<()> {
         let _w = self.write_lock();
         let mut inner = self.lock();
         self.read_script(name)?;
-        let mut by: Vec<String> = inner
-            .schema
-            .types()
-            .flat_map(|t| {
-                t.handlers
-                    .iter()
-                    .filter(|h| h.script == name)
-                    .map(|h| format!("{} (handler {:?})", type_path(&t.name), h.event))
-            })
-            .collect();
-        for (task, text) in self.definitions("tasks")? {
-            let file = task_path(&task);
-            if let Ok(doc) = Doc::parse(&text, &file)
-                && doc.field("script").and_then(Value::as_str) == Some(name)
-            {
-                by.push(file);
-            }
-        }
-        by.extend(self.device_files_naming(name)?);
+        let by = self.script_users(&inner.schema, name, None)?;
         if !by.is_empty() {
             return Err(Error::InUse {
                 code: "script_in_use",
