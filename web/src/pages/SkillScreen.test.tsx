@@ -3,7 +3,8 @@
 // Save writing SKILL.md with the keys the form does not know kept; issues shown beside their
 // field; the placeholder description refused), the Files tab (the tree, a text file edited and
 // saved, a binary file's size, type and Download, upload into a folder, a new folder, rename and
-// delete after a confirm), the ⋯ menu's Export and Delete skill, and a read-only screen in the apps.
+// delete after a confirm), the ⋯ menu's Export and Delete skill, and the same screen, saved on the
+// home server, in the apps.
 
 import { Route, Router } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
@@ -321,25 +322,46 @@ describe("the ⋯ menu", () => {
 });
 
 describe("in the apps", () => {
-  it("shows the skill read only, with Export but no Save, file changes or Delete skill", async () => {
-    appInfo.mockResolvedValue({ app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" });
+  const APP = { app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" };
+
+  it("edits and saves the skill as the web app does, its files and Delete skill too", async () => {
+    appInfo.mockResolvedValue(APP);
     await show();
-    expect(await screen.findByText("Edit skills in the web app. This app can show them but not change them.")).toBeTruthy();
+    expect(screen.queryByText(/Edit skills in the web app/)).toBeNull();
     const t = tab("Instructions");
-    expect(t.getByLabelText("Description")).toBeDisabled();
-    expect(t.getByLabelText("Instructions")).toHaveAttribute("readonly");
-    expect(t.queryByRole("button", { name: "Save" })).toBeNull();
-    expect(t.queryByRole("button", { name: "Add metadata" })).toBeNull();
+    expect(t.getByLabelText("Description")).toBeEnabled();
+    expect(t.getByLabelText("Instructions")).not.toHaveAttribute("readonly");
+    expect(t.getByRole("button", { name: "Add metadata" })).toBeTruthy();
+    fireEvent.input(t.getByLabelText("Instructions"), { target: { value: "\n# PDF forms\n\nRun scripts/fill.py first.\n" } });
+    fireEvent.click(t.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putSkill).toHaveBeenCalled());
+    expect(putSkill.mock.calls[0]![1]).toContain("Run scripts/fill.py first.");
+    expect(await t.findByRole("status")).toHaveTextContent("Saved.");
     fireEvent.click(screen.getByRole("button", { name: "Actions for pdf-forms" }));
     const menu = within(screen.getByRole("menu"));
-    expect(menu.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Export"]);
+    expect(menu.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Export", "Delete skill"]);
+    fireEvent.click(screen.getByRole("button", { name: "Actions for pdf-forms" }));
 
     fireEvent.click(screen.getByRole("tab", { name: "Files" }));
     const files = within(await screen.findByRole("region", { name: "Files" }));
-    expect(files.queryByRole("button", { name: /Upload files/ })).toBeNull();
-    expect(files.queryByRole("button", { name: "Delete assets/form.pdf" })).toBeNull();
+    expect(files.getByRole("button", { name: /Upload files/ })).toBeTruthy();
+    expect(files.getByRole("button", { name: "Delete assets/form.pdf" })).toBeTruthy();
     fireEvent.click(files.getByRole("button", { name: "fill.py" }));
     const editor = await files.findByLabelText("Contents of scripts/fill.py");
-    expect(editor).toHaveAttribute("readonly");
+    expect(editor).not.toHaveAttribute("readonly");
+  });
+
+  it("says a save needs the home server when it cannot be reached, and stays editable", async () => {
+    appInfo.mockResolvedValue(APP);
+    const message = "Changing a skill needs the home server, which is not reachable.";
+    putSkill.mockRejectedValue(new ApiError(503, { error: "ai_needs_server", message }));
+    await show();
+    const t = tab("Instructions");
+    fireEvent.input(t.getByLabelText("Description"), { target: { value: "Fill PDF forms. Use when one arrives." } });
+    fireEvent.click(t.getByRole("button", { name: "Save" }));
+    expect(await t.findByRole("alert")).toHaveTextContent(message);
+    expect(t.getByLabelText("Description")).toBeEnabled();
+    expect(t.getByLabelText("Description")).toHaveValue("Fill PDF forms. Use when one arrives.");
+    expect(t.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 });

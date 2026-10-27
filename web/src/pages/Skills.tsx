@@ -1,9 +1,10 @@
 // The Skills page, `/skills` (skills S4): every skill as a card, with its name opening the skill
 // screen, its description cut to two lines, its file count and size, its license, and an invalid
-// skill's first issue. A search box narrows the list. In the web app the header has New skill,
-// which asks for a name and opens the new skill, and Import, from a zip or (where the browser can
-// choose one) a folder, asking before it replaces a skill of the same name. In the apps the page
-// only lists: changing a skill needs `admin`, which a device token never has (skills S3).
+// skill's first issue. A search box narrows the list. The header has New skill, which asks for a
+// name and opens the new skill, and in the web app Import, from a zip or (where the browser can
+// choose one) a folder, asking before it replaces a skill of the same name. The apps write a new
+// skill on the home server, which takes the device's token for it; an import needs `admin`,
+// which a device token never has (skills S3).
 
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
@@ -40,7 +41,8 @@ export function Skills() {
   const navigate = useNavigate();
   const [app, setApp] = createSignal<boolean | null>(null);
   void appInfo().then((a) => setApp(a !== null));
-  const readOnly = () => app() !== false;
+  // In the apps: Import is the web app's.
+  const noImport = () => app() !== false;
   const [query, setQuery] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [menu, setMenu] = createSignal(false);
@@ -81,11 +83,11 @@ export function Skills() {
           <TypeIcon name={SKILL_ICON} size={24} />
           Skills
         </h1>
-        <Show when={!readOnly()}>
-          <div class="actions skills-actions">
-            <button type="button" class="button primary" onClick={() => setCreatingSkill(true)}>
-              New skill
-            </button>
+        <div class="actions skills-actions">
+          <button type="button" class="button primary" onClick={() => setCreatingSkill(true)}>
+            New skill
+          </button>
+          <Show when={!noImport()}>
             <div class="skill-more">
               <button
                 ref={importButton}
@@ -145,17 +147,11 @@ export function Skills() {
               aria-label="Skill folder"
               onChange={(e) => picked(e.currentTarget, (files) => importSkillFolder(files))}
             />
-          </div>
-        </Show>
+          </Show>
+        </div>
       </header>
 
-      <Show when={readOnly() && app() !== null}>
-        <p class="agent-readonly" role="note">
-          Add and edit skills in the web app. This app can show them but not change them.
-        </p>
-      </Show>
-
-      <Show when={creatingSkill() && !readOnly()}>
+      <Show when={creatingSkill()}>
         <div class="skills-new">
           <TypeIcon name={SKILL_ICON} size={16} />
           <NameInput label="New skill name" onDone={create} />
@@ -178,8 +174,8 @@ export function Skills() {
                 agent follows when a task calls for it. Agents choose a skill by its description.
               </p>
               <p class="muted">
-                {readOnly()
-                  ? "Add skills in the web app; they reach this app when it syncs."
+                {noImport()
+                  ? "Use New skill to write one. Import one from a zip or a folder in the web app."
                   : "Use New skill to write one, or Import to add one from a zip or a folder."}
               </p>
               <p>

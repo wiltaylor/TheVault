@@ -1179,3 +1179,127 @@ fn the_app_writes_agent_files_on_the_home_server() {
     let out = device.call("PUT", "/api/agents/clerk", Some(json!({})), 503);
     assert_eq!(out["error"], "ai_needs_server", "{out}");
 }
+
+impl Device {
+    /// One request to the device's own server with `body` as its bytes: its status and body.
+    fn call_bytes(&self, method: &str, path: &str, body: &[u8]) -> (u16, Vec<u8>) {
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(Body::from(body.to_vec()))
+            .unwrap();
+        self.runtime.block_on(async {
+            let res = self.embedded.handle(req).await;
+            let got = res.status().as_u16();
+            let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (got, bytes.to_vec())
+        })
+    }
+}
+
+const SKILL_MD: &str =
+    "---\nname: forms\ndescription: Fills forms. Use when a form arrives.\n---\n\n# Forms\n";
+
+// The skill screen edits skills in the apps as in the web app: the home server takes the
+// device's token for a skill's writes, the skill is read from there before the sync round brings
+// it, and offline a write says it needs the home server.
+#[test]
+fn the_app_writes_skills_on_the_home_server() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Admin::of(&server);
+    let device = Device::pair(&server, "Phone");
+    let local = device._vault.path().join("skills/forms");
+
+    // Created from the app, it is written on the home server and read from there at once.
+    let saved = device.call(
+        "PUT",
+        "/api/skills/forms",
+        Some(json!({ "text": SKILL_MD })),
+        201,
+    );
+    assert_eq!(saved["name"], "forms", "{saved}");
+    let home = admin.call("GET", "/api/skills/forms", None, 200);
+    assert_eq!(home["description"], "Fills forms. Use when a form arrives.");
+    assert!(!local.exists(), "written on the device");
+    let read = device.call("GET", "/api/skills/forms", None, 200);
+    assert_eq!(read["description"], home["description"]);
+    let list = device.call("GET", "/api/skills", None, 200);
+    assert!(list.to_string().contains("\"forms\""), "{list}");
+
+    // Its files, text and binary, are written there too, and read back before a sync.
+    let png: &[u8] = &[0x89, b'P', b'N', b'G', 0, 0xff, 0xfe, 1];
+    let (got, body) = device.call_bytes("PUT", "/api/skills/forms/files/assets/logo.png", png);
+    assert_eq!(got, 200, "{}", String::from_utf8_lossy(&body));
+    let (got, _) = device.call_bytes("PUT", "/api/skills/forms/files/notes.md", b"# Notes\n");
+    assert_eq!(got, 200);
+    let (got, body) = device.call_bytes("GET", "/api/skills/forms/files/assets/logo.png", b"");
+    assert_eq!(got, 200);
+    assert_eq!(body, png);
+    let changed = SKILL_MD.replace("# Forms", "# Forms, changed");
+    device.call(
+        "PUT",
+        "/api/skills/forms",
+        Some(json!({ "text": changed })),
+        200,
+    );
+
+    // The server's checks are the app's: a bad SKILL.md is its 400 with the issues.
+    let bad = device.call(
+        "PUT",
+        "/api/skills/forms",
+        Some(json!({ "text": "no frontmatter\n" })),
+        400,
+    );
+    assert_eq!(bad["error"], "invalid", "{bad}");
+    // An import still needs the web app.
+    let (got, _) = device.call_bytes("POST", "/api/skills/import", b"PK");
+    assert_eq!(got, 403);
+
+    device.sync();
+    assert_eq!(
+        std::fs::read_to_string(local.join("SKILL.md")).unwrap(),
+        changed
+    );
+    assert_eq!(std::fs::read(local.join("assets/logo.png")).unwrap(), png);
+
+    // Offline, a write says it needs the home server and a read is the local copy.
+    device.go_offline();
+    let out = device.call(
+        "PUT",
+        "/api/skills/forms",
+        Some(json!({ "text": SKILL_MD })),
+        503,
+    );
+    assert_eq!(out["error"], "ai_needs_server", "{out}");
+    assert_eq!(out["message"], embedded::SKILL_NEEDS_SERVER_MESSAGE);
+    let (got, _) = device.call_bytes("PUT", "/api/skills/forms/files/a.txt", b"a");
+    assert_eq!(got, 503);
+    let out = device.call("DELETE", "/api/skills/forms/files/notes.md", None, 503);
+    assert_eq!(out["error"], "ai_needs_server", "{out}");
+    let out = device.call("DELETE", "/api/skills/forms", None, 503);
+    assert_eq!(out["error"], "ai_needs_server", "{out}");
+    let read = device.call("GET", "/api/skills/forms", None, 200);
+    assert!(read["body"].as_str().unwrap().contains("changed"), "{read}");
+    device.embedded.set_remote(Some(device.remote.clone()));
+
+    // A file deleted, then the skill deleted from the app: gone on the home server, then on the
+    // device.
+    let gone = device.call("DELETE", "/api/skills/forms/files/notes.md", None, 200);
+    assert_eq!(gone["deleted"], json!(["notes.md"]), "{gone}");
+    let gone = device.call("DELETE", "/api/skills/forms", None, 200);
+    assert_eq!(gone["deleted"], true, "{gone}");
+    admin.call("GET", "/api/skills/forms", None, 404);
+    device.sync();
+    assert!(!local.join("SKILL.md").exists());
+    device.embedded.set_remote(None);
+    let out = device.call(
+        "PUT",
+        "/api/skills/forms",
+        Some(json!({ "text": SKILL_MD })),
+        503,
+    );
+    assert_eq!(out["error"], "ai_needs_server", "{out}");
+}

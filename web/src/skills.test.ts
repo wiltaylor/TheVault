@@ -195,7 +195,7 @@ describe("the palette's skill actions", () => {
     expect(skillMatches({ ...skills[0]!, license: "MIT" }, "mit")).toBe(true);
   });
 
-  it("leaves out New skill in the apps", () => {
-    expect(agentActions([], true, skills).map((a) => a.label)).toEqual(["New agent", "Open skill pdf-forms", "Open skill broken"]);
+  it("keeps New skill in the apps", () => {
+    expect(agentActions([], true, skills).map((a) => a.label)).toEqual(["New agent", "New skill", "Open skill pdf-forms", "Open skill broken"]);
   });
 });

@@ -2068,17 +2068,21 @@ export const api = {
     }
     return res.blob();
   },
-  /** Write the whole `SKILL.md` (admin). The server checks it first: a problem is a 400 with its issues. */
+  /**
+   * Write the whole `SKILL.md`. The server checks it first: a problem is a 400 with its issues.
+   * Needs `admin`, or in the apps the device's token: the apps write a skill on the home server,
+   * as they do these three below, and answer 503 `ai_needs_server` when it cannot be reached.
+   */
   putSkill: (name: string, text: string) =>
     request<unknown>("PUT", `/api/skills/${enc(name)}`, new RawBody(text, "text/markdown; charset=utf-8")),
-  /** Write a file under the skill's folder (admin). */
+  /** Write a file under the skill's folder (admin, or an app's device token). */
   putSkillFile: (name: string, path: string, bytes: Blob) =>
     request<unknown>("PUT", skillFileUrl(name, path), new RawBody(bytes, "application/octet-stream")),
   deleteSkillFile: (name: string, path: string) => request<unknown>("DELETE", skillFileUrl(name, path)),
-  /** Delete the skill's folder (admin). */
+  /** Delete the skill's folder (admin, or an app's device token). */
   deleteSkill: (name: string) => request<unknown>("DELETE", `/api/skills/${enc(name)}`),
   /**
-   * Import a zipped skill (admin): one top-level folder, or `SKILL.md` at the root. It is named by
+   * Import a zipped skill (admin, so the web app only): one top-level folder, or `SKILL.md` at the root. It is named by
    * its frontmatter `name`; an existing name is refused (409) unless `replace`.
    */
   importSkill: async (zip: Blob, filename: string, replace = false) => {

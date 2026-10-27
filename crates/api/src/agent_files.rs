@@ -14,7 +14,7 @@
 //! Agent files are definitions, so changing one needs `admin`, as types and tasks do
 //! (`auth::required_scope` answers `admin` for any write it does not list). A paired device's
 //! `write` token may also write them, so the apps edit agents as the web app does (see
-//! `auth::device_writes_agent`).
+//! `auth::device_writes_definition`).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

@@ -42,7 +42,7 @@ mod sync_status;
 pub use fresh::{FreshStart, LocalVault};
 pub use home::{
     AGENT_NEEDS_SERVER_MESSAGE, AI_NEEDS_SERVER_MESSAGE, NEEDS_WEB_APP_MESSAGE, NOT_PAIRED_MESSAGE,
-    OFFLINE_MESSAGE,
+    OFFLINE_MESSAGE, SKILL_NEEDS_SERVER_MESSAGE,
 };
 pub use sync_status::{SyncPhase, SyncReport, SyncSource, SyncState, Waiting, progress_json};
 
@@ -531,8 +531,13 @@ impl Embedded {
                     .unwrap_or(0);
                 home.poll_turn(&turn, after).await
             }
-            Route::AgentFile => {
-                let res = home.forward_agent(req).await;
+            which @ (Route::AgentFile | Route::Skill) => {
+                let message = if which == Route::Skill {
+                    home::SKILL_NEEDS_SERVER_MESSAGE
+                } else {
+                    home::AGENT_NEEDS_SERVER_MESSAGE
+                };
+                let res = home.forward_definition(req, message).await;
                 // The home server wrote the file: a round brings it to the local copy.
                 if res.status().is_success() {
                     self.request_sync();

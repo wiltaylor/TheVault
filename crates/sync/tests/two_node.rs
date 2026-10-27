@@ -675,8 +675,11 @@ fn a_skill_with_a_binary_asset_reaches_the_device_and_its_delete_follows() {
     });
     assert_eq!(status, 200);
     assert_eq!(bytes, blob);
-    // The apps show skills read-only (skills S3).
-    let refused = phone.call("PUT", "/api/skills/pdf", Some(json!({ "text": md })), 403);
+    // The apps never write a skill to their own copy: a change is made on the home server, which
+    // this embedded server has not been told of, and an import is the web app's (skills S3).
+    let refused = phone.call("PUT", "/api/skills/pdf", Some(json!({ "text": md })), 503);
+    assert_eq!(refused["error"], "ai_needs_server");
+    let refused = phone.call("POST", "/api/skills/import", None, 403);
     assert_eq!(refused["error"], "needs_web_app");
 
     admin.send(admin.client.delete(server.url("/api/skills/pdf")), 200);

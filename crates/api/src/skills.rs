@@ -28,8 +28,10 @@
 //!   200 for a replaced one.
 //!
 //! A limit broken is a 413 `too_large`; a bad name or path a 400 `bad_request`; a missing skill
-//! or file a 404 `not_found`. Writes need `admin`, as agent files do (agents G2), so the apps show
-//! skills read-only (`auth::required_scope` answers `admin` for any write it does not list).
+//! or file a 404 `not_found`. Writes need `admin`, as agent files do (agents G2)
+//! (`auth::required_scope` answers `admin` for any write it does not list). A paired device's
+//! `write` token may also make every write but an import, so the apps edit skills as the web app
+//! does (see `auth::device_writes_definition`).
 
 use std::sync::Arc;
 

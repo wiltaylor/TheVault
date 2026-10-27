@@ -528,13 +528,18 @@ fn skill_files_are_in_the_feed_as_text_or_base64() {
         .decode(entries[1]["base64"].as_str().unwrap())
         .unwrap();
     assert_eq!(decoded, blob);
-    // A device token reads skills but cannot change them (skills S3).
+    // A device token reads skills and, as the apps edit them, writes them, but cannot import one
+    // (skills S3).
     send(device.get(server.url("/api/skills/pdf")), 200);
     send(
         device
             .put(server.url("/api/skills/pdf"))
             .header(CONTENT_TYPE, "text/markdown")
             .body(md),
+        200,
+    );
+    send(
+        device.post(server.url("/api/skills/import")).body("PK"),
         403,
     );
     send(admin.delete(server.url("/api/skills/pdf")), 200);

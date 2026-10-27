@@ -4,8 +4,8 @@
 // server's issues beside the field they name. Files holds the skill's folder as a tree: a text file
 // opens in an editor with Save, a binary one shows its size and type with Download, and files can
 // be uploaded into a folder, folders made, and either renamed or deleted. The ⋯ menu exports the
-// skill as a zip and deletes it. In the apps the screen is read only: skill files need `admin`,
-// which a device token never has (skills S3).
+// skill as a zip and deletes it. The apps show the same screen: they read and write the skill on
+// the home server, which takes the device's token for a skill's writes.
 
 import { useNavigate, useParams } from "@solidjs/router";
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup } from "solid-js";
@@ -13,7 +13,6 @@ import { ApiError, type Skill, type SkillFile, type SkillIssue, api, skillExport
 import { Markdown } from "../ai/markdown";
 import { MenuBox } from "../components/AgentsNav";
 import { TypeIcon } from "../components/Icon";
-import { appInfo } from "../inApp";
 import {
   DESCRIPTION_PLACEHOLDER,
   SKILL_COMPATIBILITY_MAX,
@@ -46,7 +45,6 @@ interface TabProps {
   /** `SKILL.md` as stored, for the frontmatter keys the form does not edit. */
   raw: string;
   reload: () => Promise<void>;
-  readOnly: boolean;
   id: string;
 }
 
@@ -118,7 +116,7 @@ function InstructionsTab(p: TabProps) {
           </For>
         </ul>
       </Show>
-      <fieldset class="agent-fieldset" disabled={p.readOnly}>
+      <fieldset class="agent-fieldset">
         <div class="form-grid">
           <label for={id("name")}>Name</label>
           <div>
@@ -173,23 +171,19 @@ function InstructionsTab(p: TabProps) {
                 <div class="skill-metadata-row">
                   <input aria-label={`Key ${i() + 1}`} placeholder="Key" value={row[0]} onInput={(e) => setMeta(i(), 0, e.currentTarget.value)} />
                   <input aria-label={`Value ${i() + 1}`} placeholder="Value" value={row[1]} onInput={(e) => setMeta(i(), 1, e.currentTarget.value)} />
-                  <Show when={!p.readOnly}>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${row[0] || `row ${i() + 1}`}`}
-                      onClick={() => set({ metadata: draft().metadata.filter((_, j) => j !== i()) })}
-                    >
-                      <TypeIcon name="x" size={14} />
-                    </button>
-                  </Show>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${row[0] || `row ${i() + 1}`}`}
+                    onClick={() => set({ metadata: draft().metadata.filter((_, j) => j !== i()) })}
+                  >
+                    <TypeIcon name="x" size={14} />
+                  </button>
                 </div>
               )}
             </For>
-            <Show when={!p.readOnly}>
-              <button type="button" class="skill-add-row" onClick={() => set({ metadata: [...draft().metadata, ["", ""]] })}>
-                Add metadata
-              </button>
-            </Show>
+            <button type="button" class="skill-add-row" onClick={() => set({ metadata: [...draft().metadata, ["", ""]] })}>
+              Add metadata
+            </button>
             <FieldIssues issues={issues()} at="metadata" />
           </div>
           <label for={id("tools")}>Allowed tools</label>
@@ -225,13 +219,12 @@ function InstructionsTab(p: TabProps) {
           class="ai-system-prompt skill-body"
           rows={22}
           spellcheck={false}
-          readOnly={p.readOnly}
           value={draft().body}
           onInput={(e) => set({ body: e.currentTarget.value })}
         />
       </Show>
       <FieldIssues issues={issues()} at="body" />
-      <SaveBar dirty={dirty()} readOnly={p.readOnly} save={save} />
+      <SaveBar dirty={dirty()} save={save} />
     </section>
   );
 }
@@ -342,37 +335,35 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
         skills/{name()}/, {p.skill.files.length} file{p.skill.files.length === 1 ? "" : "s"}, {sizeText(p.skill.files.reduce((n, f) => n + f.size, 0))}.
         Scripts, references and assets the instructions name sit beside SKILL.md.
       </p>
-      <Show when={!p.readOnly}>
-        <div class="skill-files-bar">
-          <label for={`${p.id}-folder`}>Folder</label>
-          <select id={`${p.id}-folder`} value={target()} onChange={(e) => setTarget(e.currentTarget.value)}>
-            <option value="">The skill's folder</option>
-            <For each={allFolders()}>{(d) => <option value={d}>{d}</option>}</For>
-          </select>
-          <button type="button" disabled={busy()} onClick={() => upload.click()}>
-            <TypeIcon name="upload" size={14} /> Upload files
-          </button>
-          <button type="button" disabled={busy()} onClick={newFile}>
-            <TypeIcon name="file-plus" size={14} /> New file
-          </button>
-          <button type="button" disabled={busy()} onClick={newFolder}>
-            <TypeIcon name="folder-plus" size={14} /> New folder
-          </button>
-          <input
-            ref={upload}
-            type="file"
-            multiple
-            class="visually-hidden"
-            tabindex={-1}
-            aria-label="Files to upload"
-            onChange={(e) => {
-              const files = [...(e.currentTarget.files ?? [])];
-              e.currentTarget.value = "";
-              if (files.length) uploaded(files);
-            }}
-          />
-        </div>
-      </Show>
+      <div class="skill-files-bar">
+        <label for={`${p.id}-folder`}>Folder</label>
+        <select id={`${p.id}-folder`} value={target()} onChange={(e) => setTarget(e.currentTarget.value)}>
+          <option value="">The skill's folder</option>
+          <For each={allFolders()}>{(d) => <option value={d}>{d}</option>}</For>
+        </select>
+        <button type="button" disabled={busy()} onClick={() => upload.click()}>
+          <TypeIcon name="upload" size={14} /> Upload files
+        </button>
+        <button type="button" disabled={busy()} onClick={newFile}>
+          <TypeIcon name="file-plus" size={14} /> New file
+        </button>
+        <button type="button" disabled={busy()} onClick={newFolder}>
+          <TypeIcon name="folder-plus" size={14} /> New folder
+        </button>
+        <input
+          ref={upload}
+          type="file"
+          multiple
+          class="visually-hidden"
+          tabindex={-1}
+          aria-label="Files to upload"
+          onChange={(e) => {
+            const files = [...(e.currentTarget.files ?? [])];
+            e.currentTarget.value = "";
+            if (files.length) uploaded(files);
+          }}
+        />
+      </div>
       <Show when={error()}>
         <p class="error" role="alert">
           {error()}
@@ -396,7 +387,7 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
                   </button>
                   <span class="muted skill-tree-size">{sizeText(r.file!.size)}</span>
                 </Show>
-                <Show when={!p.readOnly && r.path !== "SKILL.md"}>
+                <Show when={r.path !== "SKILL.md"}>
                   <button type="button" class="skill-tree-action" aria-label={`Rename ${r.path}`} title="Rename" disabled={busy()} onClick={() => rename(r.path, r.folder)}>
                     <TypeIcon name="pencil" size={14} />
                   </button>
@@ -409,7 +400,7 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
           </For>
         </ul>
         <Show when={opened()} keyed>
-          {(f) => <FileView skill={p.skill} file={f} readOnly={p.readOnly} reload={p.reload} />}
+          {(f) => <FileView skill={p.skill} file={f} reload={p.reload} />}
         </Show>
       </div>
     </section>
@@ -417,7 +408,7 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
 }
 
 /** An opened file: a text file in an editor with Save, anything else as its size and type. */
-function FileView(props: { skill: Skill; file: SkillFile; readOnly: boolean; reload: () => Promise<void> }) {
+function FileView(props: { skill: Skill; file: SkillFile; reload: () => Promise<void> }) {
   const text = isTextFile(props.file);
   const [saved, setSaved] = createSignal<string | null>(null);
   const [value, setValue] = createSignal("");
@@ -462,7 +453,7 @@ function FileView(props: { skill: Skill; file: SkillFile; readOnly: boolean; rel
         fallback={<p class="muted">This file is not text, so it is not shown here. Download it to look at it.</p>}
       >
         <Show when={saved() !== null} fallback={<p class="muted">Reading the file…</p>}>
-          <Show when={isSkillMd && !props.readOnly}>
+          <Show when={isSkillMd}>
             <p class="muted">Saving SKILL.md here checks it as the Instructions tab does.</p>
           </Show>
           <textarea
@@ -470,11 +461,10 @@ function FileView(props: { skill: Skill; file: SkillFile; readOnly: boolean; rel
             aria-label={`Contents of ${props.file.path}`}
             rows={22}
             spellcheck={false}
-            readOnly={props.readOnly}
             value={value()}
             onInput={(e) => setValue(e.currentTarget.value)}
           />
-          <SaveBar dirty={value() !== saved()} readOnly={props.readOnly} save={save} />
+          <SaveBar dirty={value() !== saved()} save={save} />
         </Show>
       </Show>
     </div>
@@ -487,9 +477,6 @@ export function SkillScreen() {
   const navigate = useNavigate();
   const pane = usePane();
   const uid = createUniqueId();
-  const [app, setApp] = createSignal<boolean | null>(null);
-  void appInfo().then((a) => setApp(a !== null));
-  const readOnly = () => app() !== false;
   const [skill, setSkill] = createSignal<Skill | null>(null);
   const [raw, setRaw] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
@@ -588,11 +575,9 @@ export function SkillScreen() {
                     <a role="menuitem" href={skillExportUrl(s().name)} download={`${s().name}.zip`} onClick={() => setMenu(false)}>
                       Export
                     </a>
-                    <Show when={!readOnly()}>
-                      <button type="button" role="menuitem" class="danger" onClick={() => void remove()}>
-                        Delete skill
-                      </button>
-                    </Show>
+                    <button type="button" role="menuitem" class="danger" onClick={() => void remove()}>
+                      Delete skill
+                    </button>
                   </MenuBox>
                 </Show>
               </div>
@@ -603,11 +588,6 @@ export function SkillScreen() {
             <Show when={!s().valid}>
               <p class="agent-readonly skill-invalid" role="note">
                 This skill does not pass the Agent Skills checks, so no agent is offered it until it is fixed.
-              </p>
-            </Show>
-            <Show when={readOnly()}>
-              <p class="agent-readonly" role="note">
-                Edit skills in the web app. This app can show them but not change them.
               </p>
             </Show>
             <div class="agent-tabs" role="tablist" aria-label="Skill" onKeyDown={onTabKey}>
@@ -630,13 +610,12 @@ export function SkillScreen() {
             <div id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-tab-${tab().id}`}>
               <Show
                 when={tab().id === "files"}
-                fallback={<InstructionsTab skill={s()} raw={raw()} reload={() => load(s().name)} readOnly={readOnly()} id={uid} />}
+                fallback={<InstructionsTab skill={s()} raw={raw()} reload={() => load(s().name)} id={uid} />}
               >
                 <FilesTab
                   skill={s()}
                   raw={raw()}
                   reload={() => load(s().name)}
-                  readOnly={readOnly()}
                   id={uid}
                   open={open()}
                   setOpen={setOpen}

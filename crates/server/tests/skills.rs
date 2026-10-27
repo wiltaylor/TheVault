@@ -1,5 +1,5 @@
 //! S1: Agent Skills through `/api/skills` (skills S1, S2, S3, S7): reads need `read`, every write
-//! needs `admin`; `SKILL.md` is validated before it is written; a zip imports from one folder or
+//! needs `admin`, or a paired device's token for every write but an import; `SKILL.md` is validated before it is written; a zip imports from one folder or
 //! from its root, refuses an existing name unless `replace=true`, and writes nothing when it
 //! fails; export round-trips; and each write is a `skill.change` in the activity log.
 
@@ -9,7 +9,7 @@ use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{Value, json};
-use testkit::TestServer;
+use testkit::{PASSWORD, TestServer};
 
 const PDF: &str = "---\nname: pdf\ndescription: Fills PDF forms. Use when a PDF form arrives.\nlicense: MIT\ncompatibility: Requires python3\nmetadata:\n  author: me\nallowed-tools: Bash(python3:*) Read\nunknown: kept\n---\n\n# PDF\n\nRun scripts/fill.py.\n";
 
@@ -507,4 +507,152 @@ fn an_export_imports_back_as_it_was() {
     let mut after = expect(api.import(&exported, ""), StatusCode::CREATED);
     after.as_object_mut().unwrap().remove("replaced");
     assert_eq!(after, before);
+}
+
+/// A device paired with `api`'s server: its `write` token.
+fn pair_device(api: &Api) -> String {
+    let res = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
+        .json(&json!({ "password": PASSWORD, "name": "Phone", "platform": "android" }))
+        .send()
+        .unwrap();
+    expect(res, StatusCode::CREATED)["token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+// The apps edit skills as the web app does: a paired device's `write` token creates a skill,
+// replaces its `SKILL.md`, writes and deletes its files, text and binary, and deletes it, and
+// nothing else it may do grows.
+#[test]
+fn a_paired_device_writes_skills_and_nothing_more() {
+    let api = Api::start();
+    let device = pair_device(&api);
+    let dir = api.server.vault_path().join("skills/pdf");
+
+    let created = expect(
+        api.req("PUT", "/api/skills/pdf", &device)
+            .header(CONTENT_TYPE, "text/markdown; charset=utf-8")
+            .body(PDF)
+            .send()
+            .unwrap(),
+        StatusCode::CREATED,
+    );
+    assert_eq!(created["name"], "pdf");
+    assert_eq!(std::fs::read_to_string(dir.join("SKILL.md")).unwrap(), PDF);
+    let changed = PDF.replace("Run scripts/fill.py.", "Run scripts/fill.py first.");
+    expect(
+        api.req("PUT", "/api/skills/pdf", &device)
+            .body(changed.clone())
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("SKILL.md")).unwrap(),
+        changed
+    );
+
+    // The same checks as for the web app.
+    let err = expect(
+        api.req("PUT", "/api/skills/pdf", &device)
+            .body("no frontmatter\n")
+            .send()
+            .unwrap(),
+        StatusCode::BAD_REQUEST,
+    );
+    assert_eq!(err["error"], "invalid");
+
+    let text = expect(
+        api.req("PUT", "/api/skills/pdf/files/scripts/fill.py", &device)
+            .body("print('hi')\n")
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(text["name"], "pdf", "{text}");
+    let png: &[u8] = &[0x89, b'P', b'N', b'G', 0, 0xff, 0xfe, 1];
+    expect(
+        api.req("PUT", "/api/skills/pdf/files/assets/logo.png", &device)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(png.to_vec())
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(std::fs::read(dir.join("assets/logo.png")).unwrap(), png);
+    let gone = expect(
+        api.req("DELETE", "/api/skills/pdf/files/assets/logo.png", &device)
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(gone["deleted"], json!(["assets/logo.png"]));
+    expect(
+        api.req("DELETE", "/api/skills/pdf/files/scripts/fill.py", &device)
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert!(!dir.join("scripts/fill.py").exists());
+
+    // An import still needs `admin`.
+    let (ty, body) = form(&zip(&[("pdf/SKILL.md", PDF.as_bytes())]));
+    expect(
+        api.req("POST", "/api/skills/import?replace=true", &device)
+            .header(CONTENT_TYPE, ty)
+            .body(body)
+            .send()
+            .unwrap(),
+        StatusCode::FORBIDDEN,
+    );
+
+    let gone = expect(
+        api.req("DELETE", "/api/skills/pdf", &device)
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(gone, json!({ "name": "pdf", "deleted": true }));
+    assert!(!dir.exists());
+
+    // Every other admin route still refuses the device: Settings > AI accounts, a type's delete.
+    let refused = expect(
+        api.req("POST", "/api/integrations/ai/accounts", &device)
+            .json(&json!({ "name": "Mine", "provider": "anthropic" }))
+            .send()
+            .unwrap(),
+        StatusCode::FORBIDDEN,
+    );
+    assert_eq!(refused["error"], "forbidden");
+    let refused = expect(
+        api.req("DELETE", "/api/types/task", &device)
+            .send()
+            .unwrap(),
+        StatusCode::FORBIDDEN,
+    );
+    assert_eq!(refused["error"], "forbidden");
+
+    // An API token with `write` is not a device, whatever it is called.
+    let named = expect(
+        api.admin("POST", "/api/tokens")
+            .json(&json!({ "name": "device-fake", "scope": "write" }))
+            .send()
+            .unwrap(),
+        StatusCode::CREATED,
+    )["secret"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (method, path) in [
+        ("PUT", "/api/skills/pdf"),
+        ("PUT", "/api/skills/pdf/files/a.txt"),
+        ("DELETE", "/api/skills/pdf"),
+    ] {
+        let res = api.req(method, path, &named).body(PDF).send().unwrap();
+        assert_eq!(res.status(), 403, "{method} {path}");
+    }
+    assert!(!dir.exists());
 }

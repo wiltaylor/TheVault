@@ -173,13 +173,31 @@ pub fn is_agent_file_write(method: &Method, path: &str) -> bool {
             .is_some_and(|name| !name.is_empty() && !name.contains('/'))
 }
 
-/// Whether the request is a paired device writing an agent file with its own `write` token.
-/// Agent files need `admin`, but the user asked to edit agents in the desktop and Android apps,
-/// which they pair themselves, as in the web app: their settings, permissions and triggers, the
-/// grants an AI proposal may not make on its own (Run wscript code, sub agents) among them. So
-/// these two routes, and only these, take a device's token. It stays `write` everywhere else
-/// (D2), and an API token with `write` is still refused.
-async fn device_writes_agent(
+/// Whether `method` on `path` writes a skill: `PUT` or `DELETE /api/skills/{name}`, or `PUT` or
+/// `DELETE /api/skills/{name}/files/{path}`. An import, `POST /api/skills/import`, is not one.
+pub fn is_skill_write(method: &Method, path: &str) -> bool {
+    if !matches!(*method, Method::PUT | Method::DELETE) {
+        return false;
+    }
+    let Some(rest) = path.strip_prefix("/api/skills/") else {
+        return false;
+    };
+    match rest.split_once('/') {
+        None => !rest.is_empty(),
+        Some((name, tail)) => {
+            !name.is_empty() && tail.strip_prefix("files/").is_some_and(|f| !f.is_empty())
+        }
+    }
+}
+
+/// Whether the request is a paired device writing a definition with its own `write` token: an
+/// agent file ([`is_agent_file_write`]) or a skill ([`is_skill_write`]). Both need `admin`, but
+/// the user asked to edit agents and skills in the desktop and Android apps, which they pair
+/// themselves, as in the web app: an agent's settings, permissions and triggers, the grants an
+/// AI proposal may not make on its own (Run wscript code, sub agents) among them, and a skill's
+/// `SKILL.md`, its files and the skill itself. So these routes, and only these, take a device's
+/// token. It stays `write` everywhere else (D2), and an API token with `write` is still refused.
+async fn device_writes_definition(
     sessions: &Sessions,
     granted: &Granted,
     method: &Method,
@@ -188,7 +206,9 @@ async fn device_writes_agent(
     let Author::Token(token) = &granted.author else {
         return false;
     };
-    if granted.scope != Scope::Write || !is_agent_file_write(method, path) {
+    if granted.scope != Scope::Write
+        || !(is_agent_file_write(method, path) || is_skill_write(method, path))
+    {
         return false;
     }
     let token = token.clone();
@@ -413,7 +433,7 @@ pub async fn authenticate(
         return human_only_for(req.uri().path()).into_response();
     }
     if !granted.scope.allows(needed)
-        && !device_writes_agent(&sessions, &granted, req.method(), req.uri().path()).await
+        && !device_writes_definition(&sessions, &granted, req.method(), req.uri().path()).await
     {
         return ApiError::new(
             StatusCode::FORBIDDEN,
@@ -523,6 +543,32 @@ pub async fn logout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skill_writes_are_the_skill_and_its_files() {
+        for (method, path) in [
+            (Method::PUT, "/api/skills/pdf"),
+            (Method::DELETE, "/api/skills/pdf"),
+            (Method::PUT, "/api/skills/pdf/files/a.txt"),
+            (Method::PUT, "/api/skills/pdf/files/scripts/run.sh"),
+            (Method::DELETE, "/api/skills/pdf/files/scripts"),
+        ] {
+            assert!(is_skill_write(&method, path), "{method} {path}");
+        }
+        for (method, path) in [
+            (Method::POST, "/api/skills/import"),
+            (Method::GET, "/api/skills/pdf"),
+            (Method::POST, "/api/skills/pdf"),
+            (Method::PUT, "/api/skills/"),
+            (Method::PUT, "/api/skills"),
+            (Method::PUT, "/api/skills/pdf/files/"),
+            (Method::PUT, "/api/skills/pdf/export"),
+            (Method::PUT, "/api/skillsx/pdf"),
+            (Method::PUT, "/api/tools/pdf"),
+        ] {
+            assert!(!is_skill_write(&method, path), "{method} {path}");
+        }
+    }
 
     #[test]
     fn scopes_by_method_and_path() {

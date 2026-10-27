@@ -53,10 +53,10 @@ An export downloads `<name>.zip`, one folder `<name>/` holding the skill's files
 | `GET /api/skills/{name}` | `read` | The same, with `body`, the Markdown after the frontmatter, and `files` as a list of `{ path, size, media_type, text }`, where `text` says whether the file reads as UTF-8 text |
 | `GET /api/skills/{name}/files/{path}` | `read` | The file's bytes |
 | `GET /api/skills/{name}/export` | `read` | The skill as a zip |
-| `PUT /api/skills/{name}` | `admin` | The whole `SKILL.md` as the body. 201 when it creates the skill, 200 when it replaces `SKILL.md`; 400 `invalid` with the issues when it fails, writing nothing |
-| `PUT /api/skills/{name}/files/{path}` | `admin` | The body as the file's bytes, in an existing skill. Answers `{ name, file }` |
-| `DELETE /api/skills/{name}/files/{path}` | `admin` | The file, or every file in the folder `path`. `SKILL.md` cannot be deleted alone. Answers `{ name, deleted }`, the paths removed |
-| `DELETE /api/skills/{name}` | `admin` | The whole folder |
+| `PUT /api/skills/{name}` | `admin`, or a paired device's token | The whole `SKILL.md` as the body. 201 when it creates the skill, 200 when it replaces `SKILL.md`; 400 `invalid` with the issues when it fails, writing nothing |
+| `PUT /api/skills/{name}/files/{path}` | `admin`, or a paired device's token | The body as the file's bytes, in an existing skill. Answers `{ name, file }` |
+| `DELETE /api/skills/{name}/files/{path}` | `admin`, or a paired device's token | The file, or every file in the folder `path`. `SKILL.md` cannot be deleted alone. Answers `{ name, deleted }`, the paths removed |
+| `DELETE /api/skills/{name}` | `admin`, or a paired device's token | The whole folder |
 | `POST /api/skills/import` | `admin` | A zip, as the body or as the file field `file` of a `multipart/form-data` form. `?replace=true` replaces an existing skill; without it an existing name is 409 `skill_exists` with the skill's `name`. 201 for a new skill, 200 for a replaced one, each with the skill and `replaced` |
 
 A broken limit is 413 `too_large`. Every write is recorded in the activity log as a `skill.change` entry.
@@ -138,4 +138,6 @@ Turn off **Ask before changing skills** on an agent's Permissions tab (`permissi
 
 ## In the apps
 
-The desktop and Android apps have the **Skills** item, the Skills page and the skill screen, but only show skills: there is no **New skill**, no **Import**, no Save and no file changes, and the screen says "Edit skills in the web app". Changing a skill needs `admin`, which an app's device token never has. **Export** and **Download** work in the apps.
+The desktop and Android apps edit skills as the web app does: **New skill**, the command palette's **New skill**, the skill screen's **Save**, the Files tab's uploads, new files, renames and deletes, and **Delete skill** all work there. The apps read and write the skill on the home server, which takes a paired device's token for these writes, and the change reaches the device's copy with the sync round that follows. When the home server cannot be reached, a save says "Changing a skill needs the home server, which is not reachable." and the form keeps what was typed; the skill screen shows the device's copy. **Export** and **Download** work in the apps.
+
+**Import** is the web app's only: an import needs `admin`, which an app's device token never has.

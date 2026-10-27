@@ -2,7 +2,7 @@
 // its description, file count, size and license, an invalid skill's mark and first issue; the
 // search box; New skill from a name, opening the new skill; Import from a zip, asking before it
 // replaces a skill of that name, and from a folder; the empty state with its link to the docs;
-// and a page that only lists in the apps.
+// and in the apps the same page with New skill but without Import.
 
 import { Route, Router, useParams } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
@@ -218,14 +218,35 @@ describe("the Skills page", () => {
     expect(screen.queryByRole("searchbox")).toBeNull();
   });
 
-  it("only lists in the apps: no New skill and no Import", async () => {
+  it("makes a new skill in the apps too, and leaves Import to the web app", async () => {
     appInfo.mockResolvedValue(inApp);
     list = [skill("pdf-forms")];
     await show();
     await waitFor(() => expect(cards()).toHaveLength(1));
-    expect(await screen.findByRole("note")).toHaveTextContent("Add and edit skills in the web app.");
-    expect(screen.queryByRole("button", { name: "New skill" })).toBeNull();
+    expect(screen.queryByText(/Add and edit skills in the web app/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Import" })).toBeNull();
     expect(screen.queryByLabelText("Skill zip")).toBeNull();
+    putSkill.mockImplementation(async (name: string) => {
+      list = [...list, skill(name, { description: DESCRIPTION_PLACEHOLDER })];
+    });
+    fireEvent.click(screen.getByRole("button", { name: "New skill" }));
+    const box = screen.getByLabelText("New skill name");
+    fireEvent.input(box, { target: { value: "notes" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(putSkill).toHaveBeenCalled());
+    expect(putSkill.mock.calls[0]![0]).toBe("notes");
+    expect(await screen.findByRole("heading", { name: "Skill screen notes" })).toBeTruthy();
+  });
+
+  it("says why a new skill was not made in the apps when the home server cannot be reached", async () => {
+    appInfo.mockResolvedValue(inApp);
+    const message = "Changing a skill needs the home server, which is not reachable.";
+    putSkill.mockRejectedValue(new ApiError(503, { error: "ai_needs_server", message }));
+    await show();
+    fireEvent.click(await screen.findByRole("button", { name: "New skill" }));
+    const box = screen.getByLabelText("New skill name");
+    fireEvent.input(box, { target: { value: "notes" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
   });
 });

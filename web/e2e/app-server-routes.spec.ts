@@ -189,3 +189,40 @@ test("in an app, an agent's settings are edited and saved on the home server, an
 
   expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
 });
+
+test("in an app, a skill's SKILL.md is edited and saved on the home server, and offline says it needs it", async ({ page, admin }) => {
+  const stamp = unique();
+  const name = `app-skill-${stamp}`;
+  const md = `---\nname: ${name}\ndescription: Fills in forms. Use when a form arrives.\n---\n\n# Forms\n`;
+  expect((await admin.put(`/api/skills/${name}`, { data: { text: md } })).status()).toBe(201);
+  await inApp(page, await pair(`Laptop ${stamp}`));
+  await logIn(page, `/skills/${name}/files`);
+
+  const pane = activePane(page);
+  await expect(pane.getByText("Edit skills in the web app")).toHaveCount(0);
+  const files = pane.getByRole("region", { name: "Files" });
+  await expect(files.getByRole("button", { name: /Upload files/ })).toBeVisible();
+  await files.getByRole("button", { name: "SKILL.md", exact: true }).click();
+  const editor = files.getByLabel("Contents of SKILL.md");
+  await expect(editor).toHaveValue(md);
+  await editor.fill(`${md}\nFill every field.\n`);
+  await files.getByRole("region", { name: "SKILL.md" }).getByRole("button", { name: "Save" }).click();
+  // The save reads the skill again, which opens the file afresh with what was saved.
+  await expect.poll(async () => (await admin.get(`/api/skills/${name}/files/SKILL.md`)).text()).toContain("Fill every field.");
+  await expect(editor).toHaveValue(`${md}\nFill every field.\n`);
+
+  // The home server cannot be reached: the save says so and the form stays as it was typed.
+  const message = "Changing a skill needs the home server, which is not reachable.";
+  await page.route(`**/api/skills/${name}`, (route) =>
+    route.request().method() === "PUT" ? route.fulfill({ status: 503, json: { error: "ai_needs_server", message } }) : route.continue(),
+  );
+  await pane.getByRole("tab", { name: "Instructions" }).click();
+  const instructions = pane.getByRole("region", { name: "Instructions" });
+  await instructions.getByLabel("Description").fill(`Fills in PDF forms ${stamp}. Use when one arrives.`);
+  await instructions.getByRole("button", { name: "Save" }).click();
+  await expect(instructions.getByRole("alert")).toHaveText(message);
+  await expect(instructions.getByLabel("Description")).toBeEnabled();
+  await expect(instructions.getByLabel("Description")).toHaveValue(`Fills in PDF forms ${stamp}. Use when one arrives.`);
+
+  expect((await admin.delete(`/api/skills/${name}`)).ok()).toBe(true);
+});

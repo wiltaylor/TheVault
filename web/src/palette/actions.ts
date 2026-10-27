@@ -226,9 +226,9 @@ function showAgentsSection() {
 
 /**
  * "New agent" and "Open agent …" for each agent (agents G3). New agent opens the left sidebar's
- * name box for it, in the drawer on a narrow screen. With `skills`, "New skill" (the web app
- * only, not `inApp`), which opens the Skills page with its name box shown, and "Open skill …"
- * for each skill (skills S4).
+ * name box for it, in the drawer on a narrow screen. With `skills`, "New skill", which opens the
+ * Skills page with its name box shown, and "Open skill …" for each skill (skills S4). The browser
+ * box is the web app's only, not `inApp`.
  */
 export function agentActions(list: readonly AgentSummary[], inApp: boolean, skills: readonly SkillSummary[] = []): Action[] {
   const out: Action[] = [];
@@ -265,19 +265,17 @@ export function agentActions(list: readonly AgentSummary[], inApp: boolean, skil
       href: `/agents/${encodeURIComponent(a.name)}`,
     });
   }
-  if (!inApp) {
-    out.push({
-      id: "skill:new",
-      section: "Create",
-      label: "New skill",
-      keywords: ["Create skill", "Add skill", "Agent skill", "SKILL.md"],
-      icon: { type: SKILL_ICON },
-      run: () => {
-        setCreatingSkill(true);
-        navigatePane(M.activePane(workspace()), SKILLS_HREF);
-      },
-    });
-  }
+  out.push({
+    id: "skill:new",
+    section: "Create",
+    label: "New skill",
+    keywords: ["Create skill", "Add skill", "Agent skill", "SKILL.md"],
+    icon: { type: SKILL_ICON },
+    run: () => {
+      setCreatingSkill(true);
+      navigatePane(M.activePane(workspace()), SKILLS_HREF);
+    },
+  });
   for (const s of skills) {
     out.push({
       id: `skill:${s.name}`,

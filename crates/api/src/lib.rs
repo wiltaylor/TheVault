@@ -124,7 +124,8 @@ use writer::Writer;
 
 pub use apps::watch as watch_clients;
 pub use auth::{
-    Caller, OWNER_SESSION, SESSION_COOKIE, is_agent_file_write, is_human_only, required_scope,
+    Caller, OWNER_SESSION, SESSION_COOKIE, is_agent_file_write, is_human_only, is_skill_write,
+    required_scope,
 };
 pub use devices::DEFAULT_SKIP_PATTERN;
 pub use error::ApiError;

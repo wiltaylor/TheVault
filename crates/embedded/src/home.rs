@@ -20,11 +20,13 @@
 //! reads the turn's event stream here, on the device, and hands the webview the events after
 //! the first `n` each time it asks (see [`Home::poll_turn`]).
 //!
-//! Agent files are read from the home server, or from the local copy when it cannot be reached,
-//! and written there: the home server takes a paired device's token for `PUT` and `DELETE
-//! /api/agents/{name}`, so the agent screen edits agents in the apps as in the web app. The
-//! change reaches the local copy with the sync round the write asks for. Unpaired or offline, a
-//! write answers 503 `ai_needs_server`.
+//! Agent files and skills are read from the home server, or from the local copy when it cannot be
+//! reached, and written there: the home server takes a paired device's token for `PUT` and
+//! `DELETE /api/agents/{name}`, and for a skill's `PUT` and `DELETE /api/skills/{name}` and
+//! `/api/skills/{name}/files/{path}`, so the agent screen and the skill screen edit them in the
+//! apps as in the web app. The change reaches the local copy with the sync round the write asks
+//! for. Unpaired or offline, a write answers 503 `ai_needs_server`. A skill import still needs
+//! the web app.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -64,6 +66,11 @@ pub const AI_NEEDS_SERVER_MESSAGE: &str =
 /// unpaired.
 pub const AGENT_NEEDS_SERVER_MESSAGE: &str =
     "Changing an agent needs the home server, which is not reachable.";
+
+/// The message of a skill write while the home server cannot be reached or the device is
+/// unpaired.
+pub const SKILL_NEEDS_SERVER_MESSAGE: &str =
+    "Changing a skill needs the home server, which is not reachable.";
 
 /// How long a poll of a turn's events waits for one before answering with none.
 const POLL_WAIT: Duration = Duration::from_secs(2);
@@ -115,8 +122,11 @@ pub(crate) enum Route {
     /// `PUT` and `DELETE /api/agents/{name}`: written on the home server, which takes the
     /// device's token for them, then a sync round brings the change to the local copy.
     AgentFile,
-    /// Credentials, and changes to skills and script tools, that need `admin`, which a device
-    /// token never has (skills S3, script-tools T2).
+    /// `PUT` and `DELETE /api/skills/{name}` and `/api/skills/{name}/files/{path}`: written on
+    /// the home server, which takes the device's token for them, as for an agent file.
+    Skill,
+    /// Credentials, a skill import, and changes to script tools, that need `admin`, which a
+    /// device token never has (skills S3, script-tools T2).
     NeedsWebApp,
 }
 
@@ -223,9 +233,18 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     {
         return Route::ForwardOrLocal;
     }
-    // Skills are definitions too (skills S3): the apps show them read-only.
-    if !get && under(path, "/api/skills") {
-        return Route::NeedsWebApp;
+    // Skills are definitions too (skills S3): a change to one is made on the home server, and
+    // the skill screen reads what it saved there, the local copy offline. An import needs the
+    // web app.
+    if api::is_skill_write(method, path) {
+        return Route::Skill;
+    }
+    if under(path, "/api/skills") {
+        return if get {
+            Route::ForwardOrLocal
+        } else {
+            Route::NeedsWebApp
+        };
     }
     // Script tools are definitions too, and run only on the home server (script-tools T1, T2):
     // writing and running one needs `admin`.
@@ -481,17 +500,17 @@ impl Home {
         }
     }
 
-    /// `PUT` or `DELETE /api/agents/{name}` answered by the home server, a 403 from a server that
+    /// A write of an agent file or a skill answered by the home server, a 403 from a server that
     /// does not take the device's token for it saying the web app manages it, or 503
-    /// `ai_needs_server` when it cannot be reached.
-    pub async fn forward_agent(&self, req: Request<Body>) -> Response<Body> {
+    /// `ai_needs_server` with `message` when it cannot be reached.
+    pub async fn forward_definition(
+        &self,
+        req: Request<Body>,
+        message: &'static str,
+    ) -> Response<Body> {
         match self.send(req).await {
             Ok(res) => translate(res).await,
-            Err(_) => error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "ai_needs_server",
-                AGENT_NEEDS_SERVER_MESSAGE,
-            ),
+            Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "ai_needs_server", message),
         }
     }
 
@@ -954,14 +973,22 @@ mod tests {
             Route::AgentFile
         );
         assert_eq!(route(&post, "/api/agents/triage"), Route::Local);
-        assert_eq!(route(&get, "/api/skills"), Route::Local);
-        assert_eq!(route(&get, "/api/skills/pdf/files/a/b.png"), Route::Local);
-        assert_eq!(route(&get, "/api/skills/pdf/export"), Route::Local);
+        assert_eq!(route(&get, "/api/skills"), Route::ForwardOrLocal);
+        assert_eq!(route(&get, "/api/skills/pdf"), Route::ForwardOrLocal);
+        assert_eq!(
+            route(&get, "/api/skills/pdf/files/a/b.png"),
+            Route::ForwardOrLocal
+        );
+        assert_eq!(route(&get, "/api/skills/pdf/export"), Route::ForwardOrLocal);
         for (method, path) in [
             (Method::PUT, "/api/skills/pdf"),
             (Method::PUT, "/api/skills/pdf/files/a.txt"),
             (Method::DELETE, "/api/skills/pdf/files/a.txt"),
             (Method::DELETE, "/api/skills/pdf"),
+        ] {
+            assert_eq!(route(&method, path), Route::Skill, "{method} {path}");
+        }
+        for (method, path) in [
             (post.clone(), "/api/skills/import"),
             (Method::PUT, "/api/tools/count"),
             (Method::DELETE, "/api/tools/count"),
