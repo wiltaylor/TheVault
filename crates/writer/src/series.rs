@@ -6,7 +6,9 @@
 //! calendar and no `google_ref` is kept in the vault only, and this step makes its occurrences.
 //!
 //! On every writer, a series' rule is checked: each line must be an `RRULE`, `EXDATE` or `RDATE`
-//! line that parses, and at least one must be an `RRULE` or `RDATE` line.
+//! line that parses, and at least one must be an `RRULE` or `RDATE` line. The rule of a Google
+//! series, as Google sent it, is kept even when it does not parse (see [`from_google`]): its
+//! occurrences come from Google, so nothing here expands it.
 //!
 //! On the home server only, so that a change made on a device is worked out once, when it
 //! arrives there, the step also does the following in the same commit as the change:
@@ -53,6 +55,11 @@ pub const DAYS_BEHIND: i64 = 30;
 
 /// How many days after today a vault-only series has occurrences until.
 pub const DAYS_AHEAD: i64 = 365;
+
+/// The shipped task that pulls Google Calendar into the vault, and the script that writes series
+/// changes back: what they write to a series' rule is Google's.
+const GOOGLE_CALENDAR_TASK: &str = "google_calendar";
+const GOOGLE_SERIES_SCRIPT: &str = "google_series";
 
 /// The most occurrences one series makes in its window.
 const MAX_OCCURRENCES: u16 = 2000;
@@ -167,6 +174,28 @@ fn check_rule(doc: &Doc) -> Vec<Issue> {
         Ok(()) => Vec::new(),
         Err(e) => vec![Issue::new("rule", e)],
     }
+}
+
+/// Whether series `doc`, the change `c` makes, holds its rule as Google sent it, so the rule is
+/// kept even when it does not parse: Google is the source of truth for its own series. That is a
+/// series with a `google_ref` whose write comes from the calendar sync or its write-back handler,
+/// or leaves the rule as the note holds it. A rule typed in the vault is still checked, so a
+/// mistake is caught before it goes to Google.
+fn from_google(writer: &Writer, c: &NoteChange, doc: &Doc, author: &Author) -> Result<bool> {
+    if text(doc, "google_ref").is_empty() {
+        return Ok(false);
+    }
+    if matches!(author, Author::Task(n) if n == GOOGLE_CALENDAR_TASK)
+        || matches!(author, Author::Handler(n) if n == GOOGLE_SERIES_SCRIPT)
+    {
+        return Ok(true);
+    }
+    let path = note_path(EVENT_SERIES_TYPE, &c.id);
+    if c.event == Event::Create || !writer.vault.root().join(&path).is_file() {
+        return Ok(false);
+    }
+    let old = Input::Wcl(writer.vault.read_text(&path)?).parse(&path)?;
+    Ok(rule_lines(&old) == rule_lines(doc))
 }
 
 /// The `TZID` parameter, as a zone.
@@ -614,13 +643,14 @@ pub(crate) fn expand(
     inner: &Inner,
     mut changes: Vec<NoteChange>,
     pass: &mut Pass,
+    author_of: &dyn Fn(&str) -> Author,
 ) -> Result<Vec<NoteChange>> {
     for c in &changes {
         if c.type_name == EVENT_SERIES_TYPE
             && let Some(doc) = &c.doc
         {
             let issues = check_rule(doc);
-            if !issues.is_empty() {
+            if !issues.is_empty() && !from_google(writer, c, doc, &author_of(&c.id))? {
                 return Err(Error::Invalid(Invalid {
                     file: note_path(&c.type_name, &c.id),
                     issues,
@@ -1083,7 +1113,15 @@ impl Writer {
                 continue;
             }
             let mut changes = Vec::new();
-            step.generate(&mut changes, &id, Some(&doc), &doc)?;
+            // A rule that does not read, written to the file by hand, skips that series only.
+            match step.generate(&mut changes, &id, Some(&doc), &doc) {
+                Err(Error::Invalid(e)) => {
+                    let why = e.issues.first().map_or("", |i| i.message.as_str());
+                    eprintln!("event series: not rolling {id} forward: its rule: {why}");
+                    continue;
+                }
+                r => r?,
+            }
             if changes.is_empty() {
                 continue;
             }

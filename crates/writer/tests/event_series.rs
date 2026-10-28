@@ -167,6 +167,45 @@ fn a_rule_that_does_not_parse_is_refused_on_every_writer() {
 }
 
 #[test]
+fn a_rule_google_sent_is_kept_as_it_is_and_a_typed_one_is_still_checked() {
+    // RFC 7529's RSCALE, which the rule library does not read.
+    let odd = json!(["RRULE:FREQ=WEEKLY;BYDAY=MO;RSCALE=GREGORIAN"]);
+    let sync = Author::Task("google_calendar".into());
+    for upkeep in [Upkeep::Home, Upkeep::Device] {
+        let dir = tempfile::tempdir().unwrap();
+        let (w, _) = open(dir.path(), upkeep);
+        let google = weekly(json!({ "rule": odd, "calendar": "primary", "google_ref": "m1" }));
+        let id = w
+            .create(EVENT_SERIES_TYPE, &Input::Json(google.clone()), &sync)
+            .unwrap()
+            .id;
+        assert_eq!(fields(&w, &id)["rule"], odd);
+        // Any writer may change the rest of the series and keep the rule.
+        edit(&w, &id, json!({ "title": "Team standup" }));
+        assert_eq!(fields(&w, &id)["rule"], odd);
+
+        // A rule typed in the vault is checked, on a Google series too.
+        let note = w.read(&id).unwrap();
+        let mut json = writer::doc_to_json(&note.doc);
+        json["fields"]["rule"] = json!(["RRULE:FREQ=WEEKLY;RSCALE=JULIAN"]);
+        let err = w
+            .update(&id, &Input::Json(json), Some(&note.version), &user())
+            .unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{err}");
+        let err = w
+            .create(EVENT_SERIES_TYPE, &Input::Json(google), &user())
+            .unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{err}");
+        // A series kept in the vault takes no rule that does not read, from the sync either.
+        let local = weekly(json!({ "rule": odd }));
+        let err = w
+            .create(EVENT_SERIES_TYPE, &Input::Json(local), &sync)
+            .unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{err}");
+    }
+}
+
+#[test]
 fn a_vault_only_series_gets_its_occurrences_a_year_ahead_in_the_same_commit() {
     let dir = tempfile::tempdir().unwrap();
     let (w, _) = open(dir.path(), Upkeep::Home);
@@ -425,6 +464,28 @@ fn the_window_rolls_forward_as_the_days_pass() {
     assert_eq!(occ.last().unwrap().0, "2027-03-08");
     // The past ones stay.
     assert_eq!(occ[0].0, "2026-03-02");
+}
+
+#[test]
+fn rolling_forward_skips_a_series_whose_rule_was_broken_by_hand() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w, clock) = open(dir.path(), Upkeep::Home);
+    let broken = create(&w, EVENT_SERIES_TYPE, weekly(json!({})));
+    let fine = create(&w, EVENT_SERIES_TYPE, weekly(json!({})));
+    let path = dir
+        .path()
+        .join(format!("notes/{EVENT_SERIES_TYPE}/{broken}.wcl"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("FREQ=WEEKLY;BYDAY=MO"), "{text}");
+    std::fs::write(
+        &path,
+        text.replace("FREQ=WEEKLY;BYDAY=MO", "FREQ=FORTNIGHTLY"),
+    )
+    .unwrap();
+    clock.0.fetch_add(7 * DAY_MS, Ordering::SeqCst);
+    assert_eq!(w.roll_series().unwrap(), 1, "only the series that reads");
+    assert_eq!(occurrences(&w, &fine).len(), 54);
+    assert_eq!(occurrences(&w, &broken).len(), 53);
 }
 
 #[test]

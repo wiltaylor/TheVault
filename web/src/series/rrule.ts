@@ -81,6 +81,40 @@ export function ruleParts(line: string): [string, string][] | null {
   return out;
 }
 
+/** The parts RFC 5545 gives an `RRULE`. */
+const RULE_PARTS = new Set([
+  "FREQ",
+  "UNTIL",
+  "COUNT",
+  "INTERVAL",
+  "BYSECOND",
+  "BYMINUTE",
+  "BYHOUR",
+  "BYDAY",
+  "BYMONTHDAY",
+  "BYYEARDAY",
+  "BYWEEKNO",
+  "BYMONTH",
+  "BYSETPOS",
+  "WKST",
+]);
+
+/**
+ * Whether a line reads as an RFC 5545 `RRULE`, `EXDATE` or `RDATE` line. A rule from Google is
+ * kept as Google sent it, so a series can hold a line that does not, such as an `RRULE` with
+ * RFC 7529's `RSCALE`.
+ */
+export function lineReads(line: string): boolean {
+  const name = property(line);
+  if (name === "RRULE") {
+    const parts = ruleParts(line);
+    return !!parts && parts.some(([k]) => k === "FREQ") && parts.every(([k]) => RULE_PARTS.has(k));
+  }
+  if (name !== "EXDATE" && name !== "RDATE") return false;
+  const at = line.indexOf(":");
+  return at >= 0 && line.slice(at + 1).split(",").every((v) => /^\d{8}(T\d{6}Z?)?$/.test(v.trim()));
+}
+
 const pad = (n: number) => String(n).padStart(2, "0");
 
 /** `YYYY-MM-DD` from an `UNTIL` value: a date as it is, a UTC time as the local day it falls on. */
@@ -192,6 +226,7 @@ export interface ReadRule {
 export function readRule(value: unknown): ReadRule {
   const lines = ruleLines(value);
   if (!lines.length) return { model: null, reason: null };
+  if (!lines.every(lineReads)) return { model: null, reason: "The rule has a line the builder cannot read." };
   const rrules = lines.filter((l) => property(l) === "RRULE");
   const other = lines.filter((l) => property(l) !== "RRULE");
   if (other.length) {
@@ -268,11 +303,12 @@ const dates = (n: number) => (n === 1 ? "1 date" : `${n} dates`);
 /**
  * Stored lines in words, raw ones too: the first `RRULE` the builder can read as its summary, a
  * custom rule as "Custom rule", with ", except 2 dates" for `EXDATE` lines and ", plus 1 date"
- * for `RDATE` lines. "" for no rule.
+ * for `RDATE` lines. A rule with a line that does not read is "Custom rule". "" for no rule.
  */
 export function ruleSummary(value: unknown): string {
   const lines = ruleLines(value);
   if (!lines.length) return "";
+  if (!lines.every(lineReads)) return "Custom rule";
   const rrules = lines.filter((l) => property(l) === "RRULE");
   const m = rrules.length === 1 ? modelOf(rrules[0]!) : null;
   let s = m && typeof m !== "string" ? modelSummary(m) : rrules.length ? "Custom rule" : "On set dates";

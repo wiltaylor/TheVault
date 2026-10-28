@@ -80,6 +80,15 @@ describe("the rule's summary", () => {
     expect(ruleSummary(["RRULE:FREQ=MONTHLY;BYDAY=TU;BYSETPOS=2"])).toBe("Custom rule");
     expect(ruleSummary([])).toBe("");
   });
+
+  it("calls a rule with a line that does not read, as Google may send, a custom rule and opens it raw", () => {
+    const google = ["RRULE:FREQ=WEEKLY;COUNT=5;RSCALE=GREGORIAN;SKIP=FORWARD", "EXDATE;TZID=Australia/Melbourne:20260309T093000"];
+    expect(ruleSummary(google)).toBe("Custom rule");
+    expect(ruleSummary(["RRULE:FREQ=WEEKLY", "EXDATE:sometime"])).toBe("Custom rule");
+    expect(ruleSummary(["X-RULE:every tuesday"])).toBe("Custom rule");
+    expect(ruleSummary(["RRULE:BYDAY=MO"])).toBe("Custom rule");
+    expect(readRule(google)).toEqual({ model: null, reason: "The rule has a line the builder cannot read." });
+  });
 });
 
 describe("which fields are a series' rule", () => {

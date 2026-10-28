@@ -672,3 +672,57 @@ fn a_series_rule_that_does_not_parse_is_refused() {
         "{message}"
     );
 }
+
+#[test]
+fn a_google_rule_the_server_cannot_read_is_kept_as_google_sends_it() {
+    // RFC 7529's RSCALE and SKIP parts, which the server's rule library does not read.
+    let rule = "RRULE:FREQ=WEEKLY;COUNT=5;RSCALE=GREGORIAN;SKIP=FORWARD";
+    let api = Api::start();
+    let mut master = standup();
+    master["recurrence"] = json!([rule, "EXDATE;TZID=Australia/Melbourne:20260309T093000"]);
+    api.google.put_event("primary", master);
+    api.sync();
+
+    let series = api.series();
+    assert_eq!(series.len(), 1, "{series:?}");
+    let id = series[0]["id"].as_str().unwrap().to_owned();
+    let note = api.note(&id);
+    assert_eq!(
+        note["note"]["fields"]["rule"],
+        json!([rule, "EXDATE;TZID=Australia/Melbourne:20260309T093000"])
+    );
+    let occ = api.occurrences(&id);
+    assert_eq!(occ.len(), 5);
+    assert!(occ.iter().all(|o| {
+        o["fields"]["google_ref"]
+            .as_str()
+            .unwrap()
+            .starts_with("standup_")
+    }));
+    // A second run finds nothing to change and still succeeds.
+    let run = api.sync();
+    assert!(
+        run["log"]
+            .as_str()
+            .unwrap()
+            .contains("0 created, 0 updated, 0 trashed"),
+        "{run}"
+    );
+
+    // Editing another field of the series keeps the rule as it is and saves.
+    api.edit(&id, json!({ "title": "Team standup" }));
+    assert_eq!(api.note(&id)["note"]["fields"]["title"], "Team standup");
+
+    // A rule typed in the vault is still checked before it goes to Google.
+    let mut note = api.note(&id);
+    note["note"]["fields"]["rule"] = json!(["RRULE:FREQ=FORTNIGHTLY"]);
+    let res = expect(
+        api.req("PUT", &format!("/api/notes/{id}"))
+            .json(&json!({ "note": note["note"], "base_version": note["version"] }))
+            .send()
+            .unwrap(),
+        400,
+    );
+    assert_eq!(res["error"], "invalid", "{res}");
+    assert_eq!(res["issues"][0]["at"], "rule", "{res}");
+}

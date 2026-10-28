@@ -1330,7 +1330,9 @@ impl Writer {
         let changes = loop {
             let expanded = refs::expand(self, &inner, changes)?;
             let expanded = sessions::expand(self, &inner, expanded)?;
-            let expanded = series::expand(self, &inner, expanded, &mut series)?;
+            let expanded = series::expand(self, &inner, expanded, &mut series, &|id| {
+                authors.get(id).unwrap_or(author).clone()
+            })?;
             if expanded
                 .iter()
                 .all(|c| handled.contains(&(c.id.clone(), c.event)))
