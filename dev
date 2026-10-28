@@ -10,6 +10,9 @@
 # ghcr.io/wiltaylor/thevault-dev:<hash> first and builds only when the registry
 # has no image for this hash (ticket 138). CI publishes each hash's image once
 # (.github/workflows/dev-image.yml); THEVAULT_DEV_PULL=0 skips the pull.
+#
+# Cargo runs at most THEVAULT_BUILD_JOBS jobs at once (default 8), so a workspace test build
+# does not run dozens of linkers together and saturate the disk.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")" && pwd)
@@ -163,6 +166,7 @@ docker run --rm --init --name "$name" "${tty_flags[@]}" "${keystore_flags[@]}" "
   -e HOME=/tmp/home \
   -e ANDROID_USER_HOME=/gradle/android-user \
   -e CARGO_TERM_COLOR=always \
+  -e CARGO_BUILD_JOBS="${THEVAULT_BUILD_JOBS:-8}" \
   -v thevault-cargo:/cargo \
   -v thevault-pnpm:/pnpm-store \
   -v thevault-gradle:/gradle \

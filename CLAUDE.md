@@ -27,6 +27,13 @@ The host has no Rust or Node toolchain for this project. Run every build, test, 
 
 `./dev just check` is the full gate: formatting, clippy with warnings denied, every Rust test, and the web typecheck and tests. Run it before every commit. Ticket 01 creates the `justfile`.
 
+Builds share one disk, and a workspace test build is heavy, so:
+
+- While working, run only the tests you are changing: `./dev cargo test -p <crate> --test <file>`, one vitest file, one e2e spec.
+- Run `./dev just check` once before a commit, and never while another gate or build runs.
+- Run the full e2e suite (`./dev pnpm -C web e2e`) only before cutting a release. For other changes run the affected specs.
+- Remove a git worktree and its branch once its work is merged.
+
 ## Pinned upstreams
 
 WCL and wscript come from GitHub as git dependencies pinned to a commit. Do not switch them to path dependencies or float them to a branch.

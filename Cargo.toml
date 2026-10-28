@@ -68,6 +68,13 @@ testkit = { path = "crates/testkit" }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Line tables only: backtraces keep their files and lines, while each linked test binary is a
+# fraction of its full-debug size, so `cargo test --workspace` does not saturate the disk with
+# linker output. Tests inherit this profile.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
 # Argon2 is unusably slow unoptimised, and every test server checks a password.
 [profile.dev.package.argon2]
 opt-level = 3
