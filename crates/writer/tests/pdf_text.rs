@@ -167,7 +167,7 @@ fn a_pdf_that_panics_the_extractor_is_logged_once_and_not_retried() {
         let out = std::process::Command::new(&exe)
             .args([
                 "--exact",
-                "hostile_pdf_child",
+                "pdf_text::hostile_pdf_child",
                 "--nocapture",
                 "--test-threads=1",
             ])

@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+# Every file in tests/ is a module of tests/main.rs: one test binary for the crate.
+autotests = false
 
 [dependencies]
 aes-gcm = "0.10"
@@ -24,3 +26,7 @@ testkit.workspace = true
 
 [lints]
 workspace = true
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

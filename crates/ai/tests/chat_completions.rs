@@ -3,7 +3,7 @@
 //! `json_object` fallback, finish reasons, usage, images after tool messages, exact replay, and
 //! the official API and the ChatGPT plan staying on Responses.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 

@@ -1,6 +1,6 @@
 //! The Anthropic Messages client against the testkit fake (ai D1, D3, D5, D10, D11).
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

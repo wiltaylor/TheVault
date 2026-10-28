@@ -9,8 +9,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use testkit::TestServer;
 
-#[path = "../../index/tests/support/office.rs"]
-mod office;
+use crate::office;
 
 const DOC: &str = r#"label = "Doc"
 

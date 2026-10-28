@@ -3,18 +3,17 @@
 
 use index::{Extracted, MAX_UNZIPPED_BYTES, TextKind, extract_text};
 
-#[path = "support/office.rs"]
-mod office;
+use crate::support::{office, when_free};
 
 fn text(kind: TextKind, bytes: Vec<u8>) -> String {
-    match extract_text(kind, bytes) {
+    match when_free(|| extract_text(kind, bytes.clone())) {
         Extracted::Text(t) => t,
         other => panic!("no text: {other:?}"),
     }
 }
 
 fn failed(kind: TextKind, bytes: Vec<u8>) -> String {
-    match extract_text(kind, bytes) {
+    match when_free(|| extract_text(kind, bytes.clone())) {
         Extracted::Failed(reason) => reason,
         other => panic!("not failed: {other:?}"),
     }

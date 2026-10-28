@@ -29,7 +29,8 @@ The host has no Rust or Node toolchain for this project. Run every build, test, 
 
 Builds share one disk, and a workspace test build is heavy, so:
 
-- While working, run only the tests you are changing: `./dev cargo test -p <crate> --test <file>`, one vitest file, one e2e spec.
+- While working, run only the tests you are changing: `./dev cargo test -p <crate> --test main <file>::`, one vitest file, one e2e spec.
+- Each crate links its integration tests as one binary, `tests/main.rs`, which declares every other file in `tests/` as a module (`autotests = false`). Add a new test file as a `mod` line there, or `just ci::rust-tests-declared` fails. All of a crate's integration tests share one process, so a test must not set environment variables or other process-wide state; pass them to the child server instead.
 - Run `./dev just check` once before a commit, and never while another gate or build runs.
 - Run the full e2e suite (`./dev pnpm -C web e2e`) only before cutting a release. For other changes run the affected specs.
 - Remove a git worktree and its branch once its work is merged.

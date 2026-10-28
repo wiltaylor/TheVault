@@ -1,7 +1,7 @@
 //! Credentials from the secrets, the ChatGPT plan's refresh (ai D7, D9), Sign in with ChatGPT's
 //! pieces against the fake auth server (ai D8), settings, and that no key or token leaks.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Barrier};
 use std::thread;

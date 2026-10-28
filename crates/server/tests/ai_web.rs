@@ -11,8 +11,7 @@ use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
 use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, FakeWeb, Reply, TestAccount, TestServer};
 
-#[path = "../../index/tests/support/office.rs"]
-mod office;
+use crate::office;
 
 const MODEL: &str = "claude-opus-5";
 

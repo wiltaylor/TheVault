@@ -1,7 +1,7 @@
 //! Image parts in tool results (ai D19): Anthropic's `image` block in the `tool_result`, the
 //! Responses API's `input_image` in the `function_call_output`, and the transcript form.
 
-mod common;
+use crate::common;
 
 use ai::{Content, ImageData, Kind, Message, Part, Request, Role};
 use common::Env;

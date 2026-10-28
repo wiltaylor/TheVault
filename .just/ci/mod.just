@@ -8,7 +8,7 @@ main:
 
 # Everything a change must pass before it can merge, the release scripts' tests too. Playwright runs separately in test-e2e
 [group('ci')]
-check: rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test release-test
+check: rust-tests-declared rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test release-test
 
 # Check Rust formatting without changing files
 [group('ci')]
@@ -37,6 +37,23 @@ app-fmt-check dir: (require-tool "cargo")
 [private]
 app-lint dir: (require-tool "cargo") web-build
 	cd {{dir}} && cargo clippy --workspace --all-targets -- -D warnings
+
+# Fail when a crate's tests/ holds a file its tests/main.rs does not declare: with autotests off, cargo would never build it
+[group('ci')]
+rust-tests-declared:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	missing=0
+	for f in crates/*/tests/*.rs; do
+		name=$(basename "$f" .rs)
+		[ "$name" = main ] && continue
+		main="$(dirname "$f")/main.rs"
+		if ! grep -qx "mod $name;" "$main" 2>/dev/null; then
+			echo "$f is not declared in $main: add \`mod $name;\`" >&2
+			missing=1
+		fi
+	done
+	exit "$missing"
 
 # Run every Rust test
 [group('ci')]

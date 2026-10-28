@@ -1,8 +1,7 @@
 //! PDFs that make pdf-extract panic: the panic is caught, a tolerant fallback reads what text
 //! it can, and a PDF neither can read fails with the panic's message as its reason.
 
-#[path = "support/hostile_pdf.rs"]
-mod hostile_pdf;
+use crate::support::{hostile_pdf, when_free};
 
 use index::{Extracted, extract_pdf_text};
 
@@ -21,7 +20,7 @@ fn pdf_extract_panic(bytes: &[u8]) -> String {
 fn a_colour_space_by_reference_falls_back_to_a_tolerant_extractor() {
     let pdf = hostile_pdf::colour_space_by_reference();
     assert!(pdf_extract_panic(&pdf).contains("second arg must be a dict"));
-    let Extracted::Recovered { text, reason } = extract_pdf_text(pdf) else {
+    let Extracted::Recovered { text, reason } = when_free(|| extract_pdf_text(pdf.clone())) else {
         panic!("not recovered");
     };
     assert!(
@@ -35,7 +34,7 @@ fn a_colour_space_by_reference_falls_back_to_a_tolerant_extractor() {
 fn a_font_with_no_encoding_falls_back_to_a_tolerant_extractor() {
     let pdf = hostile_pdf::font_without_encoding();
     assert!(pdf_extract_panic(&pdf).contains("missing unicode map and encoding"));
-    let Extracted::Recovered { text, reason } = extract_pdf_text(pdf) else {
+    let Extracted::Recovered { text, reason } = when_free(|| extract_pdf_text(pdf.clone())) else {
         panic!("not recovered");
     };
     assert!(
@@ -50,7 +49,7 @@ fn a_font_with_no_encoding_falls_back_to_a_tolerant_extractor() {
 fn a_pdf_neither_extractor_reads_fails_with_the_panic_as_its_reason() {
     let pdf = hostile_pdf::font_without_encoding_or_text();
     assert!(pdf_extract_panic(&pdf).contains("missing unicode map and encoding"));
-    match extract_pdf_text(pdf) {
+    match when_free(|| extract_pdf_text(pdf.clone())) {
         Extracted::Failed(reason) => {
             assert!(
                 reason.contains("missing unicode map and encoding"),
@@ -71,7 +70,7 @@ fn a_trailer_lopdf_refuses_is_read_after_rebuilding_the_xref_table() {
         "{refused}"
     );
     assert!(pdf_extract::extract_text_from_mem(&pdf).is_err());
-    let Extracted::Recovered { text, reason } = extract_pdf_text(pdf) else {
+    let Extracted::Recovered { text, reason } = when_free(|| extract_pdf_text(pdf.clone())) else {
         panic!("not recovered");
     };
     assert!(text.contains("platypus ledger"), "{text:?}");

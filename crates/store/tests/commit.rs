@@ -152,7 +152,12 @@ fn a_process_killed_between_file_writes_leaves_all_or_nothing() {
         let (dir, vault) = seeded();
         drop(vault);
         let status = Command::new(&exe)
-            .args(["--exact", "crash_child", "--nocapture", "--test-threads=1"])
+            .args([
+                "--exact",
+                "commit::crash_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
             .env("STORE_CRASH_ROOT", dir.path())
             .env("STORE_CRASH_AT", format!("{stop:?}"))
             .status()

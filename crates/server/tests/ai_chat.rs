@@ -12,8 +12,7 @@ use testkit::{
     AiSeed, AnthropicMessage, FakeAnthropic, FakeOpenAi, OpenAiResponse, TestAccount, TestServer,
 };
 
-#[path = "../../index/tests/support/office.rs"]
-mod office;
+use crate::office;
 
 const MEMO: &str = r#"label = "Memo"
 

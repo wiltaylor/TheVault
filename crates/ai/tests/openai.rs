@@ -1,7 +1,7 @@
 //! The OpenAI Responses client against the testkit fake, with an API key and with a ChatGPT
 //! plan token (ai D1, D3, D4, D6, D10, D11).
 
-mod common;
+use crate::common;
 
 use ai::{Content, Credential, ErrorKind, Event, Kind, Message, Request, Secret, Stop};
 use common::{Env, events, get_note_tool, text_of};

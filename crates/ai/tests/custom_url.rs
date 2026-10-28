@@ -2,7 +2,7 @@
 //! staying on OpenAI's own host, keyless calls to an account's URL, the compatibility errors,
 //! the host in the trail line, OpenRouter-style URLs and extra headers (accounts A3).
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 
