@@ -100,6 +100,8 @@ The Google card's **What to sync** form holds the sync's settings. It is the onl
 | **Calendars** | The ids of the Google calendars to pull. `primary` is your main calendar; another calendar's id is under its **Integrate calendar** settings in Google Calendar | `primary` |
 | **Default calendar** | Where a new event note goes when it names no calendar | `primary` |
 
+A recurring event in Google becomes an **Event series** note, with one event note for each occurrence linked to it. Editing the series changes the recurring event in Google, and the next sync brings the change to its occurrences. **Default calendar** does not apply to a series: a new series with no calendar is kept in the vault only, and TheVault makes its occurrences itself without sending anything to Google. See [Event series](vault-format.md#event-series).
+
 Each sync also keeps its progress, such as Gmail's history id and each calendar's sync token, in a secret of its own: `google_gmail_state` and `google_calendar_state`. A sync run writes no note history for them. `docs/scripts.md`, "The Google sync's secrets", describes every Google secret.
 
 A vault from 0.1.7 had a **Google sync** settings note instead. The first start of a newer server moves its settings and progress into these secrets and deletes the note and its type. That needs the vault's secret key; a server started without it keeps the note and moves it on a later start that has the key.

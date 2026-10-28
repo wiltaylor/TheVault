@@ -4,8 +4,9 @@ use secrets
 use json
 use regex
 
-// Google Calendar events become `event` notes (google-sync D7, D8, D9, D10, D12, D16). The task
-// `google_calendar` runs this every five minutes once Google is connected.
+// Google Calendar events become `event` notes (google-sync D7, D8, D9, D10, D12, D16), and
+// recurring events `event_series` notes (event-series E2). The task `google_calendar` runs this
+// every five minutes once Google is connected.
 //
 // The settings are the JSON object in the `google_settings` secret: `calendars`, and the
 // `endpoints` test seam. The run's state is the JSON object in the `google_calendar_state` secret,
@@ -17,11 +18,14 @@ use regex
 // For each calendar the settings list, events.list runs with the calendar's sync
 // token, so only what changed since the last run arrives; the first run, and any run after Google
 // answers 410 for an expired token, lists everything. A single event becomes one note, found
-// again by `google_ref`. A recurring series becomes one note per occurrence from 30 days ago to
-// the window end, a year ahead, fetched with events.instances, each with the series rule as
-// text in `series`. A changed occurrence updates its note; a cancelled event, series or
-// occurrence moves its notes to the trash. Once a day the window end moves forward and every
-// series with a note gets the new days' occurrences.
+// again by `google_ref`. A recurring series becomes one `event_series` note, found again by its
+// `google_ref`, the master's id, and one note per occurrence from 30 days ago to the window end,
+// a year ahead, fetched with events.instances, each with the series rule as text in `series` and
+// the series note in `series_ref`. A changed occurrence updates its note; a cancelled event,
+// series or occurrence moves its notes to the trash. Once a day the window end moves forward and
+// every series with a note gets the new days' occurrences. An occurrence note from before series
+// notes, with no `series_ref`, is linked on the next run, its master read with events.get when
+// the listing did not bring it.
 //
 // Each run reads the user's calendar list once, so every note's `calendar_name` holds the name of
 // the calendar its `calendar` id names: Google's `summaryOverride` (the user's own name for it),
@@ -40,8 +44,15 @@ use regex
 struct Known {
     id: string,
     series: string,
+    series_ref: string,
     calendar: string,
     start: string,
+}
+
+// An `event_series` note, by the master id in its `google_ref`.
+struct Master {
+    id: string,
+    calendar: string,
 }
 
 struct Sync {
@@ -52,6 +63,8 @@ struct Sync {
     names: Map[string, string],
     people: Map[string, string],
     rules: Map[string, string],
+    // Series master id to its `event_series` note.
+    series: Map[string, Master],
     created: int,
     changed: int,
     trashed: int,
@@ -549,6 +562,10 @@ fn body_for(sync: Sync, fields: Map[string, Value], blocks: List[Value], values:
         fields["calendar_name"] = Value::String(meta["calendar_name"]);
     }
     put(fields, "series", meta["series"])
+    // An occurrence keeps the series it has when the run does not name one.
+    if meta["series_ref"] != "" {
+        fields["series_ref"] = Value::String(meta["series_ref"]);
+    }
     put(fields, "google_ref", meta["google_ref"])
     put(fields, "etag", meta["etag"])
     fields.remove("created");
@@ -601,8 +618,9 @@ fn trash_series(sync: Sync, master: string) -> Result[(), string] {
     Ok(())
 }
 
-// Create or update the note of Google event or occurrence `item` on `calendar`.
-fn apply(sync: Sync, item: Value, calendar: string, series: string) -> Result[(), string] {
+// Create or update the note of Google event or occurrence `item` on `calendar`. `series_ref` is
+// the series note of an occurrence, else "".
+fn apply(sync: Sync, item: Value, calendar: string, series: string, series_ref: string) -> Result[(), string] {
     let google_ref = text_of(item, "id")
     if google_ref == "" {
         return Ok(())
@@ -615,11 +633,11 @@ fn apply(sync: Sync, item: Value, calendar: string, series: string) -> Result[()
         Some(n) => n,
         None => "",
     }
-    let meta = #{ "calendar": calendar, "calendar_name": calendar_name, "series": series, "google_ref": google_ref, "etag": text_of(item, "etag") }
+    let meta = #{ "calendar": calendar, "calendar_name": calendar_name, "series": series, "series_ref": series_ref, "google_ref": google_ref, "etag": text_of(item, "etag") }
     let Some(known) = sync.known.get(google_ref) else {
         let body = body_for(sync, #{}, [], google, google, meta, false)?
         let made = vault::create("event", body)?
-        sync.known[google_ref] = Known { id: text_of(made, "id"), series: series, calendar: calendar, start: value(google, "start") }
+        sync.known[google_ref] = Known { id: text_of(made, "id"), series: series, series_ref: series_ref, calendar: calendar, start: value(google, "start") }
         sync.created += 1
         return Ok(())
     }
@@ -639,9 +657,13 @@ fn apply(sync: Sync, item: Value, calendar: string, series: string) -> Result[()
         !maps_differ(snapshot, google) &&
         text_of(Value::Map(fields), "etag") == meta["etag"] &&
         text_of(Value::Map(fields), "series") == series &&
+        (series_ref == "" || text_of(Value::Map(fields), "series_ref") == series_ref) &&
         text_of(Value::Map(fields), "calendar") == calendar &&
         (calendar_name == "" || text_of(Value::Map(fields), "calendar_name") == calendar_name)
     known.series = series
+    if series_ref != "" {
+        known.series_ref = series_ref
+    }
     known.calendar = calendar
     known.start = value(values, "start")
     if unchanged {
@@ -654,10 +676,14 @@ fn apply(sync: Sync, item: Value, calendar: string, series: string) -> Result[()
     Ok(())
 }
 
-// The rule of series `master`: from a note of one of its occurrences, else from Google.
-fn series_rule(sync: Sync, calendar: string, master: string) -> Result[string, string] {
+// The rule of series `master`, and its series note in `sync.series`: from the series note or a
+// note of one of its occurrences, else from Google, with events.get, which makes the series note
+// when there is none.
+fn series_of(sync: Sync, calendar: string, master: string) -> Result[string, string] {
     if let Some(rule) = sync.rules.get(master) {
-        return Ok(rule)
+        if sync.series.contains_key(master) {
+            return Ok(rule)
+        }
     }
     let rule = ""
     for r in sync.known.keys() {
@@ -666,10 +692,14 @@ fn series_rule(sync: Sync, calendar: string, master: string) -> Result[string, s
             rule = k.series
         }
     }
-    if rule == "" {
+    if rule == "" || !sync.series.contains_key(master) {
         let reply = fetch(sync, events_url(sync, calendar) + "/" + encode(master))?
         if status_of(reply) == 200 {
-            rule = rule_text(reply.get("body").unwrap())
+            let body = reply.get("body").unwrap()
+            if text_of(body, "status") != "cancelled" {
+                rule = rule_text(body)
+                upsert_series(sync, body, calendar)?
+            }
         }
     }
     sync.rules[master] = rule
@@ -680,10 +710,11 @@ fn series_rule(sync: Sync, calendar: string, master: string) -> Result[string, s
 // `prune`, an occurrence note in that span Google no longer lists goes to the trash.
 fn refresh_series(sync: Sync, calendar: string, master: string, rule: string, from: string, to: string, prune: bool) -> Result[(), string] {
     sync.rules[master] = rule
+    let series_ref = series_ref_of(sync, master)
     let listed: Map[string, bool] = #{}
     for item in instances(sync, calendar, master, from, to)? {
         listed[text_of(item, "id")] = true
-        apply(sync, item, calendar, rule)?
+        apply(sync, item, calendar, rule, series_ref)?
     }
     if prune {
         for r in sync.known.keys() {
@@ -725,14 +756,16 @@ fn sync_calendar(sync: Sync, calendar: string, sync_token: string, start: string
             let id = text_of(item, "id")
             trash(sync, id)?
             trash_series(sync, id)?
+            trash_master(sync, id)?
         }
     }
     let live = items.filter(|i| text_of(i, "status") != "cancelled")
-    // Series masters: their occurrences across the window.
+    // Series masters: their series notes, and their occurrences across the window.
     for item in live {
         if !list_of(item, "recurrence").is_empty() {
             let id = text_of(item, "id")
             trash(sync, id)?
+            upsert_series(sync, item, calendar)?
             refresh_series(sync, calendar, id, rule_text(item), start, end, true)?
             refreshed[id] = true
         }
@@ -741,10 +774,29 @@ fn sync_calendar(sync: Sync, calendar: string, sync_token: string, start: string
     for item in live {
         let master = text_of(item, "recurringEventId")
         if master != "" {
-            let rule = series_rule(sync, calendar, master)?
-            apply(sync, item, calendar, rule)?
+            let rule = series_of(sync, calendar, master)?
+            apply(sync, item, calendar, rule, series_ref_of(sync, master))?
         } else if list_of(item, "recurrence").is_empty() {
-            apply(sync, item, calendar, "")?
+            apply(sync, item, calendar, "", "")?
+        }
+    }
+    // Occurrence notes from before series notes: each is linked to its series' note.
+    let unlinked: Map[string, bool] = #{}
+    for r in sync.known.keys() {
+        let k = sync.known[r]
+        if k.calendar == calendar && k.series != "" && k.series_ref == "" && master_of(r) != "" {
+            unlinked[r] = true
+        }
+    }
+    for r in unlinked.keys() {
+        let master = master_of(r)
+        series_of(sync, calendar, master)?
+        let series_ref = series_ref_of(sync, master)
+        if series_ref != "" {
+            let k = sync.known[r]
+            vault::patch(k.id, Value::Map(#{ "series_ref": Value::String(series_ref) }), "")?
+            k.series_ref = series_ref
+            sync.changed += 1
         }
     }
     // A full listing names every event there is: a note of this calendar whose event or series
@@ -759,6 +811,11 @@ fn sync_calendar(sync: Sync, calendar: string, sync_token: string, start: string
             let gone = if k.series != "" { !ids.contains_key(master_of(r)) && !ids.contains_key(r) } else { !ids.contains_key(r) }
             if k.calendar == calendar && gone {
                 trash(sync, r)?
+            }
+        }
+        for master in sync.series.keys() {
+            if sync.series[master].calendar == calendar && !ids.contains_key(master) {
+                trash_master(sync, master)?
             }
         }
     }
@@ -792,7 +849,175 @@ fn known_notes() -> Result[Map[string, Known], string] {
             let r = text_of(fields, "google_ref")
             if r != "" {
                 let when = fields.get("when").unwrap_or(Value::Null)
-                out[r] = Known { id: text_of(row, "id"), series: text_of(fields, "series"), calendar: text_of(fields, "calendar"), start: text_of(when, "start") }
+                out[r] = Known { id: text_of(row, "id"), series: text_of(fields, "series"), series_ref: text_of(fields, "series_ref"), calendar: text_of(fields, "calendar"), start: text_of(when, "start") }
+            }
+        }
+        cursor = text_of(page, "next")
+    }
+    Ok(out)
+}
+
+// ---- series notes (event-series E2) ---------------------------------------------------------
+
+// The id of the series note of master `master`, or "".
+fn series_ref_of(sync: Sync, master: string) -> string {
+    match sync.series.get(master) {
+        Some(m) => m.id,
+        None => "",
+    }
+}
+
+// The snapshot keys of a series note, grouped as they merge: the first occurrence's `start` and
+// `end` and the series' `timezone` settle together.
+fn series_groups() -> List[List[string]] {
+    [["title"], ["start", "end", "timezone"], ["rule"], ["location"], ["description"], ["attendees"], ["organiser"], ["status"], ["meet_url"]]
+}
+
+fn series_keys() -> List[string] {
+    ["title", "start", "end", "timezone", "rule", "location", "description", "attendees", "organiser", "status", "meet_url"]
+}
+
+// The synced fields of a series master, in the form a series note holds them.
+fn series_synced(item: Value) -> Map[string, string] {
+    let out = synced(item)
+    out["timezone"] = text_of(item.get("start").unwrap_or(Value::Null), "timeZone")
+    out["rule"] = rule_text(item)
+    out
+}
+
+// The synced fields of a series note as it is now.
+fn series_values(fields: Value, blocks: List[Value]) -> Map[string, string] {
+    let starts = fields.get("starts").unwrap_or(Value::Null)
+    let out = note_values(fields, blocks)
+    out["start"] = text_of(starts, "start")
+    out["end"] = text_of(starts, "end")
+    out["timezone"] = text_of(fields, "timezone")
+    out["rule"] = strings(list_of(fields, "rule")).map(|l| l.trim()).filter(|l| l != "").join("\n")
+    out
+}
+
+fn series_differ(a: Map[string, string], b: Map[string, string]) -> bool {
+    series_keys().any(|k| value(a, k) != value(b, k))
+}
+
+// D10 for a series note, as `merge` does for an event note.
+fn series_merge(google: Map[string, string], snapshot: Map[string, string], mine: Map[string, string], google_newer: bool) -> Map[string, string] {
+    let out: Map[string, string] = #{}
+    for group in series_groups() {
+        let in_vault = group_differs(mine, snapshot, group)
+        let in_google = group_differs(google, snapshot, group)
+        let take_google = snapshot.is_empty() || !in_vault || (in_google && google_newer)
+        for k in group {
+            out[k] = if take_google { value(google, k) } else { value(mine, k) }
+        }
+    }
+    out
+}
+
+// The series note body for `values`: an event note's body, with `starts` for `when`, the rule,
+// the time zone and the series' snapshot.
+fn series_body(sync: Sync, fields: Map[string, Value], blocks: List[Value], values: Map[string, string], snapshot: Map[string, string], meta: Map[string, string], same_attendees: bool) -> Result[Value, string] {
+    let base = body_for(sync, fields, blocks, values, snapshot, meta, same_attendees)?
+    let f = map_of(base, "fields")
+    f.remove("when");
+    f.remove("series");
+    f.remove("series_ref");
+    if value(values, "start") != "" {
+        f["starts"] = Value::Map(#{
+            "start": Value::String(value(values, "start")),
+            "end": Value::String(value(values, "end")),
+        });
+    }
+    put(f, "timezone", value(values, "timezone"))
+    let lines = value(values, "rule").split("\n").filter(|l| l.trim() != "")
+    f["rule"] = Value::List(lines.map(|l| Value::String(l)));
+    let kept = list_of(base, "blocks").filter(|b| !is_field_block(b, "dict", "snapshot"))
+    let snap: Map[string, Value] = #{}
+    for k in series_keys() {
+        snap[k] = Value::String(value(snapshot, k))
+    }
+    kept.push(Value::Map(#{
+        "kind": Value::String("dict"),
+        "labels": Value::List([Value::String("snapshot")]),
+        "fields": Value::Map(snap),
+    }))
+    Ok(Value::Map(#{ "fields": Value::Map(f), "blocks": Value::List(kept) }))
+}
+
+// Create or update the series note of master `item` on `calendar`.
+fn upsert_series(sync: Sync, item: Value, calendar: string) -> Result[(), string] {
+    let master = text_of(item, "id")
+    if master == "" {
+        return Ok(())
+    }
+    let google = series_synced(item)
+    let calendar_name = match sync.names.get(calendar) {
+        Some(n) => n,
+        None => "",
+    }
+    let meta = #{ "calendar": calendar, "calendar_name": calendar_name, "series": "", "series_ref": "", "google_ref": master, "etag": text_of(item, "etag") }
+    let Some(known) = sync.series.get(master) else {
+        let body = series_body(sync, #{}, [], google, google, meta, false)?
+        let made = vault::create("event_series", body)?
+        sync.series[master] = Master { id: text_of(made, "id"), calendar: calendar }
+        sync.created += 1
+        return Ok(())
+    }
+    let note = vault::get(known.id)?
+    let body = note.get("note").unwrap()
+    let fields = map_of(body, "fields")
+    let blocks = list_of(body, "blocks")
+    let mine = series_values(Value::Map(fields), blocks)
+    let snapshot = dict_of(blocks, "snapshot")
+    let f = Value::Map(fields)
+    let google_newer = secs_of(text_of(item, "updated")) >= secs_of(text_of(f, "updated"))
+    let values = series_merge(google, snapshot, mine, google_newer)
+    let unchanged = !series_differ(values, mine) &&
+        !series_differ(snapshot, google) &&
+        text_of(f, "etag") == meta["etag"] &&
+        text_of(f, "calendar") == calendar &&
+        (calendar_name == "" || text_of(f, "calendar_name") == calendar_name)
+    known.calendar = calendar
+    if unchanged {
+        return Ok(())
+    }
+    let same_attendees = value(values, "attendees") == value(mine, "attendees")
+    let next = series_body(sync, fields, blocks, values, google, meta, same_attendees)?
+    vault::update(known.id, next, text_of(note, "version"))?
+    sync.changed += 1
+    Ok(())
+}
+
+// Move the series note of master `master` to the trash, and with it the occurrence notes linked
+// to it.
+fn trash_master(sync: Sync, master: string) -> Result[(), string] {
+    let Some(known) = sync.series.get(master) else {
+        return Ok(())
+    }
+    sync.series.remove(master);
+    match vault::get(known.id) {
+        Ok(note) => {
+            vault::delete(known.id, text_of(note, "version"))?;
+            sync.trashed += 1
+        }
+        Err(_) => {}
+    }
+    Ok(())
+}
+
+// The series notes there are, by master id.
+fn known_series() -> Result[Map[string, Master], string] {
+    let out: Map[string, Master] = #{}
+    let cursor = ""
+    let first = true
+    while first || cursor != "" {
+        first = false
+        let page = vault::query_page("from event_series include archived", 1000, cursor)?
+        for row in list_of(page, "rows") {
+            let fields = row.get("fields").unwrap_or(Value::Null)
+            let r = text_of(fields, "google_ref")
+            if r != "" {
+                out[r] = Master { id: text_of(row, "id"), calendar: text_of(fields, "calendar") }
             }
         }
         cursor = text_of(page, "next")
@@ -875,6 +1100,7 @@ fn run() -> Result[string, string] {
         names: #{},
         people: #{},
         rules: #{},
+        series: known_series()?,
         created: 0,
         changed: 0,
         trashed: 0,

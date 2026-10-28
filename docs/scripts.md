@@ -574,10 +574,11 @@ First the run reads the user's calendar list, `calendarList.list` at `<endpoints
 
 For each calendar id in the settings' `calendars` (`["primary"]` when empty):
 
-- **Listing.** `events.list` with `singleEvents=false` and the calendar's sync token, or with none on the first run. A 410 drops the token and lists the calendar in full. A full listing names every event there is, so a note of that calendar whose event or series it leaves out goes to the trash. The next sync token is stored in the state's `sync_tokens` under the calendar id.
+- **Listing.** `events.list` with `singleEvents=false` and the calendar's sync token, or with none on the first run. A 410 drops the token and lists the calendar in full. A full listing names every event there is, so a note of that calendar whose event or series it leaves out goes to the trash, series notes included. The next sync token is stored in the state's `sync_tokens` under the calendar id.
 - **Single events** become one `event` note each, found again by `google_ref`, the event id.
-- **Series.** A series master that is new or changed has its occurrences fetched with `events.instances` from 30 days before today to the state's `window_end` (a year after today), each occurrence one note whose `google_ref` is the occurrence id, `<series id>_<original start>`, and whose `series` is the master's `recurrence` lines joined by a line break. An occurrence note in that span that Google no longer lists goes to the trash. The master itself has no note. A changed occurrence arrives on its own and updates its note.
-- **Deletes.** A cancelled event or occurrence moves its note to the trash; a cancelled series moves every note of its occurrences there (D9).
+- **Series.** A series master that is new or changed becomes one `event_series` note, found again by `google_ref`, the master's id (event-series E2): its `rule` is the master's `recurrence` lines, `starts` its start and end as for an event's `when`, `timezone` its `start.timeZone`, and the other synced fields as for an event. Then its occurrences are fetched with `events.instances` from 30 days before today to the state's `window_end` (a year after today), each occurrence one `event` note whose `google_ref` is the occurrence id, `<series id>_<original start>`, whose `series` is the master's `recurrence` lines joined by a line break, and whose `series_ref` is the series note. An occurrence note in that span that Google no longer lists goes to the trash. A changed occurrence arrives on its own and updates its note; when its series has no note yet, the master is read with `events.get` and gets one.
+- **Linking.** An occurrence note with a `series` and no `series_ref`, as every occurrence note from before series notes is, is linked to its series' note, whose master id is what its `google_ref` holds before the last `_`. When the listing did not bring that master, it is read with `events.get`, so the series note is made at once rather than with the master's next change. Each occurrence then takes the series' carried fields (see [Event series occurrences](vault-format.md#event-series-occurrences)).
+- **Deletes.** A cancelled event or occurrence moves its note to the trash; a cancelled series moves its series note and every note of its occurrences there (D9).
 - **Window roll.** When today has moved on since `window_end` was written, every series with an occurrence note on the calendar has the new days' occurrences fetched, from the old window end to the new one.
 - `event.calendar` holds the calendar id as `calendars` lists it, such as `primary`, and `event.calendar_name` the calendar's name from the calendar list, such as `Personal` (ticket 103). A note whose name changed is updated, even when Google did not change its event. Without a name, as when the list failed, the note keeps the name it has. `calendar_name` is not synced back and is not in the `snapshot`.
 
@@ -606,6 +607,8 @@ The `snapshot` keys hold each synced field in the form the note holds it:
 | `status` | `status`, `confirmed` when absent | `status` |
 | `meet_url` | `hangoutLink` | `meet_url` |
 
+A series note's `snapshot` holds the same keys, `start` and `end` from `starts`, and two more: `timezone`, from `start.timeZone` and the note's `timezone`, and `rule`, the `recurrence` lines and the note's `rule` lines each joined with a line break. `start`, `end` and `timezone` merge as one field.
+
 A note's synced fields equal its `snapshot` in every key exactly when the vault has not changed them since the last sync. Applying a Google change to a note merges each field against the snapshot: a field changed only in Google takes Google's value, a field changed only in the vault keeps the vault's, and a field changed on both takes the side changed most recently, the note's `updated` against Google's `updated`. `start` and `end` merge as one field. The sync then writes Google's values as the new `snapshot` and Google's `etag`, so a field the vault kept still differs from the snapshot afterwards. A note Google did not change is not written.
 
 ## The Google Calendar write-back
@@ -618,7 +621,7 @@ A handler cannot tell who wrote a note, so the snapshot is the loop guard. A not
 |-------|-------|
 | `after_update` | `PATCH` of the event, or of the one occurrence its `google_ref` names (D8), with `If-Match: <etag>` and only the field groups that differ from the snapshot. A 412 is answered by a `GET`, a field-by-field merge as the sync's (D10), and one more `PATCH` with Google's new etag of what still differs from Google; a second 412 fails the run. A 404 or 410 sends nothing more: the next sync trashes the note |
 | `after_create` | With no `google_ref`: a `POST` into the note's `calendar`, else `default_calendar`, else `primary`. A note with no `when` yet is not sent; the first update that gives it one inserts it. With a `google_ref`: nothing for a note the sync just made (its `created` equals its `updated` and it equals its snapshot). Any other, such as a note restored from the trash, is looked up with a `GET`; when Google answers 404 or 410 or the event is cancelled, it is inserted as a new event (D20) and loses `series`, since it is no longer an occurrence of a series |
-| `after_delete` | `DELETE` of the event or occurrence. A 404 or 410, as for a note the sync trashed because Google deleted the event, counts as done |
+| `after_delete` | `DELETE` of the event or occurrence. A 404 or 410, as for a note the sync trashed because Google deleted the event, counts as done. An occurrence whose `series_ref` names a series note that is gone too, as when deleting a series takes its occurrences with it, sends nothing: the series' own handler deletes the master |
 
 After a `POST` or `PATCH`, the handler writes Google's answer back to the note with `vault::update`: `etag`, the `snapshot` of what Google now holds, and, for an insert, `google_ref` and `calendar`. Each field group the note still holds as it was sent takes Google's value, so the note equals its snapshot and the `after_update` that write sets off sends nothing. A group the user changed again meanwhile keeps the user's value, for that next run to send.
 
@@ -637,6 +640,28 @@ The note fields map to the event as the sync's table above, inverted:
 | `status` | `status` |
 
 `organiser` and `meet_url` are Google's own and are never sent; the write-back takes Google's values for them.
+
+An occurrence the home server made for a series kept in the vault, which holds a `series_key` and no `google_ref`, is never sent: its `after_create` logs that and sends nothing (event-series E5).
+
+### Event series
+
+The shipped `event_series` type runs `scripts/google_series.ws` after every create, update and delete of a series note, with the same secrets, settings and loop guard as `google_event.ws` (event-series E3). A series is one recurring event in Google, its master; Google applies a change of the master to every occurrence not changed on its own, and the next sync brings those occurrence notes in step. The handler never writes an occurrence note. A series with an empty `calendar` is kept in the vault only, and nothing is sent for it.
+
+| Event | Sends |
+|-------|-------|
+| `after_update` | `PATCH` of the master with `If-Match: <etag>` and only the field groups that differ from the snapshot, with the same 412 merge as an event's. A series with a `calendar` and no `google_ref`, such as one kept in the vault until now, is inserted as for `after_create` |
+| `after_create` | With a `calendar` and no `google_ref`: a `POST` of a recurring event into that calendar. Its occurrences arrive with the next sync. A series the sync just made sends nothing; any other with a `google_ref`, such as one restored from the trash, is looked up and inserted again when Google no longer has it (D20) |
+| `after_delete` | `DELETE` of the master, which cancels every occurrence. A 404 or 410 counts as done |
+
+The write-back writes `etag`, the new `snapshot`, and for an insert `google_ref`, as for an event. The fields map as an event's do, with these for the series' own:
+
+| Note | Sent as |
+|------|---------|
+| `title` | `summary` |
+| `starts` of dates | `start.date`, and `end.date` the day after the range's last day |
+| `starts` of datetimes | `start.dateTime` and `end.dateTime` as the note holds them, each with `timeZone` set to `timezone` when it holds one |
+| `rule` | `recurrence`, one string per line |
+| `location`, `description`, `attendees_raw`, `status` | as for an event |
 
 ## The Outbox's send handler
 
