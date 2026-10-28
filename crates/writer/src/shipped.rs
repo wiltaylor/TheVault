@@ -196,6 +196,7 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
             "bc27a3a0c03cc59ac5a20539e639d3d6845b69ad377f57d26e333f6aefe40ab8",
             "b353fb621d71e67501b22f64043170277f2373769912b026267161198a57b0dc",
             "f12e9fd3756b775fd84b7ab739ffd4e6e2e69a0160dcc5a96d5a5bc45551fab4",
+            "344cd1b82f892cbf2823e97b9fed84ff75432da4b76de620b9c567b070b8882d",
         ],
     },
     // The built-in agent, the chat panel's default (agents G6).
@@ -225,7 +226,10 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
     ShippedFile {
         path: "skills/wscript/references/vault-api.md",
         source: include_str!("../defaults/skills/wscript/references/vault-api.md"),
-        hashes: &["69675d6ec974a5bb2f55142299fbae7946e1296ade8e1f2ad96acbb389becd92"],
+        hashes: &[
+            "69675d6ec974a5bb2f55142299fbae7946e1296ade8e1f2ad96acbb389becd92",
+            "d351063bdf8e46878bf8e5690b33137cb717731a1e42900481e17309167c1ebb",
+        ],
     },
     ShippedFile {
         path: "skills/wscript/references/run-script.md",

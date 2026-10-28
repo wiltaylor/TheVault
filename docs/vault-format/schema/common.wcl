@@ -96,6 +96,20 @@ type NoteCard {
   note: utf8
 }
 
+# A table's rows of inline markup cells. `schema` checks the alignments, and
+# the bounds of 100 columns and 2000 rows.
+@block("row", required_fields = ["cells"])
+type TableRow {
+  cells: list<utf8>
+}
+
+@block("table")
+type Table {
+  header: bool?
+  align:  list<utf8>?
+  @children("row", min = 1) rows: list<TableRow>
+}
+
 # ---------------------------------------------------------------------------
 # Ink (D18, D29). The same block is an ink content block (no label) and an
 # ink field value (labelled with the field name).
@@ -196,6 +210,7 @@ type CanvasNode {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
+  @children("table")      tables:      list<Table>
 }
 
 @block("edge", required_fields = ["from", "to"])
@@ -276,6 +291,7 @@ type Toggle {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
+  @children("table")      tables:      list<Table>
 }
 
 @block("admonition", required_fields = ["kind"])
@@ -300,6 +316,7 @@ type Admonition {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
+  @children("table")      tables:      list<Table>
 }
 
 # ---------------------------------------------------------------------------
@@ -331,6 +348,7 @@ type Admonition {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
+  @children("table")      tables:      list<Table>
   # Only a template's column holds one; `schema` refuses it in a note's content.
   @children("period_calendar") period_calendars: list<PeriodCalendar>
 }
@@ -367,6 +385,7 @@ type PeriodCalendar {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
+  @children("table")      tables:      list<Table>
 }
 
 @doc("A dict field value. Keys are identifiers; TheVault checks every value against the field's value kind.")

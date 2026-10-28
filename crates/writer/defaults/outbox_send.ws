@@ -822,6 +822,51 @@ fn render_items(items: List[Value], style: string, depth: int, text: List[string
     html.push("</" + tag + ">")
 }
 
+// A table block into `text`, as a Markdown table, and `html`, as a <table>. A short row ends in
+// empty cells.
+fn render_table(b: Value, f: Value, text: List[string], html: List[string]) {
+    let rows: List[List[string]] = []
+    let width = 0
+    for row in list_of(b, "blocks").filter(|r| text_of(r, "kind") == "row") {
+        let cells = list_of(row.get("fields").unwrap_or(Value::Null), "cells").map(|c| c.as_string().unwrap_or(""))
+        if cells.len() > width {
+            width = cells.len()
+        }
+        rows.push(cells)
+    }
+    let header = match f.get("header") {
+        Some(Value::Bool(h)) => h,
+        _ => false,
+    }
+    let aligns = list_of(f, "align").map(|a| a.as_string().unwrap_or("left"))
+    let lines: List[string] = []
+    let table = "<table>"
+    for r in 0..rows.len() {
+        let cells = rows[r]
+        let tag = if header && r == 0 { "th" } else { "td" }
+        let words: List[string] = []
+        let marks: List[string] = []
+        table = table + "<tr>"
+        for c in 0..width {
+            let cell = cells.get(c).unwrap_or("")
+            let align = aligns.get(c).unwrap_or("left")
+            words.push(markup_text(cell).replace("\n", " ").replace("|", "\\|"))
+            marks.push(if align == "center" { ":---:" } else if align == "right" { "---:" } else { "---" })
+            let style = if align == "center" || align == "right" { " style=\"text-align:" + align + "\"" } else { "" }
+            table = table + "<" + tag + style + ">" + markup_html(cell) + "</" + tag + ">"
+        }
+        table = table + "</tr>"
+        lines.push("| " + words.join(" | ") + " |")
+        if header && r == 0 {
+            lines.push("| " + marks.join(" | ") + " |")
+        }
+    }
+    if width > 0 {
+        text.push(lines.join("\n"))
+        html.push(table + "</table>")
+    }
+}
+
 // Content blocks into paragraphs of text and HTML.
 fn render_blocks(blocks: List[Value], text: List[string], html: List[string]) {
     for b in blocks {
@@ -854,6 +899,8 @@ fn render_blocks(blocks: List[Value], text: List[string], html: List[string]) {
             render_blocks(list_of(b, "blocks"), text, html)
         } else if kind == "columns" || kind == "column" {
             render_blocks(list_of(b, "blocks"), text, html)
+        } else if kind == "table" {
+            render_table(b, f, text, html)
         }
     }
 }

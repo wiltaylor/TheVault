@@ -119,7 +119,10 @@ fn main() -> Result[Value, string] {
 
 A block's form is `{ kind, fields, blocks }`, such as a paragraph
 `{ kind: "paragraph", fields: { text } }` or an admonition
-`{ kind: "admonition", fields: { kind: "warning", title }, blocks: [...] }`:
+`{ kind: "admonition", fields: { kind: "warning", title }, blocks: [...] }`.
+A table is `{ kind: "table", fields: { header: true }, blocks: [...] }` with one
+`{ kind: "row", fields: { cells: [...] } }` per row, each cell a string of inline
+markup; `align`, a list of `left`, `center` or `right` per column, is optional:
 
 ```wscript
 use vault

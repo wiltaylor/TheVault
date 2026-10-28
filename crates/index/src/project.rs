@@ -397,6 +397,13 @@ fn visit(b: &DocBlock, text: &mut Vec<String>, mentioned: &mut Vec<String>) {
             mentioned.extend(mentions(s));
         }
     }
+    // A table's cells are inline markup, searched and linked as a paragraph's text is.
+    if b.kind == "row" {
+        for (_, cell) in schema::markup_texts(b) {
+            text.push(cell.to_owned());
+            mentioned.extend(mentions(cell));
+        }
+    }
     // A `card` block links to the note it shows, as a mention of it does.
     if b.kind == "card"
         && let Some(note) = b.body.field("note").and_then(Value::as_str)

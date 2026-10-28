@@ -206,7 +206,29 @@ EOF
 vault put --type task --json < callout.json
 ```
 
-The `text` of a paragraph, heading, list item, quote or toggle is inline markup, and so is an admonition's `title`: `**bold**`, `*italic*`, `[label](https://example.com)`, and so on. `[[<ULID>]]` or `[[<ULID>|label]]` mentions an existing note. `[[+<type>|<title>]]` is a placeholder link to a note that does not exist yet, such as `[[+task|Fix the pump]]`: the type must exist, and a `|`, `]` or `\` in the title is escaped with a backslash. A placeholder links nowhere until someone clicks it in the app, which creates the note and rewrites the placeholder as a mention. Write a placeholder when a note should exist but you are not creating it now; to link a note you have created, mention its id instead. To show a note as a card that opens it, write a `card { note = "<ULID>" }` block among the content blocks; it links to the note as a mention does.
+A `table` holds one `row` block per row, each with `cells`, a list of strings. `header = true` makes the first row the header, and `align`, one of `left`, `center` or `right` per column, is optional. Write every row with the same number of cells; a short row is padded with empty cells.
+
+```sh
+vault put --type task <<'EOF'
+title  = "Compare quotes"
+status = "Todo"
+
+content body {
+  table {
+    header = true
+    align  = ["left", "right"]
+    row {
+      cells = ["Venue", "Price"]
+    }
+    row {
+      cells = ["**Town hall**", "$400"]
+    }
+  }
+}
+EOF
+```
+
+The `text` of a paragraph, heading, list item, quote or toggle is inline markup, and so are an admonition's `title` and each of a table's `cells`: `**bold**`, `*italic*`, `[label](https://example.com)`, and so on. `[[<ULID>]]` or `[[<ULID>|label]]` mentions an existing note. `[[+<type>|<title>]]` is a placeholder link to a note that does not exist yet, such as `[[+task|Fix the pump]]`: the type must exist, and a `|`, `]` or `\` in the title is escaped with a backslash. A placeholder links nowhere until someone clicks it in the app, which creates the note and rewrites the placeholder as a mention. Write a placeholder when a note should exist but you are not creating it now; to link a note you have created, mention its id instead. To show a note as a card that opens it, write a `card { note = "<ULID>" }` block among the content blocks; it links to the note as a mention does.
 
 To change a note, send the whole note with the version you read. A note that changed since you read it is refused with `"status": 409` and `"error": "conflict"`; read it again, reapply your change, and retry.
 
@@ -613,7 +635,7 @@ vault template list invoice | jq -e '.templates[] | select(.name == "card") | .t
 
 ### Fixed blocks
 
-Any content block in a tab is shown on every note of the type. In a fixed block's `text`, an admonition's `title`, and an image's `alt` and `caption`, `{{field}}` shows that field's value, read-only.
+Any content block in a tab is shown on every note of the type. In a fixed block's `text`, an admonition's `title`, a table's cells, and an image's `alt` and `caption`, `{{field}}` shows that field's value, read-only.
 
 | Block | Holds |
 |-------|-------|
@@ -623,6 +645,7 @@ Any content block in a tab is shown on every note of the type. In a fixed block'
 | `image` | `asset = "<asset id>"`, or in a template `field = "<asset field>"` to show each note's own image; `alt`, `caption`, `width` |
 | `asset` | `asset = "<asset id>"`: a file card, or a PDF viewer |
 | `card` | `note = "<note id>"`: that note as a card, with its type's `card` template, that opens it |
+| `table` | Optional `header` and `align`, and `row { cells = ["...", "..."] }` blocks of inline markup cells |
 | `code`, `mermaid` | `source`; `code` also takes `language` and `caption` |
 | `columns` | 2 to 6 `column { width = 1 ... }` blocks side by side, each holding slots and fixed blocks. Columns do not nest |
 | `toggle` | `text`, the summary, and optional `level` (0 to 3); the blocks it opens to show nest inside it |

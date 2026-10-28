@@ -12,7 +12,7 @@ use crate::encoding::{PALETTE, is_ident, is_ink_colour, is_palette, is_ulid};
 use crate::types::{FieldDef, FieldKind, RangeOf};
 
 /// The closed set of content block kinds.
-pub const CONTENT_KINDS: [&str; 16] = [
+pub const CONTENT_KINDS: [&str; 17] = [
     "heading",
     "paragraph",
     "list",
@@ -29,10 +29,11 @@ pub const CONTENT_KINDS: [&str; 16] = [
     "toggle",
     "admonition",
     "card",
+    "table",
 ];
 
 /// The content block kinds a canvas card holds: every content block kind but a canvas.
-pub const CARD_BLOCK_KINDS: [&str; 15] = [
+pub const CARD_BLOCK_KINDS: [&str; 16] = [
     "heading",
     "paragraph",
     "list",
@@ -48,6 +49,7 @@ pub const CARD_BLOCK_KINDS: [&str; 15] = [
     "toggle",
     "admonition",
     "card",
+    "table",
 ];
 
 /// The template block that only a template tab, or a column of one, holds: a calendar of the
@@ -202,6 +204,14 @@ fn kind_words(f: &FieldDef) -> String {
 /// How many `column` blocks a `columns` block holds, at least and at most.
 pub const COLUMNS_MIN: usize = 2;
 pub const COLUMNS_MAX: usize = 6;
+
+/// The most columns a `table` block's widest row has, and the most rows it holds, so the editor
+/// stays usable.
+pub const TABLE_COLUMNS_MAX: usize = 100;
+pub const TABLE_ROWS_MAX: usize = 2000;
+
+/// The alignments of a table column, `left` being the one a column has when `align` names none.
+pub const TABLE_ALIGNS: [&str; 3] = ["left", "center", "right"];
 
 /// The kinds of a canvas node. Groups are blocks of their own, not nodes.
 pub const NODE_KINDS: [&str; 2] = ["card", "note"];
@@ -570,6 +580,7 @@ impl Check<'_> {
                 self.items(d, &[req("note", Form::Ulid)], &[], at);
                 self.only_blocks(d, &[], at);
             }
+            "table" => self.table(d, at),
             _ => {}
         }
     }
@@ -724,6 +735,67 @@ impl Check<'_> {
                     );
                 }
             }
+        }
+    }
+
+    /// A `table` block: an optional `header` flag and `align` list, then 1 to [`TABLE_ROWS_MAX`]
+    /// `row { cells = [...] }` blocks of inline markup strings. Rows may differ in length; the
+    /// widest has 1 to [`TABLE_COLUMNS_MAX`] cells.
+    fn table(&mut self, d: &Doc, at: &str) {
+        self.items(d, &[opt("header", Form::Bool)], &["align"], at);
+        self.only_blocks(d, &["row"], at);
+        if let Some(v) = d.field("align") {
+            let path = format!("{at}.align");
+            match v {
+                Value::List(l) if l.len() > TABLE_COLUMNS_MAX => self.fail(
+                    &path,
+                    format!(
+                        "has {} entries; a table has at most {TABLE_COLUMNS_MAX} columns",
+                        l.len()
+                    ),
+                ),
+                Value::List(l) => {
+                    for (n, a) in l.iter().enumerate() {
+                        self.form(a, Form::OneOf(&TABLE_ALIGNS), &format!("{path}[{n}]"));
+                    }
+                }
+                _ => self.fail(
+                    &path,
+                    format!("must be a list of strings, not {}", v.describe()),
+                ),
+            }
+        }
+        let rows = d.blocks_of("row").count();
+        if rows == 0 {
+            return self.fail(at, "needs at least one row");
+        }
+        if rows > TABLE_ROWS_MAX {
+            self.fail(
+                at,
+                format!("has {rows} rows; a table holds at most {TABLE_ROWS_MAX}"),
+            );
+        }
+        let mut width = 0;
+        for (n, row) in d.blocks_of("row").enumerate() {
+            let path = format!("{at} > row#{}", n + 1);
+            self.no_label(row, &path);
+            self.items(&row.body, &[req("cells", Form::StrList)], &[], &path);
+            self.only_blocks(&row.body, &[], &path);
+            if let Some(Value::List(cells)) = row.body.field("cells") {
+                if cells.len() > TABLE_COLUMNS_MAX {
+                    self.fail(
+                        &format!("{path}.cells"),
+                        format!(
+                            "has {} cells; a table has at most {TABLE_COLUMNS_MAX} columns",
+                            cells.len()
+                        ),
+                    );
+                }
+                width = width.max(cells.len());
+            }
+        }
+        if width == 0 && d.blocks_of("row").all(|r| r.body.field("cells").is_some()) {
+            self.fail(at, "needs at least one cell");
         }
     }
 

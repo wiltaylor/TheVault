@@ -146,6 +146,17 @@ content body {
     note = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB"
   }
 
+  table {
+    header = true
+    align  = ["left", "right"]
+    row {
+      cells = ["Step", "Hours"]
+    }
+    row {
+      cells = ["Export from **Capacities**", "2"]
+    }
+  }
+
   code {
     language = "rust"
     caption  = "Entry point"

@@ -1347,7 +1347,7 @@ template default {
 
 ### Field references
 
-The text of a fixed content block in a template can show a field's value inline: `{{name}}` in any `text` item (a heading, paragraph, quote, list item or toggle summary, including one inside a canvas card), in an admonition's `title`, or in an image's `alt` or `caption`, renders the current value of field `name` of the note being shown, read-only. `name` is `title` or a field of the type; the schema rejects any other name with "`{{name}}` names no field of the type". A reference is not a slot: it places nothing, so the field still has no entry on the page and stays editable in the properties sidebar.
+The text of a fixed content block in a template can show a field's value inline: `{{name}}` in any `text` item (a heading, paragraph, quote, list item or toggle summary, including one inside a canvas card), in an admonition's `title`, in a table's cells, or in an image's `alt` or `caption`, renders the current value of field `name` of the note being shown, read-only. `name` is `title` or a field of the type; the schema rejects any other name with "`{{name}}` names no field of the type". A reference is not a slot: it places nothing, so the field still has no entry on the page and stays editable in the properties sidebar.
 
 - `name` is an identifier written directly between the braces, with no spaces: `{{ due }}` is plain text.
 - `\{{name}}`, with the first brace escaped, and `{{name}}` inside a code span are plain text and are not checked.
@@ -1940,6 +1940,43 @@ admonition {
 }
 ```
 
+### `table`
+
+A table of inline markup cells, in rows. The first row may be a header row, and each column may be aligned left, center or right.
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `header` | bool | Optional, default `false`. When `true`, the first row is the header row |
+| `align` | list of strings | Optional. One entry per column, from the first: `left`, `center` or `right`. A column with no entry is aligned left |
+| `row { ... }` | block | At least one, and at most 2000. The rows, in order |
+
+Each `row` holds:
+
+| Item | Form | Meaning |
+|------|------|---------|
+| `cells` | list of strings, markup | Required. The row's cells, from the first column. A newline in a cell is a line break inside it |
+
+```wcl
+table {
+  header = true
+  align  = ["left", "right", "left"]
+  row {
+    cells = ["Item", "Qty", "Notes"]
+  }
+  row {
+    cells = ["Apples", "3", "**Ripe**, see [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB|Groceries]]"]
+  }
+}
+```
+
+Rules:
+
+- The canonical writer writes a table's items, then its rows, line after line with no blank lines between them.
+- The widest row has 1 to 100 cells. Rows may differ in length when read, and every reader shows a short row with empty cells at its end. A write stores every row as long as the widest, padded with empty cells, and cuts `align` to that many entries.
+- The cells are text items like a paragraph's `text`: they are searched, their mentions are links, their placeholder links are checked, and in a template's fixed blocks they may hold `{{name}}` [field references](#field-references).
+- A table sits wherever a content block does: in columns, toggles, admonitions and canvas cards.
+- Copied out of the web client, a table is a GitHub-flavoured Markdown table, with the header row's delimiter line carrying the alignments, `|` in a cell escaped as `\|` and a line break as `<br>`; a table with no header row gets an empty one. Pasted Markdown in that form, the outer pipes optional, becomes a table with `header = true`, its cells' Markdown converted to inline markup.
+
 ### `control`
 
 A form control bound to one field of the note it is shown on: a text box, a slider, a toggle, a calendar and so on. It shows the field's current value and editing it writes the field, so the field stays the only place the value lives. A control, a slot, a `{{name}}` reference and the properties sidebar showing one field always agree, and two controls may bind the same field. Controls are mostly placed in [templates](#templates), to lay a type out as a form, but a note's own content and a canvas card may hold them too.
@@ -2022,7 +2059,7 @@ columns {
 
 ## Inline markup
 
-These text items use the inline markup in PRD Appendix A (D41): `heading.text`, `paragraph.text`, `item.text`, `quote.text`, `toggle.text` and `admonition.title`, wherever the block sits, a canvas card included. No other string is parsed as markup.
+These text items use the inline markup in PRD Appendix A (D41): `heading.text`, `paragraph.text`, `item.text`, `quote.text`, `toggle.text`, `admonition.title` and each of a table row's `cells`, wherever the block sits, a canvas card included. No other string is parsed as markup.
 
 | Markup | Renders as |
 |--------|------------|

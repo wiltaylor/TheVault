@@ -6,7 +6,8 @@
 //! - fields come before blocks at every level, each group in its original order;
 //! - the `=` of every field in one body lines up;
 //! - a blank line goes above every block that is not first in its body, except between two
-//!   blocks without a body and between the items of a template `tab`;
+//!   blocks without a body, between the items of a template `tab` and in a `table`, whose rows
+//!   follow its items line after line;
 //! - a block with no items has no braces;
 //! - a multi-line string a heredoc can carry is a raw `<<'END'` heredoc indented with its field;
 //! - a float always has a decimal point;
@@ -18,9 +19,10 @@ use crate::{Result, parse_data_only};
 
 const INDENT: &str = "  ";
 
-/// Block kinds whose body is a list of slots and content blocks laid out one per line, with no
-/// blank lines between them, as `docs/vault-format/` writes a template tab.
-const COMPACT_KINDS: [&str; 1] = ["tab"];
+/// Block kinds whose body is laid out one item per line, with no blank lines between them: a
+/// template tab's slots and content blocks, as `docs/vault-format/` writes a tab, and a table's
+/// rows.
+const COMPACT_KINDS: [&str; 2] = ["tab", "table"];
 
 /// Layout blocks, which keep the layout of the body they sit in: compact inside a tab.
 const LAYOUT_KINDS: [&str; 2] = ["columns", "column"];

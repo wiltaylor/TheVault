@@ -27,5 +27,6 @@ mod sessions;
 mod shipped_defaults;
 mod skills;
 mod startup;
+mod tables;
 mod template_images;
 mod toggles;

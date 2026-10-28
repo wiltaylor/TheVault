@@ -347,9 +347,37 @@ fn print_body(out: &mut String, doc: &Doc, stroke: bool) {
             }
         }
         out.push_str(" {\n");
-        print_body(out, &b.body, b.kind == "stroke");
+        if b.kind == "table" {
+            print_body(out, &squared(&b.body), false);
+        } else {
+            print_body(out, &b.body, b.kind == "stroke");
+        }
         out.push_str("}\n");
     }
+}
+
+/// A table's body with every row padded with empty cells to the widest row's length, and its
+/// `align` cut to that many columns, as `docs/vault-format.md` "table" says a write stores it.
+fn squared(body: &Doc) -> Doc {
+    let cells = |b: &DocBlock| match b.body.field("cells") {
+        Some(Value::List(l)) if b.kind == "row" => Some(l.len()),
+        _ => None,
+    };
+    let width = body.blocks.iter().filter_map(cells).max().unwrap_or(0);
+    let mut out = body.clone();
+    for (name, value) in &mut out.fields {
+        if let (true, Value::List(l)) = (name == "align", value) {
+            l.truncate(width);
+        }
+    }
+    for row in out.blocks.iter_mut().filter(|b| b.kind == "row") {
+        for (name, value) in &mut row.body.fields {
+            if let (true, Value::List(l)) = (name == "cells", value) {
+                l.resize(width, Value::Str(String::new()));
+            }
+        }
+    }
+    out
 }
 
 /// Round flat `x, y, pressure` triples: `x` and `y` to two places, `pressure` to three.

@@ -2,9 +2,9 @@
 //! asks.
 //!
 //! A call is a link `[@<Label> <request>](agent:<name>?call=<id>)` in the inline markup of a
-//! note's content blocks: each paragraph, heading, list item, quote, toggle and admonition title
-//! at any depth. [`schema::agent_calls`] finds the calls in one text; inline code, note mentions
-//! and other links hold none.
+//! note's content blocks: each paragraph, heading, list item, quote, toggle, admonition title and
+//! table cell at any depth. [`schema::agent_calls`] finds the calls in one text; inline code,
+//! note mentions and other links hold none.
 
 use schema::{Agent, AgentCall, Doc, DocBlock};
 
@@ -27,9 +27,7 @@ pub(crate) fn calls(doc: &Doc) -> Vec<Found> {
 
 fn each_markup(blocks: &[DocBlock], out: &mut Vec<Found>) {
     for b in blocks {
-        if let Some(item) = schema::markup_item(&b.kind)
-            && let Some(text) = b.body.field(item).and_then(|v| v.as_str())
-        {
+        for (_, text) in schema::markup_texts(b) {
             let found = schema::agent_calls(text);
             let context = with_labels(text, &found);
             out.extend(found.into_iter().map(|call| Found {

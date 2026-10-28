@@ -38,7 +38,8 @@ pub use blocks::{
     CANVAS_HEIGHT_MIN, CARD_BLOCK_KINDS, COLUMNS_MAX, COLUMNS_MIN, CONTENT_KINDS, CONTROL_KINDS,
     INK_HEIGHT_DEFAULT, INK_HEIGHT_MAX, INK_HEIGHT_MIN, MAP_VIEW_HEIGHT_DEFAULT,
     MAP_VIEW_HEIGHT_MAX, MAP_VIEW_HEIGHT_MIN, NODE_KINDS, RATING_MAX_DEFAULT, RATING_MAX_LIMIT,
-    VIEW_KINDS, admonition_preset, control_fits, is_icon,
+    TABLE_ALIGNS, TABLE_COLUMNS_MAX, TABLE_ROWS_MAX, VIEW_KINDS, admonition_preset, control_fits,
+    is_icon,
 };
 pub use change::{FieldChanges, NoteEdit};
 pub use devices::{DEVICE_COMMANDS, DEVICE_EVENTS, DEVICE_PLATFORMS, DeviceFile, DeviceHook};
@@ -49,7 +50,7 @@ pub use encoding::{
 };
 pub use inline::{
     AGENT_CALL_SCHEME, AgentCall, MARKUP_ITEMS, Placeholder, agent_calls, escape_markup,
-    markup_item, parse_agent_call, placeholder_at, placeholders, unescape_markup,
+    markup_item, markup_texts, parse_agent_call, placeholder_at, placeholders, unescape_markup,
 };
 pub use note::{NoteLookup, NoteReport};
 pub use queryviews::{FieldRename, VIEW_FIELD_ITEMS, query_view_issues, reads_type};

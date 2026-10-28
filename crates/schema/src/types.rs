@@ -1329,9 +1329,19 @@ fn slot(
     })
 }
 
-/// Every `{{name}}` in the `text` items of a fixed template block, an admonition's `title`, and an image's `alt` and
-/// `caption`, at any depth, must name `title` or a field of the type. `{{name}}` is
+/// Every `{{name}}` in the `text` items of a fixed template block, an admonition's `title`, an
+/// image's `alt` and `caption`, and a table's cells, at any depth, must name `title` or a field of
+/// the type. `{{name}}` is
 /// template-only markup: in a note it is text.
+/// Fail each `{{name}}` in `text`, at `at`, that names neither `title` nor a field of the type.
+fn unknown_field_refs(c: &mut Check, text: &str, fields: &[FieldDef], at: &str) {
+    for name in field_refs(text) {
+        if name != "title" && !fields.iter().any(|f| f.name == name) {
+            c.fail(at, format!("`{{{{{name}}}}}` names no field of the type"));
+        }
+    }
+}
+
 fn check_field_refs(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) {
     let items: &[&str] = if b.kind == "image" {
         &["text", "alt", "caption"]
@@ -1344,13 +1354,12 @@ fn check_field_refs(c: &mut Check, b: &DocBlock, fields: &[FieldDef], at: &str) 
         let Some(text) = string(&b.body, item) else {
             continue;
         };
-        for name in field_refs(&text) {
-            if name != "title" && !fields.iter().any(|f| f.name == name) {
-                c.fail(
-                    &format!("{at}.{item}"),
-                    format!("`{{{{{name}}}}}` names no field of the type"),
-                );
-            }
+        unknown_field_refs(c, &text, fields, &format!("{at}.{item}"));
+    }
+    // A table's cells are fixed text too.
+    if b.kind == "row" {
+        for (item, text) in crate::inline::markup_texts(b) {
+            unknown_field_refs(c, text, fields, &format!("{at}.{item}"));
         }
     }
     for child in &b.body.blocks {

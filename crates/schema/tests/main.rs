@@ -8,6 +8,7 @@ mod controls;
 mod list_page;
 mod period_calendar;
 mod skills;
+mod tables;
 mod time;
 mod toggles;
 mod validation;

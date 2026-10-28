@@ -24,6 +24,27 @@ pub fn markup_item(kind: &str) -> Option<&'static str> {
         .map(|(_, item)| *item)
 }
 
+/// Every text of inline markup in block `b` itself, not the blocks inside it, with the item that
+/// holds it: the item [`markup_item`] names, or each cell of a table's `row`, as `cells[0]`.
+pub fn markup_texts(b: &DocBlock) -> Vec<(String, &str)> {
+    if let Some(item) = markup_item(&b.kind) {
+        return b
+            .body
+            .field(item)
+            .and_then(|v| v.as_str())
+            .map(|t| vec![(item.to_owned(), t)])
+            .unwrap_or_default();
+    }
+    match (b.kind.as_str(), b.body.field("cells")) {
+        ("row", Some(crate::doc::Value::List(cells))) => cells
+            .iter()
+            .enumerate()
+            .filter_map(|(n, c)| c.as_str().map(|t| (format!("cells[{n}]"), t)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// One `[[+type|title]]` in inline markup. `title` is unescaped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placeholder {
@@ -112,9 +133,7 @@ pub fn placeholders(text: &str) -> Vec<Placeholder> {
 pub(crate) fn placeholders_in(blocks: &[DocBlock], at: &str, out: &mut Vec<(String, Placeholder)>) {
     for (n, b) in blocks.iter().enumerate() {
         let path = format!("{at} > {}#{}", b.kind, n + 1);
-        if let Some(item) = markup_item(&b.kind)
-            && let Some(text) = b.body.field(item).and_then(|v| v.as_str())
-        {
+        for (item, text) in markup_texts(b) {
             for p in placeholders(text) {
                 out.push((format!("{path}.{item}"), p));
             }

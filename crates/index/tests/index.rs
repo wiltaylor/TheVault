@@ -817,6 +817,69 @@ content body {{
 }
 
 #[test]
+fn table_cells_are_searched_and_their_mentions_link() {
+    let (_dir, vault) = fixture();
+    let mut index = Index::open(&vault).unwrap();
+    index.rebuild(&vault).unwrap();
+    let schema = Schema::load(&vault).unwrap();
+    let text = format!(
+        r#"title   = "Tabled"
+created = "2026-10-01T09:00:00Z"
+updated = "2026-10-01T09:00:00Z"
+
+content body {{
+  table {{
+    header = true
+    row {{
+      cells = ["Fruit", "Where"]
+    }}
+    row {{
+      cells = ["Quince", "See [[{PROJECT}|the plan]]"]
+    }}
+  }}
+
+  toggle {{
+    text = "More"
+
+    table {{
+      row {{
+        cells = ["[[{TASK_B}]] and `[[{TASK_C}]]`"]
+      }}
+    }}
+  }}
+}}
+"#
+    );
+    index
+        .update(&schema, &[put(&schema, "task", SCRATCH, &text)])
+        .unwrap();
+    let ids: Vec<String> = index
+        .search("quince", None)
+        .unwrap()
+        .into_iter()
+        .map(|h| h.id)
+        .collect();
+    assert_eq!(ids, vec![SCRATCH]);
+    let mut stmt = index
+        .connection()
+        .prepare("SELECT via || ' ' || field || ' ' || dst FROM links WHERE src = ?1 ORDER BY pos")
+        .unwrap();
+    let links: Vec<String> = stmt
+        .query_map([SCRATCH], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    // Mentions in cells link as a paragraph's do, nested tables too; inline code holds none.
+    assert_eq!(
+        links,
+        vec![
+            format!("mention body {PROJECT}"),
+            format!("mention body {TASK_B}")
+        ]
+    );
+}
+
+#[test]
 fn placeholder_links_are_searched_but_link_nowhere() {
     let (_dir, vault) = fixture();
     let mut index = Index::open(&vault).unwrap();

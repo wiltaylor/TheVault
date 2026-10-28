@@ -33,7 +33,9 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// 7: the agent permission key `permissions { scripts { run_saved } }` (Run saved scripts and
 /// tasks), which an older reader refuses as an unknown switch of `scripts`, failing the agent
 /// file.
-pub const FORMAT_VERSION: u32 = 7;
+/// 8: the `table` content block, rows of inline markup cells, which an older reader refuses in a
+/// note as an unknown block kind.
+pub const FORMAT_VERSION: u32 = 8;
 
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]

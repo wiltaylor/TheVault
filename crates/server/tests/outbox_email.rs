@@ -391,6 +391,41 @@ fn a_reply_carries_the_threading_headers_and_thread() {
 }
 
 #[test]
+fn a_table_goes_as_a_markdown_table_in_the_text_part_and_a_table_in_the_html() {
+    let api = Api::start();
+    api.create(
+        "outbox",
+        email(
+            json!({}),
+            vec![json!({
+                "kind": "table",
+                "fields": { "header": true, "align": ["left", "right"] },
+                "blocks": [
+                    { "kind": "row", "fields": { "cells": ["Dish", "Price"] } },
+                    { "kind": "row", "fields": { "cells": ["**Soup** | bread", "9"] } },
+                    { "kind": "row", "fields": { "cells": ["Tea"] } },
+                ],
+            })],
+        ),
+    );
+    api.settle();
+
+    let sent = api.sent();
+    let text = sent.text.clone().unwrap();
+    assert!(
+        text.contains("| Dish | Price |\r\n| --- | ---: |\r\n| Soup \\| bread | 9 |\r\n| Tea |  |"),
+        "{text}"
+    );
+    let html = sent.html.clone().unwrap();
+    assert!(
+        html.contains(
+            "<table><tr><th>Dish</th><th style=\"text-align:right\">Price</th></tr><tr><td><strong>Soup</strong> | bread</td><td style=\"text-align:right\">9</td></tr>"
+        ),
+        "{html}"
+    );
+}
+
+#[test]
 fn headers_that_are_not_ascii_go_as_encoded_words() {
     let api = Api::start();
     let id = api.create(
