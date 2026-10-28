@@ -25,6 +25,9 @@ import { LabelledList, type LabelledShape, labelled, labelledShape, labelledValu
 import { LinkListInput, linkShape } from "./LinkList";
 import { optionChoices, optionText } from "../options";
 import { termPicker } from "./termPicker";
+import { useControlBinding } from "../controls/binding";
+import { RuleEditor } from "../series/RuleEditor";
+import { isRuleField } from "../series/rrule";
 
 export interface FieldInputProps {
   field: FieldDef;
@@ -932,6 +935,9 @@ function TermsPicker(props: FieldInputProps) {
 /** The editor for one field of a note, chosen by the field's kind. */
 export function FieldInput(props: FieldInputProps) {
   const f = () => props.field;
+  const binding = useControlBinding();
+  // An event series' rule gets the rule builder (event-series E6).
+  const rule = () => isRuleField(f(), props.related?.type ?? binding?.type()?.name);
   return (
     <Switch
       fallback={
@@ -986,6 +992,9 @@ export function FieldInput(props: FieldInputProps) {
       </Match>
       <Match when={f().kind === "asset"}>
         <AssetInput {...props} />
+      </Match>
+      <Match when={rule()}>
+        <RuleEditor value={props.value} onChange={props.onChange} label={props.label} id={props.id} />
       </Match>
       <Match when={labelledShape(f())}>{(shape) => <LabelledInput {...props} shape={shape()} />}</Match>
       <Match when={linkShape(f())}>

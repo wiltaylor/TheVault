@@ -32,6 +32,8 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 |---|---|---|---|---|
 | Create a note | `pages/TypeList.tsx` (New note), `NoteView.tsx` at `/notes/new?type=` | `POST /api/notes` | `vault put --type <type>` | Closed by #39 |
 | Open a note | `pages/NoteView.tsx` | `GET /api/notes/{id}` | `vault get <id>` | |
+| Edit an event series' rule with the rule builder or the Custom RRULE box (event-series E6) | `series/RuleEditor.tsx`, in `NoteView.tsx` | `PUT /api/notes/{id}` with the series' `rule` lines | `vault put <id> --base <version>` | |
+| Open an occurrence's series from "Part of <series>" | `NoteView.tsx` | `GET /api/notes/{id}` | `vault get <series_ref>` | |
 | Save a note (fields, content, ink, canvas) | `NoteView.tsx` | `PUT /api/notes/{id}` with `base_version` | `vault put <id> --base <version>` | |
 | Conflict view: save my version | `components/ConflictView.tsx` | `GET /api/notes/{id}`, then `PUT` at the stored version | `vault get <id>`, then `vault put <id> --base <stored version>` (the CLI prints the 409 body) | |
 | Conflict view: keep the stored version | `ConflictView.tsx` | — | — | Client-side only |
@@ -120,6 +122,7 @@ Every gap is either explained in the row where it appears or filed as a ticket. 
 | Preview a change to a type (renames, migration) | `TypeEditor.tsx` | `POST /api/types/{name}/change` | `vault type change <name> -f <file> [--rename old=new] [--migration <script>] [--function <fn>]` | |
 | List the notes a refused plan affects | `TypeEditor.tsx` | `POST /api/query` | `vault query` | |
 | Apply a type change | `TypeEditor.tsx` | `POST /api/types/{name}/change` with `plan` | `vault type change <name> … --apply <plan token>` | |
+| Add a new field to Event and Event series at once ("Also add to Event series", "Also add to Event"; event-series E4) | `TypeEditor.tsx` | `POST /api/types/{name}/change` with `plan`, then the same for the other type | `vault type change` for each type | |
 | Delete a type | `TypeEditor.tsx` | `DELETE /api/types/{name}` | `vault type delete <name>` | |
 | Open the template editor | `pages/TemplateEditor.tsx` | `GET /api/schema` | `vault schema` or `vault template list <type>` | |
 | Save a template | `TemplateEditor.tsx` | `PUT /api/types/{type}/templates/{name}` | `vault template put <type> <name> -f <file>` | |

@@ -857,3 +857,39 @@ export function unplaced(t: TemplateModel, fields: { name: string }[]): string[]
   const placed = new Set(t.tabs.flatMap((tab) => slotsOf(tab.items)));
   return ["title", ...fields.map((f) => f.name)].filter((n) => !placed.has(n));
 }
+
+/**
+ * The type that shares custom fields with `name`: `event` and `event_series`, whose fields of the
+ * same name and kind carry from a series to its occurrences (event-series E4). The type editor
+ * offers to add a new field to both.
+ */
+export function twinType(name: string): { name: string; label: string } | null {
+  if (name === "event") return { name: "event_series", label: "Event series" };
+  if (name === "event_series") return { name: "event", label: "Event" };
+  return null;
+}
+
+/** A copy of `f` as a field new to a type: fresh keys throughout, and no stored name. */
+export function copyField(f: FieldModel): FieldModel {
+  const c: FieldModel = structuredClone(f);
+  const rekey = (x: FieldModel) => {
+    x.key = nextKey++;
+    x.original = null;
+    if (x.item) rekey(x.item);
+    for (const k of x.keys) rekey(k);
+    if (x.values && x.values !== "any") rekey(x.values);
+  };
+  rekey(c);
+  return c;
+}
+
+/** Add a copy of each of `fields` that `other` lacks by name to `other`. Returns the names added. */
+export function withTwinFields(other: TypeModel, fields: FieldModel[]): string[] {
+  const added: string[] = [];
+  for (const f of fields) {
+    if (other.fields.some((x) => x.name === f.name)) continue;
+    other.fields.push(copyField(f));
+    added.push(f.name);
+  }
+  return added;
+}

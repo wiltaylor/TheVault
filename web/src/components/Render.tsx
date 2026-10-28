@@ -21,6 +21,7 @@ import { LinkAnchors, linkShape, linksOf, linksText } from "./LinkList";
 import { optionText } from "../options";
 import { noteTitle } from "../editor/titles";
 import { assetName } from "./assetNames";
+import { isRuleField, ruleSummary } from "../series/rrule";
 
 /** A field value as plain text. Lists join with commas and records list their members. */
 export function formatValue(value: Json | undefined): string {
@@ -44,6 +45,8 @@ export function formatValue(value: Json | undefined): string {
  */
 export function fieldText(f: FieldDef, value: Json | undefined): string {
   if (value === undefined || value === null) return "";
+  // An event series' rule reads as its summary (event-series E6).
+  if (isRuleField(f)) return ruleSummary(value);
   const shape = labelledShape(f);
   if (shape && Array.isArray(value)) return labelledText(labelled(value, shape.key));
   if (linkShape(f) && Array.isArray(value)) return linksText(linksOf(value));

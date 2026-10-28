@@ -52,6 +52,7 @@ import { NoteOutboxActions } from "../outbox/NoteActions";
 import { OutboxChips } from "../outbox/Chips";
 import { OUTBOX } from "../outbox/model";
 import { periodOfType } from "../planner/period";
+import { SERIES_TYPE } from "../series/rrule";
 
 /** How long after the last change a note saves itself. */
 export const AUTOSAVE_MS = 1500;
@@ -91,6 +92,12 @@ export function NewNote() {
 function draftNote(type: TypeDef): Note {
   const fields: Record<string, Json> = {};
   for (const f of type.fields) if (!f.compound && !f.computed && f.default !== undefined) fields[f.name] = f.default;
+  // A new event series repeats in this browser's time zone unless the user says otherwise
+  // (event-series E1).
+  if (type.name === SERIES_TYPE && fields.timezone === undefined && type.fields.some((f) => f.name === "timezone")) {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (zone) fields.timezone = zone;
+  }
   return { id: "", type: type.name, version: "", wcl: "", note: { fields, blocks: [] } };
 }
 
@@ -599,6 +606,11 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
   const archived = () => !props.newType && isArchived(note()?.note.fields);
   /** The note this one is a sync conflict copy of, if it is one. */
   const original = () => (props.newType ? undefined : conflictOf(note()?.note.fields));
+  // The series an occurrence of a recurring event belongs to: its hidden `series_ref` (event-series E1).
+  const seriesOf = () => {
+    const r = props.newType ? undefined : doc().fields.series_ref;
+    return typeof r === "string" && r ? r : undefined;
+  };
 
   /** Archive the note, or take it out of the archive: a new version, after any pending save. */
   async function toggleArchive() {
@@ -952,6 +964,16 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                     <span class="muted"> · sync kept another device's version as the original: </span>
                   </span>
                   <a href={`/notes/${id()}`}>{noteTitle(id()) ?? "Original note"}</a>
+                </div>
+              )}
+            </Show>
+            <Show when={seriesOf()}>
+              {(id) => (
+                <div class="series-banner" role="region" aria-label="Series">
+                  <span class="muted">Part of </span>
+                  <a href={`/notes/${id()}`} data-testid="series-link">
+                    {noteTitle(id()) ?? "the series"}
+                  </a>
                 </div>
               )}
             </Show>

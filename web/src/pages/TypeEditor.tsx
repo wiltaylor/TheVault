@@ -35,8 +35,10 @@ import {
   relationsAt,
   renames,
   takesDefault,
+  twinType,
   typeFromSchema,
   typeWcl,
+  withTwinFields,
 } from "../defs/typeModel";
 import { reloadDefinitions, taxonomies, typeDef, types } from "../session";
 import { IconPicker } from "../components/IconPicker";
@@ -576,6 +578,9 @@ export function TypeEditor() {
   const [migrationFunction, setMigrationFunction] = createSignal("");
   // What this version ignored when it loaded the stored type file.
   const [warnings, setWarnings] = createSignal<SchemaIssue[]>([]);
+  // New fields to add to the twin type too, by key: `event` and `event_series` (event-series E4).
+  const [twins, setTwins] = createSignal<ReadonlySet<number>>(new Set());
+  const twin = () => (isNew() ? null : twinType(name()));
 
   createEffect(
     on(
@@ -588,6 +593,7 @@ export function TypeEditor() {
         setSaveError(null);
         setDeleteError(null);
         setWarnings([]);
+        setTwins(new Set<number>());
         if (type === undefined) {
           setName("");
           setModel(reconcile(emptyType()));
@@ -761,6 +767,13 @@ export function TypeEditor() {
     setSaveError(null);
     try {
       await api.changeType(name(), typeWcl(model), renames(model), p.plan, migration());
+      try {
+        await addToTwin();
+      } catch (e) {
+        await reloadDefinitions();
+        setSaveError(`${model.label || name()} was saved, but the new fields were not added to ${twin()?.label}: ${errorText(e)}`);
+        return;
+      }
       await reloadDefinitions();
       navigate(`/types/${name()}`);
     } catch (e) {
@@ -768,6 +781,36 @@ export function TypeEditor() {
       if (e instanceof ApiError && e.status === 409) setPlan(null);
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** The new fields to add to the twin type too, as they will be saved. */
+  const twinFields = () => model.fields.filter((f) => f.original === null && twins().has(f.key) && isName(f.name));
+
+  /**
+   * Add the ticked new fields to the twin type, right after this type's change: the API changes one
+   * type at a time, so this is a second planned change, which adds fields and so edits no note.
+   */
+  async function addToTwin() {
+    const t = twin();
+    const fields = twinFields();
+    if (!t || !fields.length) return;
+    // A note of the twin type written between the plan and its apply makes the plan stale (409):
+    // plan again, a few times.
+    for (let attempt = 1; ; attempt++) {
+      const schema = await api.schema();
+      const other = schema.types.find((x) => x.name === t.name);
+      if (!other) return;
+      const m = typeFromSchema(other);
+      if (!withTwinFields(m, unwrap(fields)).length) return;
+      const wcl = typeWcl(m);
+      try {
+        const planned = await api.changeType(t.name, wcl, {});
+        await api.changeType(t.name, wcl, {}, planned.plan);
+        return;
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 409) || attempt >= 3) throw e;
+      }
     }
   }
 
@@ -915,6 +958,27 @@ export function TypeEditor() {
                   onInput={(e) => set((x) => (x.description = e.currentTarget.value))}
                 />
                 <KindSettings def={f()} set={set} place="field" id={id} typeName={name()} fieldName={f().name} />
+                <Show when={f().original === null && twin()}>
+                  {(t) => (
+                    <>
+                      <span />
+                      <label class="twin-flag">
+                        <input
+                          type="checkbox"
+                          checked={twins().has(key)}
+                          onChange={(e) => {
+                            const next = new Set(twins());
+                            if (e.currentTarget.checked) next.add(key);
+                            else next.delete(key);
+                            setTwins(next);
+                            setPlan(null);
+                          }}
+                        />{" "}
+                        Also add to {t().label}
+                      </label>
+                    </>
+                  )}
+                </Show>
                 <Show when={takesDefault(f())}>
                   <label for={id("default")}>Default</label>
                   <Show when={`${f().kind}/${itemKind(f())}/${f().of}/${f().taxonomy}/${f().item?.taxonomy}/${f().item?.of}`} keyed>
@@ -1303,6 +1367,11 @@ export function TypeEditor() {
               <h2>Preview</h2>
               <Show when={p().added.length}>
                 <p>Adds {p().added.join(", ")}.</p>
+              </Show>
+              <Show when={twin() && twinFields().length > 0}>
+                <p>
+                  Also adds {twinFields().map((f) => f.name).join(", ")} to {twin()?.label}, where it lacks them.
+                </p>
               </Show>
               <Show when={p().removed.length}>
                 <p>Removes {p().removed.join(", ")}. Notes keep the data and are flagged.</p>

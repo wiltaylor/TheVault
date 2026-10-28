@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Json } from "../api";
-import { type SchemaType, changeKind, fieldDefOf, inverseChoices, isLinkList, isOwnInverse, makeLinkList, newField, problems, takesDefault, typeFromSchema, typeWcl } from "./typeModel";
+import { type SchemaType, changeKind, fieldDefOf, inverseChoices, isLinkList, isOwnInverse, makeLinkList, newField, problems, takesDefault, twinType, typeFromSchema, typeWcl, withTwinFields } from "./typeModel";
 
 /** A field as `GET /api/schema` describes it, with the attributes every definition has. */
 function def(name: string, kind: string, more: Record<string, Json> = {}): Record<string, Json> {
@@ -336,5 +336,35 @@ describe("a list of links in the type editor", () => {
       ),
     );
     expect(stored.fields.map(isLinkList)).toEqual([true, true, false]);
+  });
+});
+
+describe("a field added to event and event series together (event-series E4)", () => {
+  it("pairs event with event_series and no other type", () => {
+    expect(twinType("event")).toEqual({ name: "event_series", label: "Event series" });
+    expect(twinType("event_series")).toEqual({ name: "event", label: "Event" });
+    expect(twinType("project")).toBeNull();
+  });
+
+  it("adds a copy of each new field the other type lacks, written as the first type writes it", () => {
+    const event = typeFromSchema(typeOf(def("location", "string")));
+    const series = typeFromSchema(typeOf(def("location", "string")));
+    const room = newField("room", "select");
+    room.label = "Room";
+    room.options = ["Blue", "Green"];
+    const tags = newField("tags", "list");
+    changeKind(tags, "list");
+    const location = newField("location", "string");
+    event.fields.push(room, tags, location);
+    expect(withTwinFields(series, [room, tags, location])).toEqual(["room", "tags"]);
+    const copy = series.fields.find((f) => f.name === "room")!;
+    expect(copy.key).not.toBe(room.key);
+    expect(copy.original).toBeNull();
+    expect(copy.item === null || copy.item.key !== room.item?.key).toBe(true);
+    expect(block(typeWcl(series), "room")).toBe(block(typeWcl(event), "room"));
+    expect(block(typeWcl(series), "tags")).toBe(block(typeWcl(event), "tags"));
+    // The copy is its own: editing it leaves the first type's field alone.
+    copy.label = "Meeting room";
+    expect(room.label).toBe("Room");
   });
 });
