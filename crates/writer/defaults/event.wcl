@@ -70,6 +70,31 @@ field series {
   computed    = true
 }
 
+field series_ref {
+  kind        = "reference"
+  label       = "Series"
+  description = "The event series this occurrence belongs to."
+  target      = "event_series"
+  on_delete   = "cascade"
+  hidden      = true
+}
+
+field series_key {
+  kind        = "string"
+  label       = "Series key"
+  description = "For an occurrence the server made from a series kept in the vault: the series id and the occurrence's original start."
+  hidden      = true
+}
+
+field series_overrides {
+  kind        = "list"
+  items       = "string"
+  label       = "Changed from the series"
+  description = "The fields shared with the series that were changed on this occurrence, so a change to the series leaves them as they are."
+  computed    = true
+  hidden      = true
+}
+
 field google_ref {
   kind        = "string"
   label       = "Google reference"

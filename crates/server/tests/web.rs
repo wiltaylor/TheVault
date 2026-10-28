@@ -81,6 +81,7 @@ fn lists_every_type_with_its_fields_and_templates() {
             "email",
             "email_thread",
             "event",
+            "event_series",
             "fleeting",
             "message",
             "monthlynote",

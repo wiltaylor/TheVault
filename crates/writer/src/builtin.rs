@@ -1,7 +1,7 @@
 //! The built-in types every vault has: the planner types `dailynote`, `weeklynote`,
 //! `monthlynote`, `quarterlynote` and `yearlynote`, `fleeting`, the phone data types `message`,
 //! `call` and `conversation` (D15), and the Google sync types `email`, `email_thread` and `event`
-//! (google-sync D4, D15, D17), with the `gmail_label` taxonomy `email` uses
+//! (google-sync D4, D15, D17) and `event_series` (event-series E1), with the `gmail_label` taxonomy `email` uses
 //! (google-sync D14), and `outbox`, the email, SMS and calendar invites waiting to be sent
 //! (outbox X1).
 //!
@@ -36,6 +36,10 @@ pub const EMAIL_THREAD_TYPE: &str = "email_thread";
 
 /// The name of the built-in event type: one note per Google Calendar event or occurrence.
 pub const EVENT_TYPE: &str = "event";
+
+/// The name of the built-in event series type: one note per recurring event, whose occurrences
+/// are `event` notes linked to it (event-series E1).
+pub const EVENT_SERIES_TYPE: &str = "event_series";
 
 /// The name of the built-in agent thread type: one note per chat with an agent (agents G7).
 pub const AGENT_THREAD_TYPE: &str = "agent_thread";
@@ -72,6 +76,9 @@ pub const DEFAULT_EMAIL_THREAD_TYPE: &str = include_str!("../defaults/email_thre
 /// The `event` type a vault without it gets.
 pub const DEFAULT_EVENT_TYPE: &str = include_str!("../defaults/event.wcl");
 
+/// The `event_series` type a vault without it gets (event-series E1).
+pub const DEFAULT_EVENT_SERIES_TYPE: &str = include_str!("../defaults/event_series.wcl");
+
 /// The `agent_thread` type a vault without it gets (agents G7).
 pub const DEFAULT_AGENT_THREAD_TYPE: &str = include_str!("../defaults/agent_thread.wcl");
 
@@ -91,7 +98,7 @@ pub const DEFAULT_GMAIL_LABEL_TAXONOMY: &str =
 pub const DEFAULT_PERSON_TYPE: &str = include_str!("../defaults/person.wcl");
 
 /// Every built-in type, as `(name, the type file a vault without it gets)`.
-pub const BUILT_IN_TYPES: [(&str, &str); 15] = [
+pub const BUILT_IN_TYPES: [(&str, &str); 16] = [
     (daily::DAILY_TYPE, daily::DEFAULT_DAILY_TYPE),
     (daily::WEEKLY_TYPE, daily::DEFAULT_WEEKLY_TYPE),
     (daily::MONTHLY_TYPE, daily::DEFAULT_MONTHLY_TYPE),
@@ -104,6 +111,7 @@ pub const BUILT_IN_TYPES: [(&str, &str); 15] = [
     (EMAIL_TYPE, DEFAULT_EMAIL_TYPE),
     (EMAIL_THREAD_TYPE, DEFAULT_EMAIL_THREAD_TYPE),
     (EVENT_TYPE, DEFAULT_EVENT_TYPE),
+    (EVENT_SERIES_TYPE, DEFAULT_EVENT_SERIES_TYPE),
     (AGENT_THREAD_TYPE, DEFAULT_AGENT_THREAD_TYPE),
     (AGENT_MEMORY_TYPE, DEFAULT_AGENT_MEMORY_TYPE),
     (OUTBOX_TYPE, DEFAULT_OUTBOX_TYPE),
@@ -111,13 +119,14 @@ pub const BUILT_IN_TYPES: [(&str, &str); 15] = [
 
 /// The built-in types that reference `person`, so a vault given one of them without a `person`
 /// type gets [`DEFAULT_PERSON_TYPE`] too.
-pub const TYPES_NEEDING_PERSON: [&str; 6] = [
+pub const TYPES_NEEDING_PERSON: [&str; 7] = [
     MESSAGE_TYPE,
     CALL_TYPE,
     CONVERSATION_TYPE,
     EMAIL_TYPE,
     EMAIL_THREAD_TYPE,
     EVENT_TYPE,
+    EVENT_SERIES_TYPE,
 ];
 
 /// Every built-in taxonomy, as `(name, the taxonomy file a vault without it gets)`. A built-in
@@ -141,13 +150,14 @@ pub fn is_built_in_type(name: &str) -> bool {
 /// owns those names outright and [`check_built_in_types`] holds them to the fields it needs.
 /// `agent_thread` and `agent_memory` capture nothing, so their key is the string field that
 /// marks the shape: a thread's hidden `transcript`, a memory's `agent`.
-pub const BUILT_IN_KEYS: [(&str, &str); 9] = [
+pub const BUILT_IN_KEYS: [(&str, &str); 10] = [
     (MESSAGE_TYPE, "device_ref"),
     (CALL_TYPE, "device_ref"),
     (CONVERSATION_TYPE, "thread_ref"),
     (EMAIL_TYPE, "gmail_ref"),
     (EMAIL_THREAD_TYPE, "thread_ref"),
     (EVENT_TYPE, "google_ref"),
+    (EVENT_SERIES_TYPE, "google_ref"),
     (AGENT_THREAD_TYPE, "transcript"),
     (AGENT_MEMORY_TYPE, "agent"),
     (OUTBOX_TYPE, "sent_ref"),

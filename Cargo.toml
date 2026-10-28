@@ -38,6 +38,8 @@ calamine = { version = "0.37", default-features = false }
 # The text of Word (docx) assets: their XML parts, read from the zip.
 quick-xml = "0.42"
 thiserror = "2"
+# Expands an event series' recurrence rule into its occurrences (event-series E5).
+rrule = "0.14"
 ulid = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 # Agent Skills (skills S1, S2): import and export zips with deflate only, and SKILL.md frontmatter.

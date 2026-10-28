@@ -68,10 +68,10 @@ pub struct ShippedFile {
 }
 
 /// The shipped files: the default device scripts, then the device file that names them, then the
-/// Google sync's scripts, each before the task that names it (google-sync D19), the Outbox's send
-/// handler (outbox X3), then the built-in agent (agents G6), then the built-in `wscript` skill
-/// (script-tools T5).
-pub const SHIPPED_FILES: [ShippedFile; 20] = [
+/// Google sync's scripts, each before the task that names it (google-sync D19), the event series
+/// write-back (event-series E3), the Outbox's send handler (outbox X3), then the built-in agent
+/// (agents G6), then the built-in `wscript` skill (script-tools T5).
+pub const SHIPPED_FILES: [ShippedFile; 21] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -176,7 +176,15 @@ pub const SHIPPED_FILES: [ShippedFile; 20] = [
             "0d9a17a114dfdc774cef98bca4ec1b885218afeece1b4e52d8fc0bcaf3d4b573",
             "fc7f4cad0874863f6b121722b89c43034211cd5e8d0563e9ad5dc072766b4868",
             "955b983dc5f14f0ac3aec3ec746102038561e7d4cf438f5e6e1d0a29446cf596",
+            "dd0d74cd76603d183216d207fb24db3bbf18197ab6bd148f28c04d4697d9aedb",
         ],
+    },
+    // The Google Calendar write-back of event series, named by the shipped `event_series` type's
+    // handlers (event-series E3).
+    ShippedFile {
+        path: "scripts/google_series.ws",
+        source: include_str!("../defaults/google/google_series.ws"),
+        hashes: &["eb32fbb00ac23b2c7f089f7cb53b574c990e47776d195ebe8a57cf09c77d1c45"],
     },
     // The Outbox's send handler, named by the shipped `outbox` type's handlers (outbox X3).
     ShippedFile {
@@ -1901,7 +1909,9 @@ fn move_email_into_emails(doc: &mut Doc) {
 /// Where the writer runs, which decides how much of the upkeep it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Upkeep {
-    /// The home server: everything, with notifications for files the user changed.
+    /// The home server: everything, with notifications for files the user changed. It also marks
+    /// the writer as the home server's ([`Writer::is_home`]), which alone makes the derived writes
+    /// of event series.
     Home,
     /// A device's local vault (`crates/embedded`): the built-in types, device files and scripts,
     /// without notifications or upgrade steps. The home server runs the steps and tells the user
@@ -2009,6 +2019,7 @@ impl Writer {
     pub fn upgrade_shipped_defaults(&self, upkeep: Upkeep) -> Result<Upgraded> {
         let steps = match upkeep {
             Upkeep::Home => {
+                self.home.store(true, std::sync::atomic::Ordering::Relaxed);
                 let steps = self.run_upgrade_steps(UPGRADE_STEPS)?;
                 // Not a step: a type file in the old form can arrive any time, by the CLI or a
                 // copy, and is brought to the list form on the next start.
@@ -2476,6 +2487,7 @@ mod tests {
         paths.push(crate::defs::script_path("google_gmail"));
         paths.push(crate::defs::task_path("google_gmail"));
         paths.push(crate::defs::script_path("google_event"));
+        paths.push(crate::defs::script_path("google_series"));
         paths.push(crate::defs::script_path("outbox_send"));
         paths.push(crate::agent_path(schema::ASSISTANT_AGENT));
         paths.extend(

@@ -8,7 +8,8 @@
 //! 4. Check the base version against the note's current one; a stale one is a [`Error::Conflict`]
 //!    (D12).
 //! 5. [`Hooks::before`]: the `before_*` handlers.
-//! 6. [`Hooks::side_effects`]: reverse references, `on_delete` rules and sub agent sessions.
+//! 6. [`Hooks::side_effects`]: reverse references, `on_delete` rules, sub agent sessions and event
+//!    series.
 //! 7. Commit every file atomically (D4).
 //! 8. Record a version of every changed note in `state.db`, or move a deleted note to the trash
 //!    (D13).
@@ -17,8 +18,9 @@
 //! 11. Return the canonical WCL and the new version of every changed note (D21).
 //!
 //! Step 6 is built in: [`refs`] works out the reverse sides of two-way and peer references and
-//! applies `on_delete`, and [`sessions`] takes a sub agent's sessions along with their parent
-//! thread (subagents U5). [`Hooks::side_effects`] can add more. [`NoHooks`] leaves steps 5 and 10
+//! applies `on_delete`, [`sessions`] takes a sub agent's sessions along with their parent
+//! thread (subagents U5), and [`series`] carries an event series' fields to its occurrences and
+//! makes the occurrences of a series kept in the vault (event-series E4, E5). [`Hooks::side_effects`] can add more. [`NoHooks`] leaves steps 5 and 10
 //! empty; the `script` crate's handlers fill them.
 //!
 //! Step 5 runs on every note the write changes, the side effects of step 6 included, so a note an
@@ -52,6 +54,7 @@ mod queryviews;
 mod refs;
 mod remote;
 mod script_vault;
+mod series;
 mod sessions;
 mod shipped;
 mod skills;
@@ -77,10 +80,10 @@ pub use builtin::{
     AGENT_MEMORY_TYPE, AGENT_THREAD_TYPE, BUILT_IN_KEYS, BUILT_IN_TAXONOMIES, BUILT_IN_TYPES,
     CALL_TYPE, CONVERSATION_TYPE, DEFAULT_AGENT_MEMORY_TYPE, DEFAULT_AGENT_THREAD_TYPE,
     DEFAULT_CALL_TYPE, DEFAULT_CONVERSATION_TYPE, DEFAULT_EMAIL_THREAD_TYPE, DEFAULT_EMAIL_TYPE,
-    DEFAULT_EVENT_TYPE, DEFAULT_GMAIL_LABEL_TAXONOMY, DEFAULT_MESSAGE_TYPE, DEFAULT_OUTBOX_TYPE,
-    DEFAULT_PERSON_TYPE, EMAIL_THREAD_TYPE, EMAIL_TYPE, EVENT_TYPE, GMAIL_LABEL_TAXONOMY,
-    MESSAGE_TYPE, OUTBOX_TYPE, PERSON_TYPE, TYPES_NEEDING_PERSON, is_built_in_type,
-    matches_built_in,
+    DEFAULT_EVENT_SERIES_TYPE, DEFAULT_EVENT_TYPE, DEFAULT_GMAIL_LABEL_TAXONOMY,
+    DEFAULT_MESSAGE_TYPE, DEFAULT_OUTBOX_TYPE, DEFAULT_PERSON_TYPE, EMAIL_THREAD_TYPE, EMAIL_TYPE,
+    EVENT_SERIES_TYPE, EVENT_TYPE, GMAIL_LABEL_TAXONOMY, MESSAGE_TYPE, OUTBOX_TYPE, PERSON_TYPE,
+    TYPES_NEEDING_PERSON, is_built_in_type, matches_built_in,
 };
 pub use contacts::{CONTACTS_SOURCE, UPSERT_CONTACT, contact_link_key};
 pub use daily::{
@@ -107,6 +110,9 @@ pub use purge::Purged;
 pub use refs::Referrer;
 pub use remote::{REMOTE_AUTHOR, Remote};
 pub use schema::NoteEdit;
+pub use series::{
+    DAYS_AHEAD, DAYS_BEHIND, Occurrence, carried_fields, check_rule_lines, occurrences,
+};
 pub use shipped::{
     SERVER_AUTHOR, SHIPPED_FILES, ShippedFile, UPGRADE_STEPS, UpgradeStep, Upgraded, Upkeep,
     content_hash, shipped_hash,
@@ -494,6 +500,10 @@ pub struct Writer {
     /// How many synced files besides notes this writer has changed since it opened, written here
     /// or pulled from the home server. See [`Writer::definition_changes`].
     definitions: std::sync::atomic::AtomicU64,
+    /// Whether this writer is the home server's, set by
+    /// [`Writer::upgrade_shipped_defaults`] with [`Upkeep::Home`]: the derived writes that must
+    /// happen once, such as an event series' occurrences, happen only there.
+    home: std::sync::atomic::AtomicBool,
 }
 
 /// Whether `line` of a note file is the top-level `archived = true`, which the canonical layout
@@ -545,6 +555,7 @@ impl Writer {
             staging: Mutex::new(None),
             drafts: Mutex::new(HashMap::new()),
             definitions: std::sync::atomic::AtomicU64::new(0),
+            home: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -552,6 +563,11 @@ impl Writer {
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Writer {
         self.clock = clock;
         self
+    }
+
+    /// Whether this is the home server's writer: see [`Upkeep::Home`].
+    pub fn is_home(&self) -> bool {
+        self.home.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The time on the writer's clock, in milliseconds since the Unix epoch.
@@ -1310,9 +1326,11 @@ impl Writer {
         let mut changes = self.run_before(changes, &mut handled, &mut authors, author)?;
         let mut inner = self.lock();
         let mut rounds = 0;
+        let mut series = series::Pass::default();
         let changes = loop {
             let expanded = refs::expand(self, &inner, changes)?;
             let expanded = sessions::expand(self, &inner, expanded)?;
+            let expanded = series::expand(self, &inner, expanded, &mut series)?;
             if expanded
                 .iter()
                 .all(|c| handled.contains(&(c.id.clone(), c.event)))
@@ -1329,6 +1347,11 @@ impl Writer {
             changes = self.run_before(expanded, &mut handled, &mut authors, author)?;
             inner = self.lock();
         };
+        for id in series.made {
+            authors
+                .entry(id)
+                .or_insert_with(|| Author::Task(SERVER_AUTHOR.to_owned()));
+        }
         let mut changes = changes;
         let extra = self.hooks.side_effects(&changes)?;
         changes.extend(extra);

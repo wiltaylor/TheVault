@@ -1,0 +1,159 @@
+label       = "Event series"
+plural      = "Event series"
+description = "A recurring event: its rule, and the fields every occurrence shares. Each occurrence is an event note linked to it."
+icon        = "repeat"
+colour      = "blue"
+
+field rule {
+  kind        = "list"
+  items       = "string"
+  label       = "Repeats"
+  description = "The recurrence rule, as RFC 5545 lines: one RRULE line, and any EXDATE or RDATE lines."
+  required    = true
+}
+
+field starts {
+  kind        = "date_range"
+  label       = "First occurrence"
+  description = "When the first occurrence starts and ends: dates for an all-day series, datetimes for a timed one."
+  of          = "date_or_datetime"
+  required    = true
+}
+
+field timezone {
+  kind        = "string"
+  label       = "Time zone"
+  description = "The IANA time zone the rule repeats in, such as Australia/Melbourne."
+}
+
+field calendar {
+  kind        = "string"
+  label       = "Calendar"
+  description = "The id of the Google calendar the series is on. Empty for a series kept in the vault only, whose occurrences the server makes."
+}
+
+field calendar_name {
+  kind        = "string"
+  label       = "Calendar name"
+  description = "The name of the calendar, from your Google calendar list. The calendar sync fills it."
+  computed    = true
+}
+
+field location {
+  kind  = "string"
+  label = "Location"
+}
+
+field description {
+  kind  = "content"
+  label = "Description"
+}
+
+field attendees {
+  kind   = "list"
+  items  = "reference"
+  label  = "Attendees"
+  target = "person"
+}
+
+field attendees_raw {
+  kind        = "list"
+  label       = "Attendees (as sent)"
+  description = "Each attendee's address as Google gave it."
+  items       = "string"
+}
+
+field organiser {
+  kind  = "string"
+  label = "Organiser"
+}
+
+field status {
+  kind    = "select"
+  label   = "Status"
+  options = ["confirmed", "tentative", "cancelled"]
+}
+
+field meet_url {
+  kind  = "url"
+  label = "Meet link"
+}
+
+field google_ref {
+  kind        = "string"
+  label       = "Google reference"
+  description = "Google's id for the series. Empty for a series kept in the vault only."
+  hidden      = true
+}
+
+field etag {
+  kind        = "string"
+  label       = "ETag"
+  description = "Google's version of the series, as last synced."
+  hidden      = true
+}
+
+field snapshot {
+  kind        = "dict"
+  label       = "Snapshot"
+  description = "The synced fields as Google last sent them, so a sync can tell which side changed."
+  values      = "string"
+  hidden      = true
+}
+
+handler "after_create" {
+  script        = "google_series"
+  allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings"]
+}
+
+handler "after_update" {
+  script        = "google_series"
+  allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings"]
+}
+
+handler "after_delete" {
+  script        = "google_series"
+  allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings"]
+}
+
+template default {
+  tab "Series" {
+    columns {
+      column {
+        slot "rule"
+        slot "starts"
+        slot "timezone"
+        slot "location"
+      }
+      column {
+        slot "calendar"
+        slot "calendar_name"
+        slot "status"
+        slot "meet_url"
+      }
+    }
+    slot "attendees"
+    slot "organiser"
+    slot "description"
+    query_view {
+      title = "Occurrences"
+      query = "from event where series_ref == this sort when.start asc"
+
+      view table {
+        kind    = "table"
+        columns = ["when", "title", "location"]
+      }
+    }
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "rule"
+    slot "calendar"
+  }
+}

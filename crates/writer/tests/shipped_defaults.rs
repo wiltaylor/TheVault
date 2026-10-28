@@ -169,6 +169,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "email",
             "email_thread",
             "event",
+            "event_series",
             "fleeting",
             "message",
             "monthlynote",
@@ -222,6 +223,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "google_calendar",
             "google_event",
             "google_gmail",
+            "google_series",
             "outbox_send"
         ]
     );
@@ -842,6 +844,7 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
     assert_eq!(
         added[5..],
         [
+            "event_series",
             "monthlynote",
             "outbox",
             "quarterlynote",

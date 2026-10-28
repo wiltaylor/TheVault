@@ -21,7 +21,11 @@ use regex
 //   `default_calendar`. A note with one that the task just made is left alone. Any other,
 //   such as a note restored from the trash, is looked up: when Google no longer has the event it
 //   is inserted as a new event under a new `google_ref` (D20).
-// - after_delete: DELETE the event or occurrence (D9).
+// - after_delete: DELETE the event or occurrence (D9). An occurrence whose series note went with
+//   it sends nothing: the series' own handler deletes the whole series.
+//
+// An occurrence the server made for an event series kept in the vault (event-series E5), which
+// holds a `series_key`, is never sent.
 //
 // The Outbox (outbox X5) writes an invite or change into the note with the hidden one-shot
 // field `send_updates = "all"`. The insert or PATCH then carries `sendUpdates=all`, so Google
@@ -728,6 +732,10 @@ fn push(id: string, created: bool) -> Result[string, string] {
     let google_ref = text_of(fields, "google_ref")
 
     if google_ref == "" {
+        if text_of(fields, "series_key") != "" {
+            vault::log("The note is an occurrence of a series kept in the vault, so it is not sent to Google.")
+            return Ok("The event belongs to a series kept in the vault, so it was not sent to Google.")
+        }
         if value(mine, "start") == "" {
             vault::log("The note has no time yet, so it is not sent to Google.")
             return Ok("The event has no time, so it was not sent to Google.")
@@ -881,6 +889,16 @@ fn after_delete(event: Value) -> Result[(), string] {
     let google_ref = text_of(fields, "google_ref")
     if google_ref == "" {
         return Ok(())
+    }
+    let series_ref = text_of(fields, "series_ref")
+    if series_ref != "" {
+        match vault::get(series_ref) {
+            Ok(_) => {},
+            Err(_) => {
+                vault::log("The series of this occurrence was deleted too; its own handler deletes it in Google.")
+                return Ok(())
+            },
+        }
     }
     let ctx = connect()?
     if !ctx.ok {

@@ -141,6 +141,9 @@ struct Plan {
     agents: agents::AgentPlan,
     /// When the Outbox was last swept of sent items (outbox X14).
     swept_ms: Option<i64>,
+    /// When the occurrences of the vault-only event series were last rolled forward
+    /// (event-series E5).
+    rolled_ms: Option<i64>,
 }
 
 /// The longest the background loop sleeps before looking at the clock again.
@@ -149,6 +152,11 @@ const MAX_SLEEP: Duration = Duration::from_secs(30);
 /// How often the Outbox is swept of sent items whose copy never came, in milliseconds: every ten
 /// minutes ([`Writer::sweep_outbox`], outbox X14).
 const OUTBOX_SWEEP_MS: i64 = 10 * 60 * 1000;
+
+/// How often the occurrences of the event series kept in the vault are rolled forward, in
+/// milliseconds: every hour, so each series' window moves on soon after midnight in its own time
+/// zone ([`Writer::roll_series`], event-series E5).
+const ROLL_SERIES_MS: i64 = 60 * 60 * 1000;
 
 /// Runs the vault's scheduled tasks.
 pub struct Scheduler {
@@ -293,6 +301,7 @@ impl Scheduler {
     /// and wait for them to end. Returns the task runs, in task name order.
     pub fn tick(&self) -> Vec<TaskRun> {
         self.sweep_outbox();
+        self.roll_series();
         let due = self.take_due();
         let starts = self.agent_starts();
         thread::scope(|s| {
@@ -415,9 +424,32 @@ impl Scheduler {
         }
     }
 
+    /// Make the new days' occurrences of the event series kept in the vault, at most every
+    /// [`ROLL_SERIES_MS`] (event-series E5). The scheduler runs only on the home server, as the
+    /// series' occurrences are made only there.
+    fn roll_series(&self) {
+        let now = self.clock.now_ms();
+        {
+            let mut plan = self.plan();
+            if plan
+                .rolled_ms
+                .is_some_and(|at| now >= at && now - at < ROLL_SERIES_MS)
+            {
+                return;
+            }
+            plan.rolled_ms = Some(now);
+        }
+        match self.writer.roll_series() {
+            Ok(0) => {}
+            Ok(n) => eprintln!("event series: rolled forward, {n} occurrences changed"),
+            Err(e) => eprintln!("event series: rolling forward failed: {e}"),
+        }
+    }
+
     fn background(self: Arc<Self>) {
         loop {
             self.sweep_outbox();
+            self.roll_series();
             for (def, attempt) in self.take_due() {
                 let s = self.clone();
                 thread::spawn(move || s.run(&def, attempt));
