@@ -1,6 +1,7 @@
 // Fleeting notes: what a capture becomes, and how a fleeting note turns into a note of another
 // type. The built-in `fleeting` type is defined in crates/writer/defaults/fleeting.wcl.
 
+import { cellsOf } from "../blocks/table";
 import { agentCallHref } from "../agentCalls";
 import type { Block, FieldDef, Json, NoteDoc, TypeDef } from "../api";
 import { serializeInline } from "../editor/markup";
@@ -149,6 +150,7 @@ export function blocksText(blocks: readonly Block[] | undefined): string {
     for (const b of bs) {
       const t = b.fields?.text;
       if (typeof t === "string" && t.trim()) out.push(t.replace(/\\(.)/g, "$1"));
+      if (b.kind === "row") out.push(cellsOf(b).join(" | ").replace(/\\(.)/g, "$1"));
       if (b.blocks) walk(b.blocks);
     }
   };

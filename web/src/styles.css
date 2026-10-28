@@ -9920,6 +9920,94 @@ button.toast-action {
   }
 }
 
+/* A table block (docs/vault-format.md, "table"): a real table, scrolling sideways inside the
+   block when it is wider than the page. Its tools sit just above its top left corner. */
+.table-block {
+  position: relative;
+  margin: 0.6rem 0;
+}
+
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.content-table {
+  border-collapse: collapse;
+}
+
+.content-table th,
+.content-table td {
+  min-width: 4rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+
+.content-table th {
+  background: var(--hover);
+  font-weight: 650;
+}
+
+.content-table .selectedCell {
+  background: var(--accent-soft);
+}
+
+.table-tools,
+.table-copy-view {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 3;
+  display: none;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--panel);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+  font-size: 0.8rem;
+}
+
+.table-block:hover > .table-tools,
+.table-block.table-active > .table-tools,
+.table-tools:focus-within,
+.table-block:hover > .table-copy-view,
+.table-copy-view:focus-visible {
+  display: flex;
+}
+
+.table-tools button {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.8rem;
+}
+
+.table-tools button[aria-pressed="true"] {
+  background: var(--accent-soft);
+}
+
+.table-tools select {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.25rem;
+}
+
+.table-copy {
+  white-space: nowrap;
+}
+
+@media (max-width: 600px), (pointer: coarse) {
+  .table-block.table-active > .table-tools {
+    position: static;
+    flex-wrap: wrap;
+    margin-bottom: 0.3rem;
+  }
+}
+
 /* The Trash page's confirm before emptying it or deleting a note forever (ai D21). */
 .trash-purge-dialog {
   width: min(32rem, 100%);

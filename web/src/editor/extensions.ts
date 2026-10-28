@@ -1,5 +1,5 @@
 // The editor's schema: TipTap's text blocks and marks, plus TheVault's colour mark, mentions,
-// the mention picker, column layouts, toggles and admonitions, and a holder for content blocks
+// the mention picker, column layouts, toggles, admonitions and tables, and a holder for content blocks
 // this editor does not edit yet (D29, D34).
 
 import { type AnyExtension, Extension, InputRule, Mark, Node, mergeAttributes, nodeInputRule } from "@tiptap/core";
@@ -35,6 +35,7 @@ import { PlaceholderChip, placeholderActions } from "./PlaceholderChip";
 import { ImageUpload, type ImageUploadOptions } from "./pasteImages";
 import { AT_TRIGGER } from "./trigger";
 import { solidNodeView } from "./solidNodeView";
+import { Table, TableCell, TableHeader, TableKeys, TableRow } from "./tables";
 import { Admonition, AdmonitionTitle, Toggle, type ToggleScope, ToggleKeys, ToggleSummary } from "./toggles";
 
 declare module "@tiptap/core" {
@@ -371,7 +372,7 @@ export interface EditorOptions {
 }
 
 export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
-  const tools: AnyExtension[] = [MoveBlock, SteadyFocus, blockHandle(options.handle), EdgeDropColumns, ColumnRules, ToggleKeys];
+  const tools: AnyExtension[] = [MoveBlock, SteadyFocus, blockHandle(options.handle), EdgeDropColumns, ColumnRules, ToggleKeys, TableKeys];
   if (options.slash) tools.push(placeholder(options.template ? "Type / for blocks and properties, {{ for a field" : "Type / for blocks"));
   if (options.slash) {
     tools.push(suggestion({ key: "slashMenu", topLevelOnly: true, match: matchSlash, ...options.slash }));
@@ -397,6 +398,10 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
     ToggleSummary,
     Admonition.configure({ scope: options.toggleScope ?? (() => undefined) }),
     AdmonitionTitle,
+    Table,
+    TableRow,
+    TableHeader,
+    TableCell,
     StarterKit.configure({
       document: false,
       heading: { levels: [1, 2, 3] },

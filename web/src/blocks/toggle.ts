@@ -131,7 +131,11 @@ export function nestedText(blocks: readonly Block[] | undefined): string {
   const out: string[] = [];
   const walk = (bs: readonly Block[]) => {
     for (const b of bs) {
-      for (const v of Object.values(b.fields ?? {})) if (typeof v === "string") out.push(v);
+      for (const v of Object.values(b.fields ?? {})) {
+        if (typeof v === "string") out.push(v);
+        // A table row's cells.
+        else if (Array.isArray(v)) for (const c of v) if (typeof c === "string") out.push(c);
+      }
       walk(b.blocks ?? []);
     }
   };

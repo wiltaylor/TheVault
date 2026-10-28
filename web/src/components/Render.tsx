@@ -9,6 +9,7 @@ import { admonitionLook, findTextFor, holdsFind, nestedText, readOpen, toggleLev
 import { AssetBlock, ImageBlock } from "../blocks/MediaBlocks";
 import { MermaidBlock } from "../blocks/MermaidBlock";
 import { NoteCardBlock } from "../blocks/NoteCardBlock";
+import { TableBlock } from "../blocks/TableBlock";
 import { PeriodCalendar } from "../planner/PeriodCalendar";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { ControlBlock } from "../controls/ControlView";
@@ -223,6 +224,9 @@ export function BlockView(
       </Match>
       <Match when={b().kind === "card"}>
         <NoteCardBlock block={b()} onChange={props.onChange} selected={props.selected} onRemove={props.onRemove} />
+      </Match>
+      <Match when={b().kind === "table"}>
+        <TableBlock block={b()} />
       </Match>
       <Match when={b().kind === "period_calendar"}>
         <PeriodCalendar block={b()} />

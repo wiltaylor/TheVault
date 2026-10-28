@@ -2,12 +2,14 @@
 // ProseMirror JSON. Headings, paragraphs, lists and quotes become editable nodes with their text
 // parsed as inline markup (D41). A `columns` layout becomes `columns` and `column` nodes holding
 // the same editable blocks, and a `toggle` or an `admonition` becomes a node holding its heading
-// line (the summary, the title) and then its editable blocks. Every other block kind rides along
-// untouched in a `vaultBlock`.
+// line (the summary, the title) and then its editable blocks. A `table` becomes `table` and
+// `tableRow` nodes of `tableHeader` and `tableCell` nodes, each cell's text parsed as inline
+// markup. Every other block kind rides along untouched in a `vaultBlock`.
 
 import type { JSONContent } from "@tiptap/core";
 import type { Block, TemplateItem } from "../api";
 import { columnWidth, columnsOf, slotOfBlock } from "../blocks/columns";
+import { type Align, isAlign, tableBlock, tableOf } from "../blocks/table";
 import { parseInline, serializeInline } from "./markup";
 
 const LIST_NODE: Record<string, string> = { bullet: "bulletList", numbered: "orderedList", todo: "taskList" };
@@ -94,6 +96,21 @@ function blockToDoc(block: Block): JSONContent {
           // An admonition in the editor always has a line to type on.
           ...(inner.length ? inner : [{ type: "paragraph" }]),
         ],
+      };
+    }
+    case "table": {
+      const t = tableOf(block);
+      return {
+        type: "table",
+        content: t.rows.map((row, r) => ({
+          type: "tableRow",
+          content: row.map((cell, c) => {
+            const type = t.header && r === 0 ? "tableHeader" : "tableCell";
+            const content = inline(cell);
+            const attrs = { align: t.align[c] ?? "left" };
+            return content ? { type, attrs, content } : { type, attrs };
+          }),
+        })),
       };
     }
     case "slot":
@@ -194,6 +211,16 @@ function docToBlock(node: JSONContent): Block | null {
       if (node.attrs?.collapsible === true) fields.collapsible = true;
       const blocks = nestedBlocks(rest);
       return blocks.length ? { kind: "admonition", fields, blocks } : { kind: "admonition", fields };
+    }
+    case "table": {
+      // A cell spanning several columns (pasted HTML) is its text, then empty cells.
+      const span = (cell: JSONContent) => Math.max(1, Number(cell.attrs?.colspan ?? 1) || 1);
+      const rows = (node.content ?? []).map((row) =>
+        (row.content ?? []).flatMap((cell) => [textOf(cell), ...Array<string>(span(cell) - 1).fill("")]),
+      );
+      const first = node.content?.[0]?.content ?? [];
+      const align = first.flatMap((cell): Align[] => Array<Align>(span(cell)).fill(isAlign(cell.attrs?.align) ? cell.attrs.align : "left"));
+      return tableBlock({ header: first.length > 0 && first.every((c) => c.type === "tableHeader"), align, rows });
     }
     case "templateSlot": {
       // A property block inside a template's column: `slot "<field>"`, with its label if any.

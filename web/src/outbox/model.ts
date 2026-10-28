@@ -3,6 +3,7 @@
 // may move an item from one status to another, and the server's `outbox_send` handler sends what
 // becomes `ready`. A sent item leaves the Outbox: its copy is a regular email, message or event.
 
+import { cellsOf } from "../blocks/table";
 import type { Block, Json, NoteDoc } from "../api";
 import { escapeText } from "../editor/markup";
 
@@ -134,6 +135,8 @@ function markupLines(blocks: readonly Block[]): string[] {
   for (const b of blocks) {
     const t = b.fields?.text;
     if (typeof t === "string") out.push(...t.split("\n"));
+    // A table's row, as its cells between pipes.
+    if (b.kind === "row") out.push(cellsOf(b).join(" | "));
     if (b.blocks) out.push(...markupLines(b.blocks));
   }
   return out;

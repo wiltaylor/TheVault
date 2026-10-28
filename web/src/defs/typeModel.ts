@@ -824,12 +824,17 @@ function followControls(block: Block, fieldName: (name: string) => string | null
   return { ...block, blocks: block.blocks.flatMap((b) => followControls(b, fieldName) ?? []) };
 }
 
-/** `block` with the `{{name}}` references in its text items (and an image's alt and caption), at any depth, renamed. */
+/** `block` with the `{{name}}` references in its text items (an image's alt and caption, a table's cells), at any depth, renamed. */
 function followRefs(block: Block, rename: (name: string) => string | null): Block {
   let fields = block.fields;
   for (const item of block.kind === "image" ? ["text", "alt", "caption"] : ["text"]) {
     const text = fields?.[item];
     if (typeof text === "string" && fields) fields = { ...fields, [item]: renameFieldRefs(text, rename) };
+  }
+  // A table's cells, in a row.
+  const cells = fields?.cells;
+  if (block.kind === "row" && Array.isArray(cells) && fields) {
+    fields = { ...fields, cells: cells.map((c) => (typeof c === "string" ? renameFieldRefs(c, rename) : c)) };
   }
   const blocks = block.blocks?.map((b) => followRefs(b, rename));
   const out: Block = { ...block };

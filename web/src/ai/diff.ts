@@ -18,7 +18,10 @@ export function blockLines(v: Json, depth = 0): string[] {
   const pad = "  ".repeat(depth);
   const text = typeof fields.text === "string" ? fields.text : null;
   const others = Object.entries(fields).filter(([k]) => k !== "text");
-  if (text !== null) {
+  if (kind === "row" && Array.isArray(fields.cells)) {
+    // A table's row: its cells between pipes.
+    out.push(`${pad}| ${fields.cells.map((c) => (typeof c === "string" ? c : "")).join(" | ")} |`);
+  } else if (text !== null) {
     const mark = kind === "heading" ? "# " : kind === "item" ? (fields.checked === true ? "[x] " : "- ") : "";
     out.push(`${pad}${mark}${text}`);
   } else if (kind && kind !== "content") {

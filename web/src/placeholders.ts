@@ -12,6 +12,7 @@
 import { ApiError, type Block, type NoteDoc, type TypeDef, api } from "./api";
 import { knowTitle } from "./editor/titles";
 import { MARKUP_ITEMS, replacePlaceholder } from "./editor/markup";
+import { cellsOf } from "./blocks/table";
 import { missingRequired } from "./notes";
 import { typeDef } from "./session";
 import { followLink } from "./workspace/events";
@@ -100,6 +101,18 @@ export function replacePlaceholderInDoc(doc: NoteDoc, noteType: string, title: s
           done = true;
           return { ...b, fields: { ...b.fields, [item]: next } };
         }
+      }
+      // A table's cells, in a row.
+      if (b.kind === "row" && Array.isArray(b.fields?.cells)) {
+        const cells = cellsOf(b);
+        for (let c = 0; c < cells.length && !done; c++) {
+          const next = replacePlaceholder(cells[c]!, noteType, title, id);
+          if (next !== null) {
+            done = true;
+            cells[c] = next;
+          }
+        }
+        if (done) return { ...b, fields: { ...b.fields, cells } };
       }
       if (!b.blocks?.length) return b;
       const inner = walk(b.blocks);

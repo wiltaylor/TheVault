@@ -21,6 +21,7 @@ import { useControlBinding } from "../controls/binding";
 import { CONTROL_INFO, CONTROL_KINDS, fieldKindText, fittingFields, newControl } from "../controls/model";
 import { TITLE_FIELD } from "../notes";
 import { ADMONITION_KINDS, PRESETS } from "../blocks/toggle";
+import { newTableJSON } from "./tables";
 
 type MarkName = "bold" | "italic" | "underline" | "strike" | "code" | "highlight";
 
@@ -311,6 +312,14 @@ export function ContentEditor(props: {
         run: () => place({ type: "vaultBlock", attrs: { block: fresh({ kind: "card", fields: {} }) } }),
       },
       {
+        id: "table",
+        label: "Table",
+        section: "Blocks",
+        keywords: "grid rows columns cells spreadsheet markdown",
+        hint: "3 × 3",
+        run: () => place(newTableJSON()),
+      },
+      {
         id: "file",
         label: "File",
         section: "Blocks",
@@ -443,11 +452,12 @@ export function ContentEditor(props: {
     // At the end, add an empty line to type on after the block. Elsewhere the caret goes to the
     // start of the block after it, and no empty paragraph is left in the middle of the content.
     tr = tr.replaceWith(from, to, next ? [node] : [node, schema.nodes.paragraph!.create()]);
-    // A new layout takes the caret into its first column, a toggle into its summary and a
-    // callout into its first line.
+    // A new layout takes the caret into its first column, a toggle into its summary, a callout
+    // into its first line and a table into its first cell.
     if (node.type.name === "columns") tr.setSelection(TextSelection.create(tr.doc, from + 3));
     else if (node.type.name === "toggle") tr.setSelection(TextSelection.create(tr.doc, from + 2));
     else if (node.type.name === "admonition") tr.setSelection(TextSelection.create(tr.doc, from + 1 + node.child(0).nodeSize + 1));
+    else if (node.type.name === "table") tr.setSelection(TextSelection.create(tr.doc, from + 3));
     else tr.setSelection(Selection.near(tr.doc.resolve(from + node.nodeSize)));
     view.dispatch(tr.scrollIntoView());
     view.focus();

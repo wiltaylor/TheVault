@@ -79,6 +79,22 @@ describe("rewriting a placeholder in a stored note", () => {
     expect(second.blocks[0]!.blocks![0]!.blocks![0]!.fields!.text).toBe(`and [[${ID}]]`);
   });
 
+  it("rewrites one in a table's cell", () => {
+    const doc: NoteDoc = {
+      fields: {},
+      blocks: [
+        {
+          kind: "content",
+          labels: ["body"],
+          blocks: [{ kind: "table", blocks: [{ kind: "row", fields: { cells: ["a", "then [[+task|Fix]]"] } }] }],
+        },
+      ],
+    };
+    const next = replacePlaceholderInDoc(doc, "task", "Fix", ID)!;
+    expect(next.blocks[0]!.blocks![0]!.blocks![0]!.fields!.cells).toEqual(["a", `then [[${ID}]]`]);
+    expect(doc.blocks[0]!.blocks![0]!.blocks![0]!.fields!.cells).toEqual(["a", "then [[+task|Fix]]"]);
+  });
+
   it("opens the new-note form with the title and where it came from", () => {
     expect(placeholderFormUrl("task", "Fix & go", ID)).toBe(`/notes/new?type=task&title=Fix+%26+go&from=${ID}`);
     expect(placeholderFormUrl("task", "x", undefined)).toBe("/notes/new?type=task&title=x");
