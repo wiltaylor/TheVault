@@ -194,7 +194,10 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
             "html",
             "attachments",
             "processed",
-            "gmail_ref"
+            "gmail_ref",
+            "inline_images",
+            "converter",
+            "images_pending"
         ]
     );
     for (name, target, multiple) in [

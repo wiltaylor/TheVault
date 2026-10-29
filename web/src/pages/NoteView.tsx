@@ -49,6 +49,7 @@ import { offerPlaceholders, replacePlaceholderInDoc, resolvePlaceholder } from "
 import { PlaceholdersInert } from "../components/PlaceholderLink";
 import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/Icon";
 import { NoteOutboxActions } from "../outbox/NoteActions";
+import { ViewOriginalButton } from "../components/ViewOriginal";
 import { OutboxChips } from "../outbox/Chips";
 import { OUTBOX } from "../outbox/model";
 import { periodOfType } from "../planner/period";
@@ -925,6 +926,9 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                     }}
                     onDelete={() => void remove()}
                   />
+                </Show>
+                <Show when={!props.newType && !preview() && n().type === "email" && typeof doc().fields?.html === "string"}>
+                  <ViewOriginalButton id={n().id} />
                 </Show>
                 <Show when={props.newType}>
                   <div class="actions">

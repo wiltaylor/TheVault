@@ -5,6 +5,8 @@
 //! JSON form of [`writer::Input::Json`]; any other body is the note's WCL text, with the base
 //! version in `If-Match`. A response is JSON unless `Accept` asks for `text/plain` or WCL, in
 //! which case the body is the canonical WCL on disk and the version is in `ETag` (D21).
+//! `/api/notes/{id}/original` serves the HTML an email was imported from, its inline images in
+//! place, as a sandboxed page (rich-import H6).
 //!
 //! Queries run at `/api/query` and full-text search at `/api/search`, a page at a time with a
 //! cursor (D33). `/api/query/parse` and `/api/query/text` convert between text and the visual
@@ -100,6 +102,7 @@ mod inspect;
 mod notes;
 mod notifications;
 mod openapi;
+mod original;
 mod pins;
 mod query;
 mod script_tools;
@@ -237,6 +240,7 @@ fn build() -> Built {
         .delete("/api/notes/{id}", notes::delete)
         .get("/api/notes/{id}/history", notes::history)
         .get("/api/notes/{id}/graph", notes::graph)
+        .get("/api/notes/{id}/original", original::original)
         .get("/api/notes/{id}/history/{version}", notes::version)
         .post("/api/notes/{id}/restore", notes::restore_version)
         .post("/api/notes/{id}/archive", notes::archive)

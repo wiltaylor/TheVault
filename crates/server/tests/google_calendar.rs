@@ -390,11 +390,13 @@ fn the_first_run_imports_single_events_all_day_as_dates_and_timed_with_offsets()
             "start": "2026-03-02T09:30:00+11:00",
             "end": "2026-03-02T10:00:00+11:00",
             "location": "Room 1",
-            "description": "Agenda:\n- status\n- blockers",
+            // As the HTML Google takes, which reads back as itself (rich-import H4).
+            "description": "<p>Agenda:</p><p>- status<br>- blockers</p>",
             "attendees": "ann@example.com\nbob@example.com",
             "organiser": "me@example.com",
             "status": "tentative",
             "meet_url": "https://meet.google.com/abc-defg-hij",
+            "converter": "2",
         })
     );
 

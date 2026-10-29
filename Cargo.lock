@@ -1385,6 +1385,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "html-blocks"
+version = "0.1.12"
+dependencies = [
+ "ego-tree",
+ "schema",
+ "scraper",
+ "serde_json",
+]
+
+[[package]]
 name = "html5ever"
 version = "0.40.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2895,6 +2905,7 @@ version = "0.1.12"
 dependencies = [
  "ai",
  "base64 0.22.1",
+ "html-blocks",
  "reqwest",
  "rustix",
  "schema",
@@ -2904,6 +2915,7 @@ dependencies = [
  "store",
  "tempfile",
  "testkit",
+ "tokio",
  "writer",
  "wscript",
 ]
@@ -3044,6 +3056,7 @@ dependencies = [
  "clap",
  "clients",
  "embedded",
+ "html-blocks",
  "image",
  "p256",
  "push",

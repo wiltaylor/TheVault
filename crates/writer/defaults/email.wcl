@@ -98,6 +98,28 @@ field gmail_ref {
   hidden      = true
 }
 
+field inline_images {
+  kind        = "list"
+  items       = "string"
+  label       = "Inline images"
+  description = "Each image part the HTML shows by its Content-ID, as the asset id, a space and the Content-ID, so View original shows it."
+  hidden      = true
+}
+
+field converter {
+  kind        = "int"
+  label       = "Body conversion"
+  description = "The version of the import's conversion that wrote the body: 2 converts the HTML, 1 is an older body kept because it was edited."
+  hidden      = true
+}
+
+field images_pending {
+  kind        = "bool"
+  label       = "Images pending"
+  description = "Some remote images of the body are not downloaded yet; the next Gmail sync fetches them."
+  hidden      = true
+}
+
 template default {
   tab "Email" {
     columns {
@@ -115,6 +137,8 @@ template default {
     }
     slot "body"
     slot "attachments"
+  }
+  tab "Original" {
     slot "html"
   }
 }

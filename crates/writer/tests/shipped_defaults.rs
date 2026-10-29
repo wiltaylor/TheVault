@@ -122,7 +122,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0007_person_correspondence",
             "0008_outbox_template",
             "0009_outbox_statuses",
-            "0010_ai_accounts"
+            "0010_ai_accounts",
+            "0011_email_template"
         ]
     );
     let fields: Vec<&str> = done
@@ -478,7 +479,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0007_person_correspondence",
             "0008_outbox_template",
             "0009_outbox_statuses",
-            "0010_ai_accounts"
+            "0010_ai_accounts",
+            "0011_email_template"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -678,7 +680,8 @@ fn a_0_1_6_vault_ends_with_lists_of_dicts_and_an_image_photo() {
                 "0007_person_correspondence",
                 "0008_outbox_template",
                 "0009_outbox_statuses",
-                "0010_ai_accounts"
+                "0010_ai_accounts",
+                "0011_email_template"
             ],
             "{name}"
         );
@@ -866,7 +869,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0007_person_correspondence",
             "0008_outbox_template",
             "0009_outbox_statuses",
-            "0010_ai_accounts"
+            "0010_ai_accounts",
+            "0011_email_template"
         ]
     );
     // One more for step 0007's Correspondence tab on the person type, one for each of the
@@ -1325,7 +1329,8 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
             "0007_person_correspondence",
             "0008_outbox_template",
             "0009_outbox_statuses",
-            "0010_ai_accounts"
+            "0010_ai_accounts",
+            "0011_email_template"
         ]
     );
 
@@ -1420,7 +1425,8 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
             "0007_person_correspondence",
             "0008_outbox_template",
             "0009_outbox_statuses",
-            "0010_ai_accounts"
+            "0010_ai_accounts",
+            "0011_email_template"
         ]
     );
     assert!(w.schema().type_def("google_sync").is_none());
@@ -1453,7 +1459,8 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
                 "0007_person_correspondence",
                 "0008_outbox_template",
                 "0009_outbox_statuses",
-                "0010_ai_accounts"
+                "0010_ai_accounts",
+                "0011_email_template"
             ]
         );
         assert!(w.schema().type_def("google_sync").is_some());
@@ -1544,6 +1551,9 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
     assert_eq!(
         added,
         [
+            ("email".to_owned(), "converter".to_owned()),
+            ("email".to_owned(), "images_pending".to_owned()),
+            ("email".to_owned(), "inline_images".to_owned()),
             ("email".to_owned(), "processed".to_owned()),
             ("message".to_owned(), "processed".to_owned())
         ]
@@ -1558,11 +1568,13 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
         } else {
             writer::DEFAULT_MESSAGE_TYPE
         };
-        assert_eq!(
-            read(root, &path).unwrap(),
-            without_list_page(&store::canonical(source, &path).unwrap()),
-            "{name}"
+        // Step `0011_email_template` ran on the first start too, so the email's `html` slot is
+        // where the older template has it.
+        let shipped = without_list_page(&store::canonical(source, &path).unwrap()).replace(
+            "    slot \"attachments\"\n  }\n\n  tab \"Original\" {\n    slot \"html\"\n  }\n",
+            "    slot \"attachments\"\n    slot \"html\"\n  }\n",
         );
+        assert_eq!(read(root, &path).unwrap(), shipped, "{name}");
     }
     for name in ["email", "message"] {
         let schema = w.schema();
@@ -1623,7 +1635,12 @@ fn a_vault_card_template_gains_no_slot_when_the_vault_type_has_no_card() {
 
     assert_eq!(
         done.fields_added,
-        [("email".to_owned(), "processed".to_owned())]
+        [
+            ("email".to_owned(), "processed".to_owned()),
+            ("email".to_owned(), "inline_images".to_owned()),
+            ("email".to_owned(), "converter".to_owned()),
+            ("email".to_owned(), "images_pending".to_owned())
+        ]
     );
     let schema = w.schema();
     let email = schema.type_def("email").unwrap();
@@ -2601,4 +2618,60 @@ fn the_wscript_skill_is_seeded_and_valid() {
         );
         assert_eq!(w.skill_text("wscript", rel).unwrap(), file.source, "{rel}");
     }
+}
+
+/// The `email` type as alpha.18 shipped it, before step 0011.
+const EMAIL_FF793C6: &str = include_str!("../defaults/old/email_ff793c6.wcl");
+
+#[test]
+fn the_email_template_alpha_18_shipped_moves_its_html_slot_and_no_note_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let path = "types/email.wcl";
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let current = read(root, path).unwrap();
+    assert!(current.contains("tab \"Original\""), "{current}");
+
+    // As alpha.18 left the vault, with one email in it.
+    std::fs::write(
+        root.join(path),
+        store::canonical(EMAIL_FF793C6, path).unwrap(),
+    )
+    .unwrap();
+    let w = open(root);
+    let email = w
+        .create(
+            "email",
+            &writer::Input::Json(json!({ "fields": { "title": "Hello", "gmail_ref": "m1" } })),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    let note_path = format!("notes/email/{email}.wcl");
+    let before = read(root, &note_path).unwrap();
+    assert_eq!(
+        run_step_again(&w, "0011_email_template"),
+        ["test_0011_email_template"]
+    );
+    // The start after the step adds the fields alpha.18 lacked.
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert_eq!(read(root, path).unwrap(), current);
+    assert_eq!(read(root, &note_path).unwrap(), before);
+
+    // A template the user changed is left alone.
+    let edited = EMAIL_FF793C6.replacen("tab \"Email\" {", "tab \"Mail\" {", 1);
+    let edited = store::canonical(&edited, path).unwrap();
+    std::fs::write(root.join(path), &edited).unwrap();
+    drop(w);
+    let w = open(root);
+    let step = writer::UPGRADE_STEPS
+        .iter()
+        .find(|s| s.id == "0011_email_template")
+        .unwrap();
+    w.run_upgrade_steps(&[UpgradeStep {
+        id: "test_0011_email_template_again",
+        run: step.run,
+    }])
+    .unwrap();
+    assert_eq!(read(root, path).unwrap(), edited);
 }

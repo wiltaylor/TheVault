@@ -11,7 +11,7 @@ use regex
 // The settings are the JSON object in the `google_settings` secret: `calendars`, and the
 // `endpoints` test seam. The run's state is the JSON object in the `google_calendar_state` secret,
 // written with `secrets::set` and by nothing else, so no note history is written for it:
-// `sync_tokens` (by calendar id), `window_end`, `last_run`, `last_error` and
+// `sync_tokens` (by calendar id), `window_end`, `converter`, `last_run`, `last_error` and
 // `notified_invalid_grant` (google-sync D21). Without a refresh token Google is not connected,
 // and the run ends successfully with a log line.
 //
@@ -37,6 +37,12 @@ use regex
 // in Google takes Google's value, one changed only in the vault keeps the vault's, and one changed
 // on both takes the newer change, the note's `updated` against Google's `updated` (D10).
 // `docs/google.md` describes the snapshot.
+//
+// A description is HTML or plain text in Google and content blocks in the note (rich-import H4):
+// `vault::html_to_blocks` converts it, and the snapshot holds it, as the note's value does, as
+// the HTML `vault::blocks_to_html` writes, which reads back as itself, so an untouched
+// description never differs. The snapshot records the conversion's version in `converter`; an
+// older snapshot, and a state from before it, make the next run list and convert every event.
 //
 // When Google refuses the refresh token (`invalid_grant`) the run records the error, notifies the
 // user once, and ends without failing.
@@ -402,7 +408,7 @@ fn synced(item: Value) -> Map[string, string] {
         "start": from,
         "end": to,
         "location": text_of(item, "location"),
-        "description": clean(text_of(item, "description")),
+        "description": description_html(text_of(item, "description")),
         "attendees": attendees.join("\n"),
         "organiser": organiser,
         "status": if status == "" { "confirmed" } else { status },
@@ -421,15 +427,63 @@ fn is_field_block(block: Value, kind: string, name: string) -> bool {
     text_of(block, "kind") == kind && label_of(block) == name
 }
 
-// The text of content field `name`, a line per paragraph.
+// The text of content field `name` as the HTML Google takes (rich-import H4), the form the
+// snapshot compares.
 fn content_text(blocks: List[Value], name: string) -> string {
+    vault::blocks_to_html(Value::List(content_blocks(blocks, name)))
+}
+
+// The blocks of content field `name`.
+fn content_blocks(blocks: List[Value], name: string) -> List[Value] {
     for b in blocks {
         if is_field_block(b, "content", name) {
-            let lines = list_of(b, "blocks").map(|p| text_of(p.get("fields").unwrap_or(Value::Null), "text"))
-            return clean(lines.join("\n"))
+            return list_of(b, "blocks")
         }
     }
-    ""
+    []
+}
+
+// The version of the description conversion a snapshot records (rich-import H8). A snapshot
+// without one holds the description as plain lines.
+fn converter_version() -> string {
+    "2"
+}
+
+// A description from Google, HTML or plain text, as content blocks: `vault::html_to_blocks`
+// with no images fetched.
+fn description_blocks(text: string) -> List[Value] {
+    match vault::html_to_blocks(text, Value::Map(#{ "detect": Value::Bool(true) })) {
+        Ok(c) => list_of(c, "blocks"),
+        Err(_) => [],
+    }
+}
+
+// A description from Google in the form the snapshot compares: its blocks as Google's HTML, so
+// an untouched description reads back as itself.
+fn description_html(text: string) -> string {
+    vault::blocks_to_html(Value::List(description_blocks(text)))
+}
+
+// The description of content field `name` as the older sync compared it: a line per block.
+fn old_content_text(blocks: List[Value], name: string) -> string {
+    let lines = content_blocks(blocks, name).map(|p| text_of(p.get("fields").unwrap_or(Value::Null), "text"))
+    clean(lines.join("\n"))
+}
+
+// `snapshot` in the current form. One from before the HTML conversion holds the description as
+// plain lines: when the note's description is still those lines the user did not change it,
+// and it compares as `mine`, so Google's wins; else it compares as `otherwise`.
+fn upgraded(snapshot: Map[string, string], blocks: List[Value], mine: Map[string, string], otherwise: string) -> Map[string, string] {
+    if snapshot.is_empty() || value(snapshot, "converter") == converter_version() {
+        return snapshot
+    }
+    let out: Map[string, string] = #{}
+    for k in snapshot.keys() {
+        out[k] = snapshot[k]
+    }
+    out["description"] = if old_content_text(blocks, "description") == value(snapshot, "description") { value(mine, "description") } else { otherwise }
+    out["converter"] = converter_version()
+    out
 }
 
 // The members of dict field `name`.
@@ -512,12 +566,6 @@ fn put(fields: Map[string, Value], key: string, text: string) {
     }
 }
 
-fn paragraphs(text: string) -> List[Value] {
-    text.split("\n").filter(|l| l.trim() != "").map(|l| Value::Map(#{
-        "kind": Value::String("paragraph"),
-        "fields": Value::Map(#{ "text": Value::String(l) }),
-    }))
-}
 
 // The note body for `values` on top of `fields` and `blocks`, the note's own, empty for a new
 // note.
@@ -572,18 +620,23 @@ fn body_for(sync: Sync, fields: Map[string, Value], blocks: List[Value], values:
     fields.remove("updated");
 
     let kept = blocks.filter(|b| !is_field_block(b, "content", "description") && !is_field_block(b, "dict", "snapshot"))
+    // The note's own description blocks while they still write the value, so a heading or a
+    // mention Google cannot hold stays; else the value's blocks.
     let description = value(values, "description")
-    if description != "" {
+    let own = content_blocks(blocks, "description")
+    let desc_blocks = if vault::blocks_to_html(Value::List(own)) == description { own } else { description_blocks(description) }
+    if desc_blocks.len() > 0 {
         kept.push(Value::Map(#{
             "kind": Value::String("content"),
             "labels": Value::List([Value::String("description")]),
-            "blocks": Value::List(paragraphs(description)),
+            "blocks": Value::List(desc_blocks),
         }))
     }
     let snap: Map[string, Value] = #{}
     for k in snapshot_keys() {
         snap[k] = Value::String(value(snapshot, k))
     }
+    snap["converter"] = Value::String(converter_version())
     kept.push(Value::Map(#{
         "kind": Value::String("dict"),
         "labels": Value::List([Value::String("snapshot")]),
@@ -646,7 +699,8 @@ fn apply(sync: Sync, item: Value, calendar: string, series: string, series_ref: 
     let fields = map_of(body, "fields")
     let blocks = list_of(body, "blocks")
     let mine = note_values(Value::Map(fields), blocks)
-    let snapshot = dict_of(blocks, "snapshot")
+    let held = dict_of(blocks, "snapshot")
+    let snapshot = upgraded(held, blocks, mine, value(google, "description"))
     let note_updated = match fields.get("updated") {
         Some(Value::String(s)) => s,
         _ => "",
@@ -655,6 +709,7 @@ fn apply(sync: Sync, item: Value, calendar: string, series: string, series_ref: 
     let values = merge(google, snapshot, mine, google_newer)
     let unchanged = !maps_differ(values, mine) &&
         !maps_differ(snapshot, google) &&
+        value(held, "converter") == converter_version() &&
         text_of(Value::Map(fields), "etag") == meta["etag"] &&
         text_of(Value::Map(fields), "series") == series &&
         (series_ref == "" || text_of(Value::Map(fields), "series_ref") == series_ref) &&
@@ -936,6 +991,7 @@ fn series_body(sync: Sync, fields: Map[string, Value], blocks: List[Value], valu
     for k in series_keys() {
         snap[k] = Value::String(value(snapshot, k))
     }
+    snap["converter"] = Value::String(converter_version())
     kept.push(Value::Map(#{
         "kind": Value::String("dict"),
         "labels": Value::List([Value::String("snapshot")]),
@@ -968,12 +1024,14 @@ fn upsert_series(sync: Sync, item: Value, calendar: string) -> Result[(), string
     let fields = map_of(body, "fields")
     let blocks = list_of(body, "blocks")
     let mine = series_values(Value::Map(fields), blocks)
-    let snapshot = dict_of(blocks, "snapshot")
+    let held = dict_of(blocks, "snapshot")
+    let snapshot = upgraded(held, blocks, mine, value(google, "description"))
     let f = Value::Map(fields)
     let google_newer = secs_of(text_of(item, "updated")) >= secs_of(text_of(f, "updated"))
     let values = series_merge(google, snapshot, mine, google_newer)
     let unchanged = !series_differ(values, mine) &&
         !series_differ(snapshot, google) &&
+        value(held, "converter") == converter_version() &&
         text_of(f, "etag") == meta["etag"] &&
         text_of(f, "calendar") == calendar &&
         (calendar_name == "" || text_of(f, "calendar_name") == calendar_name)
@@ -1115,6 +1173,14 @@ fn run() -> Result[string, string] {
     let end = add_days(today, 365)
     let old_end = text_of(Value::Map(state), "window_end")
     let old_tokens = map_of(Value::Map(state), "sync_tokens")
+    // A newer description conversion lists every event again, so each note's description is
+    // converted afresh (rich-import H8).
+    if text_of(Value::Map(state), "converter") != converter_version() {
+        if !old_tokens.is_empty() {
+            vault::log("The description conversion changed, so every event is listed again.")
+        }
+        old_tokens = #{}
+    }
     let tokens: Map[string, Value] = #{}
     for calendar in calendars {
         let old = match old_tokens.get(calendar) {
@@ -1132,6 +1198,7 @@ fn run() -> Result[string, string] {
         }
     }
     state["sync_tokens"] = Value::Map(tokens);
+    state["converter"] = Value::String(converter_version());
     state["window_end"] = Value::String(end);
     state["last_run"] = Value::String(now);
     state["last_error"] = Value::Null;

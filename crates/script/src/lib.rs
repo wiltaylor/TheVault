@@ -22,7 +22,9 @@
 //!
 //! Changes go through `writer`, whose [`Vault`] implementation is the write path (D13, D30). HTTP
 //! calls reach only the hosts on the job's allowlist, or any host when it holds `"*"`, and never
-//! follow redirects (D10). A script reads only the secrets its job names, or every secret when
+//! follow redirects (D10). The image downloads of `vault::html_to_blocks` and
+//! `vault::complete_images` follow a fetch policy of their own instead, in `html.rs`
+//! (rich-import H3). A script reads only the secrets its job names, or every secret when
 //! they hold [`ALL_SECRETS`] (an agent's `run_script`, script-tools T1), and cannot list them
 //! (D10). File access reaches only the job's directories, never the vault itself. The `ai`
 //! module reads the AI credentials itself, so a script names neither them nor the providers'
@@ -31,6 +33,7 @@
 mod ai_module;
 mod fs;
 mod handlers;
+mod html;
 mod http;
 
 use std::ops::Deref;
@@ -42,6 +45,7 @@ use wscript::{Fault, HostError, Module};
 
 pub use ai_module::{Ai, AiError, ChatMessage, Reply as AiReply};
 pub use handlers::{Handlers, MAX_DEPTH};
+pub use html::{IMAGE_LIMIT, IMAGE_REDIRECTS, IMAGE_TIMEOUT, looks_like_html};
 pub use http::Response;
 pub use script_core::*;
 
@@ -83,6 +87,7 @@ struct Server {
 
 impl Extensions for Server {
     fn vault(&self, m: &mut Module, v: &Arc<dyn Vault>) {
+        html::register(m, v, &self.ai);
         let vv = v.clone();
         m.fn_named(
             "upload_asset_file",

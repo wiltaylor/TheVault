@@ -125,6 +125,8 @@ struct Attachment {
     filename: String,
     mime: String,
     data: Vec<u8>,
+    /// An inline part's Content-ID, without angle brackets: the HTML shows it as `cid:<id>`.
+    content_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -275,8 +277,10 @@ impl FakeGoogle {
     /// (default the message id), `labels` (label ids), `at` (milliseconds since the epoch, Gmail's
     /// `internalDate`), `from`, `to` and `cc` (a string or a list), `subject`, `snippet`
     /// (default the text's start), `text` (a `text/plain` part), `html` (a `text/html` part),
-    /// and `attachments`, each `{ filename, mime, size }` (that many bytes) or
-    /// `{ filename, mime, data }` (a string). It is recorded in history as `messagesAdded`.
+    /// and `attachments`, each `{ filename, mime, size }` (that many bytes),
+    /// `{ filename, mime, data }` (a string) or `{ filename, mime, base64 }` (standard base64),
+    /// with `content_id` for an inline part the HTML shows as `cid:<content_id>`. It is
+    /// recorded in history as `messagesAdded`.
     pub fn add_message(&self, spec: Value) -> String {
         let mut gmail = self.gmail();
         gmail.issued += 1;
@@ -321,12 +325,14 @@ impl FakeGoogle {
                     .as_str()
                     .unwrap_or("application/octet-stream")
                     .to_owned(),
-                data: match a["data"].as_str() {
-                    Some(d) => d.as_bytes().to_vec(),
-                    None => (0..a["size"].as_u64().unwrap_or(0))
+                data: match (a["data"].as_str(), a["base64"].as_str()) {
+                    (Some(d), _) => d.as_bytes().to_vec(),
+                    (None, Some(b)) => STANDARD.decode(b).expect("attachment base64"),
+                    (None, None) => (0..a["size"].as_u64().unwrap_or(0))
                         .map(|b| (b % 251) as u8)
                         .collect(),
                 },
+                content_id: a["content_id"].as_str().map(str::to_owned),
             })
             .collect();
         let history_id = gmail.next_history();
@@ -629,17 +635,35 @@ fn get(gmail: &State, id: &str, request: &Request) -> Reply {
     } else {
         json!({ "mimeType": "multipart/alternative", "filename": "", "body": { "size": 0 }, "parts": texts })
     };
-    let mut payload = if m.attachments.is_empty() {
+    let file = |a: &Attachment| {
+        let mut part = json!({
+            "mimeType": a.mime,
+            "filename": a.filename,
+            "body": { "attachmentId": a.id, "size": a.data.len() },
+        });
+        if let Some(cid) = &a.content_id {
+            part["headers"] = json!([
+                { "name": "Content-ID", "value": format!("<{cid}>") },
+                { "name": "Content-Disposition", "value": format!("inline; filename=\"{}\"", a.filename) },
+            ]);
+        }
+        part
+    };
+    // Inline parts go with the body in a multipart/related, as Gmail sends them.
+    let (inline, files): (Vec<&Attachment>, Vec<&Attachment>) =
+        m.attachments.iter().partition(|a| a.content_id.is_some());
+    let body_part = if inline.is_empty() {
         body_part
     } else {
         let mut parts = vec![body_part];
-        for a in &m.attachments {
-            parts.push(json!({
-                "mimeType": a.mime,
-                "filename": a.filename,
-                "body": { "attachmentId": a.id, "size": a.data.len() },
-            }));
-        }
+        parts.extend(inline.into_iter().map(file));
+        json!({ "mimeType": "multipart/related", "filename": "", "body": { "size": 0 }, "parts": parts })
+    };
+    let mut payload = if files.is_empty() {
+        body_part
+    } else {
+        let mut parts = vec![body_part];
+        parts.extend(files.into_iter().map(file));
         json!({ "mimeType": "multipart/mixed", "filename": "", "body": { "size": 0 }, "parts": parts })
     };
     payload["headers"] = Value::Array(headers);
@@ -811,6 +835,7 @@ fn send(gmail: &mut State, request: &Request, upload: bool) -> Reply {
             filename: filename.clone(),
             mime: mime.clone(),
             data: data.clone(),
+            content_id: None,
         })
         .collect();
     gmail.messages.push(Message {

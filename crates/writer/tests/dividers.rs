@@ -23,12 +23,23 @@ template default {
 }
 "#;
 
+/// A clock that never moves, so a write and its rewrite share `created` and `updated`.
+struct FixedClock;
+
+impl state::Clock for FixedClock {
+    fn now_ms(&self) -> i64 {
+        1_790_000_000_000
+    }
+}
+
 fn open(root: &Path) -> Writer {
     std::fs::create_dir_all(root.join("types")).unwrap();
     std::fs::write(root.join("types/page.wcl"), PAGE).unwrap();
     let vault = Vault::init(root).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
-    Writer::open(vault, state).unwrap()
+    Writer::open(vault, state)
+        .unwrap()
+        .with_clock(std::sync::Arc::new(FixedClock))
 }
 
 fn note(blocks: serde_json::Value) -> serde_json::Value {

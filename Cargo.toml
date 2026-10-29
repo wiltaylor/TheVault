@@ -45,6 +45,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 # Agent Skills (skills S1, S2): import and export zips with deflate only, and SKILL.md frontmatter.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 yaml-rust2 = { version = "0.13", default-features = false }
+# An HTML5 parser and a DOM to walk: the chat's readable page text (ai D27) and imported email
+# and event HTML as content blocks (rich-import H1), without its command-line tool.
+scraper = { version = "0.29", default-features = false }
 
 store = { path = "crates/store" }
 schema = { path = "crates/schema" }
@@ -56,6 +59,7 @@ query-syntax = { path = "crates/query-syntax" }
 script = { path = "crates/script" }
 script-core = { path = "crates/script-core" }
 vocab = { path = "crates/vocab" }
+html-blocks = { path = "crates/html-blocks" }
 scheduler = { path = "crates/scheduler" }
 ai = { path = "crates/ai" }
 api = { path = "crates/api" }

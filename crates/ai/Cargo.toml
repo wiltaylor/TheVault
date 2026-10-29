@@ -13,9 +13,8 @@ futures-util.workspace = true
 reqwest.workspace = true
 # Verifies the RS256 ID tokens of Sign in with ChatGPT against the issuer's JWKS (ai D8).
 ring = "0.17"
-# The readable text of a web page for the chat's fetch_url (ai D27): an HTML5 parser and a DOM
-# to walk, without its command-line tool.
-scraper = { version = "0.29", default-features = false }
+# The readable text of a web page for the chat's fetch_url (ai D27).
+scraper.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

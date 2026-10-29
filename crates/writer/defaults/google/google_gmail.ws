@@ -12,7 +12,9 @@ use regex
 //   `gmail_mode` (`labels` pulls the labels named in `gmail_labels`, `all` pulls all mail),
 //   `gmail_window_days` (how far back the first pull reaches) and `gmail_backfill_to` (a date
 //   older mail is paged back to, a page each run). Its `endpoints` object points the script at
-//   other hosts than Google's, for tests. A missing secret means the defaults.
+//   other hosts than Google's, and `image_budget` (milliseconds into the run that images may be
+//   fetched, the whole time budget by default) makes images wait, both for tests. A missing
+//   secret means the defaults.
 // - The run's state is the JSON object in the `google_gmail_state` secret, written with
 //   `secrets::set` and by nothing else: `history_id`, `listed`, `backfill_page`, `last_run`,
 //   `last_error` and `notified_invalid_grant`. No note is written for it.
@@ -25,10 +27,25 @@ use regex
 //   window again besides reading history: all of it for a new mode or window, only the added
 //   labels otherwise, nothing when labels were only removed. The back-fill starts over too. A
 //   run with nothing to list (labels mode, no labels) saves no `history_id`.
-// - The body is the text/plain part as paragraphs, or else the text/html part turned into text.
-//   The HTML part is kept as an asset in `html`. Attachments up to 700 KB are kept in
-//   `attachments`; larger ones are listed by name and size. A message too large to fetch keeps
-//   its headers and snippet.
+// - The body is the text/html part converted to content blocks by `vault::html_to_blocks`
+//   (rich-import H1, H2): headings, paragraphs, lists, quotes, code, tables, images and dividers,
+//   with the quoted reply history and the signature folded into collapsed toggles. A message with
+//   no HTML part takes its text/plain part through `vault::text_to_blocks`. The HTML part is
+//   kept as an asset in `html`, which the email page's View original shows. The note records the
+//   conversion's version in `converter`.
+// - Images (rich-import H3): an inline image part, by its Content-ID, is stored as an asset and
+//   shown where the HTML's `cid:` image was, and is not listed in `attachments`; `data:` images
+//   and remote images are stored by the host function, under its own fetch policy (docs/scripts.md).
+//   Images the run's time budget leaves no room for wait as link paragraphs, the note marked
+//   `images_pending`, and a later run fetches them with `vault::complete_images`.
+// - Attachments up to 700 KB are kept in `attachments`; larger ones are listed by name and size.
+//   An inline image part has the same limit. A message too large to fetch keeps its headers and
+//   snippet.
+// - Reconversion (rich-import H8): each run, after the sync, takes up to 50 email notes written by
+//   the older line-per-paragraph import (no `converter`), fetches the message again, and rebuilds
+//   the body when it is still exactly what the older import wrote; a body the user edited is kept,
+//   and the note marked `converter = 1`. A message Gmail no longer has is rebuilt from the stored
+//   HTML, its inline images not available.
 // - Each run refreshes an access token with the three secrets and stores none. Without a refresh
 //   token Google is not connected, and the run ends successfully with a log line. A refresh token
 //   Google refuses (`invalid_grant`) is written to `last_error`, notified once, and ends
@@ -52,9 +69,33 @@ fn work_budget() -> int {
     1200000
 }
 
-// The most base64 of one body part decoded, in characters. The rest is cut.
+// The most base64 of one body part the older import decoded, in characters (`legacy_texts`).
 fn part_cap() -> int {
     120000
+}
+
+// The most base64 of one body part converted, in characters: 2 MB of HTML or text, the
+// converter's own limit (rich-import H2).
+fn body_cap() -> int {
+    2796200
+}
+
+// The version of the body conversion an email records in `converter` (rich-import H8).
+fn converter_version() -> int {
+    2
+}
+
+// The most email notes a run reconverts, and the most whose pending images it completes.
+fn reconvert_batch() -> int {
+    50
+}
+
+fn images_batch() -> int {
+    20
+}
+
+fn cut_text() -> string {
+    "The rest of the message is longer than the import keeps; see View original."
 }
 
 // The largest attachment kept, in bytes.
@@ -82,6 +123,8 @@ struct Ctx {
     terms: Map[string, bool],
     people: Map[string, string],
     started: int,
+    // The time after which images wait for a later run.
+    images_until: int,
     work: int,
     stopped: bool,
     imported: int,
@@ -622,15 +665,16 @@ fn out_of_budget(ctx: Ctx) -> bool {
 struct Parts {
     text: Value,
     html: Value,
-    attachments: List[Value],
+    // Every part with a file name, or an image with a Content-ID, in order.
+    files: List[Value],
 }
 
-// The text part, the HTML part and the attachments of a message payload.
+// The text part, the HTML part and the file parts of a message payload.
 fn walk(part: Value, found: Parts) {
     let mime = text_of(part, "mimeType").to_lower()
     let filename = text_of(part, "filename")
-    if filename != "" {
-        found.attachments.push(part)
+    if filename != "" || is_inline(part) {
+        found.files.push(part)
     } else if mime == "text/plain" && found.text.is_null() {
         found.text = part
     } else if mime == "text/html" && found.html.is_null() {
@@ -639,6 +683,20 @@ fn walk(part: Value, found: Parts) {
     for child in list_of(part, "parts") {
         walk(child, found)
     }
+}
+
+// A part's Content-ID without its angle brackets, or "".
+fn content_id(part: Value) -> string {
+    regex::replace("^<|>$", header_of(part, "Content-ID").trim(), "")
+}
+
+// Whether a part is an image an HTML body may show by its Content-ID.
+fn is_inline(part: Value) -> bool {
+    text_of(part, "mimeType").to_lower().starts_with("image/") && content_id(part) != ""
+}
+
+fn new_parts() -> Parts {
+    Parts { text: Value::Null, html: Value::Null, files: [] }
 }
 
 fn header_of(payload: Value, name: string) -> string {
@@ -707,6 +765,127 @@ fn stored(id: string) -> Result[Value, string] {
     first_row("from email include archived where gmail_ref == " + quoted(id) + " limit 1")
 }
 
+fn too_large_paragraph() -> Value {
+    paragraph("The message was too large to store; only its headers and snippet are kept.")
+}
+
+// An email's body as the import makes it.
+struct Body {
+    blocks: List[Value],
+    // The asset ids of the attachments, inline images left out.
+    attachments: List[Value],
+    // The HTML part's asset, or "".
+    html: string,
+    // Whether images wait for a later run.
+    pending: bool,
+    // Each inline image part stored, as `<asset id> <Content-ID>`, for View original.
+    inline: List[Value],
+}
+
+fn file_name(part: Value) -> string {
+    let name = text_of(part, "filename")
+    if name != "" {
+        return name
+    }
+    let sub = text_of(part, "mimeType").to_lower().split("/").get(1).unwrap_or("bin")
+    "image." + sub.split("+").get(0).unwrap_or("bin")
+}
+
+// The body of message `id` from its `payload`: the HTML part converted, or the text part, with
+// the file parts stored. `html_asset` is the HTML part's asset when it is stored already, and
+// `known` the assets already stored for file parts, by their index in the walk: a reconversion
+// reuses them rather than storing each again.
+fn build_body(ctx: Ctx, id: string, payload: Value, html_asset: string, known: Map[string, string]) -> Result[Body, string] {
+    let found = new_parts()
+    walk(payload, found)
+    let html_data = if found.html.is_null() { "" } else { part_data(ctx, id, found.html)? }
+    let html = html_asset
+    if html == "" && html_data != "" {
+        html = text_of(vault::upload_asset(id + ".html", standard_b64(html_data))?, "id")
+    }
+    // Each file part stored, an inline image by its Content-ID.
+    let cids: Map[string, Value] = #{}
+    let inline: List[Value] = []
+    let stored_files: List[string] = []
+    let skipped: List[string] = []
+    let k = 0
+    for f in found.files {
+        let size = int_of(f.get("body").unwrap_or(Value::Null), "size")
+        let asset = known.get(fmt("{}", k)).unwrap_or("")
+        if asset == "" && size <= max_attachment() {
+            let data = part_data(ctx, id, f)?
+            if data != "" {
+                asset = text_of(vault::upload_asset(file_name(f), standard_b64(data))?, "id")
+            }
+        }
+        stored_files.push(asset)
+        if is_inline(f) {
+            // An image too large to store says so where it stood.
+            cids[content_id(f)] = Value::String(asset)
+            if asset != "" {
+                inline.push(Value::String(asset + " " + content_id(f)))
+            }
+        } else if asset == "" {
+            skipped.push(file_name(f) + " (" + size_text(size) + ")")
+        }
+        k = k + 1
+    }
+    let options = Value::Map(#{
+        "base64": Value::Bool(true),
+        "quotes": Value::Bool(true),
+        "images": Value::String("download"),
+        "cid": Value::Map(cids),
+        "deadline": Value::Int(ctx.images_until),
+        "cut_text": Value::String(cut_text()),
+    })
+    let text_data = if found.text.is_null() || html_data != "" { "" } else { part_data(ctx, id, found.text)? }
+    let data = if html_data != "" { html_data } else { text_data }
+    let cut = data.len() > body_cap()
+    if cut {
+        data = data.slice(0, body_cap())
+    }
+    // The host decodes and converts the part: a quarter of what the script's own decoding costs
+    // against the run's work budget.
+    ctx.work = ctx.work + data.len() / 4
+    let blocks: List[Value] = []
+    let used: List[string] = []
+    let pending = false
+    if html_data != "" {
+        let c = vault::html_to_blocks(data, options)?
+        blocks = list_of(c, "blocks")
+        pending = int_of(c, "pending") > 0
+        for img in list_of(c, "images") {
+            let src = text_of(img, "src")
+            if src.starts_with("cid:") && text_of(img, "status") == "stored" {
+                used.push(src.slice(4, src.len()).to_lower())
+            }
+        }
+        for w in strings_of(c, "warnings") {
+            vault::log("Message " + id + ": " + w)
+        }
+    } else if text_data != "" {
+        blocks = list_of(vault::text_to_blocks(data, options)?, "blocks")
+    }
+    if cut {
+        blocks.push(paragraph(literal(cut_text())))
+    }
+    if skipped.len() > 0 {
+        blocks.push(paragraph(literal("Attachments not stored, too large: " + skipped.join(", "))))
+    }
+    // The attachments: every file part stored, but an inline image the body shows.
+    let attachments: List[Value] = []
+    let j = 0
+    for f in found.files {
+        let asset = stored_files[j]
+        let shown = is_inline(f) && used.contains(content_id(f).to_lower())
+        if asset != "" && !shown {
+            attachments.push(Value::String(asset))
+        }
+        j = j + 1
+    }
+    Ok(Body { blocks: blocks, attachments: attachments, html: html, pending: pending, inline: inline })
+}
+
 // Fetch Gmail message `id` and save it as an email note. `Ok(false)` when the run must stop.
 fn import(ctx: Ctx, id: string) -> Result[bool, string] {
     if out_of_budget(ctx) {
@@ -761,54 +940,14 @@ fn save(ctx: Ctx, id: string) -> Result[(), string] {
     let cc = people_of(ctx, cc_raw)?
     let labels = terms_of(ctx, strings_of(message, "labelIds"))?
 
-    let blocks: List[Value] = []
-    let html_asset = ""
-    let assets: List[Value] = []
-    if too_large {
-        blocks.push(paragraph("The message was too large to store; only its headers and snippet are kept."))
+    let body = if too_large {
+        Body { blocks: [too_large_paragraph()], attachments: [], html: "", pending: false, inline: [] }
     } else {
-        let found = Parts { text: Value::Null, html: Value::Null, attachments: [] }
-        walk(payload, found)
-        let html_data = if found.html.is_null() { "" } else { part_data(ctx, id, found.html)? }
-        if html_data != "" {
-            let asset = vault::upload_asset(id + ".html", standard_b64(html_data))?
-            html_asset = text_of(asset, "id")
-        }
-        let text_data = if found.text.is_null() { "" } else { part_data(ctx, id, found.text)? }
-        let cut = false
-        let text = if text_data != "" {
-            let d = if text_data.len() > part_cap() { cut = true; text_data.slice(0, part_cap()) } else { text_data }
-            decode_text(ctx, d)?
-        } else if html_data != "" {
-            let d = if html_data.len() > part_cap() { cut = true; html_data.slice(0, part_cap()) } else { html_data }
-            html_text(decode_text(ctx, d)?)
-        } else {
-            ""
-        }
-        blocks = paragraphs(text)
-        if cut {
-            blocks.push(paragraph("The rest of the message is longer than the sync keeps."))
-        }
-        let skipped: List[string] = []
-        for a in found.attachments {
-            let name = text_of(a, "filename")
-            let size = int_of(a.get("body").unwrap_or(Value::Null), "size")
-            if size > max_attachment() {
-                skipped.push(name + " (" + size_text(size) + ")")
-            } else {
-                let data = part_data(ctx, id, a)?
-                if data == "" {
-                    skipped.push(name + " (" + size_text(size) + ")")
-                } else {
-                    let asset = vault::upload_asset(name, standard_b64(data))?
-                    assets.push(Value::String(text_of(asset, "id")))
-                }
-            }
-        }
-        if skipped.len() > 0 {
-            blocks.push(paragraph(literal("Attachments not stored, too large: " + skipped.join(", "))))
-        }
+        build_body(ctx, id, payload, "", #{})?
     }
+    let blocks = body.blocks
+    let html_asset = body.html
+    let assets = body.attachments
 
     let people: List[string] = []
     for p in [from].concat(to).concat(cc) {
@@ -854,6 +993,13 @@ fn save(ctx: Ctx, id: string) -> Result[(), string] {
     if assets.len() > 0 {
         fields["attachments"] = Value::List(assets)
     }
+    fields["converter"] = Value::Int(converter_version())
+    if body.inline.len() > 0 {
+        fields["inline_images"] = Value::List(body.inline)
+    }
+    if body.pending {
+        fields["images_pending"] = Value::Bool(true)
+    }
     let note = #{ "fields": Value::Map(fields) }
     if blocks.len() > 0 {
         note["blocks"] = Value::List([Value::Map(#{
@@ -878,6 +1024,298 @@ fn relabel(ctx: Ctx, row: Value, label_ids: List[string]) -> Result[(), string] 
     vault::patch(text_of(row, "id"), Value::Map(#{ "labels": value }), "")?
     ctx.updated = ctx.updated + 1
     Ok(())
+}
+
+// ---- pending images and reconversion (rich-import H3, H8) -----------------------------------
+
+// The blocks of content field `name` of a note's body, or null when it has none.
+fn content_of(body: Value, name: string) -> Value {
+    for b in list_of(body, "blocks") {
+        if text_of(b, "kind") == "content" && strings_of(b, "labels").contains(name) {
+            return b
+        }
+    }
+    Value::Null
+}
+
+// `body` with content field `name` holding `blocks` and the fields in `set` changed, a null
+// removing one.
+fn with_body(body: Value, name: string, blocks: List[Value], set: Map[string, Value]) -> Value {
+    let fields = as_map(body.get("fields").unwrap_or(Value::Null))
+    for k in set.keys() {
+        if set[k].is_null() {
+            fields.remove(k);
+        } else {
+            fields[k] = set[k];
+        }
+    }
+    let kept = list_of(body, "blocks").filter(|b| !(text_of(b, "kind") == "content" && strings_of(b, "labels").contains(name)))
+    if blocks.len() > 0 {
+        kept.push(Value::Map(#{
+            "kind": Value::String("content"),
+            "labels": Value::List([Value::String(name)]),
+            "blocks": Value::List(blocks),
+        }))
+    }
+    Value::Map(#{ "fields": Value::Map(fields), "blocks": Value::List(kept) })
+}
+
+// Fetch the images that waited for this run: each email marked `images_pending`, up to
+// `images_batch`, gets `vault::complete_images` on its body.
+fn complete_images(ctx: Ctx) {
+    let rows = match vault::query(fmt("from email where images_pending limit {}", images_batch())) {
+        Ok(r) => r,
+        Err(e) => {
+            vault::log("The emails waiting for images were not read: " + e)
+            return
+        },
+    }
+    for row in rows {
+        if out_of_budget(ctx) {
+            return
+        }
+        let id = text_of(row, "id")
+        match complete_one(ctx, id) {
+            Ok(_) => {},
+            Err(e) => vault::log("The images of email " + id + " were not fetched: " + e),
+        }
+    }
+}
+
+fn complete_one(ctx: Ctx, id: string) -> Result[(), string] {
+    let note = vault::get(id)?
+    let body = note.get("note").unwrap_or(Value::Null)
+    let content = content_of(body, "body")
+    let blocks = if content.is_null() { [] } else { list_of(content, "blocks") }
+    let r = vault::complete_images(Value::List(blocks), Value::Map(#{ "deadline": Value::Int(ctx.images_until) }))?
+    let pending = int_of(r, "pending") > 0
+    let changed = match r.get("changed") {
+        Some(Value::Bool(b)) => b,
+        _ => false,
+    }
+    if pending && !changed {
+        return Ok(())
+    }
+    let set: Map[string, Value] = #{ "images_pending": if pending { Value::Bool(true) } else { Value::Null } }
+    vault::update(id, with_body(body, "body", list_of(r, "blocks"), set), text_of(note, "version"))?;
+    ctx.updated = ctx.updated + 1
+    Ok(())
+}
+
+// The text part, the HTML part and the attachments of a payload as the older import walked it:
+// every part with a file name an attachment.
+fn legacy_walk(part: Value, found: Parts) {
+    let mime = text_of(part, "mimeType").to_lower()
+    if text_of(part, "filename") != "" {
+        found.files.push(part)
+    } else if mime == "text/plain" && found.text.is_null() {
+        found.text = part
+    } else if mime == "text/html" && found.html.is_null() {
+        found.html = part
+    }
+    for child in list_of(part, "parts") {
+        legacy_walk(child, found)
+    }
+}
+
+// The paragraph texts the older import wrote for a message: its text part, or else its HTML
+// part as text, a line per paragraph, then the notes it added. `html_data` stands for the HTML
+// part when the message is gone from Gmail.
+fn legacy_texts(ctx: Ctx, id: string, found: Parts, html_data: string) -> Result[List[string], string] {
+    let html = if html_data != "" || found.html.is_null() { html_data } else { part_data(ctx, id, found.html)? }
+    let text_data = if found.text.is_null() { "" } else { part_data(ctx, id, found.text)? }
+    let cut = false
+    let text = if text_data != "" {
+        let d = if text_data.len() > part_cap() { cut = true; text_data.slice(0, part_cap()) } else { text_data }
+        decode_text(ctx, d)?
+    } else if html != "" {
+        let d = if html.len() > part_cap() { cut = true; html.slice(0, part_cap()) } else { html }
+        html_text(decode_text(ctx, d)?)
+    } else {
+        ""
+    }
+    let out = paragraphs(text).map(|p| text_of(p.get("fields").unwrap_or(Value::Null), "text"))
+    if cut {
+        out.push("The rest of the message is longer than the sync keeps.")
+    }
+    let skipped: List[string] = []
+    for a in found.files {
+        let size = int_of(a.get("body").unwrap_or(Value::Null), "size")
+        if size > max_attachment() {
+            skipped.push(text_of(a, "filename") + " (" + size_text(size) + ")")
+        }
+    }
+    if skipped.len() > 0 {
+        out.push(literal("Attachments not stored, too large: " + skipped.join(", ")))
+    }
+    Ok(out)
+}
+
+// The paragraph texts of a body's blocks, or null when it holds any other block: a body the
+// older import wrote holds paragraphs only.
+fn paragraph_texts(blocks: List[Value]) -> Value {
+    let out: List[Value] = []
+    for b in blocks {
+        if text_of(b, "kind") != "paragraph" {
+            return Value::Null
+        }
+        out.push(Value::String(text_of(b.get("fields").unwrap_or(Value::Null), "text")))
+    }
+    Value::List(out)
+}
+
+// Reconvert up to `reconvert_batch` email notes the older import wrote (rich-import H8).
+fn reconvert(ctx: Ctx) {
+    let page = match vault::query_page("from email where !(converter >= 1)", reconvert_batch(), "") {
+        Ok(p) => p,
+        Err(e) => {
+            vault::log("The emails to reconvert were not read: " + e)
+            return
+        },
+    }
+    let rows = list_of(page, "rows")
+    if rows.len() == 0 {
+        return
+    }
+    // The file names of the vault's assets, to match a note's attachments to its parts.
+    let names: Map[string, string] = #{}
+    match vault::assets() {
+        Ok(all) => {
+            for a in all {
+                names[text_of(a, "id")] = text_of(a, "filename")
+            }
+        },
+        Err(e) => {
+            vault::log("The assets were not read, so no email is reconverted: " + e)
+            return
+        },
+    }
+    let done = 0
+    let kept = 0
+    for row in rows {
+        if out_of_budget(ctx) {
+            break
+        }
+        let id = text_of(row, "id")
+        match reconvert_one(ctx, id, names) {
+            Ok(rebuilt) => {
+                if rebuilt {
+                    done = done + 1
+                } else {
+                    kept = kept + 1
+                }
+            },
+            Err(e) => vault::log("Email " + id + " was not reconverted: " + e),
+        }
+    }
+    let left = int_of(page, "total") - done - kept
+    vault::log(fmt("Gmail: reconverted {} email bodies, kept {} the user edited; {} to go.", done, kept, left))
+}
+
+// Mark email `id` as keeping the body the older import wrote, for `why`. `Ok(false)`.
+fn keep_body(id: string, version: string, why: string) -> Result[bool, string] {
+    vault::patch(id, Value::Map(#{ "converter": Value::Int(1) }), version)?;
+    vault::log("Email " + id + " keeps its body: " + why)
+    Ok(false)
+}
+
+// Rebuild email `id`'s body with the current conversion when it is still the one the older import
+// wrote; else mark it kept. `Ok(true)` when rebuilt.
+fn reconvert_one(ctx: Ctx, id: string, names: Map[string, string]) -> Result[bool, string] {
+    let note = vault::get(id)?
+    let version = text_of(note, "version")
+    let body = note.get("note").unwrap_or(Value::Null)
+    let fields = body.get("fields").unwrap_or(Value::Null)
+    let content = content_of(body, "body")
+    let current = paragraph_texts(if content.is_null() { [] } else { list_of(content, "blocks") })
+    let gmail_id = text_of(fields, "gmail_ref")
+    let html_asset = text_of(fields, "html")
+    if current.is_null() || gmail_id == "" {
+        return keep_body(id, version, "it is not the older import's")
+    }
+    ctx.work = ctx.work + 2000
+    let base = ctx.gmail + "/users/me/messages/" + encode(gmail_id)
+    let message = Value::Null
+    let too_large = false
+    match http::get(base + "?format=full", ctx.auth) {
+        Ok(r) => {
+            if r.status == 200 {
+                message = json::parse(r.body)?
+            } else if r.status != 404 {
+                return Err(fmt("Gmail answered {} for message {}", r.status, gmail_id))
+            }
+        },
+        Err(e) => {
+            if !e.contains("larger than") {
+                return Err(e)
+            }
+            too_large = true
+        },
+    }
+    let stored_html = ""
+    if message.is_null() && !too_large {
+        // Gone from Gmail: the stored HTML stands for the message, its inline images lost.
+        if html_asset == "" {
+            return keep_body(id, version, "Gmail no longer has the message, and no HTML of it is stored")
+        }
+        stored_html = text_of(vault::read_asset(html_asset)?, "base64")
+    }
+    let payload = message.get("payload").unwrap_or(Value::Null)
+    let legacy = new_parts()
+    if !message.is_null() {
+        legacy_walk(payload, legacy)
+    }
+    let was = if too_large {
+        [text_of(too_large_paragraph().get("fields").unwrap_or(Value::Null), "text")]
+    } else {
+        legacy_texts(ctx, gmail_id, legacy, stored_html)?
+    }
+    if json::to_string(current) != json::to_string(Value::List(was.map(|t| Value::String(t)))) {
+        return keep_body(id, version, "it was edited since the import")
+    }
+    let rebuilt = if too_large {
+        Body { blocks: [too_large_paragraph()], attachments: list_of(fields, "attachments"), html: html_asset, pending: false, inline: [] }
+    } else if message.is_null() {
+        let options = Value::Map(#{
+            "base64": Value::Bool(true),
+            "quotes": Value::Bool(true),
+            "images": Value::String("download"),
+            "deadline": Value::Int(ctx.images_until),
+            "cut_text": Value::String(cut_text()),
+        })
+        let c = vault::html_to_blocks(stored_html, options)?
+        Body { blocks: list_of(c, "blocks"), attachments: list_of(fields, "attachments"), html: html_asset, pending: int_of(c, "pending") > 0, inline: [] }
+    } else {
+        // The attachments stored already, matched to the parts in order by file name.
+        let known: Map[string, string] = #{}
+        let assets = strings_of(fields, "attachments")
+        let found = new_parts()
+        walk(payload, found)
+        let next = 0
+        let k = 0
+        for f in found.files {
+            let size = int_of(f.get("body").unwrap_or(Value::Null), "size")
+            if text_of(f, "filename") != "" && size <= max_attachment() && next < assets.len() {
+                if names.get(assets[next]).unwrap_or("") == text_of(f, "filename") {
+                    known[fmt("{}", k)] = assets[next]
+                    next = next + 1
+                }
+            }
+            k = k + 1
+        }
+        build_body(ctx, gmail_id, payload, html_asset, known)?
+    }
+    let set: Map[string, Value] = #{
+        "converter": Value::Int(converter_version()),
+        "images_pending": if rebuilt.pending { Value::Bool(true) } else { Value::Null },
+        "attachments": if rebuilt.attachments.len() > 0 { Value::List(rebuilt.attachments) } else { Value::Null },
+        "inline_images": if rebuilt.inline.len() > 0 { Value::List(rebuilt.inline) } else { Value::Null },
+    }
+    if rebuilt.html != "" {
+        set["html"] = Value::String(rebuilt.html)
+    }
+    vault::update(id, with_body(body, "body", rebuilt.blocks, set), version)?;
+    Ok(true)
 }
 
 // ---- listing --------------------------------------------------------------------------------
@@ -1165,6 +1603,7 @@ fn new_ctx(endpoints: Value, token: string, started: int) -> Ctx {
         terms: #{},
         people: #{},
         started: started,
+        images_until: started + time_budget(),
         work: 0,
         stopped: false,
         imported: 0,
@@ -1176,6 +1615,11 @@ fn new_ctx(endpoints: Value, token: string, started: int) -> Ctx {
 }
 
 fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string] {
+    // A test seam: how long into the run images may be fetched, in milliseconds.
+    match fields.get("image_budget") {
+        Some(Value::Int(ms)) => ctx.images_until = ctx.started + ms,
+        _ => {},
+    }
     let all = text_of(fields, "gmail_mode") == "all"
     let labels = load_labels(ctx)?
     let wanted: List[string] = []
@@ -1248,6 +1692,12 @@ fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string
     let next_cursor = if ctx.stopped { cursor } else { backfill(ctx, cursor, to, lists, window_start)? }
     if !ctx.stopped {
         copy_outbox(ctx)
+    }
+    if !ctx.stopped {
+        complete_images(ctx)
+    }
+    if !ctx.stopped {
+        reconvert(ctx)
     }
 
     let error = if ctx.failed > 0 {

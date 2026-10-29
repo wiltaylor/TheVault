@@ -253,7 +253,8 @@ fn a_ready_new_event_is_inserted_with_send_updates_and_the_item_leaves_the_outbo
     assert_eq!(insert.status, 200);
     assert_eq!(insert.body["summary"], "Planning");
     assert_eq!(insert.body["location"], "Room 4");
-    assert_eq!(insert.body["description"], "Bring the numbers");
+    // As the HTML Google takes (rich-import H4).
+    assert_eq!(insert.body["description"], "<p>Bring the numbers</p>");
     assert_eq!(
         insert.body["start"]["dateTime"],
         "2026-04-02T09:00:00+11:00"

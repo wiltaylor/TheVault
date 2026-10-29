@@ -224,6 +224,7 @@ pub struct Fetcher {
     exempt: Arc<Vec<IpAddr>>,
     timeout: Duration,
     idle: Duration,
+    max_redirects: usize,
 }
 
 impl Fetcher {
@@ -258,7 +259,16 @@ impl Fetcher {
             exempt,
             timeout,
             idle,
+            max_redirects: MAX_REDIRECTS,
         }
+    }
+
+    /// This fetcher with a fetch's whole `timeout` and at most `max_redirects` redirects, such
+    /// as the image downloads of an email import (rich-import H3): 10 seconds and 3.
+    pub fn limited(mut self, timeout: Duration, max_redirects: usize) -> Fetcher {
+        self.timeout = timeout;
+        self.max_redirects = max_redirects;
+        self
     }
 
     /// Whether the address rule is lifted.
@@ -417,7 +427,7 @@ impl Fetcher {
                     ));
                 };
                 redirects += 1;
-                if redirects > MAX_REDIRECTS {
+                if redirects > self.max_redirects {
                     return Err(FetchError::TooManyRedirects);
                 }
                 url = url.join(&to).map_err(|_| {

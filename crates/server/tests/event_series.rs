@@ -406,7 +406,7 @@ fn run() -> Result[string, string] {
     assert!(api.series().is_empty());
     api.put_secret(
         "google_calendar_state",
-        &json!({ "sync_tokens": { "primary": "sync_1_1" }, "window_end": "2027-03-01" })
+        &json!({ "sync_tokens": { "primary": "sync_1_1" }, "window_end": "2027-03-01", "converter": "2" })
             .to_string(),
     );
     api.google.clear_requests();

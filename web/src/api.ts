@@ -1545,6 +1545,26 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   return parsed as T;
 }
 
+/**
+ * The HTML note `id` was imported from, its inline images in place, as
+ * `/api/notes/{id}/original` serves it for View original (rich-import H6).
+ */
+export async function originalHtml(id: string): Promise<string> {
+  const res = await send(`/api/notes/${encodeURIComponent(id)}/original`, { credentials: "same-origin", headers: { Accept: "text/html" } });
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 401) onUnauthorized();
+    let body: ApiError["body"] = {};
+    try {
+      body = JSON.parse(text) as ApiError["body"];
+    } catch {
+      body = { message: text };
+    }
+    throw new ApiError(res.status, body);
+  }
+  return text;
+}
+
 /** One server-sent event: its `event` name and its `data`, parsed as JSON. */
 export interface StreamEvent {
   event: string;

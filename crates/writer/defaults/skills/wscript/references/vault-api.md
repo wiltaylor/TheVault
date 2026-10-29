@@ -140,6 +140,33 @@ fn add_warning(id: string, text: string) -> Result[Value, string] {
 }
 ```
 
+## `vault`: HTML and text as blocks
+
+| Function | Returns |
+|----------|---------|
+| `vault::html_to_blocks(html: string, options: Value)` | `Result[Value, string]`: `{ blocks, images, warnings, cut, pending }`, the HTML as content blocks |
+| `vault::text_to_blocks(text: string, options: Value)` | `Result[Value, string]`: `{ blocks, warnings, cut }`, plain text as content blocks |
+| `vault::blocks_to_html(blocks: Value)` | `string`: content blocks as simple HTML: paragraphs, bold, italic, underline, links, lists, quotes, rules |
+| `vault::complete_images(blocks: Value, options: Value)` | `Result[Value, string]`: `{ blocks, changed, pending, images }`, the images an earlier conversion left pending, fetched |
+
+`options` is a map, or `Value::Null` for none: `quotes` (fold quoted reply history and
+signatures into toggles), `images` (`"link"`, the default, or `"download"` to store images as
+assets), `cid` (`{ content_id: asset_id }` for inline parts), `deadline` (milliseconds since the
+epoch after which remote images wait), `base64` (the input is base64 text), `detect` (plain
+text when it holds no tag) and `cut_text`. Remote images download only in `after_*` handlers and
+tasks, under the host's own policy, not the script's `allow_domains`: docs/scripts.md.
+
+```wscript run
+use vault
+
+fn main() -> Result[Value, string] {
+    let c = vault::html_to_blocks("<h2>Plan</h2><p>Ship <b>Friday</b></p><hr>", Value::Null)?
+    let blocks = c.get("blocks").unwrap()
+    vault::log(vault::blocks_to_html(blocks))
+    Ok(blocks)
+}
+```
+
 ## `vault`: assets, notifications, time and the log
 
 | Function | Returns |

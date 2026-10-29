@@ -135,6 +135,7 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
             "05974f071ad03c95a1ad2627ece883f9b9acdf76ed1b33a42c7cc5c114579b24",
             "a83e6b61ee1f2434128911c404f27e310c7d35037f02e00dd1f40c95f2838f1e",
             "62b1b398df176b3d1c1d160274f9eec71e5ec9bce1628cfb4e338ead2fe6c350",
+            "141d28f31e85fdd1fdc53dcb8b8f4fc4f4e4f2f42fa1b6716b03cab0aa565fd0",
         ],
     },
     ShippedFile {
@@ -156,6 +157,7 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
             "b4782f4a6b52f51dedc82f1269f290d8a8fdad7404667526089afdee0b63b1aa",
             "72d25f21d756250ca02dc77802c24ed1b417138c99ed2644e0b8b387092fbb0a",
             "e5881bf43ba5f4381156ccb56ef2d3f0e3d0d3ac349830b0b49f7d5e1595e307",
+            "41fe0334ecdd4e4c2f43403331a36339fb47d236f215f9c6671d41a4f39e2f33",
         ],
     },
     ShippedFile {
@@ -178,6 +180,7 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
             "fc7f4cad0874863f6b121722b89c43034211cd5e8d0563e9ad5dc072766b4868",
             "955b983dc5f14f0ac3aec3ec746102038561e7d4cf438f5e6e1d0a29446cf596",
             "dd0d74cd76603d183216d207fb24db3bbf18197ab6bd148f28c04d4697d9aedb",
+            "182bb9d27f1cf2d545a1386bc7e52e91348abae7e4a1e50721d89ad25e09f237",
         ],
     },
     // The Google Calendar write-back of event series, named by the shipped `event_series` type's
@@ -185,7 +188,10 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
     ShippedFile {
         path: "scripts/google_series.ws",
         source: include_str!("../defaults/google/google_series.ws"),
-        hashes: &["eb32fbb00ac23b2c7f089f7cb53b574c990e47776d195ebe8a57cf09c77d1c45"],
+        hashes: &[
+            "eb32fbb00ac23b2c7f089f7cb53b574c990e47776d195ebe8a57cf09c77d1c45",
+            "fe66c8d1cbb6167b559908590138cdbe2752fae3846479bce4d8defc45b57fad",
+        ],
     },
     // The Outbox's send handler, named by the shipped `outbox` type's handlers (outbox X3).
     ShippedFile {
@@ -230,6 +236,7 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
         hashes: &[
             "69675d6ec974a5bb2f55142299fbae7946e1296ade8e1f2ad96acbb389becd92",
             "d351063bdf8e46878bf8e5690b33137cb717731a1e42900481e17309167c1ebb",
+            "7a8701563c3a169a52400bdebaab7df5952a72bc5e40874515a0c3f0d7b4edd8",
         ],
     },
     ShippedFile {
@@ -322,6 +329,10 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
     UpgradeStep {
         id: "0010_ai_accounts",
         run: ai_accounts,
+    },
+    UpgradeStep {
+        id: "0011_email_template",
+        run: email_template,
     },
 ];
 
@@ -803,20 +814,55 @@ fn canonical_item(item: &Item) -> String {
 /// edits no note; the rest of the file stays as it is. A template the user changed is left alone,
 /// with one line in the log.
 fn outbox_template(w: &Writer) -> Result<()> {
-    let name = OUTBOX_TYPE;
+    shipped_default_template(
+        w,
+        "0008_outbox_template",
+        OUTBOX_TYPE,
+        OUTBOX_TYPE_5E81292,
+        DEFAULT_OUTBOX_TYPE,
+    )
+}
+
+/// The `email` type as alpha.18 shipped it, whose `default` template step
+/// `0011_email_template` replaces.
+const EMAIL_TYPE_FF793C6: &str = include_str!("../defaults/old/email_ff793c6.wcl");
+
+/// Step `0011_email_template` (rich-import H7): the shipped `email` type's default template moved
+/// the `html` asset, which the email page's View original shows, out of the main tab into an
+/// Original tab of its own. As step `0008_outbox_template` does, a vault whose built-in `email`
+/// type still has the template alpha.18 shipped gets the shipped one; a template the user changed
+/// is left alone.
+fn email_template(w: &Writer) -> Result<()> {
+    shipped_default_template(
+        w,
+        "0011_email_template",
+        EMAIL_TYPE,
+        EMAIL_TYPE_FF793C6,
+        DEFAULT_EMAIL_TYPE,
+    )
+}
+
+/// Replace the `default` template of built-in type `name` by the one of `shipped`, when the
+/// vault's is still the one of `old`, compared in canonical form, as one planned type change that
+/// edits no note. The rest of the file stays as it is. Step `step` logs why it left a type alone.
+fn shipped_default_template(
+    w: &Writer,
+    step: &str,
+    name: &str,
+    old: &str,
+    shipped: &str,
+) -> Result<()> {
     let schema = w.schema();
     let Some(ty) = schema.type_def(name) else {
         return Ok(());
     };
     if !w.is_built_in_def(ty) {
-        eprintln!(
-            "step 0008_outbox_template skipped type {name:?}: a type of the user's holds the name"
-        );
+        eprintln!("step {step} skipped type {name:?}: a type of the user's holds the name");
         return Ok(());
     }
     let path = type_path(name);
-    let old: Source = store::parse_data_only(OUTBOX_TYPE_5E81292, &path)?;
-    let shipped: Source = store::parse_data_only(DEFAULT_OUTBOX_TYPE, &path)?;
+    let old: Source = store::parse_data_only(old, &path)?;
+    let shipped: Source = store::parse_data_only(shipped, &path)?;
     let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
     let (Some(old_at), Some(new_at), Some(at)) = (
         default_template_at(&old),
@@ -831,8 +877,8 @@ fn outbox_template(w: &Writer) -> Result<()> {
     }
     if vault != canonical_item(&old.items[old_at]) {
         eprintln!(
-            "step 0008_outbox_template left type {name:?} as it is: its default template is not \
-             the one TheVault shipped"
+            "step {step} left type {name:?} as it is: its default template is not the one \
+             TheVault shipped"
         );
         return Ok(());
     }
@@ -843,9 +889,7 @@ fn outbox_template(w: &Writer) -> Result<()> {
     };
     let plan = w.plan_type_change(name, &change)?;
     if !plan.changes.is_empty() {
-        eprintln!(
-            "step 0008_outbox_template was not applied to type {name:?}: it would edit notes"
-        );
+        eprintln!("step {step} was not applied to type {name:?}: it would edit notes");
         return Ok(());
     }
     w.apply_type_change(

@@ -1,0 +1,24 @@
+[package]
+name = "html-blocks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+# Every file in tests/ is a module of tests/main.rs: one test binary for the crate.
+autotests = false
+
+[dependencies]
+# An HTML5 parser (html5ever) and a DOM to walk: imported email and event HTML becomes content
+# blocks (rich-import H1).
+scraper.workspace = true
+# scraper's own tree, named in the walk's signatures.
+ego-tree = "0.11"
+schema.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

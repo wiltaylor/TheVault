@@ -259,11 +259,16 @@ fn note_as_snapshot(note: &Value) -> Value {
         "start": s(&f["when"]["start"]),
         "end": s(&f["when"]["end"]),
         "location": s(&f["location"]),
-        "description": text(note, "description"),
+        "description": html_blocks::blocks_to_html(
+            block(note, "content", "description")["blocks"]
+                .as_array()
+                .map_or(&[][..], Vec::as_slice)
+        ),
         "attendees": attendees.join("\n"),
         "organiser": s(&f["organiser"]),
         "status": s(&f["status"]),
         "meet_url": s(&f["meet_url"]),
+        "converter": "2",
     })
 }
 
@@ -551,7 +556,7 @@ fn creating_an_event_note_inserts_it_into_its_calendar_or_the_default_and_stores
             "start": { "date": "2026-03-10", "dateTime": null },
             "end": { "date": "2026-03-12", "dateTime": null },
             "location": "Sydney",
-            "description": "Flights booked\nHotel next",
+            "description": "<p>Flights booked</p><p>Hotel next</p>",
             "attendees": [],
         })
     );
@@ -762,4 +767,142 @@ fn editing_an_occurrence_patches_only_that_instance() {
         api.note(&id)["note"]["fields"]["title"],
         "Review (quarterly)"
     );
+}
+
+// ---- rich descriptions (rich-import H4, H8) ----------------------------------------------------
+
+/// Replace note `id` whole with `note`, as the user's editor would, then let its handlers finish.
+fn put_note(api: &Api, id: &str, note: Value) {
+    let version = api.note(id)["version"].clone();
+    expect(
+        api.req("PUT", &format!("/api/notes/{id}"))
+            .json(&json!({ "note": note, "base_version": version }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    api.settle();
+}
+
+#[test]
+fn an_html_description_becomes_blocks_and_an_untouched_one_is_never_sent_back() {
+    let api = Api::start();
+    let mut event = standup();
+    event["description"] = json!(
+        "<b>Bring</b> snacks &amp; *stars* [x]<br><ul><li>chips</li><li>dip</li></ul><a href=\"https://maps.example.com/r\">the map</a>"
+    );
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    let note = api.note(&id);
+    assert_eq!(
+        block(&note, "content", "description")["blocks"],
+        json!([
+            { "kind": "paragraph", "fields": { "text": "**Bring** snacks & \\*stars\\* \\[x\\]" } },
+            { "kind": "list", "fields": { "style": "bullet" }, "blocks": [
+                { "kind": "item", "fields": { "text": "chips" } },
+                { "kind": "item", "fields": { "text": "dip" } },
+            ] },
+            { "kind": "paragraph", "fields": { "text": "[the map](https://maps.example.com/r)" } },
+        ])
+    );
+    assert_in_step(&api, &note, "primary");
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
+
+    // A title edit sends the title alone: the description compares as itself.
+    api.google.clear_requests();
+    api.edit(&id, json!({ "title": "Daily standup" }));
+    let writes = api.writes();
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(writes[0].json(), json!({ "summary": "Daily standup" }));
+    let note = api.note(&id);
+    assert_in_step(&api, &note, "primary");
+    // Nor does the next sync change the note.
+    let version = note["version"].clone();
+    api.google.clear_requests();
+    api.sync();
+    assert_eq!(api.note(&id)["version"], version);
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
+}
+
+#[test]
+fn an_edited_description_is_sent_as_html_and_rich_blocks_stay_when_google_keeps_it() {
+    let api = Api::start();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.event_id("standup");
+    let mut note = api.note(&id)["note"].clone();
+    let blocks = note["blocks"].as_array_mut().unwrap();
+    for b in blocks.iter_mut() {
+        if b["kind"] == "content" && b["labels"] == json!(["description"]) {
+            b["blocks"] = json!([
+                { "kind": "heading", "fields": { "level": 2, "text": "Plan" } },
+                { "kind": "paragraph", "fields": { "text": "Bring **snacks** < 5 & {red}more{/}" } },
+            ]);
+        }
+    }
+    api.google.clear_requests();
+    put_note(&api, &id, note);
+    let writes = api.writes();
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(
+        writes[0].json(),
+        json!({ "description": "<p><b>Plan</b></p><p>Bring <b>snacks</b> &lt; 5 &amp; more</p>" })
+    );
+    let note = api.note(&id);
+    // Google keeps what was sent, so the note keeps its heading and colour.
+    assert_eq!(
+        block(&note, "content", "description")["blocks"][0]["kind"],
+        "heading"
+    );
+    assert_in_step(&api, &note, "primary");
+    api.google.clear_requests();
+    api.sync();
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
+}
+
+#[test]
+fn an_older_snapshot_is_converted_on_the_next_sync_without_sending_anything() {
+    let api = Api::start();
+    let mut event = standup();
+    event["description"] = json!("<b>Agenda</b><br>one");
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    // The note as the older sync left it: the description's raw text a line per paragraph, and
+    // a snapshot of plain lines without a converter.
+    let mut note = api.note(&id)["note"].clone();
+    for b in note["blocks"].as_array_mut().unwrap() {
+        if b["kind"] == "content" && b["labels"] == json!(["description"]) {
+            b["blocks"] =
+                json!([{ "kind": "paragraph", "fields": { "text": "<b>Agenda</b><br>one" } }]);
+        }
+        if b["kind"] == "dict" && b["labels"] == json!(["snapshot"]) {
+            let f = b["fields"].as_object_mut().unwrap();
+            f.remove("converter");
+            f.insert("description".into(), json!("<b>Agenda</b><br>one"));
+        }
+    }
+    api.google.clear_requests();
+    put_note(&api, &id, note);
+    // The handler sees the description as the older sync wrote it: nothing to send.
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
+    // A state from before the conversion lists every event again.
+    let mut state = api.server.secret_json("google_calendar_state");
+    state.as_object_mut().unwrap().remove("converter");
+    expect(
+        api.req("PUT", "/api/secrets/google_calendar_state")
+            .json(&json!({ "value": state.to_string() }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    api.sync();
+    let note = api.note(&id);
+    assert_eq!(
+        block(&note, "content", "description")["blocks"],
+        json!([{ "kind": "paragraph", "fields": { "text": "**Agenda**\none" } }])
+    );
+    assert_in_step(&api, &note, "primary");
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
 }

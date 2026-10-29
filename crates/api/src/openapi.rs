@@ -46,6 +46,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ("GET", "/api/notes/{id}/history", "Every version of a note"),
     (
         "GET",
+        "/api/notes/{id}/original",
+        "The HTML a note was imported from, its inline images in place, as text/html in a sandbox",
+    ),
+    (
+        "GET",
         "/api/notes/{id}/graph",
         "The notes linked to or from a note, most recently updated first (?limit=, default 60), with every link among them",
     ),

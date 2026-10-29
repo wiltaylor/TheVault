@@ -20,6 +20,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 - [Event series occurrences](#event-series-occurrences)
 - [Content blocks](#content-blocks)
 - [Inline markup](#inline-markup)
+- [Imported HTML](#imported-html)
 - [Query views](#query-views)
 - [Ink](#ink)
 - [Canvas](#canvas)
@@ -330,18 +331,19 @@ The fields of the Google sync types, as a new vault gets them. The Gmail and cal
 | | `thread` | `reference` to `email_thread` | The thread it belongs to |
 | | `labels` | list of `taxonomy` `gmail_label` | Its Gmail labels |
 | | `snippet` | `string` | Gmail's short preview |
-| | `body` | `content` | The text |
-| | `html` | `asset` | The HTML part, as Gmail sent it |
+| | `body` | `content` | The message as content blocks (see [Imported HTML](#imported-html)) |
+| | `html` | `asset` | The HTML part, as Gmail sent it, for View original ([Imported email](#imported-email)) |
 | | `attachments` | list of `asset` | Its attachments |
 | | `processed` | `bool`, default `false` | Set when the user, or an agent, has dealt with the email. Its slot sits beside `from` on the page and on the card. The Gmail sync never writes it: a label change rewrites only `labels` |
 | | `gmail_ref` | `string`, hidden | Gmail's message id, so a message is pulled once |
+| | `inline_images`, `converter`, `images_pending` | hidden | See [Imported email](#imported-email) |
 | `email_thread` | `participants` | list of `reference` to `person` | The people in the thread. The title is the subject |
 | | `thread_ref` | `string`, hidden | Gmail's thread id |
 | `event` | `when` | `date_range`, `of = "date_or_datetime"` | Dates for an all-day event, datetimes with their offsets for a timed one |
 | | `calendar` | `string` | The id of the Google calendar it is on, as the Google settings' `calendars` lists it, such as `primary` |
 | | `calendar_name` | `string`, computed | The calendar's name from the user's Google calendar list, which the calendar sync fills. `calendar` stays a string rather than a select with labelled options: a select's options are fixed in the type file, and a script cannot change a type to list the synced calendars |
 | | `location` | `string` | |
-| | `description` | `content` | |
+| | `description` | `content` | As blocks ([Imported HTML](#imported-html)) |
 | | `attendees` | list of `reference` to `person` | The attendees that match a person |
 | | `attendees_raw` | `list` of `string` | Each attendee's address as Google gave it |
 | | `organiser` | `string` | |
@@ -370,11 +372,12 @@ The Gmail sync is the shipped task `tasks/google_gmail.wcl`, which runs `scripts
 - Refreshes an access token at the token endpoint and stores none. When Google answers `invalid_grant`, the run writes the error to the state's `last_error`, adds the bell notification "Google sign-in expired" unless `notified_invalid_grant` is already true, sets it, and ends successfully, so the task-failure notification does not fire as well (google-sync D18). Any other failure is written to `last_error` and fails the run. A run that succeeds clears it and writes `last_run`.
 - On the first run, lists the window: the last `gmail_window_days` days, of each label in `gmail_labels` (matched to Gmail's labels by name or id, without case) in `labels` mode, or of all mail in `all` mode (google-sync D11). Later runs read Gmail's history from the state's `history_id`: a new message in scope is pulled, a label change rewrites the email's `labels` and nothing else, and a message deleted in Gmail archives its note (google-sync D9). When Gmail no longer has that history (404), the run lists the window again.
 - With `gmail_backfill_to` set, also pulls one listing page of mail older than the window, down to that date, keeping its place in the state's `backfill_page` (`<listing>:<page token>`, then `done:<date>` once the date is reached; a new date starts again).
-- Pulls each message once, by `gmail_ref`, archived notes included. The note's `body` is the `text/plain` part as paragraphs, or else the `text/html` part turned into text, with inline markup characters escaped. The HTML part is stored as the asset `<message id>.html` in `html`. Attachments up to 700 KB are stored in `attachments`, and larger ones are listed by name and size in a paragraph. A message whose response is over the 1 MiB a script may read keeps its headers, labels and snippet, and a paragraph saying the body was too large (google-sync D3). A body part is decoded up to 120,000 base64 characters, and a paragraph says when the rest was cut.
+- Pulls each message once, by `gmail_ref`, archived notes included. The note's `body` is the HTML part converted to content blocks, or the text part when there is none, with its images stored ([Imported email](#imported-email)). The HTML part is stored as the asset `<message id>.html` in `html`. Attachments up to 700 KB are stored in `attachments`, and larger ones are listed by name and size in a paragraph. A message whose response is over the 1 MiB a script may read keeps its headers, labels and snippet, and a paragraph saying the body was too large (google-sync D3).
 - Finds or creates the `email_thread` with the message's `thread_ref`, titled by the subject without `Re:` or `Fwd:`, and adds any new participants (google-sync D4). `from`, `to` and `cc` link to the person whose `emails` hold the address; an unknown address stays only in `from_raw`, `to_raw` or `cc_raw`, and no person is created (google-sync D5).
 - Adds each label it meets to `gmail_label`, a user label by its name and a Gmail label under `system`.
-- Stops early, before four minutes or before it has decoded 1,200,000 base64 characters, so it keeps within its timeout and its instruction limit. It then leaves its cursor where it was, and the next run carries on: messages already pulled are skipped.
+- Stops early, before four minutes or before it has decoded 1,200,000 base64 characters (a part the host converts counts a quarter), so it keeps within its timeout and its instruction limit. It then leaves its cursor where it was, and the next run carries on: messages already pulled are skipped.
 - Imports the sent copy of every `outbox` email item that is `sending`, has a `sent_ref` and a `sent_at` and has no `result` yet, whatever the label settings, as any other message, and sets the item's `result` to the email note, after which the item is removed (outbox X4, X14). A copy already pulled is linked, not pulled again.
+- Then fetches images that waited and reconverts older bodies ([Imported email](#imported-email)).
 
 #### Event series
 
@@ -1979,25 +1982,7 @@ Rules:
 
 ### `divider`
 
-A horizontal rule between the blocks around it. It holds no items and no blocks, so the canonical writer writes it as the bare word `divider` on a line of its own.
-
-```wcl
-paragraph {
-  text = "Above the rule."
-}
-
-divider
-
-paragraph {
-  text = "Below it."
-}
-```
-
-Rules:
-
-- A divider sits wherever a content block does: in columns, toggles, admonitions and canvas cards. `schema` rejects any item or block inside one.
-- Copied out of the web client as Markdown, a divider is `---`. Pasted Markdown `---`, `***` or `___` on a line of its own, and a pasted HTML `<hr>`, become one, and so does typing `---` on an empty line in the editor.
-- An imported email's or event's HTML `<hr>` becomes one (see [Imported HTML](#imported-html)).
+A horizontal rule between blocks, with no items or blocks: the canonical writer writes the bare word `divider` on a line of its own, and `schema` rejects anything inside one. It sits wherever a content block does. The web client makes one from the `/` menu, from `---` typed on an empty line, and from pasted Markdown `---`, `***` or `___` or an HTML `<hr>`, and copies one as `---`.
 
 ### `control`
 
@@ -2112,6 +2097,49 @@ paragraph {
   text = "Mark risks {red}in red{/}, ==highlight== questions, and see [[01JB8Z4K2MQ7V3X9T5R6W8Y2ZB]]. Then [[+task|Fix the pump]]."
 }
 ```
+
+## Imported HTML
+
+`vault::html_to_blocks` turns HTML, such as an email's HTML part or a calendar event's description, into the content blocks above, and `vault::text_to_blocks` turns plain text into them (rich-import H1). The output is blocks of escaped inline markup, so no tag, script or `javascript:` URL of the input survives.
+
+| HTML | Becomes |
+|------|---------|
+| `h1`, `h2`; `h3` to `h6` | `heading` of level 1, 2; 3 |
+| `p`, `div` and other block elements | A `paragraph` per run of text between them. A `br` is a line break in the paragraph; two in a row start a new paragraph |
+| `ul`, `ol` | `list`, `bullet` or `numbered`, with nested lists as nested items. An image in an item follows the list |
+| `blockquote` | `quote` when it holds only text, else its blocks |
+| `pre` | `code`, with `language` from a `language-<x>` or `lang-<x>` class |
+| `table` | `table` when it holds data, else its cells' content in reading order (below) |
+| `img` | `image` once stored as an asset, or a paragraph `[Image: <alt>](<url>)` saying why not. One 2 pixels wide or high or less, a tracking pixel, is dropped unfetched; one 32 by 32 pixels or less, an icon, is its alt text |
+| `hr` | `divider` |
+| `figure` | Its image, with the `figcaption` as the image's `caption` |
+| `a href` | A link, for `http`, `https`, `mailto` and `tel` only; any other is its text. A link styled as a button (a background, or a border with padding, or the only text of a filled cell) is a paragraph of its own, bold |
+| `b`, `strong`; `i`, `em`; `u`; `s`, `del`; `code`, `kbd`; `mark` | Bold, italic, underline, strikethrough, code and highlight, and so are the same `font-weight`, `font-style` and `text-decoration` styles |
+| A `color` style or `font color` | The nearest [palette](#inline-markup) colour, only when it is clearly a colour (not black, white, grey or a pale or dark tint) and not on a link |
+| `script`, `style`, `head`, forms, frames, objects, `svg`, comments | Nothing |
+
+Hidden content is dropped: `display:none`, `visibility:hidden`, `mso-hide:all`, a zero `opacity`, a zero height with the overflow hidden, the `hidden` attribute, and preheader classes. Whitespace is collapsed as a browser collapses it, and zero-width characters dropped.
+
+A table is a layout, and is unwrapped, when it says `role="presentation"` or `none`, holds another table, has fewer than two rows or one column, has a cell holding a block (an image, a heading, a list, a quote, code, a rule, or more than one paragraph or `div`), has more columns or rows than a `table` block takes, or sits in a newsletter: a document of tables inside tables that holds most of its text in them. The heuristic errs towards unwrapping. A data table's first row is its header when it sits in `thead` or is all `th`, and each column takes its alignment from its first cell's `align` or `text-align`.
+
+With quote folding on, as the Gmail sync converts, quoted reply history goes in a `toggle` titled "Quoted text", closed: Gmail's `gmail_quote`, a `blockquote type="cite"` (Apple Mail, Thunderbird) with the "On … wrote:" line before it, and from Outlook's `appendonsend` or `divRplyFwdMsg`, or a top-bordered "From:" block, to the end of the message. A Gmail signature (`gmail_signature`) goes in a toggle titled "Signature". In plain text, the trailing "On … wrote:" line and the `>` lines after it, or Outlook's "-----Original Message-----", fold the same way, and the lines after a `-- ` line are the signature.
+
+Plain text is a paragraph per run of lines between blank lines, each line a line break, with a run of `>` lines as a quote and each `http` or `https` URL a link.
+
+Past 2 MB of input, or 5000 blocks, the conversion stops and adds a paragraph saying the rest is left out; an email's says to see View original.
+
+### Imported email
+
+The Gmail sync converts each message's HTML part with quote folding on, or its text part when it has no HTML part, up to 2 MB, a paragraph saying when the rest was cut (rich-import H1, H2), and records `converter = 2` on the note.
+
+- An image part the HTML shows by its Content-ID, up to 700 KB, is stored as an asset and placed as an image block where the `cid:` image was. It is listed in the hidden `inline_images` (`<asset id> <Content-ID>`, for View original) and not in `attachments`. `data:` images and remote images are stored too (rich-import H3), under the fetch policy `docs/scripts.md` gives for `vault::html_to_blocks`.
+- Remote images the run's time leaves no room for stay as link paragraphs and the note is marked with the hidden `images_pending`. Each run fetches the images of up to 20 such emails with `vault::complete_images`, and takes the mark off once none waits.
+- Reconversion (rich-import H8): each run takes up to 50 email notes with no `converter`, written by the older import that made a paragraph per line of the text part. For each it fetches the message again and rebuilds the body, inline images included, only when the body is still exactly the paragraphs the older import would write from that message; a body the user edited keeps its text and gets `converter = 1`. A message Gmail no longer has is rebuilt from the stored `html`, its inline images "not available". The run logs how many it rebuilt, kept and has left.
+- The `email` type's default template keeps the `html` slot on an Original tab of its own. A vault whose template is still the one alpha.18 shipped, with the slot under the attachments, gets the current one from the upgrade step `0011_email_template`, which compares the two in canonical form and leaves a template the user changed as it is.
+
+### View original
+
+The email page's View original shows the stored `html` asset as the sender wrote it (rich-import H6). `GET /api/notes/<id>/original` serves it as `text/html` with each `cid:` image the note's `inline_images` names in place as a `data:` URI, without `<meta http-equiv="refresh">` and `<base>`, and with the policy `sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'`: no scripts, forms or requests. The web client shows it in an iframe's `srcdoc` whose `sandbox` allows only popups that leave the sandbox, so a link opens in a tab of its own, under a policy of the same kind and no referrer. Remote images stay blocked until the user chooses Load remote images, which shows the page again with `https:` images allowed. The assets route still serves an HTML asset as plain text.
 
 ## Query views
 

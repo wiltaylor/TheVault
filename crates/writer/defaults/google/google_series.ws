@@ -317,7 +317,7 @@ fn synced(item: Value) -> Map[string, string] {
         "timezone": text_of(start, "timeZone"),
         "rule": strings(list_of(item, "recurrence")).join("\n"),
         "location": text_of(item, "location"),
-        "description": clean(text_of(item, "description")),
+        "description": description_html(text_of(item, "description")),
         "attendees": attendees.join("\n"),
         "organiser": organiser,
         "status": if status == "" { "confirmed" } else { status },
@@ -400,15 +400,63 @@ fn is_field_block(block: Value, kind: string, name: string) -> bool {
     text_of(block, "kind") == kind && label_of(block) == name
 }
 
-// The text of content field `name`, a line per paragraph.
+// The text of content field `name` as the HTML Google takes (rich-import H4), the form the
+// snapshot compares.
 fn content_text(blocks: List[Value], name: string) -> string {
+    vault::blocks_to_html(Value::List(content_blocks(blocks, name)))
+}
+
+// The blocks of content field `name`.
+fn content_blocks(blocks: List[Value], name: string) -> List[Value] {
     for b in blocks {
         if is_field_block(b, "content", name) {
-            let lines = list_of(b, "blocks").map(|p| text_of(p.get("fields").unwrap_or(Value::Null), "text"))
-            return clean(lines.join("\n"))
+            return list_of(b, "blocks")
         }
     }
-    ""
+    []
+}
+
+// The version of the description conversion a snapshot records (rich-import H8). A snapshot
+// without one holds the description as plain lines.
+fn converter_version() -> string {
+    "2"
+}
+
+// A description from Google, HTML or plain text, as content blocks: `vault::html_to_blocks`
+// with no images fetched.
+fn description_blocks(text: string) -> List[Value] {
+    match vault::html_to_blocks(text, Value::Map(#{ "detect": Value::Bool(true) })) {
+        Ok(c) => list_of(c, "blocks"),
+        Err(_) => [],
+    }
+}
+
+// A description from Google in the form the snapshot compares: its blocks as Google's HTML, so
+// an untouched description reads back as itself.
+fn description_html(text: string) -> string {
+    vault::blocks_to_html(Value::List(description_blocks(text)))
+}
+
+// The description of content field `name` as the older sync compared it: a line per block.
+fn old_content_text(blocks: List[Value], name: string) -> string {
+    let lines = content_blocks(blocks, name).map(|p| text_of(p.get("fields").unwrap_or(Value::Null), "text"))
+    clean(lines.join("\n"))
+}
+
+// `snapshot` in the current form. One from before the HTML conversion holds the description as
+// plain lines: when the note's description is still those lines the user did not change it,
+// and it compares as `mine`, so Google's wins; else it compares as `otherwise`.
+fn upgraded(snapshot: Map[string, string], blocks: List[Value], mine: Map[string, string], otherwise: string) -> Map[string, string] {
+    if snapshot.is_empty() || value(snapshot, "converter") == converter_version() {
+        return snapshot
+    }
+    let out: Map[string, string] = #{}
+    for k in snapshot.keys() {
+        out[k] = snapshot[k]
+    }
+    out["description"] = if old_content_text(blocks, "description") == value(snapshot, "description") { value(mine, "description") } else { otherwise }
+    out["converter"] = converter_version()
+    out
 }
 
 // The members of dict field `name`.
@@ -502,12 +550,6 @@ fn put(fields: Map[string, Value], key: string, text: string) {
     }
 }
 
-fn paragraphs(text: string) -> List[Value] {
-    text.split("\n").filter(|l| l.trim() != "").map(|l| Value::Map(#{
-        "kind": Value::String("paragraph"),
-        "fields": Value::Map(#{ "text": Value::String(l) }),
-    }))
-}
 
 // The note body for `values` on top of the note's `fields` and `blocks`, as the sync writes it.
 fn body_for(ctx: Ctx, fields: Map[string, Value], blocks: List[Value], values: Map[string, string], snapshot: Map[string, string], meta: Map[string, string], same_attendees: bool) -> Result[Value, string] {
@@ -555,18 +597,23 @@ fn body_for(ctx: Ctx, fields: Map[string, Value], blocks: List[Value], values: M
     fields.remove("updated");
 
     let kept = blocks.filter(|b| !is_field_block(b, "content", "description") && !is_field_block(b, "dict", "snapshot"))
+    // The note's own description blocks while they still write the value, so a heading or a
+    // mention Google cannot hold stays; else the value's blocks.
     let description = value(values, "description")
-    if description != "" {
+    let own = content_blocks(blocks, "description")
+    let desc_blocks = if vault::blocks_to_html(Value::List(own)) == description { own } else { description_blocks(description) }
+    if desc_blocks.len() > 0 {
         kept.push(Value::Map(#{
             "kind": Value::String("content"),
             "labels": Value::List([Value::String("description")]),
-            "blocks": Value::List(paragraphs(description)),
+            "blocks": Value::List(desc_blocks),
         }))
     }
     let snap: Map[string, Value] = #{}
     for k in snapshot_keys() {
         snap[k] = Value::String(value(snapshot, k))
     }
+    snap["converter"] = Value::String(converter_version())
     kept.push(Value::Map(#{
         "kind": Value::String("dict"),
         "labels": Value::List([Value::String("snapshot")]),
@@ -707,7 +754,9 @@ fn push(id: string, created: bool) -> Result[(), string] {
         return Ok(())
     }
     let mine = note_values(fields, blocks)
-    let snapshot = dict_of(blocks, "snapshot")
+    let held = dict_of(blocks, "snapshot")
+    // An older snapshot whose description the user changed sends the change.
+    let snapshot = upgraded(held, blocks, mine, value(held, "description"))
     let google_ref = text_of(fields, "google_ref")
 
     if google_ref == "" {

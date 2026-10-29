@@ -100,6 +100,20 @@ impl Ai {
     pub fn unavailable() -> Ai {
         Ai(None)
     }
+
+    /// Whether `ai_settings.fetch_private` lets fetches reach the local network (ai D27), which
+    /// the image downloads of `vault::html_to_blocks` follow too (rich-import H3). False on a
+    /// device, or before the vault is open.
+    pub(crate) fn fetch_private(&self) -> bool {
+        let Some((binding, _)) = &self.0 else {
+            return false;
+        };
+        binding
+            .get()
+            .and_then(Weak::upgrade)
+            .and_then(|w| ::ai::Settings::load(w.state()).ok())
+            .is_some_and(|s| s.fetch_private)
+    }
 }
 
 pub fn module(access: Ai) -> Module {

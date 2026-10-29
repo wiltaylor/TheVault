@@ -7,7 +7,7 @@ use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::AUTHORIZATION;
 use serde_json::{Value, json};
 use testkit::fake_google::{DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN};
-use testkit::{FakeGoogle, TestServer};
+use testkit::{FakeGoogle, FakeWeb, Reply, TestServer};
 
 const DAY: i64 = 86_400_000;
 
@@ -245,6 +245,17 @@ fn paragraphs(note: &Value, name: &str) -> Vec<String> {
         .filter(|b| b["kind"] == "paragraph")
         .map(|b| b["fields"]["text"].as_str().unwrap().to_owned())
         .collect()
+}
+
+/// The blocks of the email's body.
+fn body_blocks(note: &Value) -> Vec<Value> {
+    note["note"]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["kind"] == "content" && b["labels"] == json!(["body"]))
+        .and_then(|c| c["blocks"].as_array().cloned())
+        .unwrap_or_default()
 }
 
 fn mail(id: &str, labels: &[&str], days_ago: i64) -> Value {
@@ -556,12 +567,20 @@ fn bodies_html_and_attachments_are_stored_and_an_oversized_message_keeps_its_hea
         "at": ago(1),
         "from": "alex@example.com",
         "subject": "Plain and HTML",
-        "text": "Hello there — café ☕ 😀\n\nSecond paragraph \"quoted\" \\ {braces}",
+        "text": "The text part, which the HTML part wins over",
         "html": "<p>Hello there</p>",
         "attachments": [
             { "filename": "small.bin", "mime": "application/octet-stream", "size": 600 * 1024 },
             { "filename": "large.zip", "mime": "application/zip", "size": 800 * 1024 },
         ],
+    }));
+    google.add_message(json!({
+        "id": "text-only",
+        "labels": ["INBOX"],
+        "at": ago(1),
+        "from": "alex@example.com",
+        "subject": "Text only",
+        "text": "Hello there — café ☕ 😀\nsame paragraph\n\nSecond paragraph \"quoted\" \\ {braces} https://example.com/x",
     }));
     google.add_message(json!({
         "id": "html-only",
@@ -582,18 +601,13 @@ fn bodies_html_and_attachments_are_stored_and_an_oversized_message_keeps_its_hea
     }));
     let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
     gmail.run_ok();
-    assert_eq!(gmail.refs(), ["html-only", "huge", "plain"]);
+    assert_eq!(gmail.refs(), ["html-only", "huge", "plain", "text-only"]);
 
+    // The HTML part wins over the text part (rich-import H2).
     let plain = gmail.email("plain");
-    assert_eq!(
-        paragraphs(&plain, "body")[..2],
-        [
-            "Hello there — café ☕ 😀".to_owned(),
-            // Markup characters are escaped, so the text shows as it was sent.
-            "Second paragraph \"quoted\" \\\\ \\{braces\\}".to_owned()
-        ]
-    );
+    assert_eq!(paragraphs(&plain, "body")[0], "Hello there");
     let fields = &plain["note"]["fields"];
+    assert_eq!(fields["converter"], 2);
     let html = fields["html"].as_str().unwrap();
     assert_eq!(gmail.asset(html), b"<p>Hello there</p>");
     let attachments = fields["attachments"].as_array().unwrap();
@@ -605,12 +619,25 @@ fn bodies_html_and_attachments_are_stored_and_an_oversized_message_keeps_its_hea
     assert!(listed.contains("large.zip"), "{listed}");
     assert!(listed.contains("800 KB"), "{listed}");
 
-    let html_only = gmail.email("html-only");
-    let text = paragraphs(&html_only, "body");
+    // A text part alone: a paragraph per run of lines, markup characters escaped so the text
+    // shows as it was sent, URLs as links.
+    let text_only = gmail.email("text-only");
     assert_eq!(
-        text,
-        ["Big news", "First & bold line.", "Second", "line <3"],
-        "{text:?}"
+        paragraphs(&text_only, "body"),
+        [
+            "Hello there — café ☕ 😀\nsame paragraph".to_owned(),
+            "Second paragraph \"quoted\" \\\\ \\{braces} [https://example.com/x](https://example.com/x)".to_owned()
+        ]
+    );
+
+    let html_only = gmail.email("html-only");
+    assert_eq!(
+        body_blocks(&html_only),
+        [
+            json!({ "kind": "heading", "fields": { "level": 1, "text": "Big news" } }),
+            json!({ "kind": "paragraph", "fields": { "text": "First & **bold** line." } }),
+            json!({ "kind": "paragraph", "fields": { "text": "Second\nline <3" } }),
+        ]
     );
     assert!(html_only["note"]["fields"]["html"].as_str().is_some());
 
@@ -741,9 +768,9 @@ fn invalid_grant_notifies_once_across_two_runs_and_does_not_fail_the_run() {
 #[test]
 fn a_run_with_more_mail_than_it_may_decode_stops_early_and_the_next_run_carries_on() {
     let google = FakeGoogle::start();
-    // Each body is about 90 KB of text: more than a dozen is more than one run decodes.
+    // Each body is about 300 KB of text: more than a dozen is more than one run converts.
     let line = "Ünïcödé text for the instruction budget, line after line.\n";
-    let body = line.repeat(90 * 1024 / line.len());
+    let body = line.repeat(300 * 1024 / line.len());
     let wide = "日本語のテキストは一文字が三バイトです。\n".repeat(1000);
     google.add_message(json!({
         "id": "wide",
@@ -779,23 +806,21 @@ fn a_run_with_more_mail_than_it_may_decode_stops_early_and_the_next_run_carries_
     gmail.run_ok();
     assert_eq!(gmail.refs().len(), 15);
     assert!(gmail.state()["history_id"].as_str().is_some());
+    // Lines with no blank line between them are one paragraph of line breaks.
     let wide = gmail.email("wide");
     let lines = paragraphs(&wide, "body");
+    assert_eq!(lines.len(), 1);
+    let lines: Vec<&str> = lines[0].split('\n').collect();
     assert_eq!(lines.len(), 1000);
     assert!(
         lines
             .iter()
-            .all(|l| l == "日本語のテキストは一文字が三バイトです。")
+            .all(|l| *l == "日本語のテキストは一文字が三バイトです。")
     );
     let note = gmail.email("big-03");
-    assert_eq!(
-        paragraphs(&note, "body")[0],
-        "Ünïcödé text for the instruction budget, line after line."
-    );
-    // A body part longer than the sync decodes is cut, and says so.
-    assert_eq!(
-        paragraphs(&note, "body").last().unwrap(),
-        "The rest of the message is longer than the sync keeps."
+    assert!(
+        paragraphs(&note, "body")[0]
+            .starts_with("Ünïcödé text for the instruction budget, line after line.\n"),
     );
 }
 
@@ -943,4 +968,413 @@ fn a_back_fill_date_inside_the_window_is_reported_once() {
         !second["log"].as_str().unwrap().contains(note),
         "{second:#}"
     );
+}
+
+// ---- rich import (rich-import H2, H3, H8) ------------------------------------------------------
+
+/// The first bytes of a 10 by 10 PNG, as far as anything reads them: the signature and the
+/// header chunk. `tag` makes each image's bytes its own.
+fn png(tag: u8) -> Vec<u8> {
+    let mut b = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR".to_vec();
+    b.extend_from_slice(&10u32.to_be_bytes());
+    b.extend_from_slice(&10u32.to_be_bytes());
+    b.extend_from_slice(&[8, 6, 0, 0, 0, tag]);
+    b
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn image_reply(bytes: Vec<u8>) -> Reply {
+    Reply {
+        status: 200,
+        headers: vec![("content-type".into(), "image/png".into())],
+        body: bytes,
+        delay: std::time::Duration::ZERO,
+    }
+}
+
+impl Gmail {
+    /// Let `vault::html_to_blocks` reach the fake web server on the loopback address.
+    fn fetch_private(&self) {
+        self.put_secret("ai_settings", &json!({ "fetch_private": true }).to_string());
+    }
+
+    fn upload(&self, name: &str, bytes: &[u8]) -> String {
+        let out = expect(
+            self.req("POST", &format!("/api/assets?filename={name}"))
+                .body(bytes.to_vec())
+                .send()
+                .unwrap(),
+            201,
+        );
+        out["id"].as_str().unwrap().to_owned()
+    }
+
+    fn log_of(run: &Value) -> String {
+        run["log"].as_str().unwrap_or_default().to_owned()
+    }
+}
+
+/// Each block's kind, a toggle's blocks' kinds after it in brackets.
+fn kinds(blocks: &[Value]) -> Vec<String> {
+    blocks
+        .iter()
+        .map(|b| {
+            let kind = b["kind"].as_str().unwrap().to_owned();
+            match b["blocks"].as_array() {
+                Some(inner) if kind == "toggle" => format!("{kind}[{}]", kinds(inner).join(",")),
+                _ => kind,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn inline_data_and_remote_images_are_stored_where_they_stood() {
+    let web = FakeWeb::start();
+    web.route("/hero.png", image_reply(png(1)));
+    web.route(
+        "/pixel.gif",
+        image_reply(b"GIF89a\x01\x00\x01\x00".to_vec()),
+    );
+    let google = FakeGoogle::start();
+    let html = format!(
+        r#"<p>Hi <b>Sam</b></p><img src="cid:logo@mail.example" alt="Logo"><img src="data:image/png;base64,{data}" alt="Dot"><p><img src="{hero}" alt="Hero"></p><img src="{hero}" alt="Hero again"><img src="{page}" alt="Not an image"><img src="{track}" width="1" height="1"><img src="{pixel}" alt=""><div class="gmail_quote"><blockquote class="gmail_quote">Earlier mail</blockquote></div>"#,
+        data = b64(&png(2)),
+        hero = web.url("/hero.png"),
+        page = web.url("/page.html"),
+        track = web.url("/track.gif"),
+        pixel = web.url("/pixel.gif"),
+    );
+    google.add_message(json!({
+        "id": "rich",
+        "labels": ["INBOX"],
+        "at": ago(1),
+        "from": "alex@example.com",
+        "subject": "Rich",
+        "text": "The text part",
+        "html": html,
+        "attachments": [
+            { "filename": "logo.png", "mime": "image/png", "base64": b64(&png(3)), "content_id": "logo@mail.example" },
+            { "filename": "unused.png", "mime": "image/png", "base64": b64(&png(4)), "content_id": "unused@mail.example" },
+            { "filename": "notes.txt", "mime": "text/plain", "data": "notes" },
+        ],
+    }));
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    gmail.fetch_private();
+    gmail.run_ok();
+    let note = gmail.email("rich");
+    let blocks = body_blocks(&note);
+    assert_eq!(
+        kinds(&blocks),
+        [
+            "paragraph",
+            "image",
+            "image",
+            "image",
+            "image",
+            "paragraph",
+            "toggle[paragraph]"
+        ],
+        "{blocks:#?}"
+    );
+    assert_eq!(blocks[0]["fields"]["text"], "Hi **Sam**");
+    let asset = |k: usize| blocks[k]["fields"]["asset"].as_str().unwrap().to_owned();
+    // The inline part where its cid: was, the data: image, the remote image once for both.
+    assert_eq!(gmail.asset(&asset(1)), png(3));
+    assert_eq!(blocks[1]["fields"]["alt"], "Logo");
+    assert_eq!(gmail.asset(&asset(2)), png(2));
+    assert_eq!(gmail.asset(&asset(3)), png(1));
+    assert_eq!(asset(3), asset(4));
+    assert_eq!(
+        blocks[5]["fields"]["text"],
+        format!(
+            "[Image: Not an image]({}) (not downloaded: it is not an image)",
+            web.url("/page.html")
+        )
+    );
+    assert_eq!(blocks[6]["fields"]["text"], "Quoted text");
+    // The inline image is not an attachment; the unused inline part and the file are.
+    let fields = &note["note"]["fields"];
+    let attachments: Vec<Vec<u8>> = fields["attachments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| gmail.asset(a.as_str().unwrap()))
+        .collect();
+    assert_eq!(attachments, [png(4), b"notes".to_vec()]);
+    assert!(fields.get("images_pending").is_none(), "{fields:#}");
+    // The hero was fetched once, the tracking pixel never.
+    let paths: Vec<String> = web
+        .requests()
+        .iter()
+        .map(|r| r.route().to_owned())
+        .collect();
+    assert_eq!(
+        paths.iter().filter(|p| *p == "/hero.png").count(),
+        1,
+        "{paths:?}"
+    );
+    assert!(!paths.iter().any(|p| p == "/track.gif"), "{paths:?}");
+
+    // View original (rich-import H6): the stored HTML as a sandboxed page, its inline image in
+    // place as a data: URI, and remote images left to the client's policy.
+    assert_eq!(
+        fields["inline_images"],
+        json!([
+            format!("{} logo@mail.example", asset(1)),
+            format!("{} unused@mail.example", attachments_ids(fields)[0])
+        ])
+    );
+    let res = gmail
+        .req(
+            "GET",
+            &format!("/api/notes/{}/original", note["id"].as_str().unwrap()),
+        )
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let h = res.headers().clone();
+    assert_eq!(h["content-type"], "text/html; charset=utf-8");
+    let csp = h["content-security-policy"].to_str().unwrap();
+    assert!(csp.starts_with("sandbox;"), "{csp}");
+    assert!(csp.contains("img-src data:;"), "{csp}");
+    assert!(csp.contains("default-src 'none'"), "{csp}");
+    assert_eq!(h["x-content-type-options"], "nosniff");
+    let page = res.text().unwrap();
+    assert!(
+        page.contains(&format!("src=\"data:image/png;base64,{}\"", b64(&png(3)))),
+        "{page}"
+    );
+    assert!(!page.contains("cid:logo"), "{page}");
+    assert!(page.contains(&web.url("/hero.png")), "{page}");
+    // The assets route still serves the stored HTML as plain text.
+    let html_asset = fields["html"].as_str().unwrap();
+    let res = gmail
+        .req("GET", &format!("/api/assets/{html_asset}"))
+        .send()
+        .unwrap();
+    assert!(
+        res.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain")
+    );
+}
+
+fn attachments_ids(fields: &Value) -> Vec<String> {
+    fields["attachments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn images_on_the_local_network_are_refused_without_fetch_private() {
+    let web = FakeWeb::start();
+    web.route("/hero.png", image_reply(png(1)));
+    let google = FakeGoogle::start();
+    google.add_message(json!({
+        "id": "local",
+        "labels": ["INBOX"],
+        "at": ago(1),
+        "from": "alex@example.com",
+        "subject": "Local",
+        "html": format!(r#"<p>Look</p><img src="{}" alt="Hero">"#, web.url("/hero.png")),
+    }));
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    gmail.run_ok();
+    let blocks = body_blocks(&gmail.email("local"));
+    assert_eq!(
+        blocks[1]["fields"]["text"],
+        format!(
+            "[Image: Hero]({}) (not downloaded: the address is on the local network)",
+            web.url("/hero.png")
+        )
+    );
+    assert!(web.requests().is_empty());
+}
+
+#[test]
+fn images_the_time_budget_leaves_out_wait_for_the_next_run() {
+    let web = FakeWeb::start();
+    web.route("/hero.png", image_reply(png(1)));
+    let google = FakeGoogle::start();
+    google.add_message(json!({
+        "id": "later",
+        "labels": ["INBOX"],
+        "at": ago(1),
+        "from": "alex@example.com",
+        "subject": "Later",
+        "html": format!(r#"<p>Look</p><img src="{}" alt="Hero"><p>Done</p>"#, web.url("/hero.png")),
+    }));
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all", "image_budget": 0 }));
+    gmail.fetch_private();
+    gmail.run_ok();
+    let note = gmail.email("later");
+    assert_eq!(note["note"]["fields"]["images_pending"], true);
+    assert_eq!(
+        body_blocks(&note)[1]["fields"]["text"],
+        format!(
+            "[Image: Hero]({}) (not downloaded yet)",
+            web.url("/hero.png")
+        )
+    );
+    assert!(web.requests().is_empty());
+
+    // The next run, with time for images, fetches it into its place.
+    gmail.set_settings(json!({ "gmail_mode": "all" }));
+    gmail.run_ok();
+    let note = gmail.email("later");
+    assert!(note["note"]["fields"].get("images_pending").is_none());
+    let blocks = body_blocks(&note);
+    assert_eq!(kinds(&blocks), ["paragraph", "image", "paragraph"]);
+    assert_eq!(
+        gmail.asset(blocks[1]["fields"]["asset"].as_str().unwrap()),
+        png(1)
+    );
+}
+
+/// An email note as the older import wrote it: paragraphs, no `converter`.
+fn old_email(gmail: &Gmail, gmail_ref: &str, texts: &[&str], extra: Value) -> String {
+    let mut fields = json!({ "title": format!("Old {gmail_ref}"), "gmail_ref": gmail_ref, "from_raw": "alex@example.com" });
+    for (k, v) in extra.as_object().into_iter().flatten() {
+        fields[k] = v.clone();
+    }
+    let blocks: Vec<Value> = texts
+        .iter()
+        .map(|t| json!({ "kind": "paragraph", "fields": { "text": t } }))
+        .collect();
+    let made = expect(
+        gmail
+            .req("POST", "/api/notes?type=email")
+            .json(&json!({ "note": { "fields": fields, "blocks": [{ "kind": "content", "labels": ["body"], "blocks": blocks }] } }))
+            .send()
+            .unwrap(),
+        201,
+    );
+    made["id"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn older_bodies_are_reconverted_unless_the_user_edited_them() {
+    let google = FakeGoogle::start();
+    let other = google.add_label("Other");
+    // Out of the synced labels, so the sync itself never imports them.
+    for id in ["kept", "edited"] {
+        google.add_message(json!({
+            "id": id,
+            "labels": [other],
+            "at": ago(1),
+            "from": "alex@example.com",
+            "subject": id,
+            "text": format!("Body of {id}\nsecond line"),
+            "html": format!("<h2>Body of {id}</h2><p>second <b>line</b></p><blockquote type=\"cite\">old</blockquote>"),
+            "attachments": [
+                { "filename": "pic.png", "mime": "image/png", "base64": b64(&png(5)), "content_id": format!("pic-{id}") },
+            ],
+        }));
+    }
+    let gmail = Gmail::start(google, json!({ "gmail_labels": ["INBOX"] }));
+    // As the older import stored them: the text part a line per paragraph, every file part an
+    // attachment.
+    let pic = gmail.upload("pic.png", &png(5));
+    let kept = old_email(
+        &gmail,
+        "kept",
+        &["Body of kept", "second line"],
+        json!({ "attachments": [pic] }),
+    );
+    let edited = old_email(
+        &gmail,
+        "edited",
+        &["Body of edited", "my own note"],
+        json!({}),
+    );
+    // Gone from Gmail: rebuilt from the stored HTML.
+    let html = gmail.upload(
+        "gone.html",
+        b"<h2>Gone</h2><p>Line <img src=\"cid:x\" alt=\"X\"></p>",
+    );
+    let gone = old_email(&gmail, "gone", &["Gone", "Line"], json!({ "html": html }));
+
+    let run = gmail.run_ok();
+    let log = Gmail::log_of(&run);
+    assert!(
+        log.contains("reconverted 2 email bodies, kept 1 the user edited; 0 to go"),
+        "{log}"
+    );
+    let note = gmail.note(&kept);
+    assert_eq!(note["note"]["fields"]["converter"], 2);
+    let blocks = body_blocks(&note);
+    assert_eq!(
+        kinds(&blocks),
+        ["heading", "paragraph", "toggle[paragraph]"],
+        "{blocks:#?}"
+    );
+    assert_eq!(blocks[1]["fields"]["text"], "second **line**");
+    // Its inline image was an attachment; the body does not show it, so it stays one.
+    assert_eq!(note["note"]["fields"]["attachments"], json!([pic]));
+    assert!(note["note"]["fields"].get("html").is_some());
+
+    let note = gmail.note(&edited);
+    assert_eq!(note["note"]["fields"]["converter"], 1);
+    assert_eq!(paragraphs(&note, "body"), ["Body of edited", "my own note"]);
+
+    let note = gmail.note(&gone);
+    assert_eq!(note["note"]["fields"]["converter"], 2);
+    let blocks = body_blocks(&note);
+    assert_eq!(
+        kinds(&blocks),
+        ["heading", "paragraph", "paragraph"],
+        "{blocks:#?}"
+    );
+    assert_eq!(
+        blocks[2]["fields"]["text"],
+        "Image: X (not available: the message holds no such part)"
+    );
+
+    // Idempotent: the next run has nothing to do.
+    let before = gmail.note(&kept)["version"].clone();
+    let run = gmail.run_ok();
+    assert!(!Gmail::log_of(&run).contains("reconverted"), "{run:#}");
+    assert_eq!(gmail.note(&kept)["version"], before);
+}
+
+#[test]
+fn reconversion_takes_fifty_notes_a_run_and_carries_on() {
+    let google = FakeGoogle::start();
+    let other = google.add_label("Other");
+    let gmail_ids: Vec<String> = (0..53).map(|k| format!("old-{k:02}")).collect();
+    for id in &gmail_ids {
+        google.add_message(json!({
+            "id": id, "labels": [other], "at": ago(1), "from": "alex@example.com",
+            "subject": id, "text": format!("Text of {id}"), "html": format!("<p>Html of <i>{id}</i></p>"),
+        }));
+    }
+    let gmail = Gmail::start(google, json!({ "gmail_labels": ["INBOX"] }));
+    for id in &gmail_ids {
+        old_email(&gmail, id, &[&format!("Text of {id}")], json!({}));
+    }
+    let first = gmail.run_ok();
+    assert!(
+        Gmail::log_of(&first)
+            .contains("reconverted 50 email bodies, kept 0 the user edited; 3 to go"),
+        "{first:#}"
+    );
+    let second = gmail.run_ok();
+    assert!(
+        Gmail::log_of(&second)
+            .contains("reconverted 3 email bodies, kept 0 the user edited; 0 to go"),
+        "{second:#}"
+    );
+    for id in &gmail_ids {
+        let note = gmail.email(id);
+        assert_eq!(paragraphs(&note, "body"), [format!("Html of *{id}*")]);
+    }
 }

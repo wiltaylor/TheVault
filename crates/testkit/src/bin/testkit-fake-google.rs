@@ -12,6 +12,7 @@
 //! | `gmail-delay off` | Gmail answers at once, releasing any request still waiting |
 //! | `calendar-delay <ms>` | [`testkit::FakeGoogle::set_calendar_delay`], the same for Calendar |
 //! | `calendar-delay off` | Calendar answers at once, releasing any request still waiting |
+//! | `add-message <json>` | [`testkit::FakeGoogle::add_message`] with the message spec `<json>`, on one line |
 
 use std::io::{BufRead, Write};
 use std::time::Duration;
@@ -46,6 +47,12 @@ fn main() {
 /// Carry out one command line.
 fn command(google: &testkit::FakeGoogle, line: &str) -> Result<(), String> {
     let (name, arg) = line.split_once(' ').unwrap_or((line, ""));
+    if name == "add-message" {
+        let spec: serde_json::Value =
+            serde_json::from_str(arg).map_err(|e| format!("add-message takes a JSON spec: {e}"))?;
+        google.add_message(spec);
+        return Ok(());
+    }
     let delay = match arg.trim() {
         "off" => None,
         ms => Some(Duration::from_millis(ms.parse().map_err(|_| {

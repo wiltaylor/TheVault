@@ -1,0 +1,136 @@
+label       = "Email"
+plural      = "Emails"
+description = "One email message, pulled from Gmail."
+icon        = "mail"
+colour      = "red"
+
+field from {
+  kind   = "reference"
+  label  = "From"
+  target = "person"
+}
+
+field from_raw {
+  kind        = "string"
+  label       = "From (as sent)"
+  description = "The sender as the message gave it, such as Alex Example <alex@example.com>."
+}
+
+field to {
+  kind   = "list"
+  items  = "reference"
+  label  = "To"
+  target = "person"
+}
+
+field to_raw {
+  kind        = "list"
+  label       = "To (as sent)"
+  description = "Each recipient as the message gave it."
+  items       = "string"
+}
+
+field cc {
+  kind   = "list"
+  items  = "reference"
+  label  = "Cc"
+  target = "person"
+}
+
+field cc_raw {
+  kind        = "list"
+  label       = "Cc (as sent)"
+  description = "Each copied recipient as the message gave it."
+  items       = "string"
+}
+
+field sent {
+  kind  = "datetime"
+  label = "Sent"
+}
+
+field thread {
+  kind   = "reference"
+  label  = "Thread"
+  target = "email_thread"
+}
+
+field labels {
+  kind     = "list"
+  items    = "taxonomy"
+  label    = "Labels"
+  taxonomy = "gmail_label"
+}
+
+field snippet {
+  kind        = "string"
+  label       = "Snippet"
+  description = "Gmail's short preview of the message."
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+field html {
+  kind        = "asset"
+  label       = "HTML"
+  description = "The message's HTML part, as Gmail sent it."
+}
+
+field attachments {
+  kind  = "list"
+  items = "asset"
+  label = "Attachments"
+}
+
+field processed {
+  kind    = "bool"
+  label   = "Processed"
+  default = false
+}
+
+field gmail_ref {
+  kind        = "string"
+  label       = "Gmail reference"
+  description = "Gmail's id for the message, so it is pulled once."
+  hidden      = true
+}
+
+template default {
+  tab "Email" {
+    columns {
+      column {
+        slot "from"
+        slot "processed"
+        slot "to"
+        slot "cc"
+      }
+      column {
+        slot "sent"
+        slot "thread"
+        slot "labels"
+      }
+    }
+    slot "body"
+    slot "attachments"
+    slot "html"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "from_raw"
+    slot "processed"
+    slot "sent"
+    slot "snippet"
+  }
+}
+
+list_page {
+  view      = "details"
+  sort      = "sent desc"
+  page_size = 50
+}

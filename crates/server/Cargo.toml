@@ -30,6 +30,7 @@ ai.workspace = true
 base64.workspace = true
 clients.workspace = true
 embedded.workspace = true
+html-blocks.workspace = true
 image.workspace = true
 p256 = { version = "0.13", default-features = false, features = ["ecdh"] }
 reqwest.workspace = true
