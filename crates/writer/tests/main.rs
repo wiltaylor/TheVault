@@ -16,6 +16,7 @@ mod columns;
 mod controls;
 mod definition_events;
 mod dicts;
+mod dividers;
 mod event_series;
 mod ink;
 mod office_text;

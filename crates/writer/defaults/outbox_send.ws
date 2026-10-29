@@ -901,6 +901,9 @@ fn render_blocks(blocks: List[Value], text: List[string], html: List[string]) {
             render_blocks(list_of(b, "blocks"), text, html)
         } else if kind == "table" {
             render_table(b, f, text, html)
+        } else if kind == "divider" {
+            text.push("---")
+            html.push("<hr>")
         }
     }
 }

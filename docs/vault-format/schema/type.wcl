@@ -77,6 +77,7 @@ type KeyDef {
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
   @children("table")      tables:      list<Table>
+  @children("divider")    dividers:    list<Divider>
   @children("period_calendar") period_calendars: list<PeriodCalendar>
 }
 

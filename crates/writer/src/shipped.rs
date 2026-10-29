@@ -197,6 +197,7 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
             "b353fb621d71e67501b22f64043170277f2373769912b026267161198a57b0dc",
             "f12e9fd3756b775fd84b7ab739ffd4e6e2e69a0160dcc5a96d5a5bc45551fab4",
             "344cd1b82f892cbf2823e97b9fed84ff75432da4b76de620b9c567b070b8882d",
+            "e84c8da7e1825c5f7e976956c124aff923e73b63524e8b75e1df7a28a27765b1",
         ],
     },
     // The built-in agent, the chat panel's default (agents G6).

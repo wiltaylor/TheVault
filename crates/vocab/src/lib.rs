@@ -35,7 +35,9 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// file.
 /// 8: the `table` content block, rows of inline markup cells, which an older reader refuses in a
 /// note as an unknown block kind.
-pub const FORMAT_VERSION: u32 = 8;
+/// 9: the `divider` content block, a horizontal rule, which an older reader refuses in a note as
+/// an unknown block kind.
+pub const FORMAT_VERSION: u32 = 9;
 
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]

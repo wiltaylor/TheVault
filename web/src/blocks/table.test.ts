@@ -97,7 +97,6 @@ describe("reading Markdown tables", () => {
     expect(pieces?.[2]).toEqual({ kind: "text", lines: ["", "After"] });
     for (const text of [
       "a | b\nc | d",
-      "Just some text\n---\nwith a rule",
       "| a | b |\n|---|\n| 1 | 2 |",
       "| a | b |",
       "|---|---|\n|---|---|",
@@ -105,6 +104,8 @@ describe("reading Markdown tables", () => {
     ]) {
       expect(markdownPieces(text), text).toBeNull();
     }
+    // A rule is a divider piece between the lines around it (rich-import H5).
+    expect(markdownPieces("Just some text\n---\nwith a rule")?.map((p) => p.kind)).toEqual(["text", "divider", "text"]);
   });
 });
 

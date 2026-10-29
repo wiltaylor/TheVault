@@ -320,6 +320,14 @@ export function ContentEditor(props: {
         run: () => place(newTableJSON()),
       },
       {
+        id: "divider",
+        label: "Divider",
+        section: "Blocks",
+        keywords: "horizontal rule line separator hr ---",
+        hint: "---",
+        run: () => place({ type: "horizontalRule" }),
+      },
+      {
         id: "file",
         label: "File",
         section: "Blocks",

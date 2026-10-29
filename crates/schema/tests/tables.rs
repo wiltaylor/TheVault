@@ -189,3 +189,21 @@ fn a_template_table_may_show_fields_in_its_cells() {
         "{issues:?}"
     );
 }
+
+// rich-import H5: a divider is a block with nothing in it, wherever content blocks sit.
+#[test]
+fn a_divider_holds_nothing_and_sits_wherever_content_does() {
+    check("divider").unwrap();
+    check("toggle {\n  text = \"t\"\n  divider\n}").unwrap();
+    check("columns {\n  column {\n    divider\n  }\n  column {\n    divider\n  }\n}").unwrap();
+    let item = check("divider {\n  style = \"dashed\"\n}").unwrap_err();
+    assert!(
+        has(&item, "divider#1.style: is not an item of this block"),
+        "{item:?}"
+    );
+    let block = check("divider {\n  paragraph {\n    text = \"x\"\n  }\n}").unwrap_err();
+    assert!(
+        has(&block, "divider#1 > paragraph: is not allowed here"),
+        "{block:?}"
+    );
+}

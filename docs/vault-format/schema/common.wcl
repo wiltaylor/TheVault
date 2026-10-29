@@ -110,6 +110,11 @@ type Table {
   @children("row", min = 1) rows: list<TableRow>
 }
 
+# A horizontal rule between blocks. It holds nothing.
+@block("divider")
+type Divider {
+}
+
 # ---------------------------------------------------------------------------
 # Ink (D18, D29). The same block is an ink content block (no label) and an
 # ink field value (labelled with the field name).
@@ -211,6 +216,7 @@ type CanvasNode {
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
   @children("table")      tables:      list<Table>
+  @children("divider")    dividers:    list<Divider>
 }
 
 @block("edge", required_fields = ["from", "to"])
@@ -292,6 +298,7 @@ type Toggle {
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
   @children("table")      tables:      list<Table>
+  @children("divider")    dividers:    list<Divider>
 }
 
 @block("admonition", required_fields = ["kind"])
@@ -317,6 +324,7 @@ type Admonition {
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
   @children("table")      tables:      list<Table>
+  @children("divider")    dividers:    list<Divider>
 }
 
 # ---------------------------------------------------------------------------
@@ -349,6 +357,7 @@ type Admonition {
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
   @children("table")      tables:      list<Table>
+  @children("divider")    dividers:    list<Divider>
   # Only a template's column holds one; `schema` refuses it in a note's content.
   @children("period_calendar") period_calendars: list<PeriodCalendar>
 }
@@ -386,6 +395,7 @@ type PeriodCalendar {
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
   @children("table")      tables:      list<Table>
+  @children("divider")    dividers:    list<Divider>
 }
 
 @doc("A dict field value. Keys are identifiers; TheVault checks every value against the field's value kind.")

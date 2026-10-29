@@ -148,7 +148,7 @@ fn sync_info_needs_no_credentials() {
     let server = TestServer::start();
     let info = send(Client::new().get(server.url("/api/sync/info")), 200);
     assert_eq!(info["protocol"], 1);
-    assert_eq!(info["format_version"], 8);
+    assert_eq!(info["format_version"], 9);
     assert_eq!(info["server_version"], env!("CARGO_PKG_VERSION"));
     // The vault's id tells a device which vault its local copy belongs to (ticket 143).
     let vault_id = open_state(&server).vault_id().unwrap();

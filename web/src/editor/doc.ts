@@ -4,7 +4,8 @@
 // the same editable blocks, and a `toggle` or an `admonition` becomes a node holding its heading
 // line (the summary, the title) and then its editable blocks. A `table` becomes `table` and
 // `tableRow` nodes of `tableHeader` and `tableCell` nodes, each cell's text parsed as inline
-// markup. Every other block kind rides along untouched in a `vaultBlock`.
+// markup. A `divider` becomes a `horizontalRule`. Every other block kind rides along untouched in
+// a `vaultBlock`.
 
 import type { JSONContent } from "@tiptap/core";
 import type { Block, TemplateItem } from "../api";
@@ -59,6 +60,8 @@ function blockToDoc(block: Block): JSONContent {
       return paragraph(str(block, "text"));
     case "quote":
       return { type: "blockquote", content: [paragraph(str(block, "text"))] };
+    case "divider":
+      return { type: "horizontalRule" };
     case "list":
       return listToDoc(block, str(block, "style"));
     case "columns":
@@ -176,6 +179,8 @@ function docToBlock(node: JSONContent): Block | null {
       return { kind: "paragraph", fields: { text: textOf(node) } };
     case "blockquote":
       return { kind: "quote", fields: { text: linesOf(node) } };
+    case "horizontalRule":
+      return { kind: "divider" };
     case "bulletList":
     case "orderedList":
     case "taskList": {

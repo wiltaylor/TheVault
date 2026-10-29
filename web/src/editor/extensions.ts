@@ -407,7 +407,8 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
       heading: { levels: [1, 2, 3] },
       code: false,
       codeBlock: false,
-      horizontalRule: false,
+      // A `divider` block: `---` on an empty line makes one, and a pasted `<hr>` is one.
+      horizontalRule: { HTMLAttributes: { class: "divider-block" } },
       trailingNode: false,
       blockquote: {},
       // A call of an agent is a link to `agent:<name>?call=<id>` (agents G19).

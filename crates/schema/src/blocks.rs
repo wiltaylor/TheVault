@@ -12,7 +12,7 @@ use crate::encoding::{PALETTE, is_ident, is_ink_colour, is_palette, is_ulid};
 use crate::types::{FieldDef, FieldKind, RangeOf};
 
 /// The closed set of content block kinds.
-pub const CONTENT_KINDS: [&str; 17] = [
+pub const CONTENT_KINDS: [&str; 18] = [
     "heading",
     "paragraph",
     "list",
@@ -30,10 +30,11 @@ pub const CONTENT_KINDS: [&str; 17] = [
     "admonition",
     "card",
     "table",
+    "divider",
 ];
 
 /// The content block kinds a canvas card holds: every content block kind but a canvas.
-pub const CARD_BLOCK_KINDS: [&str; 16] = [
+pub const CARD_BLOCK_KINDS: [&str; 17] = [
     "heading",
     "paragraph",
     "list",
@@ -50,6 +51,7 @@ pub const CARD_BLOCK_KINDS: [&str; 16] = [
     "admonition",
     "card",
     "table",
+    "divider",
 ];
 
 /// The template block that only a template tab, or a column of one, holds: a calendar of the
@@ -581,6 +583,11 @@ impl Check<'_> {
                 self.only_blocks(d, &[], at);
             }
             "table" => self.table(d, at),
+            // A horizontal rule: no items and no blocks.
+            "divider" => {
+                self.items(d, &[], &[], at);
+                self.only_blocks(d, &[], at);
+            }
             _ => {}
         }
     }

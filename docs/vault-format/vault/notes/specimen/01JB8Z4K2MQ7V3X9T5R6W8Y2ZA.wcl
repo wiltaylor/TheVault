@@ -157,6 +157,8 @@ content body {
     }
   }
 
+  divider
+
   code {
     language = "rust"
     caption  = "Entry point"

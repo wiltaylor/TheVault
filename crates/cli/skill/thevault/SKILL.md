@@ -206,7 +206,7 @@ EOF
 vault put --type task --json < callout.json
 ```
 
-A `table` holds one `row` block per row, each with `cells`, a list of strings. `header = true` makes the first row the header, and `align`, one of `left`, `center` or `right` per column, is optional. Write every row with the same number of cells; a short row is padded with empty cells.
+A `table` holds one `row` block per row, each with `cells`, a list of strings. `header = true` makes the first row the header, and `align`, one of `left`, `center` or `right` per column, is optional. Write every row with the same number of cells; a short row is padded with empty cells. A `divider` block, written `divider` on a line of its own, holds nothing and draws a horizontal rule between the blocks around it.
 
 ```sh
 vault put --type task <<'EOF'
@@ -646,6 +646,7 @@ Any content block in a tab is shown on every note of the type. In a fixed block'
 | `asset` | `asset = "<asset id>"`: a file card, or a PDF viewer |
 | `card` | `note = "<note id>"`: that note as a card, with its type's `card` template, that opens it |
 | `table` | Optional `header` and `align`, and `row { cells = ["...", "..."] }` blocks of inline markup cells |
+| `divider` | Nothing: a horizontal rule between blocks, written `divider` on a line of its own (`{ "kind": "divider" }` in JSON) |
 | `code`, `mermaid` | `source`; `code` also takes `language` and `caption` |
 | `columns` | 2 to 6 `column { width = 1 ... }` blocks side by side, each holding slots and fixed blocks. Columns do not nest |
 | `toggle` | `text`, the summary, and optional `level` (0 to 3); the blocks it opens to show nest inside it |

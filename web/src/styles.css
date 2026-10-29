@@ -11003,3 +11003,17 @@ button.toast-action {
   font-family: var(--mono);
   font-size: 0.85rem;
 }
+
+/* A `divider` content block (rich-import H5): a thin rule between blocks, in the editor and in
+   read-only views. A selected one in the editor shows the selection colour. */
+hr.divider-block {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 1em 0;
+  height: 0;
+}
+
+.ProseMirror hr.divider-block.ProseMirror-selectednode {
+  border-top-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}

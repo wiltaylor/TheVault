@@ -101,13 +101,18 @@ function delimiterRow(line: string): Align[] | null {
 const rowLike = (line: string) => line.trim() !== "" && line.includes("|");
 
 /** Pasted text in pieces: runs of lines that are not a table, and the tables between them. */
-export type Piece = { kind: "text"; lines: string[] } | { kind: "table"; table: TableData };
+export type Piece = { kind: "text"; lines: string[] } | { kind: "table"; table: TableData } | { kind: "divider" };
+
+/** A Markdown thematic break on a line of its own: `---`, `***` or `___`, spaces allowed between. */
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
 
 /**
  * The tables in Markdown `text` (GFM: a header line, a delimiter line of `---` with optional
  * colons for alignment and as many cells, then body lines until a blank line or one with no
  * pipe), with the lines around them; null when it holds no table. Each cell's inline Markdown
  * becomes inline markup. A row longer than the header widens the table rather than losing cells.
+ * A thematic break line (`---`, `***`, `___`) is a divider piece; text with one but no table is
+ * pieces too.
  */
 export function markdownPieces(text: string): Piece[] | null {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
@@ -116,6 +121,14 @@ export function markdownPieces(text: string): Piece[] | null {
   let found = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
+    // A thematic break is a divider block (rich-import H5).
+    if (THEMATIC_BREAK.test(line)) {
+      if (loose.length) pieces.push({ kind: "text", lines: loose });
+      loose = [];
+      pieces.push({ kind: "divider" });
+      found = true;
+      continue;
+    }
     const align = i + 1 < lines.length && rowLike(line) ? delimiterRow(lines[i + 1]!) : null;
     const head = align ? splitRow(line) : null;
     if (!align || !head || head.length !== align.length || delimiterRow(line)) {

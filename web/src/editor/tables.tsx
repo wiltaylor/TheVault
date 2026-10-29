@@ -271,7 +271,10 @@ function leafText(leaf: PMNode): string {
   return "";
 }
 
-/** The text a copied slice holding a table is: each table as Markdown, other blocks as text. */
+/**
+ * The text a copied slice holding a table or a divider is: each table as Markdown, a divider as
+ * `---`, other blocks as text.
+ */
 export function sliceText(slice: Slice): string | undefined {
   let tables = false;
   const parts: string[] = [];
@@ -292,6 +295,10 @@ export function sliceText(slice: Slice): string | undefined {
     if (node.type.name === "table") {
       tables = true;
       parts.push(tableToMarkdown(tableData(node), noteTitle));
+    } else if (node.type.name === "horizontalRule") {
+      // A divider copies as a Markdown thematic break.
+      tables = true;
+      parts.push("---");
     } else {
       parts.push(node.isBlock ? node.textBetween(0, node.content.size, "\n\n", leafText) : node.isText ? (node.text ?? "") : leafText(node));
     }
@@ -320,13 +327,17 @@ export function flattenCells(html: string): string {
   return doc.body.innerHTML;
 }
 
-/** The editor slice for pasted text holding Markdown tables, the lines around them as paragraphs. */
+/**
+ * The editor slice for pasted text holding Markdown tables or thematic breaks, the lines around
+ * them as paragraphs.
+ */
 export function markdownSlice(schema: Schema, text: string): Slice | null {
   const pieces = markdownPieces(text);
   if (!pieces) return null;
   const nodes: PMNode[] = [];
   for (const p of pieces) {
     if (p.kind === "table") nodes.push(tableNode(schema, p.table));
+    else if (p.kind === "divider") nodes.push(schema.nodes.horizontalRule!.create());
     else for (const line of p.lines) if (line.trim()) nodes.push(schema.nodes.paragraph!.create(null, schema.text(line)));
   }
   const open = (n: PMNode | undefined) => (n?.type.name === "paragraph" ? 1 : 0);
@@ -650,8 +661,12 @@ export const TableKeys = Extension.create({
             const html = data?.getData("text/html") ?? "";
             const text = data?.getData("text/plain") ?? "";
             // HTML with a table of its own pastes as that table; other HTML, such as a code
-            // editor's, loses to the Markdown table in its text.
-            if (!html || /<table[\s>]/i.test(html) || !view.editable || !markdownPieces(text)) return false;
+            // editor's, loses to the Markdown table in its text, and HTML with no `<hr>` loses
+            // to a Markdown thematic break in its text.
+            if (!html || /<table[\s>]/i.test(html) || !view.editable) return false;
+            const pieces = markdownPieces(text);
+            const wins = pieces?.some((p) => p.kind === "table" || (p.kind === "divider" && !/<hr[\s/>]/i.test(html)));
+            if (!wins) return false;
             repasting = true;
             try {
               view.pasteText(text, event);

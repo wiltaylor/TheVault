@@ -228,6 +228,9 @@ export function BlockView(
       <Match when={b().kind === "table"}>
         <TableBlock block={b()} />
       </Match>
+      <Match when={b().kind === "divider"}>
+        <hr class="divider-block" />
+      </Match>
       <Match when={b().kind === "period_calendar"}>
         <PeriodCalendar block={b()} />
       </Match>

@@ -1977,6 +1977,28 @@ Rules:
 - A table sits wherever a content block does: in columns, toggles, admonitions and canvas cards.
 - Copied out of the web client, a table is a GitHub-flavoured Markdown table, with the header row's delimiter line carrying the alignments, `|` in a cell escaped as `\|` and a line break as `<br>`; a table with no header row gets an empty one. Pasted Markdown in that form, the outer pipes optional, becomes a table with `header = true`, its cells' Markdown converted to inline markup.
 
+### `divider`
+
+A horizontal rule between the blocks around it. It holds no items and no blocks, so the canonical writer writes it as the bare word `divider` on a line of its own.
+
+```wcl
+paragraph {
+  text = "Above the rule."
+}
+
+divider
+
+paragraph {
+  text = "Below it."
+}
+```
+
+Rules:
+
+- A divider sits wherever a content block does: in columns, toggles, admonitions and canvas cards. `schema` rejects any item or block inside one.
+- Copied out of the web client as Markdown, a divider is `---`. Pasted Markdown `---`, `***` or `___` on a line of its own, and a pasted HTML `<hr>`, become one, and so does typing `---` on an empty line in the editor.
+- An imported email's or event's HTML `<hr>` becomes one (see [Imported HTML](#imported-html)).
+
 ### `control`
 
 A form control bound to one field of the note it is shown on: a text box, a slider, a toggle, a calendar and so on. It shows the field's current value and editing it writes the field, so the field stays the only place the value lives. A control, a slot, a `{{name}}` reference and the properties sidebar showing one field always agree, and two controls may bind the same field. Controls are mostly placed in [templates](#templates), to lay a type out as a form, but a note's own content and a canvas card may hold them too.
