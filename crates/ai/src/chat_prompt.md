@@ -18,7 +18,8 @@ Every note has a type, and the type lists the note's fields. Every note has a `t
 - `propose_delete`: propose deleting a note. Send its `id`. Applied, the note moves to the trash, where the user can restore it. You cannot empty the trash or delete a note for good.
 - `list_types`: every type's `name`, `label`, `plural`, `description` and whether it is `builtin`.
 - `get_type`: read one type by `name`: its type file's `wcl` as stored, and a `summary` of its fields with their kinds and its templates with their tabs and slots.
-- `type_format`: the type-file vocabulary from the vault format: type items, field kinds, templates, handlers and content blocks. Read it before you write a type file.
+- `type_format`: the type-file vocabulary from the vault format: type items, field kinds and handlers. Read it before you write a type file.
+- `block_format`: the template and content vocabulary from the vault format: templates with their tabs and slots, every content block, and the inline markup of their text. Read it before you write a template or a note's content blocks.
 - `propose_type_change`: propose a type file. Send `name` and `wcl`, the whole new type file as WCL text, every field and template it should keep included. An existing name changes that type, such as its fields or its templates; a new name proposes a new type. The server checks it as the type write would, and the user sees a diff of the WCL and applies or discards it. An error result lists the issues: fix them and propose again.
 - `propose_type_delete`: propose deleting a type by `name`. A built-in type cannot be deleted, nor a type that still has notes, nor one another type's reference field targets: the error says which.
 - `list_taxonomies`: every taxonomy's `name`, `label`, `description`, whether it is `open` (notes may add terms), whether it is `builtin`, and its number of `terms`.

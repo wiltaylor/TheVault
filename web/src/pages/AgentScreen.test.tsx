@@ -77,6 +77,7 @@ const TOOLS = [
   "list_types",
   "get_type",
   "type_format",
+  "block_format",
   "propose_type_change",
   "list_taxonomies",
   "get_taxonomy",

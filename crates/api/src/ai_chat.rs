@@ -2820,7 +2820,12 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "type_format",
-            "The vocabulary of type files: their items, every field kind, templates, handlers and content blocks. Read it before proposing a type change.",
+            "The vocabulary of type files: their items, every field kind and handlers. Templates, their tabs and the content blocks they hold are in block_format. Read it before proposing a type change.",
+            json!({}),
+        ),
+        tool(
+            "block_format",
+            "The vocabulary of templates and content: templates and their tabs and slots, every content block and the inline markup of their text. Read it before proposing a template change or writing a note's content blocks.",
             json!({}),
         ),
         tool(
@@ -3417,6 +3422,7 @@ fn propose_or_read(
         "list_types" => Ok(list_types(w)),
         "get_type" => get_type(w, input),
         "type_format" => Ok(type_format()),
+        "block_format" => Ok(block_format()),
         "propose_type_change" => propose_type(w, &call.id, input),
         "propose_type_delete" => propose_type_delete(w, &call.id, input),
         "list_taxonomies" => Ok(crate::ai_taxonomies::list(w)),
@@ -3759,22 +3765,37 @@ fn get_type(w: &Writer, input: &Value) -> Result<ToolOut, ToolOut> {
 /// The vault format document, embedded at build time.
 pub(crate) const VAULT_FORMAT: &str = include_str!("../../../docs/vault-format.md");
 
-/// The sections of `docs/vault-format.md` a type file is written from: type files to handlers,
-/// and the content blocks a template's tabs hold.
+/// The text of `docs/vault-format.md` from the heading `from` up to the heading `to`, trimmed.
+fn format_section(from: &str, to: &str) -> String {
+    let start = VAULT_FORMAT.find(from).unwrap_or(VAULT_FORMAT.len());
+    let end = VAULT_FORMAT[start..]
+        .find(to)
+        .map_or(VAULT_FORMAT.len(), |e| start + e);
+    VAULT_FORMAT[start..end].trim().to_owned()
+}
+
+/// The sections of `docs/vault-format.md` a type file is written from: type files, field kinds
+/// and handlers. Templates and the content blocks their tabs hold are `block_format_text`.
 pub fn type_format_text() -> &'static str {
     static TEXT: OnceLock<String> = OnceLock::new();
     TEXT.get_or_init(|| {
-        let section = |from: &str, to: &str| {
-            let start = VAULT_FORMAT.find(from).unwrap_or(VAULT_FORMAT.len());
-            let end = VAULT_FORMAT[start..]
-                .find(to)
-                .map_or(VAULT_FORMAT.len(), |e| start + e);
-            VAULT_FORMAT[start..end].trim().to_owned()
-        };
         format!(
             "{}\n\n{}\n",
-            section("\n## Type files\n", "\n## Note files\n"),
-            section("\n## Content blocks\n", "\n## Inline markup\n"),
+            format_section("\n## Type files\n", "\n## Templates\n"),
+            format_section("\n## Handlers\n", "\n## Note files\n"),
+        )
+    })
+}
+
+/// The sections of `docs/vault-format.md` a template and a note's content are written from:
+/// templates, content blocks and the inline markup of their text.
+pub fn block_format_text() -> &'static str {
+    static TEXT: OnceLock<String> = OnceLock::new();
+    TEXT.get_or_init(|| {
+        format!(
+            "{}\n\n{}\n",
+            format_section("\n## Templates\n", "\n## Handlers\n"),
+            format_section("\n## Content blocks\n", "\n## Imported HTML\n"),
         )
     })
 }
@@ -3782,6 +3803,11 @@ pub fn type_format_text() -> &'static str {
 /// `type_format`: the type-file vocabulary.
 fn type_format() -> ToolOut {
     type_out(json!({ "format": type_format_text() }), Vec::new(), None)
+}
+
+/// `block_format`: the template and content block vocabulary.
+fn block_format() -> ToolOut {
+    type_out(json!({ "format": block_format_text() }), Vec::new(), None)
 }
 
 /// `propose_type_change`: check the type file as the type write would, without writing it, and
@@ -3982,10 +4008,41 @@ mod tests {
     fn type_format_holds_the_type_file_sections() {
         let t = type_format_text();
         assert!(t.starts_with("## Type files"), "{}", &t[..40]);
-        assert!(t.contains("## Templates"));
-        assert!(t.contains("## Content blocks"));
+        assert!(t.contains("## Field kinds"));
+        assert!(t.contains("## Handlers"));
+        assert!(!t.contains("## Templates"));
         assert!(!t.contains("## Note files"));
-        assert!(t.len() < RESULT_LIMIT);
+        assert!(t.len() < RESULT_LIMIT * 8 / 10, "{} bytes", t.len());
+    }
+
+    #[test]
+    fn block_format_holds_the_template_and_content_block_sections() {
+        let t = block_format_text();
+        assert!(t.starts_with("## Templates"), "{}", &t[..40]);
+        assert!(t.contains("## Content blocks"));
+        assert!(t.contains("## Inline markup"));
+        assert!(!t.contains("## Handlers"));
+        assert!(!t.contains("## Imported HTML"));
+        assert!(t.len() < RESULT_LIMIT * 8 / 10, "{} bytes", t.len());
+    }
+
+    #[test]
+    fn type_and_block_format_cover_type_files_to_inline_markup() {
+        let (types, blocks) = (type_format_text(), block_format_text());
+        for (from, to) in [
+            ("\n## Type files\n", "\n## Note files\n"),
+            ("\n## Content blocks\n", "\n## Imported HTML\n"),
+        ] {
+            // Each `## ` section of the old type_format text is whole in one of the two.
+            for section in format_section(from, to).split("\n## ") {
+                let section = section.trim().trim_start_matches("## ");
+                assert!(
+                    types.contains(section) || blocks.contains(section),
+                    "{} is in neither",
+                    section.lines().next().unwrap_or_default()
+                );
+            }
+        }
     }
 
     #[test]

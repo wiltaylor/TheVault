@@ -203,7 +203,8 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `propose_delete` | Checks that a note exists and can be deleted and shows it to you; deletes it only when confirmation is off. Applied, the note moves to the trash; the model cannot empty the trash |
 | `list_types` | Every type's name, label, plural, description, and whether it is built in |
 | `get_type` | Reads one type file's WCL, with its fields and templates |
-| `type_format` | The type-file sections of the vault format, so the model knows the vocabulary |
+| `type_format` | The type-file sections of the vault format (type items, field kinds, handlers), so the model knows the vocabulary |
+| `block_format` | The template, content block and inline markup sections of the vault format |
 | `propose_type_change` | Checks a whole new type file, for an existing type or a new name, and shows it to you; writes it only when confirmation is off |
 | `propose_type_delete` | Checks that a type can be deleted, as Delete type in the type editor would, and shows the delete to you; deletes it only when confirmation is off. A built-in type, a type that still has notes and a type another type's reference field targets are refused, and the error says which |
 | `list_taxonomies` | Every taxonomy's name, label, description, whether it is open (notes may add terms), whether it is built in, and its term count |

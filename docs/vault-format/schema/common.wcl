@@ -99,15 +99,15 @@ type NoteCard {
 # A table's rows of inline markup cells. `schema` checks the alignments, and
 # the bounds of 100 columns and 2000 rows.
 @block("row", required_fields = ["cells"])
-type TableRow {
+type TableBlockRow {
   cells: list<utf8>
 }
 
 @block("table")
-type Table {
+type TableBlock {
   header: bool?
   align:  list<utf8>?
-  @children("row", min = 1) rows: list<TableRow>
+  @children("row", min = 1) rows: list<TableBlockRow>
 }
 
 # A horizontal rule between blocks. It holds nothing.
@@ -215,7 +215,7 @@ type CanvasNode {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
-  @children("table")      tables:      list<Table>
+  @children("table")      tables:      list<TableBlock>
   @children("divider")    dividers:    list<Divider>
 }
 
@@ -297,7 +297,7 @@ type Toggle {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
-  @children("table")      tables:      list<Table>
+  @children("table")      tables:      list<TableBlock>
   @children("divider")    dividers:    list<Divider>
 }
 
@@ -323,7 +323,7 @@ type Admonition {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
-  @children("table")      tables:      list<Table>
+  @children("table")      tables:      list<TableBlock>
   @children("divider")    dividers:    list<Divider>
 }
 
@@ -356,7 +356,7 @@ type Admonition {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
-  @children("table")      tables:      list<Table>
+  @children("table")      tables:      list<TableBlock>
   @children("divider")    dividers:    list<Divider>
   # Only a template's column holds one; `schema` refuses it in a note's content.
   @children("period_calendar") period_calendars: list<PeriodCalendar>
@@ -394,7 +394,7 @@ type PeriodCalendar {
   @children("toggle")     toggles:     list<Toggle>
   @children("admonition") admonitions: list<Admonition>
   @children("card")       cards:       list<NoteCard>
-  @children("table")      tables:      list<Table>
+  @children("table")      tables:      list<TableBlock>
   @children("divider")    dividers:    list<Divider>
 }
 

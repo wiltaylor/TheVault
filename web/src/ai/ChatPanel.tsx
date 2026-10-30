@@ -109,6 +109,8 @@ export function stepLabel(name: string, input: Json): string {
       return `Read type ${s("name")}`;
     case "type_format":
       return "Read the type file format";
+    case "block_format":
+      return "Read the template and content block format";
     case "propose_type_change":
       return `Checked a change to type ${s("name")}`;
     case "propose_type_delete":
@@ -235,6 +237,8 @@ export function activeLabel(name: string, input: Json): string {
       return "Reading a type";
     case "type_format":
       return "Reading the type file format";
+    case "block_format":
+      return "Reading the template and content block format";
     case "propose_type_change":
       return "Checking a type change";
     case "propose_type_delete":
@@ -343,6 +347,7 @@ const TYPE_TOOLS = new Set([
   "list_types",
   "get_type",
   "type_format",
+  "block_format",
   "propose_type_change",
   "propose_type_delete",
   "list_taxonomies",

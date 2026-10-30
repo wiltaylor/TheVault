@@ -260,6 +260,7 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["list_types", "List types"],
       ["get_type", "Read a type"],
       ["type_format", "Read the type file format"],
+      ["block_format", "Read the template and content block format"],
       ["propose_type_change", "Change types"],
       ["propose_type_delete", "Delete types"],
     ],

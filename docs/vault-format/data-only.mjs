@@ -169,8 +169,11 @@ function parse(tokens) {
       if (t.kind === closing) { next(); return; }
       if (t.kind !== "word") fail(t, `expected a field or block, found \`${t.value}\``);
       next();
-      if (RESERVED_ITEMS.has(t.value)) fail(t, `\`${t.value}\` items are not allowed in vault files`);
       const after = peek();
+      // A field may be named after a keyword, as a trigger's `type = "email"` is.
+      if (RESERVED_ITEMS.has(t.value) && after.kind !== "=") {
+        fail(t, `\`${t.value}\` items are not allowed in vault files`);
+      }
       if (after.kind === "=") {
         if (!isIdent(t.value)) fail(t, `\`${t.value}\` is not a valid field name`);
         next();

@@ -314,7 +314,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 49);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 50);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
@@ -1140,6 +1140,7 @@ fn type_tools_list_read_and_propose_a_template_change_without_writing() {
     fake.push(AnthropicMessage::new().tool_use("toolu_l", "list_types", json!({})));
     fake.push(AnthropicMessage::new().tool_use("toolu_g", "get_type", json!({ "name": "memo" })));
     fake.push(AnthropicMessage::new().tool_use("toolu_f", "type_format", json!({})));
+    fake.push(AnthropicMessage::new().tool_use("toolu_b", "block_format", json!({})));
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_t",
         "propose_type_change",
@@ -1150,6 +1151,8 @@ fn type_tools_list_read_and_propose_a_template_change_without_writing() {
     assert_eq!(
         shape(&events),
         [
+            "tool",
+            "tool_result",
             "tool",
             "tool_result",
             "tool",
@@ -1193,7 +1196,16 @@ fn type_tools_list_read_and_propose_a_template_change_without_writing() {
         .unwrap()
         .to_owned();
     assert!(format.contains("## Type files"), "{}", &format[..200]);
-    assert!(format.contains("## Templates"));
+    assert!(format.contains("## Field kinds"));
+
+    // block_format is its templates, content blocks and inline markup.
+    let format = tool_result_in(&fake, 4)["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(format.contains("## Templates"), "{}", &format[..200]);
+    assert!(format.contains("## Content blocks"));
+    assert!(format.contains("## Inline markup"));
 
     let p = last(&events, "type_proposal");
     assert_eq!(p["id"], "toolu_t");
@@ -1207,7 +1219,7 @@ fn type_tools_list_read_and_propose_a_template_change_without_writing() {
     assert_eq!(p["issues"], json!([]));
 
     // The model is told the change awaits the user, and nothing was written.
-    let result = tool_result_in(&fake, 4);
+    let result = tool_result_in(&fake, 5);
     assert_eq!(result["is_error"], false);
     assert!(
         result["content"]
