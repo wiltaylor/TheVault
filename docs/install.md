@@ -218,6 +218,35 @@ sudo iptables -I DOCKER-USER 6 -s "$subnet" -d 100.64.0.0/10 -j REJECT
 
 The first rule lets the box answer the server. If your DNS server is on the local network, allow it before the others, such as `sudo iptables -I DOCKER-USER 2 -s "$subnet" -d 192.168.1.1 -p udp --dport 53 -j RETURN`. The rules last until the host restarts; keep them with your distribution's iptables persistence. The subnet changes if the network is removed, such as by `docker compose down`, so check it again after that.
 
+### Add an Android emulator
+
+The Android box, `docker/android.Dockerfile`, is the browser box plus the Android SDK, `adb` and an x86_64 Android 15 emulator with Google Play. The emulator window opens on the same desktop, and agents drive it through `browser_run` with `adb`, such as `adb shell input tap 540 1200`, `adb exec-out uiautomator dump /dev/tty` and `adb exec-out screencap -p > shot.png`. The Google Play system image may not be redistributed, so no published image exists: you build it yourself, and the build accepts the Android SDK licences for you.
+
+The host needs `/dev/kvm`. The image adds about 5.5 GB to the browser box.
+
+1. Build it from a checkout of this repository. This builds the browser box first:
+
+   ```sh
+   just android-image-build
+   ```
+
+2. Next to `compose.yaml`, create `compose.override.yaml`:
+
+   ```yaml
+   services:
+     browser:
+       image: thevault-android:local
+       devices: [/dev/kvm]
+       group_add: ["${KVM_GID}"]
+   ```
+
+3. In `.env`, set `KVM_GID` to the output of `stat -c %g /dev/kvm`, and set `BROWSER_MEMORY=8g`. The box uses over 5 GB once the emulator is up, so the default 2 GB limit kills it.
+4. Run `docker compose up -d`.
+
+The box refuses to start without `/dev/kvm`. The emulator cold-boots on every start, in under a minute on the default 2 CPUs. Its AVD lives in `/home/agent/.android` on the `thevault_browser-home` volume, so Google sign-ins and installed apps persist. Sign in to Google on the desktop yourself, and treat that account like a browser login: every agent with Browser automation can use it. `ANDROID_RAM_MB` sets the emulator's memory, default `4096`.
+
+For `just dev`, `just dev-android` starts the Android box in place of the one `just dev-browser` starts.
+
 ### Turn it off
 
 Stop the box and remove its container:

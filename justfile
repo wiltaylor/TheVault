@@ -66,7 +66,10 @@ dev-browser name='thevault-browser-dev' image='thevault-browser:local': (require
 	if ! docker image inspect '{{image}}' >/dev/null 2>&1; then just browser-image-build '{{image}}'; fi
 	token=$(openssl rand -hex 32)
 	docker rm -f '{{name}}' >/dev/null 2>&1 || true
-	docker run -d --name '{{name}}' --shm-size 1g -e BROWSER_TOKEN="$token" \
+	# The Android box needs /dev/kvm; the browser box ignores it.
+	kvm=()
+	if [ -e /dev/kvm ]; then kvm=(--device /dev/kvm --group-add "$(stat -c %g /dev/kvm)"); fi
+	docker run -d --name '{{name}}' --shm-size 1g -e BROWSER_TOKEN="$token" "${kvm[@]}" \
 		-v '{{name}}-home':/home/agent '{{image}}' >/dev/null
 	ip=$(docker inspect -f '{{{{range .NetworkSettings.Networks}}{{{{.IPAddress}}{{{{end}}' '{{name}}')
 	mkdir -p .scratch
@@ -461,6 +464,20 @@ browser-image-build tag='thevault-browser:local': (require-host-tool "docker")
 [group('docker')]
 browser-image-test: (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl")
 	docker/test-browser-image.sh
+
+# Build the Android box image (docker/android.Dockerfile): the browser box image (browser) with the Android SDK, adb and a Google Play emulator, for linux/amd64, built locally and never pushed; runs on the host, not through ./dev
+[group('docker')]
+android-image-build tag='thevault-android:local' browser='thevault-browser:local': (require-host-tool "docker") (browser-image-build browser)
+	docker build -f docker/android.Dockerfile --platform linux/amd64 --build-arg BROWSER_IMAGE={{browser}} -t {{tag}} .
+
+# Build the browser box and Android box images, or check image when given, in a throwaway container with /dev/kvm on free ports: the /dev/kvm refusal, adb on PATH, the emulator booting with Google Play and Play services, its window on the desktop, and adb input, UI dump and a screenshot read back; runs on the host
+[group('docker')]
+android-image-test image='': (require-host-tool "docker") (require-host-tool "jq") (require-host-tool "curl")
+	IMAGE='{{image}}' docker/test-android-image.sh
+
+# Start an Android box for `just dev` in place of the browser box, as `just dev-browser` does, after building its image: the emulator boots on the desktop and agents drive it with adb through browser_run; runs on the host
+[group('docker')]
+dev-android name='thevault-android-dev': (android-image-build) (dev-browser name 'thevault-android:local')
 
 # Build and check the browser box release image as .github/workflows/browser-image.yml does, tagging ghcr.io/wiltaylor/thevault-browser (or image) as the server image is tagged, locally without pushing; runs on the host
 [group('docker')]

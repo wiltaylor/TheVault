@@ -95,6 +95,8 @@ With the browser box set up ([Browser box](install.md#browser-box)), an agent wi
 
 The switch is `permissions.browser = true` in the agent file, and it is apart from the tools list: an agent with no tools list (every tool) does not get the browser tools, and a tools list cannot name them. The tools are offered only when the server has a box (`VAULT_BROWSER_URL` set and not empty) and the switch is on.
 
+When the box is the Android box ([Add an Android emulator](install.md#add-an-android-emulator)), `browser_run` also drives its emulator with `adb`. The system prompt and the `browser_run` description tell the agent to check for `adb` and how to read the screen, tap, type and take a screenshot.
+
 | Tool | What it does |
 |------|--------------|
 | `browser_run {command, timeout}` | Runs a bash command in the box, in `/work`, killed after `timeout` seconds (1 to 300, 60 when `null`). The model gets the exit code, stdout and stderr, each cut to its last 20,000 characters, and whether it timed out. At most 4 commands run in the box at once; a fifth is an error result |

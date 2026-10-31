@@ -1,0 +1,4 @@
+# The build context of docker/android.Dockerfile is the repository root; it builds on the browser
+# box image and adds only docker/android/.
+*
+!docker/android/
