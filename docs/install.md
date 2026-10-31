@@ -230,12 +230,13 @@ The host needs `/dev/kvm`. The image adds about 5.5 GB to the browser box.
    just android-image-build
    ```
 
-2. Next to `compose.yaml`, create `compose.override.yaml`:
+2. Next to `compose.yaml`, create `compose.override.yaml`. `pull_policy: never` keeps `docker compose pull` from looking for the local image in a registry:
 
    ```yaml
    services:
      browser:
        image: thevault-android:local
+       pull_policy: never
        devices: [/dev/kvm]
        group_add: ["${KVM_GID}"]
    ```
@@ -244,6 +245,8 @@ The host needs `/dev/kvm`. The image adds about 5.5 GB to the browser box.
 4. Run `docker compose up -d`.
 
 The box refuses to start without `/dev/kvm`. The emulator cold-boots on every start, in under a minute on the default 2 CPUs. Its AVD lives in `/home/agent/.android` on the `thevault_browser-home` volume, so Google sign-ins and installed apps persist. Sign in to Google on the desktop yourself, and treat that account like a browser login: every agent with Browser automation can use it. `ANDROID_RAM_MB` sets the emulator's memory, default `4096`.
+
+The Android box does not follow `THEVAULT_VERSION`, so `docker compose pull` leaves it as it is. To upgrade it, build it again and run `docker compose up -d`. To build it on another machine, put it on the server with `docker save thevault-android:local | ssh <server> docker load`.
 
 For `just dev`, `just dev-android` starts the Android box in place of the one `just dev-browser` starts.
 
