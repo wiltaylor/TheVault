@@ -318,7 +318,7 @@ pub(crate) fn set_archived(doc: &mut Doc, archived: bool) {
 
 /// Print a doc as WCL text, ready for [`store::canonical`]. Ink stroke points are rounded as
 /// `docs/vault-format.md` "Ink" says: coordinates to two decimal places, pressure to three.
-pub(crate) fn print(doc: &Doc) -> String {
+pub fn print(doc: &Doc) -> String {
     let mut out = String::new();
     print_body(&mut out, doc, false);
     out

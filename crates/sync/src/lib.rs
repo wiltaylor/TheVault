@@ -88,7 +88,7 @@ use writer::{
 
 use client::Home;
 pub use client::Timeouts;
-pub use merge::{Merged, merge};
+pub use merge::{Merged, Resolved, Side, merge, merge_preferring};
 pub use progress::{Progress, Stage, SyncProgress};
 pub use queue::{AssetFailure, Held, KnownAsset, Pending, Queue, Synced};
 
