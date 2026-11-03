@@ -186,6 +186,10 @@ impl GitSync {
                         "the branch written under the previous sync key was not removed: {e}"
                     ));
                 }
+                // This vault's branch under the previous key is not another instance's.
+                if let Some(old) = &status.branch {
+                    report.skipped_branches.retain(|b| &b.branch != old);
+                }
                 status.branch = Some(report.branch.clone());
                 let previous = status.last_report.take();
                 let news = previous.as_ref().is_none_or(|p| {

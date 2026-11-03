@@ -919,7 +919,8 @@ impl Round<'_> {
         }
     }
 
-    /// Record that note `id` clashed in `fields`, and tell the user (D9).
+    /// Record that note `id` clashed in `fields`, and tell the user when this vault's values
+    /// lost: the instance that lost is the one notified, once (D9).
     fn clash(&mut self, id: &str, doc: &Doc, b: &Branch, origin: &str, fields: Vec<String>) {
         let title = field(doc, "title")
             .and_then(Value::as_str)
@@ -947,7 +948,9 @@ impl Round<'_> {
             url: None,
             source: "system".to_owned(),
         };
-        if let Err(e) = self.w.state().add_notification(&n) {
+        if origin != self.me
+            && let Err(e) = self.w.state().add_notification(&n)
+        {
             eprintln!("gitsync: recording the clash notification for {id}: {e}");
         }
         self.report.clashes.push(Clash {
