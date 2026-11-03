@@ -253,6 +253,59 @@ fn a_note_that_leaves_the_published_set_is_archived_until_it_returns() {
 }
 
 #[test]
+fn a_note_the_import_query_stops_matching_is_archived_until_it_matches_again() {
+    let repo = BareRepo::new();
+    let (a, b) = pair(&repo.url(), "from memo", "");
+    a.configure(&repo.url(), "from memo", "from memo", json!({}));
+    b.configure(
+        &repo.url(),
+        "from memo",
+        "from memo where b != \"no\"",
+        json!({}),
+    );
+    let leaves = a.create(&memo("Leaves", "1", "yes"));
+    let user_archived = a.create(&memo("Archived by the user", "1", "yes"));
+    let mine = b.create(&memo("B's own", "1", "yes"));
+    b.sync();
+    a.sync();
+    b.sync();
+    assert!(!b.archived(&leaves));
+    b.at_version("POST", &user_archived, "/archive");
+
+    // A changes the field B's import query filters on: both still published, neither selected.
+    a.set(&leaves, "b", "no");
+    a.set(&user_archived, "b", "no");
+    a.set(&mine, "b", "no");
+    a.sync();
+    let report = b.sync();
+    assert_eq!(
+        ids(&report, "archived"),
+        std::slice::from_ref(&leaves),
+        "{report}"
+    );
+    assert!(b.archived(&leaves));
+    assert!(b.archived(&user_archived));
+    // A note B created is always selected, so it is never archived this way.
+    assert!(!b.archived(&mine));
+    assert_eq!(b.field(&mine, "b"), "no");
+    // The archive stays on B: A's copy is not archived.
+    a.sync();
+    assert!(!a.archived(&leaves));
+
+    a.set(&leaves, "b", "yes");
+    a.set(&user_archived, "b", "yes");
+    a.sync();
+    let report = b.sync();
+    assert_eq!(
+        ids(&report, "unarchived"),
+        std::slice::from_ref(&leaves),
+        "{report}"
+    );
+    assert!(!b.archived(&leaves));
+    assert!(b.archived(&user_archived), "the user's archive was undone");
+}
+
+#[test]
 fn a_deleted_import_stays_deleted_until_restored() {
     let repo = BareRepo::new();
     let (a, b) = pair(&repo.url(), "from memo", "from memo");
