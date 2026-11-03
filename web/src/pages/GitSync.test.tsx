@@ -41,8 +41,8 @@ const settings: GitSyncSettings = {
   remote_url: "https://github.com/me/vault-sync.git",
   auth: "https",
   https_username: "x-access-token",
-  export_query: 'type = "project"',
-  import_query: 'type = "project"',
+  export_query: "from project",
+  import_query: "from project",
   schedule: "*/15 * * * *",
   name: "laptop",
   warn_bytes: 1024 ** 3,
@@ -112,7 +112,7 @@ describe("GitSync", () => {
       new ApiError(400, { error: "bad_request", message: "the import query may not use this", field: "import_query" }),
     );
     render(() => <GitSync />);
-    fireEvent.input(await screen.findByLabelText("Import query"), { target: { value: "id = this.id" } });
+    fireEvent.input(await screen.findByLabelText("Import query"), { target: { value: "from project where id == this" } });
     fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
 
     const shown = await screen.findByText("the import query may not use this");

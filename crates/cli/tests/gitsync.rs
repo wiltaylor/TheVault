@@ -104,7 +104,7 @@ fn status_shows_no_secret_and_set_keeps_the_settings_it_was_not_given() {
             "gitsync",
             "set",
             "--import-query",
-            "from doc where id == this.id",
+            "from doc where id == this",
         ],
         "",
     );

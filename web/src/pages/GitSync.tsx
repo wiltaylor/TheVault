@@ -512,7 +512,7 @@ export function GitSync(props: { pollMs?: number }) {
                   id="gitsync-export"
                   rows={3}
                   spellcheck={false}
-                  placeholder='type = "project" and tags contains "shared"'
+                  placeholder='from project where tags == "shared"'
                   aria-invalid={refused()?.field === "export_query" ? "true" : undefined}
                   value={form().export_query}
                   onInput={(e) => edit("export_query", e.currentTarget.value)}
@@ -526,7 +526,7 @@ export function GitSync(props: { pollMs?: number }) {
                   id="gitsync-import"
                   rows={3}
                   spellcheck={false}
-                  placeholder='type = "project"'
+                  placeholder="from project"
                   aria-invalid={refused()?.field === "import_query" ? "true" : undefined}
                   value={form().import_query}
                   onInput={(e) => edit("import_query", e.currentTarget.value)}
