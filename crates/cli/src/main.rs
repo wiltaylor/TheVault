@@ -284,6 +284,10 @@ enum Command {
     /// Secrets that tasks read. Values are never shown.
     #[command(subcommand)]
     Secret(Secret),
+    /// Git sync with your other instances through a git repo (Settings > Sync). Secret values
+    /// are never shown, except a newly generated sync key, once.
+    #[command(subcommand)]
+    Gitsync(Gitsync),
     /// The canvases inside a note.
     #[command(subcommand)]
     Canvas(Canvas),
@@ -713,6 +717,90 @@ enum Secret {
     Set { name: String },
     /// Delete a secret.
     Delete { name: String },
+}
+
+#[derive(Subcommand)]
+enum Gitsync {
+    /// The settings, which secrets are set, whether a round runs, and the last round.
+    Status,
+    /// Change some of the settings. Each flag left out keeps its saved value.
+    Set(Box<GitsyncSet>),
+    /// The token git sends over HTTPS.
+    #[command(subcommand)]
+    Token(GitsyncToken),
+    /// The SSH key pair git signs in with over SSH.
+    #[command(subcommand)]
+    SshKey(GitsyncSshKey),
+    /// The sync key every instance shares.
+    #[command(subcommand)]
+    Key(GitsyncKey),
+    /// Run a round now and wait for it to end, then print the status with its report.
+    Run {
+        /// Print the answer as soon as the round starts instead of waiting for it.
+        #[arg(long)]
+        no_wait: bool,
+    },
+    /// Forget the connection: the settings, every git sync secret, the clone and the merge
+    /// bases. Notes already synced stay.
+    Disconnect,
+}
+
+#[derive(Args)]
+struct GitsyncSet {
+    /// The git remote, such as https://github.com/you/vault-sync.git.
+    #[arg(long)]
+    remote_url: Option<String>,
+    /// How git signs in: `https` with the token, or `ssh` with the key pair.
+    #[arg(long, value_parser = ["https", "ssh"])]
+    auth: Option<String>,
+    /// The username sent with the token; x-access-token for GitHub.
+    #[arg(long)]
+    https_username: Option<String>,
+    /// The notes this instance publishes, as query text.
+    #[arg(long)]
+    export_query: Option<String>,
+    /// Which of the other instances' published notes this instance takes. It may not use `this`.
+    #[arg(long)]
+    import_query: Option<String>,
+    /// When a round runs, as cron, such as "*/15 * * * *".
+    #[arg(long)]
+    schedule: Option<String>,
+    /// This instance's name, which other instances' history shows.
+    #[arg(long)]
+    name: Option<String>,
+    /// Warn once the published branch is larger than this many bytes.
+    #[arg(long)]
+    warn_bytes: Option<u64>,
+    /// Refuse to push a published branch larger than this many bytes.
+    #[arg(long)]
+    max_bytes: Option<u64>,
+    /// Pause or resume the schedule: true or false.
+    #[arg(long)]
+    paused: Option<bool>,
+}
+
+#[derive(Subcommand)]
+enum GitsyncToken {
+    /// Store or replace the token. It is read from stdin.
+    Set,
+    /// Remove the token.
+    Clear,
+}
+
+#[derive(Subcommand)]
+enum GitsyncSshKey {
+    /// Make an ed25519 key pair and print its public key, to add to the repo as a deploy key.
+    Generate,
+    /// Store an OpenSSH private key read from stdin, and print its public key.
+    Set,
+}
+
+#[derive(Subcommand)]
+enum GitsyncKey {
+    /// Make a new sync key and print it. This is the only time it is shown.
+    Generate,
+    /// Store a sync key from another instance, `tvsync1-...`, read from stdin.
+    Set,
 }
 
 #[derive(Subcommand)]
@@ -1181,6 +1269,7 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
             }
             Secret::Delete { name } => api.delete(&["api", "secrets", &name]),
         },
+        Command::Gitsync(g) => gitsync(api, g),
         Command::Canvas(c) => match c {
             Canvas::Get { id, name } => api.get(&["api", "notes", &id, "canvas", &name]),
             Canvas::Put {
@@ -1204,6 +1293,125 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
         | Command::RestoreBackup { .. }
         | Command::VersionCompare { .. } => unreachable!("local commands are handled in run"),
     }
+}
+
+/// The git sync's routes (git-sync D18).
+const GITSYNC: [&str; 3] = ["api", "integrations", "gitsync"];
+
+/// The route `GITSYNC` followed by `rest`.
+fn gitsync_path<'a>(rest: &[&'a str]) -> Vec<&'a str> {
+    GITSYNC
+        .iter()
+        .copied()
+        .chain(rest.iter().copied())
+        .collect()
+}
+
+/// `vault gitsync`. A write the server answers with no body prints the status instead.
+fn gitsync(api: &Api, g: Gitsync) -> Result<Value, Fail> {
+    let status = || api.get(&GITSYNC);
+    let or_status = |v: Value| if v.is_null() { status() } else { Ok(v) };
+    match g {
+        Gitsync::Status => status(),
+        Gitsync::Set(set) => {
+            let mut settings = match status()?["settings"].take() {
+                Value::Object(o) => o,
+                _ => Map::new(),
+            };
+            let mut put = |key: &str, v: Option<Value>| {
+                if let Some(v) = v {
+                    settings.insert(key.to_owned(), v);
+                }
+            };
+            put("remote_url", set.remote_url.map(Value::from));
+            put("auth", set.auth.map(Value::from));
+            put("https_username", set.https_username.map(Value::from));
+            put("export_query", set.export_query.map(Value::from));
+            put("import_query", set.import_query.map(Value::from));
+            put("schedule", set.schedule.map(Value::from));
+            put("name", set.name.map(Value::from));
+            put("warn_bytes", set.warn_bytes.map(Value::from));
+            put("max_bytes", set.max_bytes.map(Value::from));
+            put("paused", set.paused.map(Value::from));
+            or_status(api.put(&gitsync_path(&["settings"]), Value::Object(settings))?)
+        }
+        Gitsync::Token(GitsyncToken::Set) => {
+            let token = stdin_line()?;
+            or_status(api.put(&gitsync_path(&["token"]), json!({ "token": token }))?)
+        }
+        Gitsync::Token(GitsyncToken::Clear) => or_status(api.delete(&gitsync_path(&["token"]))?),
+        Gitsync::SshKey(GitsyncSshKey::Generate) => {
+            api.post(&gitsync_path(&["ssh-key", "generate"]), Value::Null)
+        }
+        Gitsync::SshKey(GitsyncSshKey::Set) => {
+            let raw = read_text(None)?;
+            let key = format!("{}\n", raw.trim());
+            api.put(&gitsync_path(&["ssh-key"]), json!({ "private_key": key }))
+        }
+        Gitsync::Key(GitsyncKey::Generate) => {
+            api.post(&gitsync_path(&["key", "generate"]), Value::Null)
+        }
+        Gitsync::Key(GitsyncKey::Set) => {
+            let key = stdin_line()?;
+            or_status(api.put(&gitsync_path(&["key"]), json!({ "key": key }))?)
+        }
+        Gitsync::Run { no_wait } => gitsync_run(api, no_wait),
+        Gitsync::Disconnect => {
+            api.delete(&GITSYNC)?;
+            Ok(json!({ "disconnected": true }))
+        }
+    }
+}
+
+/// `vault gitsync run`: start a round, or join the one running, and unless `no_wait` read the
+/// status until it ends. A round that ended with an error fails with it.
+fn gitsync_run(api: &Api, no_wait: bool) -> Result<Value, Fail> {
+    let before = api.get(&GITSYNC)?;
+    let started = match api.call(Method::POST, &gitsync_path(&["run"]), &[], Body::None) {
+        Ok(v) => v,
+        // A round already running is the one to wait for.
+        Err(f) if !no_wait && f.body["status"] == 409 => Value::Null,
+        Err(f) => return Err(f),
+    };
+    if no_wait {
+        return Ok(if started.is_null() {
+            json!({ "started": true })
+        } else {
+            started
+        });
+    }
+    // The round may not show as running yet when the first read comes back, so it has ended
+    // once it was seen running, or the last run or error moved. A round that never shows either
+    // within a few seconds ended before the first read.
+    let mut seen_running = false;
+    let start = std::time::Instant::now();
+    loop {
+        let now = api.get(&GITSYNC)?;
+        if now["running"] == true {
+            seen_running = true;
+        } else if seen_running
+            || now["last_run"] != before["last_run"]
+            || now["last_error"] != before["last_error"]
+            || start.elapsed() > std::time::Duration::from_secs(10)
+        {
+            if let Some(error) = now["last_error"].as_str() {
+                return Err(Fail::body(json!({
+                    "error": "gitsync",
+                    "message": error,
+                    "last_run": now["last_run"],
+                    "last_report": now["last_report"],
+                })));
+            }
+            return Ok(now);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+/// stdin's text without its trailing newline, as `secret set` reads a value.
+fn stdin_line() -> Result<String, Fail> {
+    let raw = read_text(None)?;
+    Ok(raw.trim_end_matches(['\n', '\r']).to_owned())
 }
 
 /// `vault clients publish`: copy `files` into the clients folder `dir` and print its manifest.

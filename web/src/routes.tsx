@@ -35,6 +35,7 @@ const Ai = page(() => import("./pages/Ai"), "Ai");
 const AgentScreen = page(() => import("./pages/AgentScreen"), "AgentScreen");
 const SkillScreen = page(() => import("./pages/SkillScreen"), "SkillScreen");
 const Skills = page(() => import("./pages/Skills"), "Skills");
+const GitSync = page(() => import("./pages/GitSync"), "GitSync");
 const GoogleCallback = page(() => import("./pages/Integrations"), "GoogleCallback");
 const Integrations = page(() => import("./pages/Integrations"), "Integrations");
 const Settings = page(() => import("./pages/Settings"), "Settings");
@@ -89,6 +90,7 @@ export function paneRoutes() {
         <Route path="/secrets" component={Secrets} />
         <Route path="/tokens" component={Tokens} />
         <Route path="/devices" component={Devices} />
+        <Route path="/sync" component={GitSync} />
         <Route path="/integrations" component={Integrations} />
         <Route path="/ai" component={Ai} />
       </Route>

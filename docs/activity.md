@@ -1,6 +1,6 @@
 # The activity log
 
-The activity log records what happens in the vault: note edits, changes to types and other definitions, AI turns and every tool call an agent makes, scheduled task runs, the Outbox, sync and sign-ins. Open it from **Log** in the side menu, under **Outbox**, to see what was done and by whom. It is most useful for watching what an AI agent does.
+The activity log records what happens in the vault: note edits, changes to types and other definitions, AI turns and every tool call an agent makes, scheduled task runs, the Outbox, device sync and git sync, and sign-ins. Open it from **Log** in the side menu, under **Outbox**, to see what was done and by whom. It is most useful for watching what an AI agent does.
 
 ## The Log page
 
@@ -70,9 +70,10 @@ Each entry has a dotted kind, a category, an actor, a one-line summary, an optio
 | `outbox` | `outbox.drafted`, `outbox.ready`, `outbox.sending`, `outbox.sent`, `outbox.failed` | An Outbox item was drafted, marked ready, claimed for sending, sent (the write that records `sent_at`) or failed, with its kind and recipients, not its body. A sent item then leaves the Outbox, and a draft deleted (rejected) is a `note.delete`. |
 | `sync` | `task.run.start`, `task.run.end` | A run of the Google Gmail or Calendar sync (the `google_gmail` and `google_calendar` tasks), with its outcome. |
 | `sync` | `sync.round` | A device finished a sync round that moved or held something: pushed, pulled, merged and conflict counts and the held notes. The app reports it with `POST /api/devices/{id}/sync-rounds`. |
+| `sync` | `gitsync.round` | A git sync round with your other instances (docs/gitsync.md) that pushed, imported, merged, archived or warned about something, or failed. The actor is `gitsync:<instance name>`. The detail is the round's report: `pushed`, `created`, `updated`, `merged`, `clashes`, `archived`, `unarchived`, `skipped_branches`, `warnings` and `bytes`; a failed round records its error. A round that did nothing is not recorded. |
 | `auth` | `auth.login`, `auth.login_failed`, `auth.token_created`, `auth.token_revoked`, `auth.device_paired`, `auth.device_revoked` | Password sign-ins and failed sign-ins, API tokens made or revoked (an agent install code makes one too), devices paired or removed. |
 
-The actor is `<kind>:<name>`: `session:owner` for you, `agent:<name>`, `handler:<script>`, `task:<name>`, `token:<name>`, `device:<device name>` for a paired device's token, or `server:server` for what the server does itself, such as writing a shipped default or a failed sign-in.
+The actor is `<kind>:<name>`: `session:owner` for you, `agent:<name>`, `handler:<script>`, `task:<name>`, `token:<name>`, `device:<device name>` for a paired device's token, `gitsync:<instance name>` for a git sync round, or `server:server` for what the server does itself, such as writing a shipped default or a failed sign-in.
 
 ## API
 

@@ -997,6 +997,66 @@ export interface AiTestResult {
   error: { kind: string; message: string } | null;
 }
 
+/** The git sync's settings, kept in the `gitsync_settings` secret (git-sync D18). */
+export interface GitSyncSettings {
+  /** The git remote, such as `https://github.com/me/vault-sync.git` or `git@github.com:me/vault-sync.git`. */
+  remote_url: string;
+  /** `https` signs in with a token (git-sync D24); `ssh` with a key pair (git-sync D19). */
+  auth: "https" | "ssh";
+  /** The username sent with the token; `x-access-token` for GitHub. */
+  https_username: string;
+  /** The notes this instance publishes, as query text. */
+  export_query: string;
+  /** The published notes of other instances this instance takes, as query text; it may not use `this` (git-sync D23). */
+  import_query: string;
+  /** When a round runs, as cron; every 15 minutes unless changed. */
+  schedule: string;
+  /** This instance's name, in other instances' history (`gitsync <name>`) and the repo's manifest. */
+  name: string;
+  /** Past this many published bytes, rounds warn (git-sync D25). */
+  warn_bytes: number;
+  /** Past this many published bytes, the push is refused (git-sync D25). */
+  max_bytes: number;
+  /** Whether the schedule is paused; Sync now still runs a round. */
+  paused: boolean;
+}
+
+/** What a git sync round did. The counts are numbers, or lists of what they count. */
+export interface GitSyncReport {
+  pushed: boolean;
+  created?: number | unknown[];
+  updated?: number | unknown[];
+  merged?: number | unknown[];
+  clashes?: number | unknown[];
+  archived?: number | unknown[];
+  unarchived?: number | unknown[];
+  /** The other instances' branches the round skipped, with why: a key mismatch, or a newer format. */
+  skipped_branches?: unknown[];
+  warnings?: string[];
+  /** The size of this instance's published branch. */
+  bytes?: number;
+}
+
+/** The git sync's connection, as Settings > Sync shows it (git-sync D18). No secret value is in it. */
+export interface GitSyncStatus {
+  configured: boolean;
+  /** The settings, or null before they are first saved. */
+  settings: GitSyncSettings | null;
+  token_set: boolean;
+  ssh_key_set: boolean;
+  /** The stored key pair's public half, in OpenSSH form, to add to the host as a deploy key. */
+  ssh_public_key: string | null;
+  /** The pinned SSH host key's fingerprint, or null before the first SSH round. */
+  host_fingerprint: string | null;
+  /** Whether the shared sync key is stored (git-sync D14). */
+  key_set: boolean;
+  running: boolean;
+  /** When a round last ended: RFC 3339. */
+  last_run: string | null;
+  last_error: string | null;
+  last_report: GitSyncReport | null;
+}
+
 /** The Brave Search card's state (ai D26): whether the API key is stored, never the key. */
 export interface BraveStatus {
   configured: boolean;
@@ -1939,6 +1999,27 @@ export const api = {
   bravePutKey: (key: string) => request<BraveStatus>("PUT", "/api/integrations/brave/key", { key }),
   /** Search Brave once for "TheVault" with the stored key. */
   braveTest: () => request<BraveTestResult>("POST", "/api/integrations/brave/test"),
+  /** The git sync's settings, which secrets are set, and its last round (git-sync D18). */
+  gitsyncStatus: () => request<GitSyncStatus>("GET", "/api/integrations/gitsync"),
+  /** Save the git sync's settings. A query or cron that does not check is a 400 naming it. */
+  gitsyncSaveSettings: (settings: GitSyncSettings) =>
+    request<unknown>("PUT", "/api/integrations/gitsync/settings", settings),
+  /** Store the HTTPS token (git-sync D24). It is never read back. */
+  gitsyncPutToken: (token: string) => request<unknown>("PUT", "/api/integrations/gitsync/token", { token }),
+  gitsyncDeleteToken: () => request<unknown>("DELETE", "/api/integrations/gitsync/token"),
+  /** Make an ed25519 key pair and store it; the answer is the public half (git-sync D19). */
+  gitsyncGenerateSshKey: () => request<{ public_key: string }>("POST", "/api/integrations/gitsync/ssh-key/generate"),
+  /** Store a pasted OpenSSH private key; the answer is its public half. */
+  gitsyncPutSshKey: (private_key: string) =>
+    request<{ public_key: string }>("PUT", "/api/integrations/gitsync/ssh-key", { private_key }),
+  /** Make a new shared sync key. The answer is the only time the server shows it (git-sync D14). */
+  gitsyncGenerateKey: () => request<{ key: string }>("POST", "/api/integrations/gitsync/key/generate"),
+  /** Store a sync key pasted from another instance, `tvsync1-…`. A malformed one is a 400. */
+  gitsyncPutKey: (key: string) => request<unknown>("PUT", "/api/integrations/gitsync/key", { key }),
+  /** Start a round now: 202, or 409 while one runs. */
+  gitsyncRun: () => request<unknown>("POST", "/api/integrations/gitsync/run"),
+  /** Forget the connection: every `gitsync_*` secret, the clone and the merge bases. */
+  gitsyncDisconnect: () => request<unknown>("DELETE", "/api/integrations/gitsync"),
   /** Whether the browser box is set up and answers, and its versions (browser B4). */
   browserStatus: () => request<BrowserStatus>("GET", "/api/integrations/browser"),
   /** Settings > AI: the accounts and the global settings (accounts A7). */
