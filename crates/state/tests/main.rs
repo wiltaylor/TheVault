@@ -6,6 +6,7 @@ mod activity;
 mod changes;
 mod commands;
 mod devices;
+mod gitsync;
 mod sessions;
 mod shipped;
 mod state;

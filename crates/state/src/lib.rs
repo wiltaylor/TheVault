@@ -1,7 +1,8 @@
 //! `.vault/state.db`: version history, trash, the change feed devices sync from, encrypted secrets,
 //! API tokens, password-login sessions, paired devices and their base versions, task and agent
 //! trigger run logs, the calls of agents answered, the queue of `after_*` handler jobs, the user's
-//! notifications, the shipped defaults and upgrade steps the vault has had, and the activity log.
+//! notifications, the shipped defaults and upgrade steps the vault has had, the activity log, and
+//! what git sync knows of the notes it shares.
 //!
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
@@ -13,6 +14,7 @@ mod changes;
 mod commands;
 mod devices;
 mod events;
+mod gitsync;
 mod history;
 mod jobs;
 mod notifications;
@@ -47,6 +49,7 @@ pub use devices::{Device, NewDevice, PLATFORMS, PairCode, PushTarget};
 pub use events::{
     CAPACITY as EVENT_CAPACITY, ClientBuild, Events, LiveEvent, Missed, Subscription,
 };
+pub use gitsync::GitsyncNote;
 pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
 pub use jobs::{HandlerJob, JobStatus};
 pub use notifications::{
@@ -148,7 +151,7 @@ pub struct State {
     activity_pruned: AtomicI64,
 }
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -448,6 +451,22 @@ CREATE INDEX IF NOT EXISTS activity_actor ON activity (actor_kind, actor, id);
 CREATE INDEX IF NOT EXISTS activity_subject ON activity (subject_kind, subject, id);
 ";
 
+/// What version 18 adds: what git sync knows of each note it shares with another instance
+/// (git-sync D8, D10, D17, D27). `base` is the published bytes last taken from or sent to the
+/// peer.
+const SCHEMA_V18: &str = "
+CREATE TABLE IF NOT EXISTS gitsync_notes (
+    note_id          TEXT NOT NULL,
+    peer_vault_id    TEXT NOT NULL,
+    origin           TEXT NOT NULL,
+    base             BLOB NOT NULL,
+    base_hash        TEXT NOT NULL,
+    archived_by_sync INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (note_id, peer_vault_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS gitsync_notes_peer ON gitsync_notes (peer_vault_id, note_id);
+";
+
 impl State {
     /// Opens or creates `state.db` at `path`. Without `key`, secrets can be listed but not
     /// read or written.
@@ -550,7 +569,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=16 => {
+        0..=17 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -612,6 +631,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 16 {
                 tx.execute_batch(SCHEMA_V17)?;
+            }
+            if version <= 17 {
+                tx.execute_batch(SCHEMA_V18)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
