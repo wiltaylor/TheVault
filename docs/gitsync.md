@@ -22,7 +22,7 @@ Each instance runs a round on its schedule, every 15 minutes unless you change i
 
 1. Fetches every instance's branch from the repo.
 2. Reads each other instance's published notes, runs this instance's import query over them, and writes the matches into this vault.
-3. Archives the notes another instance stopped publishing.
+3. Archives the imported notes another instance stopped publishing or the import query no longer matches.
 4. Encrypts this instance's export set and pushes it to this instance's own branch, as a single commit that replaces the one before it.
 
 An imported note keeps its id, its type and its assets. Its history names the instance it came from as the author, as `gitsync <name>`. When a note uses a type or taxonomy this vault does not have, the round creates it. It never changes a type or taxonomy this vault already has.
@@ -97,7 +97,7 @@ The import query has these limits:
 
 A note this instance created and another instance published back, after editing it, is always taken, whatever the import query says.
 
-If a note this instance imported stops matching its import query while the other instance still publishes it, the round stops updating it and leaves it as it is.
+If a note this instance imported stops matching its import query while the other instance still publishes it, the round archives this instance's copy, as it does for a note that is no longer published. When the note matches again, the round unarchives it. A note you archived yourself stays archived, and a note this instance created is never archived this way. If the import query cannot run against an instance's notes, the round reports a warning and archives none of that instance's notes.
 
 ## Edits, clashes and deletes
 
@@ -107,7 +107,7 @@ If a note this instance imported stops matching its import query while the other
 
 **Links to notes you were not sent are dropped.** When an imported note links to a note this instance does not have, the round drops that link and keeps the rest of the note. When your edits flow back to the origin, the origin keeps the link.
 
-**A note that is no longer published is archived.** When another instance stops publishing a note, because it no longer matches the export query or was deleted there, the round archives this instance's copy. When that instance publishes the note again, the round unarchives it. A note you archived yourself stays archived.
+**A note that is no longer published is archived.** When another instance stops publishing a note, because it no longer matches the export query or was deleted there, the round archives this instance's copy. The round also archives a copy that no longer matches this instance's import query. When the note is published and matches again, the round unarchives it. A note you archived yourself stays archived.
 
 **A note you delete stays deleted.** When you delete an imported note, later rounds do not bring it back. If you restore it from the trash, it syncs again.
 

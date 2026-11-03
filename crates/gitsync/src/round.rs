@@ -11,9 +11,10 @@
 //!   vault does not have are dropped (D16). A note new here is created; one unchanged here since
 //!   its base takes the published version; one changed on both sides is merged field by field,
 //!   a clash going to the note's origin (D8), with a notification naming the fields (D9).
-//! - **Archive.** A note imported from another instance that no instance publishes any more is
-//!   archived, and remembered as archived by sync; when it is published again it is unarchived
-//!   (D3, D26). A note the user archived stays archived.
+//! - **Archive.** A note imported from another instance that no instance publishes any more, or
+//!   that the import query no longer selects, is archived, and remembered as archived by sync;
+//!   when it is selected again it is unarchived (D3, D26, D29). A note the user archived stays
+//!   archived.
 //! - **Export.** The export query's notes, plus the imported notes changed here, go out
 //!   encrypted, with their assets and the definitions they use. An imported note goes out as
 //!   its published base with only the fields changed here applied over it, so fields and links
@@ -394,6 +395,9 @@ struct Branch {
     schema: Schema,
     /// The notes to import from this branch, in id order.
     selected: BTreeSet<String>,
+    /// Whether the import query failed against this branch, so its notes are kept as if
+    /// selected rather than archived.
+    unselectable: bool,
 }
 
 impl Branch {
@@ -631,15 +635,19 @@ impl Round<'_> {
             .filter(|n| n.entry.origin == self.me)
             .map(|n| n.entry.id.clone())
             .collect();
+        let mut unselectable = false;
         if let Some(q) = import {
             match self.select(&schema, &notes, q) {
                 Ok(ids) => selected.extend(ids.into_iter().filter(|id| notes.contains_key(id))),
                 // The instance has no such type: nothing of it matches.
                 Err(query::Error::UnknownType(_)) => {}
-                Err(e) => self.report.warnings.push(format!(
-                    "the import query cannot run against {}: {e}",
-                    manifest.instance.name
-                )),
+                Err(e) => {
+                    unselectable = true;
+                    self.report.warnings.push(format!(
+                        "the import query cannot run against {}: {e}",
+                        manifest.instance.name
+                    ));
+                }
             }
         }
         Ok(Branch {
@@ -652,6 +660,7 @@ impl Round<'_> {
             taxonomies,
             schema,
             selected,
+            unselectable,
         })
     }
 
@@ -961,22 +970,25 @@ impl Round<'_> {
         });
     }
 
-    /// Archive the imported notes no instance publishes any more, and unarchive those archived
-    /// by sync that are published again (D3, D26).
+    /// Archive the imported notes no instance publishes any more or the import query no longer
+    /// selects, and unarchive those archived by sync that are selected again (D3, D26, D29). A
+    /// branch the import query failed against keeps every note it publishes.
     fn archive(&mut self, branches: &[Branch]) -> Result<()> {
         let state = self.w.state();
         let author = self.author();
-        let published: BTreeSet<&str> = branches
-            .iter()
-            .flat_map(|b| b.notes.keys().map(String::as_str))
-            .collect();
         let selected: BTreeSet<&str> = branches
             .iter()
             .flat_map(|b| b.selected.iter().map(String::as_str))
             .collect();
+        let kept: BTreeSet<&str> = branches
+            .iter()
+            .filter(|b| b.unselectable)
+            .flat_map(|b| b.notes.keys().map(String::as_str))
+            .chain(selected.iter().copied())
+            .collect();
         for b in branches {
             for row in state.gitsync_rows_for_peer(&b.peer)? {
-                if row.origin == self.me || published.contains(row.note_id.as_str()) {
+                if row.origin == self.me || kept.contains(row.note_id.as_str()) {
                     continue;
                 }
                 if row.archived_by_sync {
