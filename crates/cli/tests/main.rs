@@ -4,3 +4,4 @@
 
 mod agent_install;
 mod cli;
+mod gitsync;

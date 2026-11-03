@@ -75,22 +75,22 @@ fn seed(vault: &Path) {
 }
 
 /// What one run of `vault` did.
-struct Out {
-    ok: bool,
-    json: Value,
-    stdout: String,
-    stderr: String,
+pub(crate) struct Out {
+    pub(crate) ok: bool,
+    pub(crate) json: Value,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
 /// Runs `vault` with its own config folder, against `url` with `token` when given.
-struct Vault {
+pub(crate) struct Vault {
     url: Option<String>,
     token: Option<String>,
     config: TempDir,
 }
 
 impl Vault {
-    fn offline() -> Vault {
+    pub(crate) fn offline() -> Vault {
         Vault {
             url: None,
             token: None,
@@ -98,7 +98,7 @@ impl Vault {
         }
     }
 
-    fn against(server: &TestServer) -> Vault {
+    pub(crate) fn against(server: &TestServer) -> Vault {
         Vault {
             url: Some(server.base_url()),
             token: Some(server.admin_token().to_owned()),
@@ -111,7 +111,7 @@ impl Vault {
         self.config.path()
     }
 
-    fn run(&self, args: &[&str], stdin: &str) -> Out {
+    pub(crate) fn run(&self, args: &[&str], stdin: &str) -> Out {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_vault"));
         cmd.args(args)
             .env_remove("VAULT_URL")
@@ -153,21 +153,21 @@ impl Vault {
     }
 
     /// Run, expecting success.
-    fn ok(&self, args: &[&str], stdin: &str) -> Value {
+    pub(crate) fn ok(&self, args: &[&str], stdin: &str) -> Value {
         let out = self.run(args, stdin);
         assert!(out.ok, "vault {args:?} failed:\n{}", out.stdout);
         out.json
     }
 
     /// Run, expecting failure.
-    fn fails(&self, args: &[&str], stdin: &str) -> Value {
+    pub(crate) fn fails(&self, args: &[&str], stdin: &str) -> Value {
         let out = self.run(args, stdin);
         assert!(!out.ok, "vault {args:?} succeeded:\n{}", out.stdout);
         out.json
     }
 }
 
-fn s(v: &Value) -> &str {
+pub(crate) fn s(v: &Value) -> &str {
     v.as_str().unwrap_or_else(|| panic!("not a string: {v}"))
 }
 
@@ -1370,7 +1370,11 @@ fn every_command_prints_json() {
         .iter()
         .map(|c| s(&c["command"]).to_owned())
         .collect();
-    let missed: Vec<_> = all.difference(&seen).collect();
+    // `gitsync.rs` runs every `gitsync` command against a git remote of its own.
+    let missed: Vec<_> = all
+        .difference(&seen)
+        .filter(|c| !c.starts_with("gitsync "))
+        .collect();
     assert!(missed.is_empty(), "commands never run: {missed:?}");
 
     // Failures print JSON too.
