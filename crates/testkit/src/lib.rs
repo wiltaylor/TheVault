@@ -9,7 +9,9 @@
 //! browser box's noVNC and health, for the `/browser/` proxy; point `VAULT_BROWSER_URL` and
 //! `VAULT_BROWSER_DESKTOP_URL` at its `base_url()`. [`FakeBrowser`] is the browser box's exec
 //! service the browser tools drive; point `VAULT_BROWSER_URL` at its `base_url()` and
-//! `VAULT_BROWSER_TOKEN` at its `token()`.
+//! `VAULT_BROWSER_TOKEN` at its `token()`. The git-sync remotes are [`BareRepo`] (`file://`),
+//! [`GitHttpServer`] (`git http-backend` behind a token) and [`FakeSsh`] (an `ssh` that runs
+//! the remote command locally).
 //!
 //! ```no_run
 //! let server = testkit::TestServer::start();
@@ -40,6 +42,7 @@ pub mod fake_novnc;
 pub mod fake_openai;
 pub mod fake_siwc;
 pub mod fake_web;
+mod git_remote;
 mod standin;
 
 pub use ai_seed::{AiSeed, TestAccount, account_id};
@@ -55,6 +58,9 @@ pub use fake_openai::{
 };
 pub use fake_siwc::{FakeSiwc, FakeSiwcBuilder};
 pub use fake_web::{FAKE_PAGE, FakeWeb};
+pub use git_remote::{
+    BareRepo, FAKE_SSH_HOST, FAKE_SSH_HOST_FINGERPRINT, FAKE_SSH_HOST_KEY, FakeSsh, GitHttpServer,
+};
 
 pub use fake_google::{
     CALENDAR_PATH, FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, TOKEN_PATH, USERINFO_PATH,

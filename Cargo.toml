@@ -67,6 +67,7 @@ clients = { path = "crates/clients" }
 embedded = { path = "crates/embedded" }
 push = { path = "crates/push" }
 sync = { path = "crates/sync" }
+gitsync = { path = "crates/gitsync" }
 testkit = { path = "crates/testkit" }
 
 [workspace.lints.rust]
