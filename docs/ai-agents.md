@@ -370,7 +370,31 @@ Every trigger run is recorded in `state.db` (`agent_runs`): the agent, the trigg
 agent run 12: agent=triage trigger=new_email thread=01JB8Z1A2B3C4D5E6F7G8H9J0K outcome=succeeded
 ```
 
-The Triggers tab shows each trigger's last 20 runs, with a link to each run's thread. A run that fails, through a provider error, a refusal or a turn that does not end, leaves one bell notification, "<Agent>'s <trigger> run failed", that opens its thread. A run that goes well sends none.
+The Triggers tab shows each trigger's last 20 runs, with a link to each run's thread and, under **Log**, the run's trail lines and capacity waits. A run that fails, through a provider error, a refusal or a turn that does not end, leaves one bell notification, "<Agent>'s <trigger> run failed", that opens its thread. A run that goes well sends none.
+
+### When the model is at capacity
+
+An unattended run, from a schedule, a note event or a call from a note, and the sub agents it starts, retries a model call that fails with a transient error:
+
+1. It waits 60 seconds and makes the call again.
+2. If that fails, it waits 120 seconds and tries again.
+3. If that fails, it waits 240 seconds and tries a last time.
+4. If the fourth attempt fails, the run fails as any failed run does: the run is recorded as failed with the last error's message, and it leaves its `agent.run` activity entry and its bell notification.
+
+A transient error is one of:
+
+- kind `unavailable`: the provider is overloaded or cannot be reached, a 500, 502, 503 or 529, an `overloaded_error`, `server_is_overloaded` or `service_unavailable`, or any provider or request error whose message says the model is "at capacity" or "overloaded";
+- kind `rate_limit`, except a usage or quota limit used up (`insufficient_quota`, `usage_limit_reached`, `subscription_sharing_usage_limit_exceeded`), which waiting minutes does not lift. Such a run fails at once.
+
+Each wait is added to the run's log as it starts, so the Triggers tab shows it while the run waits:
+
+```text
+model at capacity; retrying in 60s (attempt 2 of 4): Anthropic claude-opus-5: Overloaded
+```
+
+A wait of a sub agent's call starts `sub agent <n>: `. Each failed attempt also writes its own [trail line](ai.md#the-trail-line).
+
+Only the call that failed is made again, with the same request. The tools the run called in earlier steps were answered before it and are not run again. A step's own tool calls run only once its model call has ended, so a call that breaks off part way, even in the middle of asking for a tool, has run none of them; the text it had streamed is dropped. The run waits on its own: other agents' runs, scheduled tasks and git sync go on, and only that agent's further runs wait behind it, as they do behind any run of its (see [Limits](#limits)). The provider client's own short retries (at most twice, waiting at most 60 seconds, see [Refusals and errors](ai.md#refusals-and-errors)) happen inside each attempt. A chat you are in never waits like this: it shows the error at once.
 
 ## API
 
@@ -381,7 +405,7 @@ The Triggers tab shows each trigger's last 20 runs, with a link to each run's th
 | `PUT /api/agents/{name}` | admin, or a paired device's token | Writes the agent from WCL, `{ wcl }`, or the JSON form `GET` answers |
 | `DELETE /api/agents/{name}` | admin, or a paired device's token | Deletes the agent file; its threads stay |
 | `GET /api/agents/calls/{call}` | read | What became of a call committed in a note: `{ agent, note, thread, running }`, `thread` null for a call that was not run; 404 while the server has not seen the call |
-| `GET /api/agents/{name}/runs` | read | `{ tools, triggers: [{ name, kind, runs }] }`: the tools a trigger run is offered, and each trigger's last 20 runs, newest first, each `{ id, thread, started, ended, outcome, message }` with times in milliseconds |
+| `GET /api/agents/{name}/runs` | read | `{ tools, triggers: [{ name, kind, runs }] }`: the tools a trigger run is offered, and each trigger's last 20 runs, newest first, each `{ id, thread, started, ended, outcome, message, log }` with times in milliseconds and `log` the run's trail lines and capacity waits, one per line, which grows while the run waits |
 | `GET /api/agents/{name}/threads` | read | The agent's threads, newest activity first, each with `archived`; archived threads only with `?archived=true` |
 | `POST /api/agents/{name}/threads` | read | Starts a thread from `{ title? }` |
 | `GET /api/agents/{name}/threads/{id}` | read | A thread with its messages, steps and proposals |

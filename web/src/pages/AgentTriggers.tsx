@@ -148,6 +148,12 @@ function RunList(props: { agent: string; runs: AgentRun[] | undefined; loading: 
                 <Show when={r.message}>
                   <div class="agent-run-message">{r.message}</div>
                 </Show>
+                <Show when={r.log}>
+                  <details class="agent-run-log">
+                    <summary>Log</summary>
+                    <pre>{r.log}</pre>
+                  </details>
+                </Show>
               </li>
             )}
           </For>

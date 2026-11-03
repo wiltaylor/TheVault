@@ -10317,6 +10317,17 @@ button.toast-action {
   white-space: pre-wrap;
 }
 
+.agent-run-log {
+  font-size: 0.85rem;
+}
+
+.agent-run-log pre {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
 .ai-agent-link {
   padding: 0.5rem 0.75rem;
   border-radius: 0.4rem;
