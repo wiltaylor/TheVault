@@ -97,6 +97,7 @@ mod defs;
 mod devices;
 mod error;
 mod events;
+mod gitsync;
 mod google;
 mod inspect;
 mod notes;
@@ -219,6 +220,8 @@ struct Built {
     apps: Routes<Arc<apps::Folder>>,
     /// The Google sign-in routes, which take the sign-ins started.
     google: Routes<Arc<google::Google>>,
+    /// The git sync routes, which take the connection the scheduler runs rounds of.
+    gitsync: Routes<Arc<::gitsync::GitSync>>,
     /// The Settings > AI routes, which take the ChatGPT sign-ins started.
     ai: Routes<Arc<ai_settings::Ai>>,
     /// The browser box's status, which takes where the box is.
@@ -413,6 +416,23 @@ fn build() -> Built {
         .post("/api/integrations/google/start", google::start)
         .post("/api/integrations/google/finish", google::finish)
         .post("/api/integrations/google/disconnect", google::disconnect);
+    let gitsync = Routes::new()
+        .get("/api/integrations/gitsync", gitsync::status)
+        .delete("/api/integrations/gitsync", gitsync::disconnect)
+        .put("/api/integrations/gitsync/settings", gitsync::put_settings)
+        .put("/api/integrations/gitsync/token", gitsync::put_token)
+        .delete("/api/integrations/gitsync/token", gitsync::delete_token)
+        .post(
+            "/api/integrations/gitsync/ssh-key/generate",
+            gitsync::generate_ssh_key,
+        )
+        .put("/api/integrations/gitsync/ssh-key", gitsync::put_ssh_key)
+        .post(
+            "/api/integrations/gitsync/key/generate",
+            gitsync::generate_key,
+        )
+        .put("/api/integrations/gitsync/key", gitsync::put_key)
+        .post("/api/integrations/gitsync/run", gitsync::run);
     let ai = Routes::new()
         .get("/api/integrations/ai", ai_settings::status)
         .put("/api/integrations/ai/settings", ai_settings::put_settings)
@@ -461,6 +481,7 @@ fn build() -> Built {
         tasks,
         apps,
         google,
+        gitsync,
         ai,
         browser,
     }
@@ -474,6 +495,7 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         tasks,
         apps,
         google,
+        gitsync,
         ai,
         browser,
     } = build();
@@ -483,6 +505,7 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         .chain(tasks.seen)
         .chain(apps.seen)
         .chain(google.seen)
+        .chain(gitsync.seen)
         .chain(ai.seen)
         .chain(browser.seen)
         .collect()
@@ -550,6 +573,7 @@ fn assemble(
         tasks,
         apps,
         google,
+        gitsync,
         ai,
         browser,
     } = build();
@@ -565,6 +589,7 @@ fn assemble(
                 .router
                 .with_state(Arc::new(google::Google::new(scheduler.clone()))),
         )
+        .merge(gitsync.router.with_state(scheduler.gitsync().clone()))
         .merge(
             ai.router
                 .with_state(Arc::new(ai_settings::Ai::new(writer_for_ai))),

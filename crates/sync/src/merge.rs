@@ -214,11 +214,17 @@ fn merge_blocks(
             winner: None,
             names: Vec::new(),
         };
-        let merged = merge_fields(&b.fields, &o.body.fields, &t.body.fields, false, &mut strict)
-            .and_then(|fields| {
-                let blocks = diff3(&b.blocks, &o.body.blocks, &t.body.blocks)?;
-                Ok(Doc { fields, blocks })
-            });
+        let merged = merge_fields(
+            &b.fields,
+            &o.body.fields,
+            &t.body.fields,
+            false,
+            &mut strict,
+        )
+        .and_then(|fields| {
+            let blocks = diff3(&b.blocks, &o.body.blocks, &t.body.blocks)?;
+            Ok(Doc { fields, blocks })
+        });
         match merged {
             Ok(body) => out.push(DocBlock {
                 kind: o.kind,

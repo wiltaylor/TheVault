@@ -12,6 +12,7 @@ base64.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clients.workspace = true
 futures-util.workspace = true
+gitsync.workspace = true
 hyper = "1"
 hyper-util = { version = "0.1", features = ["tokio"] }
 image.workspace = true

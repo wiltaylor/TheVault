@@ -23,6 +23,10 @@
 //!
 //! Beside the tasks, the scheduler runs agent triggers (agents G9 to G12): schedules and note
 //! events that start unattended agent runs through an [`AgentRunner`] (see [`agents`]).
+//!
+//! It also starts git sync rounds (git-sync D20): when the connection is set up and not paused,
+//! each time its cron schedule, read in UTC, comes due, unless a round is still running. A round
+//! runs on a thread of its own in the background loop; [`Scheduler::tick`] waits for it.
 
 pub mod agents;
 mod describe;
@@ -35,6 +39,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use chrono::TimeZone;
+use gitsync::GitSync;
 use script::{Host, Job, Kind};
 use state::{Clock, RunOutcome, TaskRun};
 use writer::Writer;
@@ -144,6 +150,8 @@ struct Plan {
     /// When the occurrences of the vault-only event series were last rolled forward
     /// (event-series E5).
     rolled_ms: Option<i64>,
+    /// The git sync schedule and when it next fires (git-sync D20).
+    gitsync_next: Option<(String, i64)>,
 }
 
 /// The longest the background loop sleeps before looking at the clock again.
@@ -167,6 +175,8 @@ pub struct Scheduler {
     wake: Condvar,
     /// Runs agent triggers; only the server sets one.
     runner: OnceLock<Arc<dyn AgentRunner>>,
+    /// The git sync connection, which the API shares (git-sync D20).
+    gitsync: OnceLock<Arc<GitSync>>,
 }
 
 impl Scheduler {
@@ -184,6 +194,7 @@ impl Scheduler {
             plan: Mutex::new(Plan::default()),
             wake: Condvar::new(),
             runner: OnceLock::new(),
+            gitsync: OnceLock::new(),
         });
         s.reload()?;
         Ok(s)
@@ -201,6 +212,19 @@ impl Scheduler {
 
     pub fn now_ms(&self) -> i64 {
         self.clock.now_ms()
+    }
+
+    /// Use `gitsync` for the git sync rounds. Only the first call counts; the server makes it
+    /// before the API asks for the connection, with the programs and sizes it was started with.
+    pub fn set_gitsync(&self, gitsync: Arc<GitSync>) {
+        let _ = self.gitsync.set(gitsync);
+    }
+
+    /// The git sync connection: the one [`Scheduler::set_gitsync`] gave, or else one with the
+    /// default programs.
+    pub fn gitsync(&self) -> &Arc<GitSync> {
+        self.gitsync
+            .get_or_init(|| GitSync::new(self.writer.clone(), gitsync::Options::default()))
     }
 
     fn plan(&self) -> MutexGuard<'_, Plan> {
@@ -304,9 +328,13 @@ impl Scheduler {
         self.roll_series();
         let due = self.take_due();
         let starts = self.agent_starts();
+        let gitsync = self.gitsync_due();
         thread::scope(|s| {
             for job in starts {
                 s.spawn(move || self.agent_work(job));
+            }
+            if let Some(g) = gitsync {
+                s.spawn(move || g.run());
             }
             let handles: Vec<_> = due
                 .into_iter()
@@ -446,10 +474,50 @@ impl Scheduler {
         }
     }
 
+    /// The git sync connection when its schedule is due now and no round runs, moving the
+    /// schedule on (git-sync D20). A paused or unset connection never comes due; a new or changed
+    /// schedule first fires at its next time after now.
+    fn gitsync_due(&self) -> Option<Arc<GitSync>> {
+        let g = self.gitsync.get()?;
+        let settings = match g.settings() {
+            Ok(Some(s)) if !s.paused && g.configured().unwrap_or(false) => s,
+            _ => {
+                self.plan().gitsync_next = None;
+                return None;
+            }
+        };
+        let now = self.clock.now_ms();
+        let next_after = |at: i64| {
+            let cron = schema::parse_cron(&settings.schedule).ok()?;
+            let from = chrono::Utc.timestamp_millis_opt(at).single()?;
+            cron.find_next_occurrence(&from, false)
+                .ok()
+                .map(|t| t.timestamp_millis())
+        };
+        let mut plan = self.plan();
+        match &plan.gitsync_next {
+            Some((schedule, at)) if *schedule == settings.schedule => {
+                if *at > now {
+                    return None;
+                }
+            }
+            _ => {
+                plan.gitsync_next = next_after(now).map(|at| (settings.schedule.clone(), at));
+                return None;
+            }
+        }
+        plan.gitsync_next = next_after(now).map(|at| (settings.schedule.clone(), at));
+        drop(plan);
+        (!g.running()).then(|| g.clone())
+    }
+
     fn background(self: Arc<Self>) {
         loop {
             self.sweep_outbox();
             self.roll_series();
+            if let Some(g) = self.gitsync_due() {
+                g.start();
+            }
             for (def, attempt) in self.take_due() {
                 let s = self.clone();
                 thread::spawn(move || s.run(&def, attempt));
@@ -473,6 +541,7 @@ impl Scheduler {
                 })
                 .flatten()
                 .chain(plan.agents.next_due(now))
+                .chain(plan.gitsync_next.as_ref().map(|(_, at)| *at))
                 .min();
             let sleep = next.map_or(MAX_SLEEP, |at| {
                 Duration::from_millis(u64::try_from(at - now).unwrap_or(0)).min(MAX_SLEEP)
