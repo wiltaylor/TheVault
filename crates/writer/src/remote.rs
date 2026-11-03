@@ -9,12 +9,17 @@
 //!   server's change feed says, byte for byte. The server already validated the note, ran its
 //!   handlers and stamped it, so none of that runs again, and no `after_*` hook sees the change:
 //!   it is not a local write to send back.
+//! - Git sync, between instances, writes another vault's text of a note the same way under an
+//!   author of its own: [`Writer::create_remote`] and [`Writer::replace_remote`], which check the
+//!   note is absent or at a base version so a user's edit is not lost (git-sync D7, D28).
 
 use schema::{NoteReport, Schema};
 use state::Author;
 use store::Change;
 
-use crate::{Error, Event, Input, Result, Saved, Writer, feed::synced_file, first, note_path};
+use crate::{
+    Error, Event, Inner, Input, Result, Saved, Writer, feed::synced_file, first, note_path,
+};
 
 /// The author of the versions a device records for notes it received from the home server.
 pub const REMOTE_AUTHOR: &str = "sync";
@@ -30,6 +35,28 @@ pub enum Remote {
     },
     /// The note was deleted on the server: it goes to the trash here too.
     Delete { id: String },
+}
+
+/// What a write from another vault expects of the note it writes over.
+#[derive(Clone, Copy)]
+enum Expect<'a> {
+    /// Anything: the home server's copy is the master (D19).
+    Any,
+    /// No note under the id, live, trashed or in the history.
+    Absent,
+    /// A live note at this version (D12).
+    At(&'a str),
+}
+
+/// Where a note stands in this vault: [`Writer::note_state`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoteState {
+    /// In the vault, with its type and current version.
+    Live { type_name: String, version: String },
+    /// In the trash.
+    Trashed,
+    /// Neither: never created here, or purged from the trash.
+    Absent,
 }
 
 /// The top-level folders the store commits to. Other synced folders, such as `devices/`, are
@@ -64,6 +91,139 @@ impl Writer {
             .map(first)
     }
 
+    /// Create note `id` of `type_name` from `wcl`, another vault's text of it, recorded as
+    /// `author`: git sync imports a note under the id it has everywhere (git-sync D7, D28). The
+    /// text is written as it is, canonical, with its stamps; no `before_*` or `after_*` handler
+    /// runs and no activity is recorded, as for [`Writer::apply_remote`]. `id` must be a ULID no
+    /// note here has, live, in the trash or in the history, else [`Error::IdTaken`].
+    pub fn create_remote(
+        &self,
+        id: &str,
+        type_name: &str,
+        wcl: &str,
+        author: &Author,
+    ) -> Result<Saved> {
+        let _w = self.write_lock();
+        let mut inner = self.lock();
+        let wcl = self.remote_text(&inner, id, type_name, wcl)?;
+        self.put_remote(&mut inner, id, type_name, &wcl, author, Expect::Absent)
+    }
+
+    /// Replace live note `id` with `wcl`, another vault's text of it, as type `type_name`,
+    /// recorded as `author`, as [`Writer::create_remote`] writes. The note must be at version
+    /// `base`, else [`Error::Conflict`], so a user's edit since `base` is not lost. Text the note
+    /// already holds records nothing and returns the current version.
+    pub fn replace_remote(
+        &self,
+        id: &str,
+        type_name: &str,
+        wcl: &str,
+        base: &str,
+        author: &Author,
+    ) -> Result<Saved> {
+        let _w = self.write_lock();
+        let mut inner = self.lock();
+        let wcl = self.remote_text(&inner, id, type_name, wcl)?;
+        self.put_remote(&mut inner, id, type_name, &wcl, author, Expect::At(base))
+    }
+
+    /// Whether note `id` is live, in the trash, or neither: never created here, or purged. Git
+    /// sync tells a note the user deleted from one it has yet to import this way (git-sync D17).
+    pub fn note_state(&self, id: &str) -> Result<NoteState> {
+        let _inner = self.lock();
+        if let Some(type_name) = self.locate(id)? {
+            let text = self.vault.read_text(&note_path(&type_name, id))?;
+            let version = self.head(id, &type_name, &text)?;
+            return Ok(NoteState::Live { type_name, version });
+        }
+        if self.state.trash_entry(id)?.is_some() {
+            return Ok(NoteState::Trashed);
+        }
+        Ok(NoteState::Absent)
+    }
+
+    /// `wcl` in canonical form, for a type this vault has.
+    fn remote_text(&self, inner: &Inner, id: &str, type_name: &str, wcl: &str) -> Result<String> {
+        if !schema::is_ulid(id) || !schema::is_name(type_name) {
+            return Err(Error::BadRequest(format!("{type_name}/{id} is not a note")));
+        }
+        if inner.schema.type_def(type_name).is_none() {
+            return Err(Error::UnknownType(type_name.to_owned()));
+        }
+        Ok(store::canonical(wcl, &note_path(type_name, id))?)
+    }
+
+    /// Write note `id` as `wcl`, byte for byte, recorded as `author`, once the note is as
+    /// `expect` says, and index it. No handler runs. The caller holds the write lock.
+    fn put_remote(
+        &self,
+        inner: &mut Inner,
+        id: &str,
+        type_name: &str,
+        wcl: &str,
+        author: &Author,
+        expect: Expect<'_>,
+    ) -> Result<Saved> {
+        if !schema::is_ulid(id) || !schema::is_name(type_name) {
+            return Err(Error::BadRequest(format!("{type_name}/{id} is not a note")));
+        }
+        let path = note_path(type_name, id);
+        let doc = Input::Wcl(wcl.to_owned()).parse(&path)?;
+        let old_type = self.locate(id)?;
+        match (expect, old_type.as_deref()) {
+            (Expect::Any, _) => {}
+            (Expect::Absent, None) if self.state.history(id)?.is_empty() => {}
+            (Expect::Absent, _) => return Err(Error::IdTaken(id.to_owned())),
+            (Expect::At(_), None) => return Err(Error::NotFound(id.to_owned())),
+            (Expect::At(base), Some(old)) => {
+                let text = self.vault.read_text(&note_path(old, id))?;
+                self.check_base(id, old, &text, Some(base))?;
+            }
+        }
+        if old_type.as_deref() == Some(type_name) && self.vault.read_text(&path)? == wcl {
+            return Ok(Saved {
+                id: id.to_owned(),
+                type_name: type_name.to_owned(),
+                event: Event::Update,
+                version: self.head(id, type_name, wcl)?,
+                wcl: wcl.to_owned(),
+                also: Vec::new(),
+            });
+        }
+        let mut files = Vec::new();
+        if let Some(old) = old_type.as_deref().filter(|t| *t != type_name) {
+            files.push(Change::delete(note_path(old, id)));
+        }
+        files.push(Change::write(path, wcl.as_bytes()));
+        let report = report(&inner.schema, self, type_name, &doc);
+        let generation = self.commit(files)?;
+        let version = self.state.record_version(id, type_name, author, wcl)?;
+        inner.index.update(
+            &inner.schema,
+            &[index::Update::Put {
+                id: id.to_owned(),
+                type_name: type_name.to_owned(),
+                doc,
+                report,
+            }],
+        )?;
+        inner.index.advance(generation)?;
+        let saved = Saved {
+            id: id.to_owned(),
+            type_name: type_name.to_owned(),
+            event: if old_type.is_some() {
+                Event::Update
+            } else {
+                Event::Create
+            },
+            version: version.token,
+            wcl: wcl.to_owned(),
+            also: Vec::new(),
+        };
+        self.announce(std::slice::from_ref(&saved), &|_| None);
+        Ok(saved)
+    }
+
     /// Write a note exactly as the home server holds it, or move it to the trash, and index it.
     /// Returns the note's local version, or `None` when a delete found nothing to delete. A put
     /// of the text the note already holds records nothing and returns the current version.
@@ -72,54 +232,9 @@ impl Writer {
         let mut inner = self.lock();
         let author = Author::Token(REMOTE_AUTHOR.to_owned());
         match change {
-            Remote::Put { id, type_name, wcl } => {
-                if !schema::is_ulid(id) || !schema::is_name(type_name) {
-                    return Err(Error::BadRequest(format!("{type_name}/{id} is not a note")));
-                }
-                let path = note_path(type_name, id);
-                let doc = Input::Wcl(wcl.clone()).parse(&path)?;
-                let old_type = self.locate(id)?;
-                if old_type.as_deref() == Some(type_name.as_str())
-                    && self.vault.read_text(&path)? == *wcl
-                {
-                    return Ok(Some(self.head(id, type_name, wcl)?));
-                }
-                let mut files = Vec::new();
-                if let Some(old) = old_type.as_deref().filter(|t| *t != type_name) {
-                    files.push(Change::delete(note_path(old, id)));
-                }
-                files.push(Change::write(path, wcl.as_bytes()));
-                let report = report(&inner.schema, self, type_name, &doc);
-                let generation = self.commit(files)?;
-                let version = self.state.record_version(id, type_name, &author, wcl)?;
-                let inner = &mut *inner;
-                inner.index.update(
-                    &inner.schema,
-                    &[index::Update::Put {
-                        id: id.clone(),
-                        type_name: type_name.clone(),
-                        doc,
-                        report,
-                    }],
-                )?;
-                inner.index.advance(generation)?;
-                self.announce(
-                    &[Saved {
-                        id: id.clone(),
-                        type_name: type_name.clone(),
-                        event: if old_type.is_some() {
-                            Event::Update
-                        } else {
-                            Event::Create
-                        },
-                        version: version.token.clone(),
-                        wcl: wcl.clone(),
-                        also: Vec::new(),
-                    }],
-                    &|_| None,
-                );
-                Ok(Some(version.token))
-            }
+            Remote::Put { id, type_name, wcl } => self
+                .put_remote(&mut inner, id, type_name, wcl, &author, Expect::Any)
+                .map(|s| Some(s.version)),
             Remote::Delete { id } => {
                 let Some(type_name) = self.locate(id)? else {
                     return Ok(None);
