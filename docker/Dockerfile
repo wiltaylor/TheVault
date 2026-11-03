@@ -44,8 +44,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim
 # ca-certificates for anything that reads the system roots. The server's own HTTPS (Gmail,
 # Calendar, OAuth, scripts' http) uses rustls with bundled webpki roots, so it does not need them.
+# git and openssh-client for git sync, which shells out to the git CLI over HTTPS or SSH (git-sync
+# D22); git's HTTPS transport is the one that reads the system roots.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tini \
+ && apt-get install -y --no-install-recommends ca-certificates tini git openssh-client \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 1000 thevault \
  && useradd --uid 1000 --gid 1000 --home-dir /home/thevault --create-home --shell /usr/sbin/nologin thevault \
