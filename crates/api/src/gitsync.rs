@@ -95,6 +95,9 @@ fn delete_secret(w: &Writer, name: &str) -> Result<(), ApiError> {
 /// The page's view of the connection.
 fn status_of(g: &GitSync) -> Result<Value, ApiError> {
     let w = g.writer();
+    // A round saves its status before it clears the flag, so the flag read first means a round
+    // seen as ended has its status saved.
+    let running = g.running();
     let settings = g.settings()?;
     let secrets = load_secrets(w.state())?;
     let status = load_status(w.state())?;
@@ -110,7 +113,7 @@ fn status_of(g: &GitSync) -> Result<Value, ApiError> {
         "ssh_public_key": public_key,
         "host_fingerprint": status.host_fingerprint,
         "key_set": secrets.key.is_some(),
-        "running": g.running(),
+        "running": running,
         "last_run": status.last_run,
         "last_error": status.last_error,
         "last_report": status.last_report,
