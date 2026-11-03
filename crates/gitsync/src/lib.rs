@@ -11,18 +11,27 @@
 //! - [`pack`]: notes as blobs, and assets split into encrypted parts (D12).
 //! - [`git`]: the `git` CLI runner, with HTTPS token and SSH key auth (D19, D22, D24).
 //! - [`sshkey`]: ed25519 deploy keys and host key fingerprints (D19).
+//! - [`settings`]: the connection's settings, credentials and status, kept as secrets (D18).
+//! - [`round`]: one sync round: fetch, import, archive, export and push.
+//! - [`service`]: the connection as the server runs it, one round at a time (D20).
 
 pub mod crypto;
 pub mod git;
 pub mod layout;
 pub mod manifest;
 pub mod pack;
+pub mod round;
+pub mod service;
+pub mod settings;
 pub mod sshkey;
 
 pub use crypto::SyncKey;
 pub use git::{Auth, GITHUB_KNOWN_HOSTS, Git, TreeEntry};
 pub use layout::{Layout, PART_BYTES};
 pub use manifest::{AssetEntry, DefEntry, FORMAT, Instance, Manifest, NoteEntry};
+pub use round::{Clash, Paths, Report, Skipped, run_round};
+pub use service::{GitSync, Options};
+pub use settings::{AuthKind, Secrets, Settings, Status};
 
 /// What can go wrong in this crate.
 #[derive(Debug, thiserror::Error)]
@@ -60,6 +69,27 @@ pub enum Error {
     SshKey(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// A round that cannot go on, such as one with no sync key or a query that does not parse.
+    #[error("{0}")]
+    Sync(String),
+    #[error(transparent)]
+    State(#[from] state::Error),
+    #[error(transparent)]
+    Writer(#[from] writer::Error),
+    #[error(transparent)]
+    Query(#[from] query::Error),
+    #[error(transparent)]
+    Index(#[from] index::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// `s` cut to at most `max` characters, ending in an ellipsis when cut.
+pub(crate) fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_owned();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('\u{2026}');
+    out
+}

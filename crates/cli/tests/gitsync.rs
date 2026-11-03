@@ -12,7 +12,11 @@ use crate::cli::{Vault, s};
 
 fn seed(vault: &Path) {
     std::fs::create_dir_all(vault.join("types")).unwrap();
-    std::fs::write(vault.join("types/doc.wcl"), "label = \"Doc\"\n").unwrap();
+    std::fs::write(
+        vault.join("types/doc.wcl"),
+        "label = \"Doc\"\n\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n",
+    )
+    .unwrap();
 }
 
 /// A bare repo in a fresh temp folder, and its `file://` URL.
@@ -33,6 +37,8 @@ fn bare_repo() -> (TempDir, String) {
 fn branches(url: &str) -> Vec<String> {
     let out = Command::new("git")
         .args(["ls-remote", "--heads", url])
+        // Outside any checkout, which a worktree's `.git` file may point out of.
+        .current_dir(std::env::temp_dir())
         .output()
         .unwrap();
     assert!(out.status.success(), "git ls-remote failed: {out:?}");
@@ -45,7 +51,6 @@ fn branches(url: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "needs gs-round"]
 fn status_shows_no_secret_and_set_keeps_the_settings_it_was_not_given() {
     let server = TestServer::start_seeded(seed);
     let vault = Vault::against(&server);
@@ -114,7 +119,6 @@ fn status_shows_no_secret_and_set_keeps_the_settings_it_was_not_given() {
 }
 
 #[test]
-#[ignore = "needs gs-round"]
 fn key_generate_prints_the_key_once_and_key_set_reads_it_from_stdin() {
     let server = TestServer::start_seeded(seed);
     let vault = Vault::against(&server);
@@ -141,7 +145,6 @@ fn key_generate_prints_the_key_once_and_key_set_reads_it_from_stdin() {
 }
 
 #[test]
-#[ignore = "needs gs-round"]
 fn the_token_and_the_ssh_key_are_stored_but_never_shown() {
     let server = TestServer::start_seeded(seed);
     let vault = Vault::against(&server);
@@ -167,7 +170,6 @@ fn the_token_and_the_ssh_key_are_stored_but_never_shown() {
 }
 
 #[test]
-#[ignore = "needs gs-round"]
 fn run_waits_for_the_round_and_prints_its_report() {
     let server = TestServer::start_seeded(seed);
     let vault = Vault::against(&server);

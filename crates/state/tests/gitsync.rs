@@ -70,6 +70,31 @@ fn rows_are_listed_by_peer_and_by_note() {
 }
 
 #[test]
+fn the_imported_rows_are_those_another_instance_created() {
+    let dir = TempDir::new().unwrap();
+    let state = open(&dir);
+    let mut own = row(NOTE_B, "peer1", b"b1");
+    own.origin = "me".into();
+    state.gitsync_put(&own).unwrap();
+    state.gitsync_put(&row(NOTE_A, "peer2", b"a2")).unwrap();
+    state.gitsync_put(&row(NOTE_A, "peer1", b"a1")).unwrap();
+
+    let imported: Vec<_> = state
+        .gitsync_imported("me")
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.note_id, r.peer_vault_id))
+        .collect();
+    assert_eq!(
+        imported,
+        [
+            (NOTE_A.to_owned(), "peer1".to_owned()),
+            (NOTE_A.to_owned(), "peer2".to_owned())
+        ]
+    );
+}
+
+#[test]
 fn archived_by_sync_is_set_and_cleared_on_one_row() {
     let dir = TempDir::new().unwrap();
     let state = open(&dir);

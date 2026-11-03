@@ -103,7 +103,8 @@ pub use index::{
     extract_pdf_text, extract_text,
 };
 pub use note::{
-    ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, value_to_json, value_wcl,
+    ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, print as print_doc,
+    value_to_json, value_wcl,
 };
 pub use outbox_sms::{COPY_WINDOW_MS, same_number, sms_words};
 pub use purge::Purged;

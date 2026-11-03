@@ -40,6 +40,20 @@ struct Args {
     )]
     clients_poll_ms: u64,
 
+    /// The `ssh` program git sync runs, `ssh` from `PATH` by default. The tests point it at a
+    /// stand-in (git-sync D19).
+    #[arg(long, env = "VAULT_GITSYNC_SSH", value_name = "PATH", hide = true)]
+    gitsync_ssh: Option<PathBuf>,
+
+    /// The largest asset part git sync writes, in bytes. The tests make it small (git-sync D12).
+    #[arg(
+        long,
+        env = "VAULT_GITSYNC_PART_BYTES",
+        value_name = "BYTES",
+        hide = true
+    )]
+    gitsync_part_bytes: Option<usize>,
+
     /// Start a clock that only `/api/test/clock` moves, at this RFC 3339 time or count of
     /// milliseconds since the epoch. Only test builds accept it (S7).
     #[arg(long, value_name = "TIME")]
@@ -107,6 +121,21 @@ fn main() -> anyhow::Result<()> {
     let scheduler =
         Scheduler::new(writer.clone(), host, clock).context("loading the scheduled tasks")?;
     triggers.bind(&scheduler);
+    // The rounds run with the ssh and part size this server was started with (git-sync D19).
+    scheduler.set_gitsync(gitsync::GitSync::new(
+        writer.clone(),
+        gitsync::Options {
+            git_bin: None,
+            ssh_bin: args
+                .gitsync_ssh
+                .clone()
+                .filter(|p| !p.as_os_str().is_empty()),
+            part_bytes: args
+                .gitsync_part_bytes
+                .unwrap_or(gitsync::PART_BYTES)
+                .max(gitsync::crypto::OVERHEAD + 1),
+        },
+    ));
     let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
     // In the runtime, so agent trigger runs use it (agents G12).
     let app = {

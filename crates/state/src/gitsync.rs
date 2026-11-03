@@ -82,6 +82,12 @@ impl State {
         self.gitsync_rows("note_id = ?1 ORDER BY peer_vault_id", note_id)
     }
 
+    /// Every row of a note another instance created, `origin` not `vault_id`: the notes this
+    /// vault imported. In note id order, then peer order.
+    pub fn gitsync_imported(&self, vault_id: &str) -> Result<Vec<GitsyncNote>> {
+        self.gitsync_rows("origin != ?1 ORDER BY note_id, peer_vault_id", vault_id)
+    }
+
     fn gitsync_rows(&self, filter: &str, value: &str) -> Result<Vec<GitsyncNote>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
