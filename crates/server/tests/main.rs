@@ -7,6 +7,7 @@
 mod office;
 
 mod activity;
+mod agent_capacity_retry;
 mod agent_files;
 mod agent_memory;
 mod agent_mentions;
