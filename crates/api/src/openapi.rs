@@ -720,6 +720,56 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/integrations/gitsync",
+        "Settings > Sync: the git sync settings, which credentials are set, whether a round runs, and the last round; never a secret",
+    ),
+    (
+        "DELETE",
+        "/api/integrations/gitsync",
+        "Disconnect git sync: delete every gitsync_* secret, the clone and the synced notes' bases",
+    ),
+    (
+        "PUT",
+        "/api/integrations/gitsync/settings",
+        "Save the git sync settings; a 400 names the query or schedule at fault in `field`",
+    ),
+    (
+        "PUT",
+        "/api/integrations/gitsync/token",
+        "Store the HTTPS token git sync signs in with",
+    ),
+    (
+        "DELETE",
+        "/api/integrations/gitsync/token",
+        "Remove the HTTPS token",
+    ),
+    (
+        "POST",
+        "/api/integrations/gitsync/ssh-key/generate",
+        "Make and store an ed25519 deploy key, answering its public key",
+    ),
+    (
+        "PUT",
+        "/api/integrations/gitsync/ssh-key",
+        "Store a pasted OpenSSH private key, answering its public key",
+    ),
+    (
+        "POST",
+        "/api/integrations/gitsync/key/generate",
+        "Make and store a new sync key, answering it the only time it is shown",
+    ),
+    (
+        "PUT",
+        "/api/integrations/gitsync/key",
+        "Store a pasted tvsync1- sync key",
+    ),
+    (
+        "POST",
+        "/api/integrations/gitsync/run",
+        "Start a git sync round: 202, or 409 while one runs",
+    ),
+    (
+        "GET",
         "/api/integrations/brave",
         "Settings > Integrations > Brave Search: whether the API key is stored, never the key",
     ),

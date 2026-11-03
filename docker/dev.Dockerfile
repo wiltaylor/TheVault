@@ -147,3 +147,9 @@ RUN apt-get update \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends rpm \
  && rm -rf /var/lib/apt/lists/*
+
+# openssh-client, the ssh git sync runs git over (git-sync D22). git is installed above. A layer
+# of its own, so adding it rebuilds nothing above.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client \
+ && rm -rf /var/lib/apt/lists/*

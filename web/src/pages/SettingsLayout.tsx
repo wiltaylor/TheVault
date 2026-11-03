@@ -11,6 +11,7 @@ const SECTIONS: [string, string][] = [
   ["/settings/secrets", "Secrets"],
   ["/settings/tokens", "API tokens"],
   ["/settings/devices", "Devices"],
+  ["/settings/sync", "Sync"],
   ["/settings/integrations", "Integrations"],
   ["/settings/ai", "AI"],
 ];
@@ -18,9 +19,9 @@ const SECTIONS: [string, string][] = [
 /**
  * The sections the apps leave out: they hold credentials, or (Tools) write and run definitions,
  * which need `admin` on the home server, and an app's device token never has it (D2). They are
- * managed in the web app.
+ * managed in the web app. Sync holds the git sync's credentials (git-sync D18).
  */
-export const WEB_APP_ONLY = ["/settings/tools", "/settings/secrets", "/settings/tokens", "/settings/integrations", "/settings/ai"];
+export const WEB_APP_ONLY = ["/settings/tools", "/settings/secrets", "/settings/tokens", "/settings/sync", "/settings/integrations", "/settings/ai"];
 
 /** The settings area: tabs for each section above the section's own page. */
 export function SettingsLayout(props: ParentProps) {

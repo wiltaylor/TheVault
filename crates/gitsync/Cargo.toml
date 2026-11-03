@@ -1,0 +1,40 @@
+[package]
+name = "gitsync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+# Every file in tests/ is a module of tests/main.rs: one test binary for the crate.
+autotests = false
+
+[dependencies]
+base64.workspace = true
+chacha20poly1305.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+hkdf = "0.12"
+hmac = "0.12"
+index.workspace = true
+query.workspace = true
+rustix = { workspace = true, features = ["process"] }
+schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ssh-key = { version = "0.6", default-features = false, features = ["std", "ed25519", "rand_core"] }
+state.workspace = true
+store.workspace = true
+sync.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+writer.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+testkit.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "main"
+path = "tests/main.rs"

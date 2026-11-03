@@ -992,3 +992,27 @@ fn a_time_of_day_is_stored_as_written_with_its_seconds_since_midnight() {
         ]
     );
 }
+
+#[test]
+fn the_assets_of_a_note_are_the_assets_it_names() {
+    let (_dir, vault) = fixture();
+    let mut index = Index::open(&vault).unwrap();
+    index.rebuild(&vault).unwrap();
+    assert_eq!(
+        index.assets_of_note(TASK_A).unwrap(),
+        vec![ASSET.to_owned()]
+    );
+    assert_eq!(index.assets_of_note(TASK_B).unwrap(), Vec::<String>::new());
+    assert_eq!(index.assets_of_note(SCRATCH).unwrap(), Vec::<String>::new());
+
+    let schema = Schema::load(&vault).unwrap();
+    index
+        .update(
+            &schema,
+            &[Update::Delete {
+                id: TASK_A.to_owned(),
+            }],
+        )
+        .unwrap();
+    assert_eq!(index.assets_of_note(TASK_A).unwrap(), Vec::<String>::new());
+}

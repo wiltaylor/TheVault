@@ -17,6 +17,10 @@
 //!
 //! Blocks have no ids, so a block is its canonical text: two notes hold the same block when they
 //! parse to the same block, which is when their canonical text is the same (D21).
+//!
+//! Git sync merges the same way but never refuses: [`merge_preferring`] settles each clash to the
+//! side the caller names, the note's origin (git-sync D8), and lists what clashed for the
+//! notification (git-sync D9).
 
 use std::collections::HashMap;
 
@@ -34,21 +38,81 @@ pub enum Merged {
     Clash(String),
 }
 
+/// One side of a merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Ours,
+    Theirs,
+}
+
+/// A merge whose clashes were settled to one side: the note, and the name of each field or
+/// compound field that clashed, in note order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Resolved {
+    pub doc: Doc,
+    pub clashes: Vec<String>,
+}
+
+/// How a merge treats a clash: refuse the whole merge, or give the field to one side and note it.
+struct Clashes {
+    winner: Option<Side>,
+    names: Vec<String>,
+}
+
+impl Clashes {
+    /// The winner's value for clashing item `name`, or `Err(why)` when the merge refuses clashes.
+    fn settle<T>(&mut self, name: &str, ours: T, theirs: T, why: String) -> Result<T, String> {
+        let pick = match self.winner {
+            None => return Err(why),
+            Some(Side::Ours) => ours,
+            Some(Side::Theirs) => theirs,
+        };
+        self.names.push(name.to_owned());
+        Ok(pick)
+    }
+}
+
 /// Merge `ours` (the device's note) and `theirs` (the server's) from `base`, the server version
 /// the device's change started from. `None` means there is no base: both sides created the note,
 /// so anything they hold differently clashes.
 pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> Merged {
+    let mut clashes = Clashes {
+        winner: None,
+        names: Vec::new(),
+    };
+    match merge_docs(base, ours, theirs, &mut clashes) {
+        Ok(doc) => Merged::Clean(doc),
+        Err(why) => Merged::Clash(why),
+    }
+}
+
+/// Merge as [`merge`] does, settling every clash to `winner`'s value of the field, or its whole
+/// compound field, rather than refusing. `created`, `updated` and `archived` are `theirs`, as in
+/// [`merge`].
+pub fn merge_preferring(base: Option<&Doc>, ours: &Doc, theirs: &Doc, winner: Side) -> Resolved {
+    let mut clashes = Clashes {
+        winner: Some(winner),
+        names: Vec::new(),
+    };
+    let doc = merge_docs(base, ours, theirs, &mut clashes)
+        .expect("a merge with a winner settles every clash");
+    Resolved {
+        doc,
+        clashes: clashes.names,
+    }
+}
+
+fn merge_docs(
+    base: Option<&Doc>,
+    ours: &Doc,
+    theirs: &Doc,
+    clashes: &mut Clashes,
+) -> Result<Doc, String> {
     let empty = Doc::default();
     let base = base.unwrap_or(&empty);
-    let fields = match merge_fields(&base.fields, &ours.fields, &theirs.fields, true) {
-        Ok(f) => f,
-        Err(why) => return Merged::Clash(why),
-    };
-    let blocks = match merge_blocks(&base.blocks, &ours.blocks, &theirs.blocks) {
-        Ok(b) => b,
-        Err(why) => return Merged::Clash(why),
-    };
-    Merged::Clean(Doc { fields, blocks })
+    let fields = merge_fields(&base.fields, &ours.fields, &theirs.fields, true, clashes)?;
+    let blocks = merge_blocks(&base.blocks, &ours.blocks, &theirs.blocks, clashes)?;
+    Ok(Doc { fields, blocks })
 }
 
 /// The value both sides agree on, or the side that changed it from the base. `Err` when both
@@ -73,6 +137,7 @@ fn merge_fields(
     ours: &[(String, Value)],
     theirs: &[(String, Value)],
     top: bool,
+    clashes: &mut Clashes,
 ) -> Result<Vec<(String, Value)>, String> {
     let get = |items: &'_ [(String, Value)], name: &str| {
         items
@@ -93,10 +158,11 @@ fn merge_fields(
             continue;
         }
         let (b, o, t) = (get(base, name), get(ours, name), get(theirs, name));
-        match pick(b.as_ref(), o.as_ref(), t.as_ref()) {
-            Ok(v) => out.extend(v.map(|v| (name.to_owned(), v))),
-            Err(()) => return Err(format!("both changed field {name:?}")),
-        }
+        let v = match pick(b.as_ref(), o.as_ref(), t.as_ref()) {
+            Ok(v) => v,
+            Err(()) => clashes.settle(name, o, t, format!("both changed field {name:?}"))?,
+        };
+        out.extend(v.map(|v| (name.to_owned(), v)));
     }
     Ok(out)
 }
@@ -113,6 +179,7 @@ fn merge_blocks(
     base: &[DocBlock],
     ours: &[DocBlock],
     theirs: &[DocBlock],
+    clashes: &mut Clashes,
 ) -> Result<Vec<DocBlock>, String> {
     let find = |items: &'_ [DocBlock], b: &DocBlock| {
         items.iter().find(|x| block_key(x) == block_key(b)).cloned()
@@ -130,25 +197,45 @@ fn merge_blocks(
             out.extend(v);
             continue;
         }
-        let (Some(o), Some(t)) = (o, t) else {
-            return Err(format!(
-                "one side changed {} and the other removed it",
-                key.name()
-            ));
+        let name = key.label().unwrap_or(&key.kind).to_owned();
+        let (Some(o), Some(t)) = (o.clone(), t.clone()) else {
+            let why = format!("one side changed {} and the other removed it", key.name());
+            out.extend(clashes.settle(&name, o, t, why)?);
+            continue;
         };
         if o.kind != "content" {
-            return Err(format!("both changed {}", key.name()));
+            let why = format!("both changed {}", key.name());
+            out.push(clashes.settle(&name, o, t, why)?);
+            continue;
         }
+        // The content merges strictly; a clash inside it gives the winner the whole field.
         let b = b.map(|b| b.body).unwrap_or_default();
-        let fields = merge_fields(&b.fields, &o.body.fields, &t.body.fields, false)
-            .map_err(|why| format!("{}: {why}", key.name()))?;
-        let blocks = diff3(&b.blocks, &o.body.blocks, &t.body.blocks)
-            .map_err(|why| format!("{}: {why}", key.name()))?;
-        out.push(DocBlock {
-            kind: o.kind,
-            labels: o.labels,
-            body: Doc { fields, blocks },
+        let mut strict = Clashes {
+            winner: None,
+            names: Vec::new(),
+        };
+        let merged = merge_fields(
+            &b.fields,
+            &o.body.fields,
+            &t.body.fields,
+            false,
+            &mut strict,
+        )
+        .and_then(|fields| {
+            let blocks = diff3(&b.blocks, &o.body.blocks, &t.body.blocks)?;
+            Ok(Doc { fields, blocks })
         });
+        match merged {
+            Ok(body) => out.push(DocBlock {
+                kind: o.kind,
+                labels: o.labels,
+                body,
+            }),
+            Err(why) => {
+                let why = format!("{}: {why}", key.name());
+                out.push(clashes.settle(&name, o, t, why)?);
+            }
+        }
     }
     Ok(out)
 }
@@ -343,6 +430,23 @@ mod tests {
             "title = \"T\"\ncreated = \"2026-01-01T00:00:00Z\"\nupdated = \"2026-01-03T00:00:00Z\"\n",
         );
         assert_eq!(clean(merge(Some(&base), &ours, &theirs)), theirs);
+    }
+
+    #[test]
+    fn a_winner_takes_each_clash_and_both_sides_keep_the_rest() {
+        let base = note("a = 1\nb = 1\nc = 1", &["one", "two"]);
+        let ours = note("a = 2\nb = 2\nc = 1", &["uno", "two"]);
+        let theirs = note("a = 3\nb = 1\nc = 3", &["eins", "two"]);
+        let r = merge_preferring(Some(&base), &ours, &theirs, Side::Theirs);
+        assert_eq!(r.doc, note("a = 3\nb = 2\nc = 3", &["eins", "two"]));
+        assert_eq!(r.clashes, vec!["a", "body"]);
+        let r = merge_preferring(Some(&base), &ours, &theirs, Side::Ours);
+        assert_eq!(r.doc, note("a = 2\nb = 2\nc = 3", &["uno", "two"]));
+        assert_eq!(r.clashes, vec!["a", "body"]);
+        // No clash, nothing named.
+        let r = merge_preferring(Some(&base), &ours, &base, Side::Theirs);
+        assert_eq!(r.doc, ours);
+        assert!(r.clashes.is_empty());
     }
 
     #[test]

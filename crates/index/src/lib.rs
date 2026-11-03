@@ -244,6 +244,16 @@ impl Index {
         Ok(out)
     }
 
+    /// The ids of the assets indexed note `note` names, sorted, each once. A note the index does
+    /// not hold names none.
+    pub fn assets_of_note(&self, note: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT asset FROM asset_refs WHERE note = ?1 ORDER BY asset",
+        )?;
+        let rows = stmt.query_map([note], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// How many indexed notes name each asset that any note names.
     pub fn asset_use_counts(&self) -> Result<std::collections::HashMap<String, usize>> {
         let mut stmt = self

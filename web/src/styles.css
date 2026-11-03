@@ -3391,6 +3391,35 @@ button.link {
   margin: 0;
 }
 
+/* Settings > Sync: the git sync's cards (git-sync D18). */
+.gitsync-card {
+  max-width: 48rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.gitsync-card h2 {
+  margin: 0.25rem 0;
+  font-size: 1.1rem;
+}
+
+.gitsync-card textarea {
+  width: 100%;
+  font-family: var(--mono);
+}
+
+.gitsync-card > button,
+.gitsync-ssh > label {
+  align-self: flex-start;
+}
+
+.gitsync-ssh {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 /* Settings > AI: one card per provider (ai D6, D8). */
 .ai-card {
   max-width: 48rem;
