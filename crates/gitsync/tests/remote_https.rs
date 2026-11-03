@@ -22,13 +22,25 @@ fn set_token(i: &Instance, token: &str) {
 /// Every place a token must never show: the status, the activity log and the server's stderr.
 fn assert_no_token(i: &Instance, token: &str) {
     let status = i.status().to_string();
-    assert!(!status.contains(token), "the status shows the token: {status}");
+    assert!(
+        !status.contains(token),
+        "the status shows the token: {status}"
+    );
     let activity = i.get("/api/activity").to_string();
-    assert!(!activity.contains(token), "the activity log shows the token");
+    assert!(
+        !activity.contains(token),
+        "the activity log shows the token"
+    );
     let notifications = i.get("/api/notifications").to_string();
-    assert!(!notifications.contains(token), "a notification shows the token");
+    assert!(
+        !notifications.contains(token),
+        "a notification shows the token"
+    );
     for line in i.server.stderr_lines() {
-        assert!(!line.contains(token), "the server's stderr shows the token: {line}");
+        assert!(
+            !line.contains(token),
+            "the server's stderr shows the token: {line}"
+        );
     }
 }
 

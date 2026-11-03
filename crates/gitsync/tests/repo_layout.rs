@@ -4,7 +4,7 @@
 use serde_json::json;
 use testkit::BareRepo;
 
-use crate::instance::{Instance, PART_BYTES, memo, pair};
+use crate::instance::{PART_BYTES, memo, pair};
 
 fn is_hex(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit())
@@ -48,9 +48,11 @@ fn the_repo_holds_only_opaque_hex_names_one_commit_per_branch() {
             let fields: Vec<&str> = meta.split_whitespace().collect();
             let (oid, size) = (fields[2], fields[3].parse::<usize>().unwrap());
             assert!(size <= PART_BYTES, "{line}");
+            // The folder kinds (notes, assets, definitions) and the manifest are fixed names;
+            // everything else is hex.
             for segment in path.split('/') {
                 assert!(
-                    is_hex(segment) || segment == "manifest",
+                    is_hex(segment) || ["manifest", "n", "a", "d"].contains(&segment),
                     "{segment} in {path}"
                 );
             }

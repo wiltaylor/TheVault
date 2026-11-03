@@ -143,6 +143,18 @@ impl Instance {
         }
     }
 
+    /// An instance named `name` on a server already started.
+    pub fn on(name: &str, server: TestServer) -> Instance {
+        Instance {
+            server,
+            name: name.to_owned(),
+            http: Client::builder()
+                .timeout(Duration::from_secs(120))
+                .build()
+                .unwrap(),
+        }
+    }
+
     /// Send `method path` with `body` and check the status; answers the JSON body, or `null`.
     pub fn call(&self, method: &str, path: &str, body: Option<Value>, status: u16) -> Value {
         let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap();

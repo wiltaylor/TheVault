@@ -25,7 +25,11 @@ fn the_export_and_import_queries_choose_what_arrives_with_its_id_and_author() {
     assert_eq!(report["pushed"], true, "{report}");
     assert_eq!(report["published"], 2, "{report}");
     let report = b.sync();
-    assert_eq!(ids(&report, "created"), [shared.clone()], "{report}");
+    assert_eq!(
+        ids(&report, "created"),
+        std::slice::from_ref(&shared),
+        "{report}"
+    );
 
     assert_eq!(b.field(&shared, "title"), "Shared");
     assert_eq!(b.note(&shared).unwrap()["type"], "memo");
@@ -141,7 +145,11 @@ fn a_link_to_a_note_not_sent_is_dropped_there_and_kept_at_the_origin() {
     b.set(&shared, "b", "two");
     b.sync();
     let report = a.sync();
-    assert_eq!(ids(&report, "updated"), [shared.clone()], "{report}");
+    assert_eq!(
+        ids(&report, "updated"),
+        std::slice::from_ref(&shared),
+        "{report}"
+    );
     assert_eq!(a.field(&shared, "b"), "two");
     assert_eq!(a.field(&shared, "link"), target.as_str());
 }
@@ -161,7 +169,11 @@ fn edits_flow_back_and_a_clash_goes_to_the_origin_with_one_notification() {
     let report = b.sync();
     assert_eq!(report["pushed"], true, "{report}");
     let report = a.sync();
-    assert_eq!(ids(&report, "merged"), [id.clone()], "{report}");
+    assert_eq!(
+        ids(&report, "merged"),
+        std::slice::from_ref(&id),
+        "{report}"
+    );
     assert_eq!(a.field(&id, "a"), "from A");
     assert_eq!(a.field(&id, "b"), "B's b");
     // A won, so A is not told.
@@ -209,7 +221,11 @@ fn a_note_that_leaves_the_published_set_is_archived_until_it_returns() {
     a.set(&user_archived, "a", "private");
     a.sync();
     let report = b.sync();
-    assert_eq!(ids(&report, "archived"), [leaves.clone()], "{report}");
+    assert_eq!(
+        ids(&report, "archived"),
+        std::slice::from_ref(&leaves),
+        "{report}"
+    );
     assert!(b.archived(&leaves));
     assert!(b.archived(&user_archived));
 
@@ -217,7 +233,11 @@ fn a_note_that_leaves_the_published_set_is_archived_until_it_returns() {
     a.set(&user_archived, "a", "share");
     a.sync();
     let report = b.sync();
-    assert_eq!(ids(&report, "unarchived"), [leaves.clone()], "{report}");
+    assert_eq!(
+        ids(&report, "unarchived"),
+        std::slice::from_ref(&leaves),
+        "{report}"
+    );
     assert!(!b.archived(&leaves));
     assert!(b.archived(&user_archived), "the user's archive was undone");
 
@@ -225,7 +245,11 @@ fn a_note_that_leaves_the_published_set_is_archived_until_it_returns() {
     a.at_version("DELETE", &leaves, "");
     a.sync();
     let report = b.sync();
-    assert_eq!(ids(&report, "archived"), [leaves.clone()], "{report}");
+    assert_eq!(
+        ids(&report, "archived"),
+        std::slice::from_ref(&leaves),
+        "{report}"
+    );
 }
 
 #[test]
@@ -246,7 +270,11 @@ fn a_deleted_import_stays_deleted_until_restored() {
 
     b.call("POST", &format!("/api/trash/{id}/restore"), None, 200);
     let report = b.sync();
-    assert_eq!(ids(&report, "updated"), [id.clone()], "{report}");
+    assert_eq!(
+        ids(&report, "updated"),
+        std::slice::from_ref(&id),
+        "{report}"
+    );
     assert_eq!(b.field(&id, "a"), "2");
 }
 

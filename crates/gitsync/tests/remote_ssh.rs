@@ -20,7 +20,12 @@ fn a_round_over_ssh_learns_the_host_key_then_pins_it() {
     let bin = ssh.bin();
     let a = Instance::start_with("A", seed, &[("VAULT_GITSYNC_SSH", bin.to_str().unwrap())]);
     a.generate_key();
-    let made = a.call("POST", "/api/integrations/gitsync/ssh-key/generate", None, 200);
+    let made = a.call(
+        "POST",
+        "/api/integrations/gitsync/ssh-key/generate",
+        None,
+        200,
+    );
     let public = made["public_key"].as_str().unwrap().to_owned();
     assert!(public.starts_with("ssh-ed25519 "), "{public}");
     let status = a.status();
@@ -58,6 +63,9 @@ fn a_round_over_ssh_learns_the_host_key_then_pins_it() {
     let later = &ssh.calls()[first.len()..];
     assert!(!later.is_empty());
     for call in later {
-        assert_eq!(option(call, "StrictHostKeyChecking").as_deref(), Some("yes"));
+        assert_eq!(
+            option(call, "StrictHostKeyChecking").as_deref(),
+            Some("yes")
+        );
     }
 }

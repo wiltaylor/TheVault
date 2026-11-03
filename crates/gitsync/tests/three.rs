@@ -29,7 +29,11 @@ fn an_edit_on_one_importer_reaches_the_origin_and_the_other_importer() {
     c.set(&id, "b", "from C");
     c.sync();
     let report = a.sync();
-    assert_eq!(ids(&report, "updated"), [id.clone()], "{report}");
+    assert_eq!(
+        ids(&report, "updated"),
+        std::slice::from_ref(&id),
+        "{report}"
+    );
     assert_eq!(a.field(&id, "b"), "from C");
     b.sync();
     assert_eq!(b.field(&id, "b"), "from C");
