@@ -60,13 +60,20 @@ fn https_auth_uses_an_owner_only_askpass_script_and_no_argv_token() {
 
     // The script answers git's two prompts from the child's variables.
     let ask = |prompt: &str| {
-        let out = Command::new(askpass)
-            .arg(prompt)
+        let mut cmd = Command::new(askpass);
+        cmd.arg(prompt)
             .env_clear()
             .env(TOKEN_VAR, TOKEN)
-            .env(USERNAME_VAR, "x-access-token")
-            .output()
-            .unwrap();
+            .env(USERNAME_VAR, "x-access-token");
+        // Another test forking while the script was written leaves it busy for a moment.
+        let out = loop {
+            match cmd.output() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                other => break other.unwrap(),
+            }
+        };
         String::from_utf8(out.stdout).unwrap()
     };
     assert_eq!(

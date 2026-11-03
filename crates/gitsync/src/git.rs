@@ -340,7 +340,7 @@ impl Git {
         .stderr(Stdio::piped())
         // Its own process group, so a timeout kills ssh and the remote helpers too.
         .process_group(0);
-        let mut child = cmd.spawn()?;
+        let mut child = spawn(&mut cmd)?;
         let mut stdin = child.stdin.take();
         let mut stdout = child.stdout.take().expect("stdout is piped");
         let mut stderr = child.stderr.take().expect("stderr is piped");
@@ -664,6 +664,21 @@ fn write_private(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(())
+}
+
+/// Spawns `cmd`, retrying while exec fails with "text file busy": a script written moments ago
+/// stays busy while a child forked by another thread, before its exec, holds the write handle.
+fn spawn(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+    let mut tries = 0;
+    loop {
+        match cmd.spawn() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 100 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            other => return other,
+        }
+    }
 }
 
 fn kill_group(pid: u32) {
