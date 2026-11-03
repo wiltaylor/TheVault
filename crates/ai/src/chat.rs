@@ -257,7 +257,9 @@ fn failure(who: &Who, req: &Request, error: &Value, usage: Usage) -> AiError {
     let code = s("code").or_else(|| s("type")).unwrap_or_default();
     let message = s("message").unwrap_or("the request failed");
     let kind = kind_of_code(code).unwrap_or(ErrorKind::Provider);
-    AiError::new(kind, format!("{} {}: {message}", who.name, req.model)).with_usage(usage)
+    AiError::new(kind, format!("{} {}: {message}", who.name, req.model))
+        .coded(code)
+        .with_usage(usage)
 }
 
 /// A tool call coming in, piece by piece.

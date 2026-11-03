@@ -364,6 +364,23 @@ async fn a_stream_broken_off_is_an_error_and_not_retried() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_stream_error_saying_at_capacity_is_unavailable_and_transient() {
+    let env = Env::new();
+    env.anthropic
+        .push(AnthropicMessage::text("Hello there").error_after(
+            4,
+            "api_error",
+            "The model is at capacity right now",
+        ));
+    let e = ai::complete(&ai::client(), &env.cred(Kind::Anthropic), &request("hi"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Unavailable, "{e}");
+    assert!(e.is_transient());
+    assert_eq!(env.anthropic.message_requests().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn thinking_is_replayed_to_the_same_model_only() {
     let env = Env::new();
     env.anthropic.push(

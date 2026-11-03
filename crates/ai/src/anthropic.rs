@@ -401,6 +401,7 @@ impl StreamDecoder {
                 let kind = kind_of_code(code).unwrap_or(ErrorKind::Provider);
                 return Err(
                     AiError::new(kind, format!("{} {}: {message}", self.name, self.model))
+                        .coded(code)
                         .with_usage(self.turn.usage),
                 );
             }
