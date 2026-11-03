@@ -108,7 +108,7 @@ pub use note::{
 pub use outbox_sms::{COPY_WINDOW_MS, same_number, sms_words};
 pub use purge::Purged;
 pub use refs::Referrer;
-pub use remote::{REMOTE_AUTHOR, Remote};
+pub use remote::{NoteState, REMOTE_AUTHOR, Remote};
 pub use schema::NoteEdit;
 pub use series::{
     DAYS_AHEAD, DAYS_BEHIND, Occurrence, carried_fields, check_rule_lines, occurrences,
@@ -637,7 +637,28 @@ impl Writer {
     /// other can arrive together. Returns each canonical text, in order.
     pub(crate) fn put_types(&self, sources: &[(&str, &str)]) -> Result<Vec<String>> {
         let _w = self.write_lock();
-        let mut inner = self.lock();
+        self.put_types_locked(self.lock(), sources)
+    }
+
+    /// Create type `name` from `source` unless the vault already has a type of that name, which
+    /// is left as it is: git sync brings the types of the notes it imports, and never overwrites
+    /// one (git-sync D15). Returns whether it created the type.
+    pub fn put_type_if_missing(&self, name: &str, source: &str) -> Result<bool> {
+        let _w = self.write_lock();
+        let inner = self.lock();
+        if inner_has_type(&inner, name) {
+            return Ok(false);
+        }
+        self.put_types_locked(inner, &[(name, source)])?;
+        Ok(true)
+    }
+
+    /// [`Writer::put_types`] for a caller holding the write lock.
+    fn put_types_locked(
+        &self,
+        mut inner: MutexGuard<'_, Inner>,
+        sources: &[(&str, &str)],
+    ) -> Result<Vec<String>> {
         let (changes, texts, schema) = self.checked_types(&inner, sources)?;
         let generation = self.commit(changes)?;
         inner.index.set_schema(&schema)?;

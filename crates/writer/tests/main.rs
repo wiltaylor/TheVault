@@ -18,6 +18,7 @@ mod definition_events;
 mod dicts;
 mod dividers;
 mod event_series;
+mod gitsync;
 mod ink;
 mod office_text;
 mod open_taxonomies;

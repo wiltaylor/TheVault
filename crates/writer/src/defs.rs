@@ -299,6 +299,24 @@ impl Writer {
         Ok((self.vault.read_text(&path)?, saved))
     }
 
+    /// Create taxonomy `name` from `source` unless the vault already has a taxonomy of that
+    /// name, which is left as it is (git-sync D15). Returns whether it created the taxonomy.
+    pub fn put_taxonomy_if_missing(
+        &self,
+        name: &str,
+        source: &str,
+        author: &Author,
+    ) -> Result<bool> {
+        let _w = self.write_lock();
+        let inner = self.lock();
+        if inner.schema.taxonomy(name).is_some() {
+            return Ok(false);
+        }
+        let (path, text, changes) = self.plan_taxonomy(&inner, name, source, &BTreeMap::new())?;
+        self.commit_definitions(inner, vec![(path, Some(text))], changes, author)?;
+        Ok(true)
+    }
+
     /// Check a [`Writer::put_taxonomy`] without writing anything (ai D31): the same refusals, and
     /// the stored text and the notes a rename would rewrite.
     pub fn check_taxonomy(
