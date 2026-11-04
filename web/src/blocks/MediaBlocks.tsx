@@ -36,6 +36,14 @@ export async function upload(file: File): Promise<Asset> {
   return asset;
 }
 
+/** A pasted image arrives named `image.png`: give it a name of its own. */
+export function pastedName(file: File): File {
+  if (!/^image\.\w+$/.test(file.name)) return file;
+  const ext = file.name.split(".").pop();
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return new File([file], `pasted-${stamp}.${ext}`, { type: file.type });
+}
+
 /** A hidden file input and the button that opens it; `onFile` gets the chosen file. */
 export function FilePicker(props: { label: string; text: string; accept?: string; onFile: (file: File) => void }) {
   let input!: HTMLInputElement;

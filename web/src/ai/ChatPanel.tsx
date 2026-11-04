@@ -27,6 +27,7 @@ import {
   useContext,
 } from "solid-js";
 import { agentLabel, agents } from "../agents";
+import { pastedName } from "../blocks/MediaBlocks";
 import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl, isSubSession } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { formatValue } from "../components/Render";
@@ -1372,13 +1373,6 @@ interface Upload {
 
 let uploads = 0;
 
-/** A pasted image arrives named `image.png`: give it a name of its own. */
-function pastedName(file: File): File {
-  if (!/^image\.\w+$/.test(file.name)) return file;
-  const ext = file.name.split(".").pop();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  return new File([file], `pasted-${stamp}.${ext}`, { type: file.type });
-}
 
 /** A size as people read it. */
 function sizeText(bytes: number): string {

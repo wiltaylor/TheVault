@@ -1181,7 +1181,7 @@ attachments = ["01JB9A0C3D4E5F6G7H8J9K0M1P"]
 |------|------|---------|
 | `accept` | string | `"image"` or `"any"`. Default `"any"`. With `"image"`, a value must be an asset whose file is an image, by its file name (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif` or `.svg`); validation rejects another asset with "asset ... is "...", and this field holds only images" |
 
-A single asset field with `accept = "image"` is edited as a square image tile: the image, or a placeholder ("Add photo" for a field labelled Photo, else "Add image") when it is empty. The tile opens a dialog that uploads an image, by the file picker or by dropping one, or picks one of the vault's images; a set tile also offers Remove and Open full size. Cards and tables show the image as a thumbnail. Any other asset field keeps the picker of uploaded files.
+A single asset field with `accept = "image"` is edited as a square image tile: the image, or a placeholder ("Add photo" for a field labelled Photo, else "Add image") when it is empty. The tile opens a dialog that uploads an image, by the file picker, by dropping one or by pasting one with Ctrl+V, or picks one of the vault's images. Pasting an image on the tile itself opens the dialog and uploads it, and a pasted `image.png` is stored as `pasted-<time>.png`; a set tile also offers Remove and Open full size. Cards and tables show the image as a thumbnail. Any other asset field keeps the picker of uploaded files.
 
 ```wcl
 field photo {
