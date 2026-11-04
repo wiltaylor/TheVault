@@ -68,6 +68,9 @@ pub struct AiError {
     pub explanation: Option<String>,
     /// The tokens the call used before it failed, for the trail line.
     pub usage: Usage,
+    /// A [`ErrorKind::RateLimit`] that is a usage or quota limit used up, which waiting minutes
+    /// does not lift, rather than a limit on how fast calls come.
+    pub exhausted: bool,
 }
 
 impl AiError {
@@ -81,6 +84,7 @@ impl AiError {
             category: None,
             explanation: None,
             usage: Usage::default(),
+            exhausted: false,
         }
     }
 
@@ -119,6 +123,32 @@ impl AiError {
         self.kind == ErrorKind::Invalid
             && matches!(self.status, Some(404 | 405))
             && self.message.starts_with(crate::http::UNSUPPORTED_API)
+    }
+
+    /// Whether waiting and calling again may well succeed: the provider is overloaded or
+    /// unreachable ([`ErrorKind::Unavailable`]), or a rate limit that is not a usage or quota
+    /// limit used up. An unattended agent run retries such a call (`CAPACITY_WAITS` in the api).
+    pub fn is_transient(&self) -> bool {
+        match self.kind {
+            ErrorKind::Unavailable => true,
+            ErrorKind::RateLimit => !self.exhausted,
+            _ => false,
+        }
+    }
+
+    /// The same error read with the provider's error `code` or type: a usage or quota code marks
+    /// it [`AiError::exhausted`], and a message saying the model is at capacity or overloaded
+    /// makes a provider or request error [`ErrorKind::Unavailable`].
+    pub(crate) fn coded(mut self, code: &str) -> AiError {
+        if LIMIT_CODES.contains(&code) {
+            self.exhausted = true;
+        }
+        if matches!(self.kind, ErrorKind::Provider | ErrorKind::Invalid)
+            && says_at_capacity(&self.message)
+        {
+            self.kind = ErrorKind::Unavailable;
+        }
+        self
     }
 
     /// The same error, naming the account and model it came from.
@@ -242,8 +272,23 @@ pub(crate) fn from_response(account: &str, model: &str, status: u16, body: &str)
         text.push_str(". See your ChatGPT usage at https://chatgpt.com/settings/usage");
     }
     AiError::new(kind, text)
+        .coded(code)
         .on(account, model)
         .with_status(status)
+}
+
+/// The codes of a usage or quota limit used up, which waiting does not lift.
+pub(crate) const LIMIT_CODES: [&str; 3] = [
+    "subscription_sharing_usage_limit_exceeded",
+    "usage_limit_reached",
+    "insufficient_quota",
+];
+
+/// Whether a provider's message says the model is at capacity or overloaded, whatever code came
+/// with it.
+pub(crate) fn says_at_capacity(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("at capacity") || m.contains("overloaded")
 }
 
 /// Whether an error body says the model was not found (OpenAI's `model_not_found`, or an error
@@ -342,5 +387,72 @@ mod tests {
             r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
         );
         assert_eq!(e.kind, ErrorKind::Unavailable);
+        assert!(e.is_transient());
+    }
+
+    #[test]
+    fn at_capacity_and_overloaded_messages_are_unavailable() {
+        for (status, body) in [
+            (
+                400,
+                r#"{"error":{"type":"invalid_request_error","message":"The model is at capacity, try later"}}"#,
+            ),
+            (
+                500,
+                r#"{"type":"error","error":{"type":"api_error","message":"Model at capacity"}}"#,
+            ),
+            (
+                418,
+                r#"{"error":{"message":"Server Overloaded, please retry"}}"#,
+            ),
+            (520, "the upstream is at capacity"),
+        ] {
+            let e = from_response("Acct", "m", status, body);
+            assert_eq!(e.kind, ErrorKind::Unavailable, "{status} {body}");
+            assert!(e.is_transient(), "{status} {body}");
+        }
+        assert_eq!(
+            from_response("Acct", "m", 418, r#"{"error":{"message":"I'm a teapot"}}"#).kind,
+            ErrorKind::Provider
+        );
+        // A refused key stays a refused key, whatever its message says.
+        let e = from_response(
+            "Acct",
+            "m",
+            401,
+            r#"{"error":{"type":"authentication_error","message":"overloaded"}}"#,
+        );
+        assert_eq!(e.kind, ErrorKind::Auth);
+        assert!(!e.is_transient());
+    }
+
+    #[test]
+    fn a_used_up_quota_is_a_rate_limit_that_is_not_transient() {
+        let e = from_response(
+            "OpenAI",
+            "gpt-x",
+            429,
+            r#"{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}"#,
+        );
+        assert_eq!(e.kind, ErrorKind::RateLimit);
+        assert!(e.exhausted);
+        assert!(!e.is_transient());
+        for code in [
+            "usage_limit_reached",
+            "subscription_sharing_usage_limit_exceeded",
+        ] {
+            let body = format!(r#"{{"error":{{"code":"{code}","message":"Limit"}}}}"#);
+            assert!(!from_response("ChatGPT", "gpt-x", 429, &body).is_transient());
+        }
+        let e = from_response(
+            "Anthropic",
+            "m",
+            429,
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"Slow down"}}"#,
+        );
+        assert_eq!(e.kind, ErrorKind::RateLimit);
+        assert!(!e.exhausted);
+        assert!(e.is_transient());
+        assert!(from_response("Anthropic", "m", 429, "").is_transient());
     }
 }

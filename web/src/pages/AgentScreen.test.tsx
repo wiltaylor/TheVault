@@ -197,8 +197,8 @@ beforeEach(async () => {
         name: "nightly",
         kind: "schedule",
         runs: [
-          { id: 2, thread: "01JRUN2", started: 1767578400000, ended: 1767578403000, outcome: "failed", message: "Anthropic is unavailable" },
-          { id: 1, thread: "01JRUN1", started: 1767492000000, ended: 1767492002000, outcome: "succeeded", message: null },
+          { id: 2, thread: "01JRUN2", started: 1767578400000, ended: 1767578403000, outcome: "failed", message: "Anthropic is unavailable", log: "model at capacity; retrying in 60s (attempt 2 of 4): Anthropic m: Overloaded" },
+          { id: 1, thread: "01JRUN1", started: 1767492000000, ended: 1767492002000, outcome: "succeeded", message: null, log: "" },
         ],
       },
     ],
@@ -825,6 +825,10 @@ describe("the Triggers tab", () => {
       "href",
       "/agents/inbox_triage?thread=01JRUN2",
     );
+    // The run's log, with its capacity waits, folds under Log; a run with none has no Log.
+    expect(within(items[0]!).getByText("Log")).toBeTruthy();
+    expect(items[0]).toHaveTextContent("model at capacity; retrying in 60s (attempt 2 of 4)");
+    expect(within(items[1]!).queryByText("Log")).toBeNull();
     expect(items[1]).toHaveTextContent("Succeeded");
     expect(t.getByText(/a run is offered only the tools that need no confirmation/).parentElement).toHaveTextContent(
       "Search notes, Read a note, Edit notes.",

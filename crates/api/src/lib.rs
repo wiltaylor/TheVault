@@ -78,6 +78,7 @@ mod ai_assets;
 mod ai_browser;
 mod ai_chat;
 mod ai_outbox;
+mod ai_retry;
 mod ai_saved;
 mod ai_scripts;
 mod ai_settings;
@@ -523,7 +524,16 @@ pub fn router(
     let sessions = Arc::new(auth::Sessions::new(writer.clone()));
     // Only the server runs agent triggers (agents G10): the embedded app servers come through
     // `owner_router`, which installs no runner.
-    scheduler.set_agent_runner(Arc::new(agent_runs::TriggerRunner::new(writer.clone())));
+    // A run's capacity waits are slept for real, but are over at once under `--test-clock`.
+    let waits = if test_clock.is_some() {
+        ai_retry::Waits::instant()
+    } else {
+        ai_retry::Waits::real()
+    };
+    scheduler.set_agent_runner(Arc::new(agent_runs::TriggerRunner::new(
+        writer.clone(),
+        waits,
+    )));
     // Only the server runs agents' scripts (script-tools T1), on the host the tasks run on.
     script_tools::register(&writer, &scheduler);
     let browser = browser::Config::from_env();

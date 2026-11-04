@@ -98,6 +98,7 @@ use tokio::sync::{mpsc, watch};
 use writer::{Input, Op, TypeChange, Writer, doc_to_json};
 
 use crate::agent_threads::{self, Busy, Stored, Thread};
+use crate::ai_retry::CapacityRetry;
 use crate::ai_taxonomies::apply_taxonomy;
 use crate::auth::{Caller, GrantedScope};
 use crate::events::HEARTBEAT;
@@ -195,7 +196,7 @@ pub(crate) struct Unattended {
     pub(crate) log: Vec<String>,
 }
 
-type Report = Arc<std::sync::Mutex<Unattended>>;
+pub(crate) type Report = Arc<std::sync::Mutex<Unattended>>;
 
 /// The one HTTP client chat calls share.
 fn http() -> &'static reqwest::Client {
@@ -219,14 +220,17 @@ pub async fn chat(
 /// Run one unattended turn of agent `agent` on its thread `thread`, whose user message is
 /// `prompt`, and wait for it to end (agents G12). The agent is the caller, with `write` scope,
 /// and `admin` when its permissions allow a type or taxonomy change; the turn is offered no
-/// change tool whose confirmation switch is on, so nothing waits for a user.
+/// change tool whose confirmation switch is on, so nothing waits for a user. A model call that
+/// fails with a transient error is made again after each of `waits` (`crate::ai_retry`).
 pub(crate) async fn run_unattended(
     w: Arc<Writer>,
     agent: &Agent,
     thread: &str,
     prompt: &str,
+    waits: crate::ai_retry::Waits,
 ) -> Unattended {
     let report: Report = Arc::default();
+    let retry = CapacityRetry::new(waits, w.clone(), thread, report.clone());
     let body = ChatBody {
         account: None,
         provider: None,
@@ -250,7 +254,7 @@ pub(crate) async fn run_unattended(
         unattended_scope(agent),
         body,
         never,
-        Some(report.clone()),
+        Some((report.clone(), retry)),
     )
     .await;
     match started {
@@ -405,15 +409,17 @@ pub(crate) async fn start(
     start_with(w, author, scope, body, stop, None).await
 }
 
-/// [`start`], for an unattended turn when `report` is given.
+/// [`start`], for an unattended turn when `unattended` is given: where it reports, and how its
+/// model calls are retried.
 async fn start_with(
     w: Arc<Writer>,
     author: Author,
     scope: Scope,
     body: ChatBody,
     stop: watch::Receiver<bool>,
-    report: Option<Report>,
+    unattended: Option<(Report, CapacityRetry)>,
 ) -> Result<(mpsc::Receiver<Sent>, Arc<AtomicBool>), ApiError> {
+    let (report, retry) = unattended.unzip();
     let account = match (
         body.account
             .as_deref()
@@ -480,6 +486,7 @@ async fn start_with(
         scope,
         agent_name: named.then(|| prepared.agent.name.clone()),
         unattended: report.is_some(),
+        retry,
         sub: None,
         origin,
     };
@@ -499,6 +506,8 @@ struct TurnCfg {
     agent_name: Option<String>,
     /// Nobody waits on it to apply anything (agents G12, subagents U8).
     unattended: bool,
+    /// How an unattended turn retries a model call that failed with a transient error.
+    retry: Option<CapacityRetry>,
     /// For a sub agent's turn (subagents U1).
     sub: Option<SubMark>,
     /// Where it came from, for the activity log.
@@ -546,6 +555,7 @@ fn spawn_turn(
         log: prepared.log.map(std::sync::Mutex::new),
         report,
         unattended: cfg.unattended,
+        retry: cfg.retry,
         sub: cfg.sub,
         activity,
         skills: prepared.skills,
@@ -1277,6 +1287,9 @@ struct Turn {
     /// Nobody waits on the turn: it is offered no change tool that would only propose (agents
     /// G12), as is a sub agent of such a turn (subagents U8).
     unattended: bool,
+    /// How an unattended turn, and a sub agent of one, retries a model call that failed with a
+    /// transient error (`crate::ai_retry`).
+    retry: Option<CapacityRetry>,
     /// For a sub agent's turn (subagents U1).
     sub: Option<SubMark>,
     /// The turn's entries in the activity log (activity Y2).
@@ -1565,12 +1578,8 @@ impl Turn {
                 effort: setup.effort,
                 max_tokens: None,
             };
-            let began = Instant::now();
-            let called = tokio::select! {
-                _ = self.out.closed() => Called::Gone,
-                c = self.call(&setup.cred, &req) => c,
-            };
-            let trail = |usage: Usage, outcome: Outcome| {
+            let mut began = Instant::now();
+            let trail = |began: Instant, usage: Usage, outcome: Outcome| {
                 let line = ai::trail_line(
                     &setup.cred.name,
                     setup.cred.kind,
@@ -1590,10 +1599,40 @@ impl Turn {
                     usage.output,
                 );
             };
+            // An unattended turn makes a call that failed with a transient error again, after
+            // each of its waits (`crate::ai_retry`). The same request goes again: the tool calls
+            // of earlier rounds are answered in it, and this round's run only once its call has
+            // ended, so a failed call has run none. Its partial text is dropped.
+            let mut retries = 0;
+            let called = loop {
+                let called = tokio::select! {
+                    _ = self.out.closed() => Called::Gone,
+                    c = self.call(&setup.cred, &req) => c,
+                };
+                let Called::Failed { error, .. } = &called else {
+                    break called;
+                };
+                let Some((retry, wait)) = self
+                    .retry
+                    .as_ref()
+                    .filter(|_| error.is_transient())
+                    .and_then(|r| Some((r, r.wait(retries)?)))
+                else {
+                    break called;
+                };
+                trail(began, error.usage, Outcome::of_error(error));
+                retry.note(retries, wait, error).await;
+                tokio::select! {
+                    _ = self.out.closed() => return,
+                    _ = retry.sleep(wait) => {}
+                }
+                retries += 1;
+                began = Instant::now();
+            };
             let (text, calls, stop, state) = match called {
                 Called::Gone => return,
                 Called::Failed { text, error } => {
-                    trail(error.usage, Outcome::of_error(&error));
+                    trail(began, error.usage, Outcome::of_error(&error));
                     let mut content = Vec::new();
                     if !text.is_empty() {
                         content.push(Content::text(text));
@@ -1623,7 +1662,7 @@ impl Turn {
                     state,
                     usage,
                 } => {
-                    trail(usage, Outcome::of_stop(&stop));
+                    trail(began, usage, Outcome::of_stop(&stop));
                     self.context(usage.input + usage.output, setup.window).await;
                     (text, calls, stop, state)
                 }
@@ -2565,6 +2604,7 @@ impl Turn {
             scope: self.scope,
             agent_name: Some(agent.clone()),
             unattended: self.unattended,
+            retry: self.retry.as_ref().map(|r| r.for_sub(n)),
             sub: Some(SubMark {
                 throwaway: delegated.is_none(),
                 n,

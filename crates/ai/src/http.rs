@@ -218,13 +218,7 @@ fn without_url(e: &reqwest::Error) -> String {
 /// Whether a failed answer is worth another attempt: a 429 or a 5xx, but not a usage or quota
 /// limit, which waiting a second does not lift.
 fn retryable(status: u16, body: &str) -> bool {
-    let limit = [
-        "subscription_sharing_usage_limit_exceeded",
-        "usage_limit_reached",
-        "insufficient_quota",
-    ]
-    .iter()
-    .any(|c| body.contains(c));
+    let limit = error::LIMIT_CODES.iter().any(|c| body.contains(c));
     (status == 429 || (500..600).contains(&status)) && !limit
 }
 

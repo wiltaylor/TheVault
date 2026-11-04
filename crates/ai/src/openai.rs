@@ -200,7 +200,7 @@ fn failure(who: &Who, req: &Request, error: Option<&Value>, turn: &Turn) -> AiEr
     if code == "subscription_sharing_usage_limit_exceeded" {
         text.push_str(". See your ChatGPT usage at https://chatgpt.com/settings/usage");
     }
-    AiError::new(kind, text).with_usage(turn.usage)
+    AiError::new(kind, text).coded(code).with_usage(turn.usage)
 }
 
 /// The tool calls and refusal among the output items, then the end of the turn.

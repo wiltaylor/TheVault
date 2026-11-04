@@ -110,6 +110,19 @@ impl State {
         }
     }
 
+    /// Adds `line` to the log of the run still going on thread `thread`, so the run's view shows
+    /// it before the run ends. Returns whether a running run had that thread. The log the run
+    /// finishes with replaces what was added.
+    pub fn append_agent_run_log(&self, thread: &str, line: &str) -> Result<bool> {
+        let changed = self.conn().execute(
+            "UPDATE agent_runs
+                 SET log = CASE WHEN log = '' THEN ?2 ELSE log || char(10) || ?2 END
+             WHERE thread = ?1 AND outcome = 'running'",
+            params![thread, line],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Records how run `id` ended, with its trail lines. A run finishes once.
     pub fn finish_agent_run(
         &self,
@@ -179,6 +192,25 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_running_run_takes_log_lines_by_its_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        let a = s.start_agent_run("triage", "mail").unwrap();
+        s.set_agent_run_thread(a, "01THREAD").unwrap();
+        assert!(s.append_agent_run_log("01THREAD", "waiting 60s").unwrap());
+        assert!(s.append_agent_run_log("01THREAD", "waiting 120s").unwrap());
+        assert_eq!(
+            s.agent_run(a).unwrap().unwrap().log,
+            "waiting 60s\nwaiting 120s"
+        );
+        s.finish_agent_run(a, &AgentRunOutcome::Succeeded, "all of it")
+            .unwrap();
+        assert!(!s.append_agent_run_log("01THREAD", "late").unwrap());
+        assert!(!s.append_agent_run_log("01OTHER", "none").unwrap());
+        assert_eq!(s.agent_run(a).unwrap().unwrap().log, "all of it");
+    }
 
     #[test]
     fn a_run_is_recorded_with_its_thread_and_outcome() {

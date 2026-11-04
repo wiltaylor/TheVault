@@ -4,13 +4,15 @@
 //! [`TriggerRunner`] opens a thread (`origin = "trigger:<name>"`) and runs one unattended turn on
 //! it with [`ai_chat::run_unattended`]: the agent is the caller, and the turn is offered only the
 //! read tools its permissions allow and the change tools whose confirmation switch is off, so
-//! nothing waits for a user. Only the server installs it (`crate::router`); the embedded app
+//! nothing waits for a user. A model call that fails with a transient error is retried after
+//! the waits [`crate::ai_retry`] sets out. Only the server installs it (`crate::router`); the embedded app
 //! servers never run triggers.
 //!
 //! `GET /api/agents/{name}/runs` (read) answers `{tools, triggers}`: `tools`, the tools a trigger
 //! run of the agent is offered, and for each trigger in file order `{name, kind, runs}`, `runs`
 //! its last [`RUNS_SHOWN`] runs, newest first, each `{id, thread, started, ended, outcome,
-//! message}` with times in milliseconds since the epoch.
+//! message, log}` with times in milliseconds since the epoch and `log` the run's trail lines and
+//! capacity waits, one per line, which grows while the run waits.
 //!
 //! `GET /api/agents/calls/{call}` (read) answers what became of a call committed in a note
 //! (agents G19): `{agent, note, thread, running}`, `thread` null for a call that was not run and
@@ -25,7 +27,7 @@ use schema::{Agent, TriggerWhen};
 use serde_json::{Value, json};
 use writer::Writer;
 
-use crate::{ApiError, agent_threads, ai_chat, blocking};
+use crate::{ApiError, agent_threads, ai_chat, ai_retry, blocking};
 
 /// How many runs of each trigger the route answers.
 pub const RUNS_SHOWN: u32 = 20;
@@ -34,14 +36,20 @@ pub const RUNS_SHOWN: u32 = 20;
 pub struct TriggerRunner {
     writer: Arc<Writer>,
     handle: tokio::runtime::Handle,
+    /// The waits before a model call is retried.
+    waits: ai_retry::Waits,
 }
 
 impl TriggerRunner {
     /// A runner over `writer`, on the async runtime this is called in, or on one of its own when
-    /// called outside one.
-    pub fn new(writer: Arc<Writer>) -> TriggerRunner {
+    /// called outside one, retrying a model call at capacity after `waits`.
+    pub fn new(writer: Arc<Writer>, waits: ai_retry::Waits) -> TriggerRunner {
         let handle = tokio::runtime::Handle::try_current().unwrap_or_else(|_| own_runtime());
-        TriggerRunner { writer, handle }
+        TriggerRunner {
+            writer,
+            handle,
+            waits,
+        }
     }
 }
 
@@ -77,9 +85,15 @@ impl scheduler::AgentRunner for TriggerRunner {
         let w = self.writer.clone();
         // Open clients show the thread running while the run goes (agents G17).
         crate::ai_turns::publish(&w, &agent.name, thread, None, true);
-        let done = self
-            .handle
-            .block_on(ai_chat::run_unattended(w, agent, thread, prompt));
+        // This blocks the scheduler's thread for this run alone; a capacity wait sleeps on the
+        // runtime's timer, holding no runtime thread.
+        let done = self.handle.block_on(ai_chat::run_unattended(
+            w,
+            agent,
+            thread,
+            prompt,
+            self.waits.clone(),
+        ));
         crate::ai_turns::publish(&self.writer, &agent.name, thread, None, false);
         scheduler::TurnReport {
             outcome: done
@@ -111,6 +125,7 @@ pub async fn list(
                         "ended": r.ended_ms,
                         "outcome": r.outcome.as_str(),
                         "message": r.outcome.message(),
+                        "log": r.log,
                     })
                 })
                 .collect();

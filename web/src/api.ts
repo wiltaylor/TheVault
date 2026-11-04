@@ -715,6 +715,8 @@ export interface AgentRun {
   ended: number | null;
   outcome: "running" | "succeeded" | "failed";
   message: string | null;
+  /** The run's trail lines and capacity waits, one per line; it grows while the run waits. */
+  log: string;
 }
 
 /** An agent's trigger runs: the tools a trigger run is offered, and each trigger's last runs. */
