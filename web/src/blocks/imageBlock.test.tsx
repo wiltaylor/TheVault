@@ -113,6 +113,19 @@ describe("an edited image block", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("fits whole with fit = whole, where it cannot be edited too", () => {
+    const { container } = render(() => <ImageBlock block={block({ fit: "whole" })} />);
+    expect(container.querySelector("figure")?.classList.contains("fit-whole")).toBe(true);
+    const plain = render(() => <ImageBlock block={block()} />);
+    expect(plain.container.querySelector("figure")?.classList.contains("fit-whole")).toBe(false);
+  });
+
+  it("offers Fit only in a template", () => {
+    const { getByLabelText, queryByLabelText } = show(block(), { selected: true });
+    fireEvent.click(getByLabelText("Edit image"));
+    expect(queryByLabelText("Fit")).toBeNull();
+  });
+
   it("is unchanged where it cannot be edited", () => {
     const { container } = render(() => <ImageBlock block={block({ caption: "Read only" })} selected />);
     expect(container.querySelector(".block-image-tools")).toBeNull();

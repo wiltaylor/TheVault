@@ -1098,6 +1098,24 @@ button.field-image-placeholder:disabled {
   height: 5.5rem;
 }
 
+/* An image with `fit = "whole"`: scaled whole into the card's image area, the card behind the
+   space it leaves, where the default crops it to fill. A fixed image takes the area too. */
+.card-cover .fit-whole img,
+.query-card .fit-whole img,
+.canvas-card .fit-whole img {
+  display: block;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  height: 8rem;
+  object-fit: contain;
+  border-radius: 0.35rem;
+}
+
+.query-cards .card-cover .fit-whole img {
+  height: 5.5rem;
+}
+
 .block-asset {
   margin: 0.6rem 0;
 }

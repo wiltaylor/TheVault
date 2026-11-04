@@ -169,3 +169,70 @@ fn a_note_image_cannot_name_a_field() {
         "{err}"
     );
 }
+
+#[test]
+fn an_image_fits_a_card_by_crop_or_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    for fit in ["crop", "whole"] {
+        let image =
+            format!("    image {{\n      field = \"cover\"\n      fit   = \"{fit}\"\n    }}\n");
+        let source = with_image(&image);
+        assert_eq!(w.put_type("album", &source).unwrap(), source, "{fit}");
+        let template = format!("template card {{\n  tab \"Card\" {{\n{image}  }}\n}}\n");
+        assert_eq!(
+            w.put_template("album", "card", &template).unwrap(),
+            template
+        );
+    }
+
+    let image = "    image {\n      field = \"cover\"\n      fit   = \"stretch\"\n    }\n";
+    let reason = "image#1.fit: \"stretch\" is not one of crop, whole";
+    let err = w.put_type("album", &with_image(image)).unwrap_err();
+    assert!(err.to_string().contains(reason), "{err}");
+    let template = format!("template card {{\n  tab \"Card\" {{\n{image}  }}\n}}\n");
+    let err = w.put_template("album", "card", &template).unwrap_err();
+    assert!(err.to_string().contains(reason), "template: {err}");
+    // A fixed image takes it too, in a template and in a note's own content.
+    let fixed = "    image {\n      asset = \"01JB9A0C3D4E5F6G7H8J9K0M1N\"\n      fit   = \"whole\"\n    }\n";
+    w.put_type("album", &with_image(fixed)).unwrap();
+    let author = Author::Session("test".into());
+    let note = json!({ "fields": { "title": "Whole" },
+                       "blocks": [{ "kind": "content", "labels": ["body"],
+                                    "blocks": [{ "kind": "image",
+                                                 "fields": { "asset": "01JB9A0C3D4E5F6G7H8J9K0M1N", "fit": "whole" } }] }] });
+    w.create("album", &Input::Json(note), &author).unwrap();
+
+    let note = json!({ "fields": { "title": "Bad" },
+                       "blocks": [{ "kind": "content", "labels": ["body"],
+                                    "blocks": [{ "kind": "image",
+                                                 "fields": { "asset": "01JB9A0C3D4E5F6G7H8J9K0M1N", "fit": 3 } }] }] });
+    let err = w.create("album", &Input::Json(note), &author).unwrap_err();
+    assert!(
+        err.to_string().contains("image#1.fit: must be a string"),
+        "{err}"
+    );
+}
+
+#[test]
+fn an_image_without_fit_round_trips_without_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    // `fit` defaults to "crop" and nothing writes it in.
+    let written = w.put_type("album", ALBUM).unwrap();
+    assert!(!written.contains("fit"), "{written}");
+    w.create(
+            "album",
+            &Input::Json(json!({ "fields": { "title": "Plain" },
+                                 "blocks": [{ "kind": "content", "labels": ["body"],
+                                              "blocks": [{ "kind": "image",
+                                                           "fields": { "asset": "01JB9A0C3D4E5F6G7H8J9K0M1N" } }] }] })),
+            &Author::Session("test".into()),
+        )
+        .unwrap();
+    let notes = dir.path().join("notes/album");
+    for entry in std::fs::read_dir(notes).unwrap() {
+        let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        assert!(!text.contains("fit"), "{text}");
+    }
+}

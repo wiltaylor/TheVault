@@ -43,10 +43,14 @@ export function wclField(name: string, v: Json | undefined, indent = "", float =
   return v === undefined || v === null ? "" : `${indent}${name} = ${wclValue(v, float)}\n`;
 }
 
+/** Whether item `k` of a `kind` block holds its default, which the canonical form leaves out. */
+const isDefault = (kind: string, k: string, v: Json): boolean => kind === "image" && k === "fit" && v === "crop";
+
 /** A block and everything in it. */
 export function wclBlock(b: Block, indent = ""): string {
   const head = [b.kind, ...(b.labels ?? []).map((l) => label(b.kind, l))].join(" ");
   const fields = Object.entries(b.fields ?? {})
+    .filter(([k, v]) => !isDefault(b.kind, k, v))
     .map(([k, v]) => wclField(k, v, `${indent}  `))
     .join("");
   const blocks = (b.blocks ?? []).map((c) => wclBlock(c, `${indent}  `));

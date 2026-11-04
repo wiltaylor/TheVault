@@ -215,6 +215,10 @@ pub const TABLE_ROWS_MAX: usize = 2000;
 /// The alignments of a table column, `left` being the one a column has when `align` names none.
 pub const TABLE_ALIGNS: [&str; 3] = ["left", "center", "right"];
 
+/// How an `image` block fits a card's image area: `crop` fills it and crops, the default;
+/// `whole` scales the whole image into it.
+pub const IMAGE_FITS: [&str; 2] = ["crop", "whole"];
+
 /// The kinds of a canvas node. Groups are blocks of their own, not nodes.
 pub const NODE_KINDS: [&str; 2] = ["card", "note"];
 
@@ -601,6 +605,7 @@ impl Check<'_> {
             opt("alt", Form::Str),
             opt("caption", Form::Str),
             opt("width", Form::Int(1, i64::MAX)),
+            opt("fit", Form::OneOf(&IMAGE_FITS)),
         ];
         self.items(d, &items, &[], at);
         self.only_blocks(d, &[], at);
