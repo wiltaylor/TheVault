@@ -49,6 +49,11 @@ describe("wcl", () => {
     expect(wclBlock(qv)).toBe('query_view {\n  query = "from task"\n\n  view open {\n    kind = "table"\n  }\n}\n');
     expect(wclBlock({ kind: "tab", labels: ["Main"] })).toBe('tab "Main"\n');
   });
+
+  it("leaves an image's fit out when it is the default crop", () => {
+    expect(wclBlock({ kind: "image", fields: { field: "cover", fit: "crop" } })).toBe('image {\n  field = "cover"\n}\n');
+    expect(wclBlock({ kind: "image", fields: { field: "cover", fit: "whole" } })).toBe('image {\n  field = "cover"\n  fit = "whole"\n}\n');
+  });
 });
 
 const stored: SchemaType = {

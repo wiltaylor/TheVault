@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Asset, type Block, type FieldDef, type Json, type TypeDef, api } from "../api";
@@ -41,7 +41,10 @@ describe("an image from an asset field", () => {
   beforeEach(() => {
     vi.spyOn(api, "assets").mockResolvedValue(ASSETS);
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("knows images by their file name", () => {
     expect(isImageFile("a.png")).toBe(true);
@@ -58,6 +61,16 @@ describe("an image from an asset field", () => {
     expect(img.getAttribute("alt")).toBe("Cover of Blue Train");
     expect(img.getAttribute("width")).toBe("200");
     expect(container.querySelector("figcaption")?.textContent).toBe("Blue Train sleeve");
+  });
+
+  it("fits the images whole with fit = whole, and crops them by default", async () => {
+    const whole = show(image("photos", { fit: "whole" }), binding({ photos: ["IMG2", "IMG3"] }));
+    await waitFor(() => expect(srcs(whole.container)).toHaveLength(2));
+    expect(whole.container.querySelector("figure")?.classList.contains("fit-whole")).toBe(true);
+    whole.unmount();
+    const crop = show(image("photos"), binding({ photos: ["IMG2"] }));
+    await waitFor(() => expect(srcs(crop.container)).toHaveLength(1));
+    expect(crop.container.querySelector("figure")?.classList.contains("fit-whole")).toBe(false);
   });
 
   it("shows every image in a multiple field, in order, and skips files that are not images", async () => {
@@ -121,6 +134,33 @@ describe("an image from an asset field", () => {
     fireEvent.click(getByRole("button", { name: "Save" }));
     expect(block().fields?.field).toBe("photos");
     expect(getByTestId("field-image-placeholder").textContent).toBe("Image from Photos");
+  });
+
+  it("sets fit with the Edit dialog's Fit control, and clears it back to Crop to fill", () => {
+    const [block, setBlock] = createSignal<Block>(image("cover"));
+    render(() => (
+      <ControlBindingContext.Provider value={{ ...binding({ cover: "IMG1" }), preview: true }}>
+        <ImageBlock block={block()} onChange={setBlock} selected onRemove={() => {}} />
+      </ControlBindingContext.Provider>
+    ));
+    const { getByLabelText, getByRole } = screen;
+    fireEvent.click(getByLabelText("Edit image"));
+    const fit = getByLabelText("Fit") as HTMLSelectElement;
+    expect([...fit.options].map((o) => [o.value, o.textContent])).toEqual([
+      ["crop", "Crop to fill"],
+      ["whole", "Whole image"],
+    ]);
+    expect(fit.value).toBe("crop");
+    fireEvent.change(fit, { target: { value: "whole" } });
+    fireEvent.click(getByRole("button", { name: "Save" }));
+    expect(block().fields).toEqual({ field: "cover", fit: "whole" });
+    expect(document.querySelector("figure")?.classList.contains("fit-whole")).toBe(true);
+
+    fireEvent.click(getByLabelText("Edit image"));
+    expect((getByLabelText("Fit") as HTMLSelectElement).value).toBe("whole");
+    fireEvent.change(getByLabelText("Fit"), { target: { value: "crop" } });
+    fireEvent.click(getByRole("button", { name: "Save" }));
+    expect(block().fields).toEqual({ field: "cover" });
   });
 
   describe("empty on the note page", () => {

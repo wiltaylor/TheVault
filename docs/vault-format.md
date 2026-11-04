@@ -1411,6 +1411,7 @@ An `image` block in a template can name an asset field of the type with `field` 
 - An asset in the field that is not an image (by its file name: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif` or `.svg`) is skipped. An empty field shows nothing on a card. On the note page it offers to add an image, by choosing a file or dropping one, which uploads the file and sets the field (for a multiple field, adds it). It shows nothing there either when the default template also places the field with a slot or an editable control, which has its own upload.
 - `alt` and `caption` may hold `{{name}}` [field references](#field-references), checked like those in `text`.
 - `field` is template-only. In a note's own content, an image with `field` fails validation with "is allowed only in a template".
+- On a card the image area is 8rem high and crops a taller or wider image to fill it. `fit = "whole"` shows the whole image instead, scaled to fit the area, as a fixed `asset` image does with it too. The note page always shows the whole image. In the template editor, the image's Edit dialog sets it with Fit: "Crop to fill" or "Whole image".
 
 ```wcl
 template card {
@@ -1418,6 +1419,20 @@ template card {
     image {
       field = "cover"
       alt   = "Cover of {{title}}"
+    }
+    slot "status"
+  }
+}
+```
+
+A card that shows the whole cover, uncropped:
+
+```wcl
+template card {
+  tab "Card" {
+    image {
+      field = "cover"
+      fit   = "whole"
     }
     slot "status"
   }
@@ -1661,6 +1676,7 @@ quote {
 | `alt` | string | Alternative text |
 | `caption` | string | Caption shown under the image |
 | `width` | int | Display width in CSS pixels. Default: the content width |
+| `fit` | `"crop"` or `"whole"` | How the image fits a card's image area, 8rem high. `"crop"`, the default, fills the area and crops the image. `"whole"` scales the whole image into the area, with the card's background in the space left over. Canonical WCL leaves it out when it is `"crop"`. Allowed in a note's content too, where the image is never cropped, so it changes nothing there. The schema rejects any other value with "`"<value>"` is not one of crop, whole" |
 
 ```wcl
 image {

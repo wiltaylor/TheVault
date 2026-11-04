@@ -106,6 +106,9 @@ const widthOf = (block: Block): number | undefined => {
   return typeof w === "number" ? w : undefined;
 };
 
+/** Whether the image fits a card whole, scaled into its image area, rather than cropped to fill it. */
+const fitsWhole = (block: Block): boolean => block.fields?.fit === "whole";
+
 const keepSelection = (e: MouseEvent) => e.preventDefault();
 
 function PencilIcon() {
@@ -151,11 +154,14 @@ const FOCUSABLE = 'button:not([disabled]), input:not([type="hidden"]):not([hidde
 /**
  * The image's properties in a modal dialog: alt text, caption, width and the file (a fixed image)
  * or the asset field (a template's image from a field, when `fields` lists the type's asset
- * fields). Save applies every change as one block; Cancel, Escape and a click outside discard
- * them. Focus returns to what opened it.
+ * fields). In a template it also sets how the image fits a card: cropped to fill, the default,
+ * left out of the block, or whole. Save applies every change as one block; Cancel, Escape and a
+ * click outside discard them. Focus returns to what opened it.
  */
 function ImageDialog(props: { block: Block; fields?: FieldDef[]; onSave: (block: Block) => void; onClose: () => void }) {
   const fromField = () => props.fields !== undefined;
+  const inTemplate = fromField() || !!useControlBinding()?.preview;
+  const [fit, setFit] = createSignal(fitsWhole(props.block) ? "whole" : "crop");
   const [alt, setAlt] = createSignal(text(props.block, "alt"));
   const [caption, setCaption] = createSignal(text(props.block, "caption"));
   const [width, setWidth] = createSignal(String(widthOf(props.block) ?? ""));
@@ -188,6 +194,7 @@ function ImageDialog(props: { block: Block; fields?: FieldDef[]; onSave: (block:
     next = withText(next, "caption", caption());
     next = withItem(next, "width", width().trim() !== "" && Number.isInteger(n) && n > 0 ? n : undefined);
     next = fromField() ? withItem(next, "field", field()) : withText(next, "asset", asset());
+    if (inTemplate) next = withItem(next, "fit", fit() === "whole" ? "whole" : undefined);
     if (JSON.stringify(next) !== JSON.stringify(props.block)) props.onSave(next);
     props.onClose();
   }
@@ -278,6 +285,15 @@ function ImageDialog(props: { block: Block; fields?: FieldDef[]; onSave: (block:
                 onInput={(e) => setWidth(e.currentTarget.value)}
               />
             </label>
+            <Show when={inTemplate}>
+              <label>
+                Fit
+                <select value={fit()} onChange={(e) => setFit(e.currentTarget.value)}>
+                  <option value="crop">Crop to fill</option>
+                  <option value="whole">Whole image</option>
+                </select>
+              </label>
+            </Show>
             <Show when={!fromField()}>
               <div class="image-dialog-replace">
                 <FilePicker label="Replace image" text={busy() ? "Uploading…" : "Replace image…"} accept="image/*" onFile={(file) => void replace(file)} />
@@ -333,14 +349,14 @@ function FixedImage(props: ImageBlockProps) {
     <Show
       when={props.onChange}
       fallback={
-        <figure class="block-image">
+        <figure class="block-image" classList={{ "fit-whole": fitsWhole(props.block) }}>
           <Show when={asset()}>{image()}</Show>
           {caption()}
         </figure>
       }
     >
       {(change) => (
-        <figure class="block-image editing" classList={{ selected: !!props.selected }}>
+        <figure class="block-image editing" classList={{ selected: !!props.selected, "fit-whole": fitsWhole(props.block) }}>
           <div class="block-image-frame">
             <Show
               when={asset()}
@@ -446,7 +462,7 @@ function FieldImage(props: ImageBlockProps) {
     <Show
       when={!props.onChange}
       fallback={
-        <figure class="block-image field-image editing" classList={{ selected: !!props.selected }} data-field={name()}>
+        <figure class="block-image field-image editing" classList={{ selected: !!props.selected, "fit-whole": fitsWhole(props.block) }} data-field={name()}>
           <div class="block-image-frame">
             <div class="field-image-placeholder" data-testid="field-image-placeholder">
               <ImageIcon />
@@ -478,7 +494,7 @@ function FieldImage(props: ImageBlockProps) {
           </Show>
         }
       >
-        <figure class="block-image field-image" data-field={name()} classList={{ several: shown().length > 1 }}>
+        <figure class="block-image field-image" data-field={name()} classList={{ several: shown().length > 1, "fit-whole": fitsWhole(props.block) }}>
           <div class="field-images">
             <For each={shown()}>
               {(id) => <img src={assetUrl(id)} alt={fillFieldRefs(text(props.block, "alt"), refs)} width={widthOf(props.block)} loading="lazy" />}
