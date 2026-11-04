@@ -103,6 +103,36 @@ describe("image field", () => {
     expect(api.uploadAsset).toHaveBeenCalledWith(png);
   });
 
+  it("uploads an image pasted with Ctrl+V in the dialog, and leaves a text paste to the search box", async () => {
+    vi.mocked(api.uploadAsset).mockClear();
+    const m = mount();
+    fireEvent.click(m.getByRole("button", { name: "Add photo" }));
+    expect(m.getByText("or drop or paste an image here")).toBeTruthy();
+    const search = m.getByRole("searchbox", { name: "Search images" });
+    const text = { items: [{ kind: "string", getAsFile: () => null }] };
+    expect(fireEvent.paste(search, { clipboardData: text })).toBe(true);
+    expect(api.uploadAsset).not.toHaveBeenCalled();
+    const png = new File(["x"], "image.png", { type: "image/png" });
+    const image = { items: [{ kind: "file", getAsFile: () => png }] };
+    // The search box has focus, so the paste reaches the dialog from there.
+    expect(fireEvent.paste(search, { clipboardData: image })).toBe(false);
+    await waitFor(() => expect(m.value()).toBe(NEW));
+    expect(vi.mocked(api.uploadAsset).mock.calls[0]![0].name).toMatch(/^pasted-[\d-T]+\.png$/);
+    expect(m.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens the dialog and uploads an image pasted on the tile", async () => {
+    vi.mocked(api.uploadAsset).mockClear();
+    const m = mount(FACE);
+    const png = new File(["x"], "image.png", { type: "image/png" });
+    fireEvent.paste(m.getByRole("button", { name: "Change Photo" }), {
+      clipboardData: { items: [{ kind: "file", getAsFile: () => png }] },
+    });
+    await waitFor(() => expect(m.value()).toBe(NEW));
+    expect(vi.mocked(api.uploadAsset).mock.calls[0]![0].name).toMatch(/^pasted-[\d-T]+\.png$/);
+    expect(m.queryByRole("dialog")).toBeNull();
+  });
+
   it("offers Remove and Open full size once set, and Remove clears it", () => {
     const m = mount(FACE);
     const open = m.getByRole("link", { name: "Open full size" });

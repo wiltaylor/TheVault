@@ -1,10 +1,11 @@
 // An asset field that takes only images (`accept = "image"`), such as a person's photo: a square
 // tile showing the image, or a placeholder when the field is empty. The tile opens a dialog that
-// uploads an image, by the file picker or by dropping one, or picks one already in the vault.
+// uploads an image, by the file picker, by dropping one or by pasting one (Ctrl+V), or picks one
+// already in the vault. Pasting on the tile itself opens the dialog with the pasted image uploading.
 
 import { For, Show, createResource, createSignal, onCleanup, onMount } from "solid-js";
 import { type AssetSummary, api, assetUrl } from "../api";
-import { FilePicker, ImageIcon, isImageFile, upload } from "../blocks/MediaBlocks";
+import { FilePicker, ImageIcon, isImageFile, pastedName, upload } from "../blocks/MediaBlocks";
 
 /** The placeholder's text: "Add photo" for a field labelled Photo, else "Add image". */
 export function addImageText(label: string): string {
@@ -33,12 +34,22 @@ export interface ImageFieldProps {
   onChange: (id: string | undefined) => void;
 }
 
+/** The image files on a clipboard, for Ctrl+V. */
+export function pastedImages(data: DataTransfer | null | undefined): File[] {
+  return [...(data?.items ?? [])]
+    .flatMap((i) => (i.kind === "file" ? [i.getAsFile()] : []))
+    .filter((f): f is File => !!f && (f.type.startsWith("image/") || isImageFile(f.name)))
+    .map(pastedName);
+}
+
 /** The image tile, with Remove and Open full size once it holds an image. */
 export function ImageField(props: ImageFieldProps) {
   const [open, setOpen] = createSignal(false);
+  const [pasted, setPasted] = createSignal<File | undefined>();
   let tile!: HTMLButtonElement;
   function close() {
     setOpen(false);
+    setPasted(undefined);
     queueMicrotask(() => tile?.focus());
   }
   return (
@@ -54,6 +65,13 @@ export function ImageField(props: ImageFieldProps) {
         title={props.value ? `Change ${props.label}` : addImageText(props.label)}
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}
+        onPaste={(e) => {
+          const file = pastedImages(e.clipboardData)[0];
+          if (!file || props.disabled) return;
+          e.preventDefault();
+          setPasted(file);
+          setOpen(true);
+        }}
       >
         <Show
           when={props.value}
@@ -81,6 +99,7 @@ export function ImageField(props: ImageFieldProps) {
         <ImagePickerDialog
           label={props.label}
           current={props.value}
+          pasted={pasted()}
           onPick={(id) => {
             props.onChange(id);
             close();
@@ -92,10 +111,12 @@ export function ImageField(props: ImageFieldProps) {
   );
 }
 
-/** The dialog: Upload (or drop) an image, or choose one of the vault's images. */
+/** The dialog: Upload (drop or paste) an image, or choose one of the vault's images. */
 export function ImagePickerDialog(props: {
   label: string;
   current?: string;
+  /** An image pasted on the tile, uploaded as soon as the dialog opens. */
+  pasted?: File;
   onPick: (id: string) => void;
   onClose: () => void;
 }) {
@@ -112,7 +133,10 @@ export function ImagePickerDialog(props: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   onCleanup(() => clearTimeout(timer));
 
-  onMount(() => search.focus());
+  onMount(() => {
+    search.focus();
+    if (props.pasted) void uploadFile(props.pasted);
+  });
 
   async function uploadFile(file: File) {
     setError(null);
@@ -152,6 +176,12 @@ export function ImagePickerDialog(props: {
             props.onClose();
           }
         }}
+        onPaste={(e) => {
+          const file = pastedImages(e.clipboardData)[0];
+          if (!file) return;
+          e.preventDefault();
+          if (!busy()) void uploadFile(file);
+        }}
         onDragOver={(e) => {
           if ([...(e.dataTransfer?.types ?? [])].includes("Files")) {
             e.preventDefault();
@@ -181,7 +211,7 @@ export function ImagePickerDialog(props: {
             accept="image/*"
             onFile={(file) => void uploadFile(file)}
           />
-          <span class="muted">or drop an image here</span>
+          <span class="muted">or drop or paste an image here</span>
         </div>
         <Show when={error()}>
           {(e) => (
