@@ -880,11 +880,10 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
         generation(root).trim().parse::<u64>().unwrap(),
         before + 4 + 3 + 1
     );
-    // The message type 0.1.6 had gains only `processed`.
+    // The message and call types 0.1.6 had gain only `processed`.
     assert!(
-        done.fields_added
-            .iter()
-            .all(|(t, f)| t == "person" || (t == "message" && f == "processed")),
+        done.fields_added.iter().all(|(t, f)| t == "person"
+            || ((t == "message" || t == "call") && f == "processed")),
         "{:?}",
         done.fields_added
     );
@@ -2718,15 +2717,10 @@ fn a_0_1_14_vault_gains_processed_on_call_and_no_note_changes() {
         done.fields_added,
         [("call".to_owned(), "processed".to_owned())]
     );
-    // The type is the shipped one but for the card, which the seeding leaves alone.
+    // The page and the card both gain the slot (ticket 148), so the type is the shipped one.
     assert_eq!(
         read(root, "types/call.wcl").unwrap(),
-        store::canonical(writer::DEFAULT_CALL_TYPE, "types/call.wcl")
-            .unwrap()
-            .replace(
-                "    slot \"started\"\n    slot \"processed\"\n",
-                "    slot \"started\"\n"
-            )
+        store::canonical(writer::DEFAULT_CALL_TYPE, "types/call.wcl").unwrap()
     );
     assert_eq!(read(root, &path).unwrap(), before);
     drop(w);
