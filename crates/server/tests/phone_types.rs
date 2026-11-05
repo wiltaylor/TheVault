@@ -160,9 +160,15 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
             "number",
             "started",
             "duration",
+            "processed",
             "device_ref"
         ]
     );
+    assert_eq!(field(call, "processed")["kind"], "bool");
+    assert_eq!(field(call, "processed")["label"], "Processed");
+    assert_eq!(field(call, "processed")["default"], false);
+    assert_eq!(field(call, "processed")["required"], false);
+    assert_eq!(field(call, "processed")["computed"], false);
     assert_eq!(
         field(call, "direction")["options"],
         json!(["in", "out", "missed"])
@@ -426,4 +432,29 @@ fn a_message_can_be_ticked_processed_from_its_page_and_its_card() {
         .filter_map(|i| i["slot"].as_str())
         .collect();
     assert_eq!(card, ["title", "sent", "processed"]);
+}
+
+#[test]
+fn a_call_can_be_ticked_processed_from_its_page_and_its_card() {
+    let api = Api::new(TestServer::start());
+    let types = api.types();
+    let call = find(&types, "call");
+    let slots = |name: &str| -> Vec<String> {
+        call["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("no {name} template: {call}"))["tabs"][0]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["slot"].as_str().map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(
+        slots("default"),
+        ["direction", "processed", "person", "number", "started", "duration"]
+    );
+    assert_eq!(slots("card"), ["title", "started", "processed"]);
 }
