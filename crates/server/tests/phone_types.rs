@@ -454,7 +454,14 @@ fn a_call_can_be_ticked_processed_from_its_page_and_its_card() {
     };
     assert_eq!(
         slots("default"),
-        ["direction", "processed", "person", "number", "started", "duration"]
+        [
+            "direction",
+            "processed",
+            "person",
+            "number",
+            "started",
+            "duration"
+        ]
     );
     assert_eq!(slots("card"), ["title", "started", "processed"]);
 }

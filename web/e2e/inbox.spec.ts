@@ -134,6 +134,6 @@ test("the inbox lists captures, incoming mail and messages and missed calls by t
   ]) {
     const res = await admin.post("/api/query", { data: { query: `from ${type} where title == "${title}"`, page_size: 1 } });
     const found = (await res.json()) as { rows: { fields: Record<string, unknown> }[] };
-    expect(found.rows[0].fields.processed, title).toBe(true);
+    expect(found.rows[0]?.fields.processed, title).toBe(true);
   }
 });

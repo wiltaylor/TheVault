@@ -19,9 +19,10 @@ export async function loadInbox(filter: Filter, withProcessed: boolean, limit: n
   const results = await Promise.allSettled(sources.map((s) => api.query(sourceQuery(s, withProcessed, extra), null, limit)));
   const pages: { source: Source; page: Page }[] = [];
   let failure: unknown = null;
-  results.forEach((r, i) => {
-    if (r.status === "fulfilled") pages.push({ source: sources[i], page: r.value });
-    else failure ??= r.reason;
+  sources.forEach((source, i) => {
+    const r = results[i];
+    if (r?.status === "fulfilled") pages.push({ source, page: r.value });
+    else if (r) failure ??= r.reason;
   });
   if (pages.length === 0 && failure !== null) throw failure;
   return { items: merge(pages, limit), total: total(pages) };

@@ -882,8 +882,9 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
     );
     // The message and call types 0.1.6 had gain only `processed`.
     assert!(
-        done.fields_added.iter().all(|(t, f)| t == "person"
-            || ((t == "message" || t == "call") && f == "processed")),
+        done.fields_added
+            .iter()
+            .all(|(t, f)| t == "person" || ((t == "message" || t == "call") && f == "processed")),
         "{:?}",
         done.fields_added
     );

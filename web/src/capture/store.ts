@@ -2,7 +2,7 @@
 
 import { createSignal } from "solid-js";
 import { ASSISTANT, callableAgents } from "../agents";
-import { type AgentSummary, api } from "../api";
+import type { AgentSummary } from "../api";
 import { onNoteChangedElsewhere, onNoteWritten } from "../changes";
 import { countInbox } from "../inbox/load";
 import { FLEETING } from "./model";
