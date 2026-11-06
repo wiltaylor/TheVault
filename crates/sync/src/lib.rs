@@ -333,6 +333,32 @@ struct Pushing {
     chain: Vec<String>,
 }
 
+/// The key in the device's `meta` table that records that its own pins went to the home server
+/// once (TV-12).
+const PINS_PUSHED: &str = "pins_pushed";
+
+/// The entries of the pinned tree `nodes`, as `GET /api/pins` answers it, under `parent`.
+fn pin_entries(nodes: &Json, parent: Option<&str>, out: &mut Vec<state::PinEntry>) {
+    for (i, n) in nodes.as_array().into_iter().flatten().enumerate() {
+        let Some(id) = n["id"].as_str() else {
+            continue;
+        };
+        let kind = match n["kind"].as_str() {
+            Some("folder") => state::PinKind::Folder {
+                name: n["name"].as_str().unwrap_or_default().to_owned(),
+            },
+            _ => state::PinKind::Note,
+        };
+        out.push(state::PinEntry {
+            id: id.to_owned(),
+            kind,
+            parent: parent.map(str::to_owned),
+            position: i as i64,
+        });
+        pin_entries(&n["children"], Some(id), out);
+    }
+}
+
 /// Whether a failed push of one note is that note's own problem, which holds it back while the
 /// rest of the queue goes on: the server refused the note (a 4xx other than a refused token or
 /// a request to slow down) or answered it with something the protocol does not allow. A server
@@ -674,11 +700,46 @@ impl Engine {
         report.held = held;
         self.push_notifications(&mut report)?;
         self.pull(&mut report)?;
+        // Before the assets, so Android's prefetch reads the server's pins (TV-12). The pins are
+        // not the round's main work: a failure here leaves the device's copy as it was.
+        if let Err(e) = self.sync_pins() {
+            eprintln!("sync: the pins were not taken from the server: {e}");
+        }
         self.sync_assets(&mut report)?;
         self.report_bases()?;
         report.stuck = self.queue.asset_failures()?;
         self.report_round(&report);
         Ok(report)
+    }
+
+    /// Make the device's pinned tree the home server's, which owns the pins (TV-12). The first
+    /// time, the notes the device pinned on its own are pinned on the server too, at the end of
+    /// its root, so nothing pinned before the change is lost; the device's `meta` table then
+    /// records it, so they are sent once.
+    fn sync_pins(&self) -> Result<()> {
+        let state = self.writer.state();
+        if state.meta(PINS_PUSHED)?.is_none() {
+            let server = self.home.get("/api/pins")?.ok("the pins")?;
+            let mut have = Vec::new();
+            pin_entries(&server["pins"], None, &mut have);
+            for id in state.pins()? {
+                if have.iter().any(|e| e.id == id) {
+                    continue;
+                }
+                let answer = self.home.put_json(&format!("/api/pins/{id}"), &json!({}))?;
+                // A note the server does not have, such as one held back this round, stays
+                // pinned on the device only until the tree below replaces it.
+                if answer.status != reqwest::StatusCode::NOT_FOUND {
+                    answer.ok("pinning a note")?;
+                }
+            }
+            state.set_meta(PINS_PUSHED, "1")?;
+        }
+        let tree = self.home.get("/api/pins")?.ok("the pins")?;
+        let mut entries = Vec::new();
+        pin_entries(&tree["pins"], None, &mut entries);
+        state.replace_pins(&entries)?;
+        Ok(())
     }
 
     /// Tell the server what the round did, for its activity log (activity Y2). A round that moved
