@@ -70,6 +70,7 @@ const SHIPPED = "You are the assistant inside TheVault.";
 const TOOLS = [
   "search_notes",
   "query_notes",
+  "query_format",
   "get_note",
   "read_asset",
   "find_assets",

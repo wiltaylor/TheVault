@@ -124,6 +124,13 @@ Agent files that hold `browser = true` are new: an app from before the browser b
 
 Skills are folders of instructions and files in the vault's `skills/` folder, in the open Agent Skills format; [Agent skills](skills.md) covers writing and importing them. An agent is offered the valid skills its **Skills** permission allows: every valid skill (no `skills` list in the file, the default) or only those named (`permissions.skills = ["pdf-forms"]`). A skill with errors is offered to no agent. `[]` offers none, and the agent gets no skill tools.
 
+The vault ships two skills, which every agent with no `skills` list is offered, and which an existing vault gains on its next start:
+
+- `wscript`: the scripting language and the vault API, for `run_script`, script tools, handlers and tasks.
+- `vault-queries`: how to write a query, with the rules that differ from SQL and worked examples for tasks, people, mail, messages, captures, events and links. Every example in it is checked against the parser.
+
+A shipped skill the user has not changed is replaced by the newer version when the app updates; one the user changed stays, and the bell says a newer one exists. The model also has `query_format`, the whole query language from the vault format.
+
 The agent's system text ends with an "Available skills" section, after its prompt, its memories and the open note: each offered skill's name and description, and a line telling it to call `use_skill` before following one. When the agent has the browser box, the line says how to run a skill's scripts there; otherwise it says scripts can be read but not run.
 
 The list is a snapshot kept per thread, in the thread's transcript: taken on the thread's first turn and sent unchanged on every later turn, so adding or changing skills never changes a running conversation's instructions, and prompt caching holds. To give a thread the current list, type `/update-skills` alone in the chat box, in the panel or the agent screen, in any client. The turn sends no message of yours: the server takes a fresh snapshot, tells the model "The available skills changed; the list at the end of your instructions is current.", and the conversation shows a small "Skills updated (<n>)" line instead of your bubble. Anything else starting with `/` is sent as typed. A thread from before skills takes its snapshot on its next turn; a conversation with no thread lists the skills as they are on each turn.

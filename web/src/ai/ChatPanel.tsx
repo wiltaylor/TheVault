@@ -108,6 +108,8 @@ export function stepLabel(name: string, input: Json): string {
       return "Listed the types";
     case "get_type":
       return `Read type ${s("name")}`;
+    case "query_format":
+      return "Read the query language";
     case "type_format":
       return "Read the type file format";
     case "block_format":
@@ -236,6 +238,8 @@ export function activeLabel(name: string, input: Json): string {
       return "Listing the types";
     case "get_type":
       return "Reading a type";
+    case "query_format":
+      return "Reading the query language";
     case "type_format":
       return "Reading the type file format";
     case "block_format":
@@ -347,6 +351,7 @@ function browserStatus(b: BrowserRef): string {
 const TYPE_TOOLS = new Set([
   "list_types",
   "get_type",
+  "query_format",
   "type_format",
   "block_format",
   "propose_type_change",

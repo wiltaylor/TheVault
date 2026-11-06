@@ -2158,6 +2158,125 @@ The Gmail sync converts each message's HTML part with quote folding on, or its t
 
 The email page's View original shows the stored `html` asset as the sender wrote it (rich-import H6). `GET /api/notes/<id>/original` serves it as `text/html` with each `cid:` image the note's `inline_images` names in place as a `data:` URI, without `<meta http-equiv="refresh">` and `<base>`, and with the policy `sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'`: no scripts, forms or requests. The web client shows it in an iframe's `srcdoc` whose `sandbox` allows only popups that leave the sandbox, so a link opens in a tab of its own, under a policy of the same kind and no referrer. Remote images stay blocked until the user chooses Load remote images, which shows the page again with `https:` images allowed. The assets route still serves an HTML asset as plain text.
 
+## Query language
+
+A query picks notes and orders them. Lists, query views, `vault query`, `/api/query`, scripts (`vault::query`) and the AI's `query_notes` all read the same language. This section is the reference: PRD Appendix B is where it started, and this is what the parser takes now.
+
+### Clauses
+
+A query is a `from` clause followed by optional clauses, always in this order, each at most once:
+
+```
+from <type>[, <type>...]    or    from *
+include archived
+where <expression>
+search "<text>"
+sort <field> [asc|desc][, <field> [asc|desc]...]
+group by <field>
+select <field>[, <field>...]
+limit <n>
+```
+
+- `from` names one type, several types separated by commas, or `*` for every type. A type name is the type's `name`, such as `task`, not its label.
+- `include archived` reads archived notes too. See [Archived notes in queries](#archived-notes-in-queries).
+- `where` keeps the notes for which the expression is true.
+- `search "<text>"` keeps the notes whose title or text holds every word, ignoring case, and ranks them by relevance unless `sort` is given. See [Query views](#query-views) for how the last word matches.
+- `sort` orders by one or more fields, `asc` (the default) or `desc`. A note with no value goes last either way. Add `id` as a last key for a stable order: `sort due asc, id asc`.
+- `group by` groups the result by one field, as a kanban view does.
+- `select` returns only these fields in each row. Without it a row holds every stored field. A row never holds a `content` field (the body): read the note itself for that.
+- `limit` caps the result at a whole number of notes.
+
+### Field names and values
+
+- A field is named by its `name` in the type, such as `due` or `status`. Every note also has the built-in fields `id`, `type`, `title`, `created`, `updated` and `archived`.
+- A dot follows a single `reference` field to the note it points at: `project.status` is the status of the note in `project`. A dot also reads the `start` or `end` of a date range, as in `when.start`, and a member of a location or dict field. Inside `any()` and `all()`, a dot reads a key of a dict: `p.number`.
+- `this` is the note that holds the query, in a template or a note's content. A query run on its own, from the API or a tool, has no `this`.
+- A field the note does not have is missing. A missing value is false, so `where !processed` lists notes with `processed = false` and those without the field. `==` and the ordering operators are false when a side is missing, and `!=` is true.
+- Text is in double quotes, with the escapes `\n`, `\t`, `\\` and `\"`. Single quotes are not strings.
+- Numbers are written as they are: `3`, `2.5`. Bools are `true` and `false`.
+- A `date` or `datetime` field compares with `today()`, `now()`, date arithmetic, or a string holding a date or a datetime: `due < "2026-12-01"`, `sent >= "2026-11-01T00:00:00Z"`.
+- A `taxonomy` field holds a term path, such as `"Doing/Blocked"`. `==` compares the whole path. `under()` also matches the terms below it.
+- A `select` field holds one of its options: `priority == "high"`. A `list` field is tested with `has()`, `has_ci()`, `contains()`, `any()`, `all()` or `empty()`, not with `==`.
+
+### Operators
+
+| Operators | Meaning |
+|-----------|---------|
+| `==`, `!=` | Equal, not equal |
+| `<`, `<=`, `>`, `>=` | Order: numbers, text, dates and datetimes |
+| `&&`, `\|\|`, `!` | And, or, not. Use parentheses to group: `(a \|\| b) && c` |
+| `+`, `-`, `*`, `/`, `%` | Arithmetic. A date plus `days(n)` is a date: `today() + days(7)` |
+
+`//` starts a comment that runs to the end of the line.
+
+### Functions
+
+| Function | Returns |
+|----------|---------|
+| `today()`, `now()` | Today's date in the user's time zone, or the current datetime |
+| `days(n)` | A duration of `n` days, for date arithmetic |
+| `has(list, value)` | True if a list field contains `value` |
+| `has_ci(list, value)` | As `has()`, with text compared ignoring case. Given a single value, it compares that value |
+| `contains(field, "text")` | True if a text field, or any item of a text list, holds the text, ignoring case |
+| `empty(field)` | True if the field has no value: missing, blank text or an empty list |
+| `under(field, "term")` | True if a taxonomy field holds `term` or a term below it |
+| `any(list, \|x\| expr)` | True if `expr` is true for any item of the list |
+| `all(list, \|x\| expr)` | True if `expr` is true for every item of the list |
+| `linked_from(type, field)` | The notes of `type` whose reference `field` points at the note being tested, as a list for `any()` and `all()`: `from project where any(linked_from(task, project), \|t\| !t.done)` lists the projects with an open task |
+
+No other function exists. A call to any other name is a syntax error.
+
+### It is not SQL
+
+| Not this | Write this |
+|----------|------------|
+| `status = 'Todo'` | `status == "Todo"` |
+| `a AND b`, `a OR b`, `NOT a` | `a && b`, `a \|\| b`, `!a` |
+| `ORDER BY due DESC` | `sort due desc` |
+| `title LIKE '%plan%'` | `contains(title, "plan")` |
+| `tags IN ('a', 'b')` | `has(tags, "a") \|\| has(tags, "b")` |
+| `due IS NULL` | `empty(due)` |
+| `SELECT title FROM task` | `from task select title` |
+| `where done == false` on a note without the field | `where !done` |
+
+### Examples
+
+```query
+from task where status == "Todo" sort due asc limit 20
+```
+
+```query
+from task where under(status, "Active") && due < today() + days(7) group by status
+```
+
+```query
+from task where project == this && !done sort due asc
+```
+
+```query
+from person where any(emails, |e| has_ci(e.address, "ann@example.com"))
+```
+
+```query
+from book, article search "event sourcing" sort updated desc limit 20
+```
+
+```query
+from email where !processed && sent >= "2026-11-01T00:00:00Z" sort sent desc select title, from_raw, sent
+```
+
+```query
+from task include archived where contains(title, "release") && !empty(due)
+```
+
+```query
+from event where when.start >= today() && when.start < today() + days(7) sort when.start asc
+```
+
+```query
+from project where any(linked_from(task, project), |t| !t.done) sort title asc
+```
+
 ## Query views
 
 A `query_view` block runs one query and shows its results through one or more saved views (D8, D33).
@@ -2165,7 +2284,7 @@ A `query_view` block runs one query and shows its results through one or more sa
 | Item | Form | Meaning |
 |------|------|---------|
 | `title` | string | Heading shown above the view |
-| `query` | string | Required. A query in the grammar of PRD Appendix B, with the `include archived` clause of [Archived notes in queries](#archived-notes-in-queries). `this` is the note that holds the block |
+| `query` | string | Required. A query in the [query language](#query-language). `this` is the note that holds the block |
 | `default_view` | string | The view shown first. Default: the first view |
 | `allow_new` | bool | The views add notes. Default `false`. See [Adding notes from a query view](#adding-notes-from-a-query-view) |
 | `view <name> { ... }` | block | At least one. `<name>` is unique within the block |

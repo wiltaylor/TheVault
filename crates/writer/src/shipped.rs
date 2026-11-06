@@ -70,8 +70,9 @@ pub struct ShippedFile {
 /// The shipped files: the default device scripts, then the device file that names them, then the
 /// Google sync's scripts, each before the task that names it (google-sync D19), the event series
 /// write-back (event-series E3), the Outbox's send handler (outbox X3), then the built-in agent
-/// (agents G6), then the built-in `wscript` skill (script-tools T5).
-pub const SHIPPED_FILES: [ShippedFile; 21] = [
+/// (agents G6), then the built-in `wscript` skill (script-tools T5), then the `vault-queries` skill
+/// (TV-29).
+pub const SHIPPED_FILES: [ShippedFile; 22] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -261,6 +262,12 @@ pub const SHIPPED_FILES: [ShippedFile; 21] = [
         path: "skills/wscript/references/bulk-actions.md",
         source: include_str!("../defaults/skills/wscript/references/bulk-actions.md"),
         hashes: &["fc43bfc1178b51c8ec636562470f0d0e4f60007e86effb65f0df2ecbfeafd993"],
+    },
+    // How to write queries, with examples the parser checks (TV-29).
+    ShippedFile {
+        path: "skills/vault-queries/SKILL.md",
+        source: include_str!("../defaults/skills/vault-queries/SKILL.md"),
+        hashes: &["ba14e4d0c7fb23a7eb12d99cc2880a3e54b01e93fc3bf87833362911c3341c22"],
     },
 ];
 
@@ -2545,6 +2552,7 @@ mod tests {
                 .iter()
                 .map(|f| format!("skills/wscript/{f}")),
         );
+        paths.push("skills/vault-queries/SKILL.md".to_owned());
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);
         for (name, source) in crate::DEFAULT_DEVICE_SCRIPTS {
@@ -2554,6 +2562,28 @@ mod tests {
                 .unwrap();
             assert_eq!(file.source, source);
         }
+    }
+
+    /// Every ```` ```query ```` example in a shipped skill parses, so a skill never teaches a query
+    /// the vault refuses (TV-29).
+    #[test]
+    fn every_query_example_in_the_shipped_skills_parses() {
+        let mut seen = 0;
+        for file in SHIPPED_FILES
+            .iter()
+            .filter(|f| f.path.starts_with("skills/"))
+        {
+            let mut rest = file.source;
+            while let Some(start) = rest.find("```query\n") {
+                let body = &rest[start + "```query\n".len()..];
+                let end = body.find("```").unwrap_or(body.len());
+                let q = body[..end].trim();
+                query::parse(q).unwrap_or_else(|e| panic!("{}: {q}: {e}", file.path));
+                seen += 1;
+                rest = &body[end..];
+            }
+        }
+        assert!(seen >= 15, "{seen} query examples");
     }
 
     #[test]

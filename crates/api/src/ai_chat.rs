@@ -2822,13 +2822,13 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "query_notes",
-            "Run a query in the vault query language, such as `from task where status == \"Todo\" sort due asc`. Returns at most 50 rows and the total that matched.",
+            "Run a query in the vault query language, such as `from task where status == \"Todo\" sort due asc`. It is not SQL: `==`, `&&`, `||`, double-quoted text, `sort` and the functions query_format lists. Returns at most 50 rows and the total that matched.",
             json!({ "query": { "type": "string", "description": "The query text." } }),
         ),
         tool(
             "get_note",
-            "Read one note by id: its type, its version and the whole note as JSON, body included, and `assets`, the files it references (id, filename, media_type, size) for read_asset.",
-            json!({ "id": { "type": "string", "description": "The note's 26-character id." } }),
+            "Read one note by id: its type, its version and the whole note as JSON, body included, and `assets`, the files it references (id, filename, media_type, size) for read_asset. Use an id exactly as a row of query_notes, search_notes or backlinks gave it, or as a link holds it. Never make an id up.",
+            json!({ "id": { "type": "string", "description": "The note's 26-character id, copied from a row, a link or an earlier result." } }),
         ),
         tool(
             "read_asset",
@@ -2857,6 +2857,11 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             "get_type",
             "Read one type: its type file's WCL text as stored, and a parsed summary of its fields (with kinds) and its templates (with their tabs and slots).",
             json!({ "name": { "type": "string", "description": "The type's name, such as `task`." } }),
+        ),
+        tool(
+            "query_format",
+            "The whole query language: clauses and their order, field names and values, operators, every function, what SQL habits to avoid, worked examples, and query views. Read it before writing a query that is more than a type and a simple condition, and after a query syntax error.",
+            json!({}),
         ),
         tool(
             "type_format",
@@ -3419,7 +3424,7 @@ fn propose_or_read(
                     extra["more"] = json!(!page["next"].is_null());
                     rows_out(rows, extra)
                 })
-                .map_err(ToolOut::error)
+                .map_err(|e| ToolOut::error(query_error(q, &e)))
         }),
         "get_note" => str_arg(input, "id").and_then(|id| {
             Vault::get(w, id)
@@ -3436,7 +3441,7 @@ fn propose_or_read(
                         proposal: None,
                     }
                 })
-                .map_err(ToolOut::error)
+                .map_err(|e| ToolOut::error(get_note_error(id, &e)))
         }),
         "find_assets" => {
             let found = ai_assets::find_assets(w, input);
@@ -3461,6 +3466,7 @@ fn propose_or_read(
         "propose_delete" => propose_delete(w, author, &call.id, input),
         "list_types" => Ok(list_types(w)),
         "get_type" => get_type(w, input),
+        "query_format" => Ok(query_format()),
         "type_format" => Ok(type_format()),
         "block_format" => Ok(block_format()),
         "propose_type_change" => propose_type(w, &call.id, input),
@@ -3840,6 +3846,86 @@ pub fn block_format_text() -> &'static str {
     })
 }
 
+/// The sections of `docs/vault-format.md` a query is written from: the query language and query
+/// views, with their subsections.
+pub fn query_format_text() -> &'static str {
+    static TEXT: OnceLock<String> = OnceLock::new();
+    TEXT.get_or_init(|| {
+        format!(
+            "{}\n",
+            format_section("\n## Query language\n", "\n## Ink\n")
+        )
+    })
+}
+
+/// `query_format`: the query language.
+fn query_format() -> ToolOut {
+    type_out(json!({ "format": query_format_text() }), Vec::new(), None)
+}
+
+/// A `query_notes` error with a hint: the SQL habit the query shows, if any, and where the whole
+/// grammar is. Most failed queries in production were SQL written as a query (TV-29).
+fn query_error(query: &str, error: &str) -> String {
+    let words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(str::to_ascii_uppercase)
+        .collect();
+    let has_word = |w: &str| words.iter().any(|x| x == w);
+    let mut hints: Vec<&str> = Vec::new();
+    if error.contains("unexpected character `=`") {
+        hints.push("compare with `==`, not `=`");
+    }
+    if error.contains("unexpected character `'`") {
+        hints.push("text goes in double quotes, as \"Todo\"");
+    }
+    if has_word("AND") || has_word("OR") || has_word("NOT") {
+        hints.push("join conditions with `&&` and `||`, and negate with `!`");
+    }
+    if has_word("ORDER") {
+        hints.push("order with `sort <field> asc|desc`");
+    }
+    if has_word("LIKE") {
+        hints.push("match text with `contains(field, \"text\")`");
+    }
+    if has_word("NULL") {
+        hints.push("test for no value with `empty(field)`");
+    }
+    if has_word("SELECT") && !query.trim_start().starts_with("from") {
+        hints.push("start with `from <type>`; `select` comes near the end");
+    }
+    if error.contains("there is no type") {
+        hints.push("list_types gives every type's name");
+    }
+    if error.contains("unknown field") {
+        hints.push("get_type lists a type's fields");
+    }
+    let mut out = error.to_owned();
+    if !hints.is_empty() {
+        out.push_str(". The query language is not SQL: ");
+        out.push_str(&hints.join("; "));
+    }
+    out.push_str(". Read query_format for the whole grammar and examples.");
+    out
+}
+
+/// A `get_note` error that says how to find a real id when the note is not there: most failed
+/// reads in production were ids the model made up or remembered wrongly (TV-29).
+fn get_note_error(id: &str, error: &str) -> String {
+    let looks_like_id = id.len() == 26 && id.chars().all(|c| c.is_ascii_alphanumeric());
+    if !error.contains("does not exist") && looks_like_id {
+        return error.to_owned();
+    }
+    let what = if looks_like_id {
+        format!("There is no note {id}")
+    } else {
+        format!("{id:?} is not a note id, which is 26 letters and digits")
+    };
+    format!(
+        "{what}. Do not guess ids: find the note with query_notes or search_notes and use the id \
+         its row gives, exactly as given."
+    )
+}
+
 /// `type_format`: the type-file vocabulary.
 fn type_format() -> ToolOut {
     type_out(json!({ "format": type_format_text() }), Vec::new(), None)
@@ -4064,6 +4150,100 @@ mod tests {
         assert!(!t.contains("## Handlers"));
         assert!(!t.contains("## Imported HTML"));
         assert!(t.len() < RESULT_LIMIT * 8 / 10, "{} bytes", t.len());
+    }
+
+    #[test]
+    fn query_format_holds_the_query_language_and_query_views() {
+        let t = query_format_text();
+        assert!(t.starts_with("## Query language"), "{}", &t[..40]);
+        assert!(t.contains("### It is not SQL"));
+        assert!(t.contains("## Query views"));
+        assert!(t.contains("### Archived notes in queries"));
+        assert!(!t.contains("## Ink"));
+        assert!(t.len() < RESULT_LIMIT * 8 / 10, "{} bytes", t.len());
+    }
+
+    #[test]
+    fn query_format_names_every_function_the_parser_takes() {
+        let t = query_format_text();
+        for (name, _) in query::FUNCTIONS {
+            assert!(
+                t.contains(&format!("`{name}(")),
+                "{name} is not in the functions table"
+            );
+        }
+    }
+
+    #[test]
+    fn every_query_example_in_query_format_parses() {
+        let examples = fenced(query_format_text(), "query");
+        assert!(examples.len() >= 8, "{} examples", examples.len());
+        for q in examples {
+            query::parse(&q).unwrap_or_else(|e| panic!("{q}: {e}"));
+        }
+    }
+
+    /// The bodies of the code blocks fenced as ```` ```<lang> ```` in `text`.
+    fn fenced(text: &str, lang: &str) -> Vec<String> {
+        let open = format!("```{lang}\n");
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(start) = rest.find(&open) {
+            let body = &rest[start + open.len()..];
+            let end = body.find("```").unwrap_or(body.len());
+            out.push(body[..end].trim().to_owned());
+            rest = &body[end..];
+        }
+        out
+    }
+
+    #[test]
+    fn a_query_error_names_the_sql_habit_and_points_at_query_format() {
+        let e = query_error(
+            "from task where status = 'Todo' AND due IS NULL ORDER BY due",
+            "query syntax error at line 1, column 24: unexpected character `=`",
+        );
+        assert!(
+            e.starts_with("query syntax error at line 1, column 24"),
+            "{e}"
+        );
+        for hint in [
+            "`==`",
+            "`&&`",
+            "`sort <field>",
+            "`empty(field)`",
+            "query_format",
+        ] {
+            assert!(e.contains(hint), "{hint} missing: {e}");
+        }
+        let e = query_error("from tasks", "there is no type \"tasks\"");
+        assert!(e.contains("list_types"), "{e}");
+        let e = query_error(
+            "from task where",
+            "query syntax error at line 1, column 16: expected an expression, found the end",
+        );
+        assert!(!e.contains("not SQL"), "{e}");
+        assert!(
+            e.ends_with("Read query_format for the whole grammar and examples."),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_missing_note_says_to_find_ids_rather_than_guess() {
+        let e = get_note_error(
+            "01J00000000000000000000000",
+            "note 01J00000000000000000000000 does not exist",
+        );
+        assert!(
+            e.starts_with("There is no note 01J00000000000000000000000."),
+            "{e}"
+        );
+        assert!(e.contains("query_notes or search_notes"), "{e}");
+        let e = get_note_error("task-12", "bad id");
+        assert!(e.starts_with("\"task-12\" is not a note id"), "{e}");
+        let other = "you may not read notes of type secret";
+        assert_eq!(get_note_error("01J00000000000000000000000", other), other);
     }
 
     #[test]
