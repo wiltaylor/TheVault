@@ -210,14 +210,16 @@ describe("a sub agent's session", () => {
     s.close();
   });
 
-  it("streams a running session, with Stop", async () => {
+  // Under a parallel load the first render of the streamed text can take over the 1 s default
+  // wait, so the waits here are longer (TV-48).
+  it("streams a running session, with Stop", { timeout: 20_000 }, async () => {
     agentThread.mockResolvedValue(session({ running: true, turn: "turn-sub", started_ms: Date.now() }));
     const s = createChatSession({ agent: "lead" });
     render(() => <Conversation session={s} readOnly />);
     void s.openThread("01JSUB");
-    await waitFor(() => expect(live).not.toBeNull());
+    await waitFor(() => expect(live).not.toBeNull(), { timeout: 8000 });
     emit("text", { delta: "Still looking" });
-    expect(await screen.findByText("Still looking")).toBeTruthy();
+    expect(await screen.findByText("Still looking", {}, { timeout: 8000 })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(turns.aiTurnStop).toHaveBeenCalledWith("turn-sub");
     s.close();

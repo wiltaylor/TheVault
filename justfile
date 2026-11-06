@@ -19,6 +19,14 @@ main:
 [group('check')]
 check: ci::check
 
+# Validate a card: the same gate as check. Every card runs it on thevault-dev, on a clean checkout of its pushed commit (AGENTS.md)
+[group('check')]
+validate: check
+
+# Validate a card that touches the Android app: the Android lint, then the app's Rust tests and the Robolectric tests. Runs on thevault-dev after validate, for cards that touch apps/android, crates/embedded, crates/sync, crates/push, or carry the label android (AGENTS.md)
+[group('check')]
+validate-android: android-check android-test
+
 # Format all code
 [group('check')]
 fmt: rust-fmt (app-fmt "apps/android/src-tauri") (app-fmt "apps/desktop/src-tauri")
