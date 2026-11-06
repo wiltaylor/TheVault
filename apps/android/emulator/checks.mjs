@@ -69,7 +69,9 @@ const KNOWN_E164 = "+16502530001";
 const UNKNOWN = "6502539999";
 const OUTGOING = "6502530003";
 const OLD = "6502537777"; // before pairing: must never arrive
-const SELF = "15555215554"; // the emulator's own number: an SMS sent to it comes back
+// The emulator's own number, 1555521 and its console port: an SMS sent to it comes back. Another
+// emulator's number would reach that emulator instead.
+const SELF = `1555521${/^emulator-(\d+)$/.exec(process.env.ANDROID_SERIAL ?? "")?.[1] ?? process.env.EMULATOR_PORT ?? "5554"}`;
 
 // ---------------------------------------------------------------------------------------------
 // Results
