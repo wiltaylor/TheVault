@@ -428,7 +428,8 @@ fn a_gmail_refusal_fails_the_run_and_notifies_on_the_email() {
         failed[0].contains("Gmail answered 403 to trash of message one: Insufficient Permission"),
         "{failed:#?}"
     );
-    // Nothing retries it, so the user is told on the email.
+    // Nothing retries it, so the user is told. The email is in the vault's trash, so the
+    // notification names it in its body and is not tied to the note.
     let items = api.notifications();
     assert_eq!(items.len(), 1, "{items:#?}");
     assert_eq!(items[0]["title"], "Gmail did not trash an email");
@@ -439,7 +440,7 @@ fn a_gmail_refusal_fails_the_run_and_notifies_on_the_email() {
             .ends_with("Nothing retries it: trash the message in Gmail."),
         "{items:#?}"
     );
-    assert_eq!(items[0]["note"], one.as_str());
+    assert_eq!(items[0]["note"], Value::Null, "{items:#?}");
 }
 
 #[test]

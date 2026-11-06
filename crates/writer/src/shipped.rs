@@ -177,7 +177,7 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
     ShippedFile {
         path: "scripts/google_mail.ws",
         source: include_str!("../defaults/google/google_mail.ws"),
-        hashes: &["bf8fda07c1cd113ddc57c19a026f2da51e51516939d7471c85de19a2346ffe40"],
+        hashes: &["3529e9ee6cc6f41423d02c8564525badb2c1e6987eeca704b95973b73df7dd6e"],
     },
     // The Google Calendar write-back, named by the shipped `event` type's handlers.
     ShippedFile {

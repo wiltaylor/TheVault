@@ -210,7 +210,7 @@ fn after_update(note: Value) -> Result[(), string] {
         return Ok(())
     }
     let body = Value::Map(#{ "removeLabelIds": Value::List([Value::String("INBOX")]) })
-    reported(note, "archive", send(id, "modify", json::to_string(body)))
+    reported(note, "archive", text_of(note, "id"), send(id, "modify", json::to_string(body)))
 }
 
 fn after_delete(note: Value) -> Result[(), string] {
@@ -222,7 +222,8 @@ fn after_delete(note: Value) -> Result[(), string] {
         return Ok(())
     }
     remember_trashed(id)?
-    reported(note, "trash", send(id, "trash", ""))
+    // The email is in the vault's trash, so the notification is not tied to it.
+    reported(note, "trash", "", send(id, "trash", ""))
 }
 
 // Connect and POST `body` to message `id`'s `action`. Not connected, or without gmail.modify,
@@ -235,15 +236,21 @@ fn send(id: string, action: string, body: string) -> Result[(), string] {
     act(gmail, id, action, body)
 }
 
-// `result` as it is, after a notification on the email when it failed: nothing retries a mail
-// action, so the user must know to `verb` the message in Gmail.
-fn reported(note: Value, verb: string, result: Result[(), string]) -> Result[(), string] {
+// `result` as it is, after a notification when it failed, on note `on` unless that is "":
+// nothing retries a mail action, so the user must know to `verb` the message in Gmail. A
+// notification that cannot be raised is logged, and the run still fails with Gmail's error.
+fn reported(note: Value, verb: string, on: string, result: Result[(), string]) -> Result[(), string] {
     match result {
         Ok(_) => Ok(()),
         Err(e) => {
             let title = "Gmail did not " + verb + " an email"
-            let body = e + ". Nothing retries it: " + verb + " the message in Gmail."
-            vault::notify(title, body, text_of(note, "id"))?
+            let subject = text_of(fields_at(note, "note"), "title")
+            let about = if subject == "" { "" } else { " Email: " + subject + "." }
+            let body = e + "." + about + " Nothing retries it: " + verb + " the message in Gmail."
+            match vault::notify(title, body, on) {
+                Ok(_) => {},
+                Err(n) => vault::log("The notification was not raised: " + n),
+            }
             Err(e)
         },
     }
