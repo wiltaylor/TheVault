@@ -193,12 +193,14 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 |---|---|
 | `search_notes` | Full-text search, at most 20 notes |
 | `query_notes` | A query in the vault query language, at most 50 notes. A failed query's error names the SQL habit it shows, such as `=` for `==` or `AND` for `&&`, and points at `query_format` |
+| `value_format` | The JSON form of a note, then the [Value encodings](vault-format.md#value-encodings) and [Note files](vault-format.md#note-files) sections of the vault format: how each kind of value is written, and which fields the server or a handler writes |
 | `query_format` | The [Query language](vault-format.md#query-language) and [Query views](vault-format.md#query-views) sections of the vault format: clauses, values, operators, every function, the SQL habits to avoid, and examples |
 | `get_note` | Reads one note, body included, and lists the assets it references (id, file name, media type, size); each text over 40,000 characters is cut with a marker A note that is not there, or an id that is not one, gets an error telling the model to find the id with `query_notes` or `search_notes` rather than guess |
 | `read_asset` | Reads one attachment by asset id; see [Attachments](#attachments) |
 | `find_assets` | Finds stored files by name: those whose file name contains `text`, ignoring case, newest first, 1 to 50 (`limit`, 20 when absent); empty text lists the newest. Each is its `id`, `filename`, `media_type`, `size` and `created` time |
 | `backlinks` | The notes that link to a note |
 | `propose_edit` | Checks an edit to one note and shows it to you; writes it only when [confirmation is off](#changes-the-ai-makes) |
+| `propose_fields` | Checks setting some fields of one note, keeping every other field and the whole body, and shows it to you as `propose_edit` does; writes it only when confirmation is off. `null` removes a field |
 | `propose_create` | Checks a new note of a type and shows it to you; creates it only when confirmation is off |
 | `propose_archive` | Checks that a note exists and is not already archived (or, to unarchive, archived) and shows it to you; does it only when confirmation is off |
 | `propose_delete` | Checks that a note exists and can be deleted and shows it to you; deletes it only when confirmation is off. Applied, the note moves to the trash; the model cannot empty the trash |

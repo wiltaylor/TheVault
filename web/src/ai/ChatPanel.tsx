@@ -98,6 +98,8 @@ export function stepLabel(name: string, input: Json): string {
       return s("text").trim() ? `Looked for files named “${s("text").trim()}”` : "Listed the newest files";
     case "propose_edit":
       return "Checked an edit";
+    case "propose_fields":
+      return "Checked a field change";
     case "propose_create":
       return "Checked a new note";
     case "propose_archive":
@@ -110,6 +112,8 @@ export function stepLabel(name: string, input: Json): string {
       return `Read type ${s("name")}`;
     case "query_format":
       return "Read the query language";
+    case "value_format":
+      return "Read the field value formats";
     case "type_format":
       return "Read the type file format";
     case "block_format":
@@ -228,6 +232,8 @@ export function activeLabel(name: string, input: Json): string {
       return "Looking for files";
     case "propose_edit":
       return "Checking an edit";
+    case "propose_fields":
+      return "Checking a field change";
     case "propose_create":
       return "Checking a new note";
     case "propose_archive":
@@ -240,6 +246,8 @@ export function activeLabel(name: string, input: Json): string {
       return "Reading a type";
     case "query_format":
       return "Reading the query language";
+    case "value_format":
+      return "Reading the field value formats";
     case "type_format":
       return "Reading the type file format";
     case "block_format":
@@ -352,6 +360,7 @@ const TYPE_TOOLS = new Set([
   "list_types",
   "get_type",
   "query_format",
+  "value_format",
   "type_format",
   "block_format",
   "propose_type_change",

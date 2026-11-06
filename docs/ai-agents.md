@@ -124,12 +124,13 @@ Agent files that hold `browser = true` are new: an app from before the browser b
 
 Skills are folders of instructions and files in the vault's `skills/` folder, in the open Agent Skills format; [Agent skills](skills.md) covers writing and importing them. An agent is offered the valid skills its **Skills** permission allows: every valid skill (no `skills` list in the file, the default) or only those named (`permissions.skills = ["pdf-forms"]`). A skill with errors is offered to no agent. `[]` offers none, and the agent gets no skill tools.
 
-The vault ships two skills, which every agent with no `skills` list is offered, and which an existing vault gains on its next start:
+The vault ships three skills, which every agent with no `skills` list is offered, and which an existing vault gains on its next start:
 
 - `wscript`: the scripting language and the vault API, for `run_script`, script tools, handlers and tasks.
 - `vault-queries`: how to write a query, with the rules that differ from SQL and worked examples for tasks, people, mail, messages, captures, events and links. Every example in it is checked against the parser.
+- `vault-notes`: how to write notes and types: the JSON form, a note with every common field kind, every content block, computed fields, reference, inverse and taxonomy fields, and which query views need which items. Its type files and notes are checked against the writer.
 
-A shipped skill the user has not changed is replaced by the newer version when the app updates; one the user changed stays, and the bell says a newer one exists. The model also has `query_format`, the whole query language from the vault format.
+A shipped skill the user has not changed is replaced by the newer version when the app updates; one the user changed stays, and the bell says a newer one exists. The model also has `query_format`, the whole query language, and `value_format`, how each field value is written, both from the vault format.
 
 The agent's system text ends with an "Available skills" section, after its prompt, its memories and the open note: each offered skill's name and description, and a line telling it to call `use_skill` before following one. When the agent has the browser box, the line says how to run a skill's scripts there; otherwise it says scripts can be read but not run.
 
@@ -351,7 +352,7 @@ A trigger run has no one present to apply a proposal, so it is offered only:
 - the change tools whose confirmation switch is off for the agent, and
 - the Outbox draft tools, since what they draft waits in the Outbox for you.
 
-A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies, agents and skills only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
+A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The run's system text says which changes are held back this way and names each switch, so the agent tells you which change it would make and which switch allows it, rather than that it has no tool for it. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies, agents and skills only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
 
 ## No loops
 

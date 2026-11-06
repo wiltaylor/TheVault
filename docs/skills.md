@@ -36,7 +36,7 @@ Backups include `skills/` like every other vault folder. The desktop and Android
 
 ## Shipped skills
 
-The app writes two skills into every vault: `wscript`, for writing scripts, and `vault-queries`, for writing queries. They are shipped defaults: a vault without one gains it on the next start, an unchanged one is replaced by the newer version when the app updates, and one the user changed is kept, with a bell notice that a newer version exists (see [Shipped defaults and upgrades](vault-format.md#shipped-defaults-and-upgrades)). Delete a shipped skill's folder and it comes back on the next start; to keep an agent from using it, leave it out of the agent's `skills` list.
+The app writes three skills into every vault: `wscript`, for writing scripts, `vault-queries`, for writing queries, and `vault-notes`, for writing notes and types. They are shipped defaults: a vault without one gains it on the next start, an unchanged one is replaced by the newer version when the app updates, and one the user changed is kept, with a bell notice that a newer version exists (see [Shipped defaults and upgrades](vault-format.md#shipped-defaults-and-upgrades)). Delete a shipped skill's folder and it comes back on the next start; to keep an agent from using it, leave it out of the agent's `skills` list.
 
 ## Import and export
 

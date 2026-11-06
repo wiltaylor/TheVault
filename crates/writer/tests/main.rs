@@ -27,6 +27,7 @@ mod pdf_text;
 mod query_views;
 mod sessions;
 mod shipped_defaults;
+mod skill_examples;
 mod skills;
 mod startup;
 mod tables;

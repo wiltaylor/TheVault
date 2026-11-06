@@ -71,8 +71,8 @@ pub struct ShippedFile {
 /// Google sync's scripts, each before the task that names it (google-sync D19), the event series
 /// write-back (event-series E3), the Outbox's send handler (outbox X3), then the built-in agent
 /// (agents G6), then the built-in `wscript` skill (script-tools T5), then the `vault-queries` skill
-/// (TV-29).
-pub const SHIPPED_FILES: [ShippedFile; 22] = [
+/// (TV-29) and the `vault-notes` skill (TV-34).
+pub const SHIPPED_FILES: [ShippedFile; 23] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -268,6 +268,12 @@ pub const SHIPPED_FILES: [ShippedFile; 22] = [
         path: "skills/vault-queries/SKILL.md",
         source: include_str!("../defaults/skills/vault-queries/SKILL.md"),
         hashes: &["ba14e4d0c7fb23a7eb12d99cc2880a3e54b01e93fc3bf87833362911c3341c22"],
+    },
+    // How to write notes and types, with examples the writer validates (TV-34).
+    ShippedFile {
+        path: "skills/vault-notes/SKILL.md",
+        source: include_str!("../defaults/skills/vault-notes/SKILL.md"),
+        hashes: &["9d41e06d86277eab708d43e4ff1c4cf2e45db829f0281e437eb82a49a5d5c59f"],
     },
 ];
 
@@ -2553,6 +2559,7 @@ mod tests {
                 .map(|f| format!("skills/wscript/{f}")),
         );
         paths.push("skills/vault-queries/SKILL.md".to_owned());
+        paths.push("skills/vault-notes/SKILL.md".to_owned());
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);
         for (name, source) in crate::DEFAULT_DEVICE_SCRIPTS {
