@@ -1199,6 +1199,7 @@ fn web_of(agent: &Agent) -> ai::Web {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     w: &Writer,
     scope: Scope,
