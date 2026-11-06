@@ -251,15 +251,24 @@ fn a_skill_is_created_read_listed_and_its_files_written_and_deleted() {
         api.admin("GET", "/api/skills").send().unwrap(),
         StatusCode::OK,
     );
-    // Only the shipped skills are left: `vault-notes` (TV-34), `vault-queries` (TV-29) and
-    // `wscript` (script-tools T5).
+    // Only the shipped skills are left: `vault-automation` and `vault-comms` (TV-35),
+    // `vault-notes` (TV-34), `vault-queries` (TV-29) and `wscript` (script-tools T5).
     let names: Vec<&str> = list["skills"]
         .as_array()
         .unwrap()
         .iter()
         .map(|s| s["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["vault-notes", "vault-queries", "wscript"]);
+    assert_eq!(
+        names,
+        [
+            "vault-automation",
+            "vault-comms",
+            "vault-notes",
+            "vault-queries",
+            "wscript"
+        ]
+    );
 
     assert_eq!(
         api.skill_entries(),
@@ -452,14 +461,23 @@ fn an_invalid_zip_is_refused_before_anything_is_written() {
     );
     assert_eq!(invalid["error"], "invalid");
     assert_eq!(invalid["issues"][0]["at"], "description");
-    // Only the shipped skills' folders: `vault-notes` (TV-34), `vault-queries` (TV-29) and
-    // `wscript` (script-tools T5).
+    // Only the shipped skills' folders: `vault-automation` and `vault-comms` (TV-35),
+    // `vault-notes` (TV-34), `vault-queries` (TV-29) and `wscript` (script-tools T5).
     let mut folders: Vec<String> = std::fs::read_dir(api.server.vault_path().join("skills"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     folders.sort();
-    assert_eq!(folders, ["vault-notes", "vault-queries", "wscript"]);
+    assert_eq!(
+        folders,
+        [
+            "vault-automation",
+            "vault-comms",
+            "vault-notes",
+            "vault-queries",
+            "wscript"
+        ]
+    );
     assert!(!api.server.vault_path().join("escape.txt").exists());
     assert!(api.skill_entries().is_empty());
 }

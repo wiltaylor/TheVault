@@ -684,8 +684,8 @@ fn a_skill_with_a_binary_asset_reaches_the_device_and_its_delete_follows() {
 
     admin.send(admin.client.delete(server.url("/api/skills/pdf")), 200);
     phone.sync();
-    // Only the shipped skills are left: vault-notes (TV-34), vault-queries (TV-29) and wscript
-    // (script-tools T5).
+    // Only the shipped skills are left: vault-automation and vault-comms (TV-35), vault-notes
+    // (TV-34), vault-queries (TV-29) and wscript (script-tools T5).
     let names: Vec<Value> = phone.call("GET", "/api/skills", None, 200)["skills"]
         .as_array()
         .unwrap()
@@ -695,6 +695,8 @@ fn a_skill_with_a_binary_asset_reaches_the_device_and_its_delete_follows() {
     assert_eq!(
         names,
         [
+            json!("vault-automation"),
+            json!("vault-comms"),
             json!("vault-notes"),
             json!("vault-queries"),
             json!("wscript")

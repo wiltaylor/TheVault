@@ -56,7 +56,13 @@ impl Api {
         // them: start without the shipped skills, `wscript` (script-tools T5), `vault-queries`
         // (TV-29) and `vault-notes` (TV-34), which would add the skills section and the skill
         // tools.
-        for skill in ["wscript", "vault-queries", "vault-notes"] {
+        for skill in [
+            "wscript",
+            "vault-queries",
+            "vault-notes",
+            "vault-comms",
+            "vault-automation",
+        ] {
             let res = api
                 .client
                 .delete(api.server.url(&format!("/api/skills/{skill}")))
