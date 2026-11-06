@@ -18,6 +18,29 @@ use crate::core::Link;
 /// How long one request waits for the server.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long opening a connection to the server may take. A server that cannot be reached (the
+/// phone off its network, the server down) fails here, not after [`TIMEOUT`], so a round knows at
+/// once (TV-59).
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A request that did not reach the server, or got no answer: no connection, a timeout, a broken
+/// connection. An answer the server refused is not one.
+#[derive(Debug)]
+pub struct Unreachable(pub String);
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
+/// The [`Unreachable`] message of `e`, if it is one.
+pub fn unreachable(e: &anyhow::Error) -> Option<&str> {
+    e.downcast_ref::<Unreachable>().map(|u| u.0.as_str())
+}
+
 /// How many unread notifications one request asks for: the server's largest page.
 const PAGE: usize = 500;
 
@@ -33,13 +56,16 @@ pub struct PushTarget {
 }
 
 pub(crate) fn client() -> anyhow::Result<Client> {
-    Ok(Client::builder().timeout(TIMEOUT).build()?)
+    Ok(Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(TIMEOUT)
+        .build()?)
 }
 
 pub(crate) fn send(link: &Link, rb: RequestBuilder) -> anyhow::Result<Response> {
     rb.bearer_auth(&link.token)
         .send()
-        .map_err(|e| anyhow::anyhow!("cannot reach {}: {e}", link.server_url))
+        .map_err(|e| Unreachable(format!("cannot reach {}: {e}", link.server_url)).into())
 }
 
 /// The error for an answer that is not a success: the server's message, else its status.

@@ -448,14 +448,16 @@ impl Core {
     /// never call it from inside an async runtime.
     pub fn sync_now(&self) -> anyhow::Result<Report> {
         let link = self.linked()?;
+        // The settings and the health go first, outside the round lock, and with a short connect
+        // timeout: a server that cannot be reached ends the round here within seconds, and holds
+        // up no other trigger, which tries again as soon as the server answers (TV-59).
+        if let Err(message) = self.before_round(&link) {
+            log::info!("sync round skipped: {message}");
+            self.record(&Err(sync::Error::Http(message.clone())));
+            return Err(sync::Error::Http(message).into());
+        }
         let _round = lock(&self.round);
         self.syncing.store(true, Ordering::SeqCst);
-        if let Err(e) = self.refresh_settings(&link) {
-            log::warn!("the device settings were not refreshed: {e:#}");
-        }
-        if let Err(e) = self.report_health(&link) {
-            log::warn!("the capture health was not reported: {e:#}");
-        }
         let mut result = self.round(&link);
         if let Err(sync::Error::OtherVault { server, .. }) = &result {
             // The home server holds another vault than the local copy: start fresh, then sync
@@ -469,27 +471,7 @@ impl Core {
                 ))),
             };
         }
-        let at_ms = now_ms();
-        {
-            let mut last = lock(&self.last);
-            let ok_ms = match &result {
-                Ok(_) => Some(at_ms),
-                Err(_) => last.as_ref().and_then(|l| l.ok_ms),
-            };
-            let (phase, error) = match &result {
-                Ok(report) => (SyncPhase::Synced, report.problem()),
-                Err(e) => {
-                    let (phase, message) = SyncPhase::of_error(e);
-                    (phase, Some(message))
-                }
-            };
-            *last = Some(Last {
-                at_ms,
-                error,
-                phase,
-                ok_ms,
-            });
-        }
+        self.record(&result);
         self.syncing.store(false, Ordering::SeqCst);
         match &result {
             Ok(r) => log::info!(
@@ -519,6 +501,48 @@ impl Core {
             log::warn!("failed device events not reported to the home server: {e:#}");
         }
         Ok(report)
+    }
+
+    /// Keep how a round ended, for the sync status.
+    fn record(&self, result: &sync::Result<Report>) {
+        let at_ms = now_ms();
+        let mut last = lock(&self.last);
+        let ok_ms = match result {
+            Ok(_) => Some(at_ms),
+            Err(_) => last.as_ref().and_then(|l| l.ok_ms),
+        };
+        let (phase, error) = match result {
+            Ok(report) => (SyncPhase::Synced, report.problem()),
+            Err(e) => {
+                let (phase, message) = SyncPhase::of_error(e);
+                (phase, Some(message))
+            }
+        };
+        *last = Some(Last {
+            at_ms,
+            error,
+            phase,
+            ok_ms,
+        });
+    }
+
+    /// Before a round: take the device's settings and send the capture health. Answers why the
+    /// round cannot run when the server could not be reached; any other failure is logged and
+    /// the round goes on.
+    fn before_round(&self, link: &Link) -> Result<(), String> {
+        if let Err(e) = self.refresh_settings(link) {
+            if let Some(m) = notify::unreachable(&e) {
+                return Err(m.to_owned());
+            }
+            log::warn!("the device settings were not refreshed: {e:#}");
+        }
+        if let Err(e) = self.report_health(link) {
+            if let Some(m) = notify::unreachable(&e) {
+                return Err(m.to_owned());
+            }
+            log::warn!("the capture health was not reported: {e:#}");
+        }
+        Ok(())
     }
 
     /// One round with the home server behind the version gate.
@@ -610,15 +634,17 @@ impl Core {
     }
 
     /// Take the device's settings from the home server into the device runtime, when one is
-    /// open. The settings stay as they were when the server no longer lists the device.
+    /// open. The settings stay as they were when the server no longer lists the device. The
+    /// request is made with no runtime open too, as the round's first contact with the server.
     fn refresh_settings(&self, link: &Link) -> anyhow::Result<()> {
+        let settings = commands::settings(link)?;
         let Ok(runtime) = self.runtime() else {
             return Ok(());
         };
         if runtime.device_id() != link.device_id {
             return Ok(());
         }
-        if let Some(s) = commands::settings(link)?.filter(Value::is_object) {
+        if let Some(s) = settings.filter(Value::is_object) {
             runtime.set_settings(&s)?;
         }
         Ok(())
