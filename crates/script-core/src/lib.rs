@@ -250,11 +250,16 @@ const MAX_UNITS: usize = 64;
 
 const WORKER_STACK: usize = 8 << 20;
 
-/// The wscript host of one vault.
+/// The wscript host of one vault. A drop stops it taking jobs and waits for each worker to
+/// finish the run in hand, so do not drop the last reference to it while holding a lock that a
+/// run may wait for, such as the writer's.
 pub struct Host {
     contexts: Arc<Contexts>,
     jobs: Mutex<Option<Sender<Request>>>,
     limits: Limits,
+    /// The worker threads. Each holds the vault, so a drop waits for them: the vault's files and
+    /// locks (the full-text index lock) are released once the host is gone.
+    workers: Vec<thread::JoinHandle<()>>,
 }
 
 struct Request {
@@ -319,19 +324,22 @@ impl Host {
         });
         let (tx, rx) = mpsc::channel::<Request>();
         let rx = Arc::new(Mutex::new(rx));
-        for n in 0..workers.max(1) {
-            let rx = rx.clone();
-            let contexts = contexts.clone();
-            thread::Builder::new()
-                .name(format!("script-{n}"))
-                .stack_size(WORKER_STACK)
-                .spawn(move || worker(&rx, &contexts))
-                .expect("start a script worker");
-        }
+        let workers = (0..workers.max(1))
+            .map(|n| {
+                let rx = rx.clone();
+                let contexts = contexts.clone();
+                thread::Builder::new()
+                    .name(format!("script-{n}"))
+                    .stack_size(WORKER_STACK)
+                    .spawn(move || worker(&rx, &contexts))
+                    .expect("start a script worker")
+            })
+            .collect();
         Host {
             contexts,
             jobs: Mutex::new(Some(tx)),
             limits,
+            workers,
         }
     }
 
@@ -423,8 +431,17 @@ impl Host {
 }
 
 impl Drop for Host {
+    /// Stops taking jobs and waits for the workers to finish the run in hand and exit, so the
+    /// vault they hold is dropped before the host is gone. A host dropped on one of its own
+    /// workers does not wait for that worker.
     fn drop(&mut self) {
         self.shutdown();
+        let here = thread::current().id();
+        for w in self.workers.drain(..) {
+            if w.thread().id() != here {
+                let _ = w.join();
+            }
+        }
     }
 }
 

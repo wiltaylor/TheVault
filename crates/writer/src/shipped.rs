@@ -68,12 +68,13 @@ pub struct ShippedFile {
 }
 
 /// The shipped files: the default device scripts, then the device file that names them, then the
-/// Google sync's scripts, each before the task that names it (google-sync D19), the event series
+/// Google sync's scripts, each before the task that names it (google-sync D19), the mail actions
+/// back to Gmail (TV-25), the event series
 /// write-back (event-series E3), the Outbox's send handler (outbox X3), then the built-in agent
 /// (agents G6), then the built-in `wscript` skill (script-tools T5), then the `vault-queries` skill
 /// (TV-29), the `vault-notes` skill (TV-34), and the `vault-comms` and `vault-automation` skills
 /// (TV-35).
-pub const SHIPPED_FILES: [ShippedFile; 25] = [
+pub const SHIPPED_FILES: [ShippedFile; 26] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -138,6 +139,8 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
             "a83e6b61ee1f2434128911c404f27e310c7d35037f02e00dd1f40c95f2838f1e",
             "62b1b398df176b3d1c1d160274f9eec71e5ec9bce1628cfb4e338ead2fe6c350",
             "141d28f31e85fdd1fdc53dcb8b8f4fc4f4e4f2f42fa1b6716b03cab0aa565fd0",
+            "a0c60ab7567034967d238eba8dd45c7783fb71107d7ef1e6cae168755cae1db1",
+            "54c5b6fb03f926e16ef935dc2f7cd5a493470d5f187faafa96d0f0afa8f09ad3",
         ],
     },
     ShippedFile {
@@ -160,6 +163,7 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
             "72d25f21d756250ca02dc77802c24ed1b417138c99ed2644e0b8b387092fbb0a",
             "e5881bf43ba5f4381156ccb56ef2d3f0e3d0d3ac349830b0b49f7d5e1595e307",
             "41fe0334ecdd4e4c2f43403331a36339fb47d236f215f9c6671d41a4f39e2f33",
+            "1b2796fa010585134eb1c98c79ee322b1e4d3999deeacfdb061da53204323c88",
         ],
     },
     ShippedFile {
@@ -168,6 +172,16 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
         hashes: &[
             "94f9b68f9e0f6a9bcb001ce06304c1a791fb5dad6bb5eb5ed1cbead2d8997c51",
             "07fca002b04da1462058d2959114609243cf4068dec3dcd383f1bc93d641b2d4",
+            "97e5f92bf1f17aa8d653678b50af23f0fdbc6ea435d9f7e31c13b592ad2f7265",
+        ],
+    },
+    // Mail actions back to Gmail, named by the shipped `email` type's handlers (TV-25).
+    ShippedFile {
+        path: "scripts/google_mail.ws",
+        source: include_str!("../defaults/google/google_mail.ws"),
+        hashes: &[
+            "3529e9ee6cc6f41423d02c8564525badb2c1e6987eeca704b95973b73df7dd6e",
+            "9bc72d0981a46efd7e3915fdf88103d8e42e00fc85af0bb9f3a53d69ee1365cd",
         ],
     },
     // The Google Calendar write-back, named by the shipped `event` type's handlers.
@@ -183,6 +197,9 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
             "955b983dc5f14f0ac3aec3ec746102038561e7d4cf438f5e6e1d0a29446cf596",
             "dd0d74cd76603d183216d207fb24db3bbf18197ab6bd148f28c04d4697d9aedb",
             "182bb9d27f1cf2d545a1386bc7e52e91348abae7e4a1e50721d89ad25e09f237",
+            "5be2897cde964dfe62213b22db49856e2dff6cc4a6d35f9057ceebd09a2284b8",
+            "1fdc331fcbcefb5df07233a2eb2b2075784824d41c1d31f27375860053877680",
+            "c468775afaa9cbce770b6bf18e8f72f3d517ba1e9f9d1ff5e10af91a3ee59a3f",
         ],
     },
     // The Google Calendar write-back of event series, named by the shipped `event_series` type's
@@ -280,7 +297,10 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
     ShippedFile {
         path: "skills/vault-comms/SKILL.md",
         source: include_str!("../defaults/skills/vault-comms/SKILL.md"),
-        hashes: &["39a30bcfd3bd2e8dcaaa140fdee8041f80fc0cee9a9d9c58627906bad2fd4996"],
+        hashes: &[
+            "39a30bcfd3bd2e8dcaaa140fdee8041f80fc0cee9a9d9c58627906bad2fd4996",
+            "adb916f9ad00124a1b30bed9035b4b35dc0b0f4347188b7d31496b8003367424",
+        ],
     },
     // Tasks, handlers, script tools and which agent tools need which switch (TV-35).
     ShippedFile {
@@ -359,6 +379,10 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
     UpgradeStep {
         id: "0011_email_template",
         run: email_template,
+    },
+    UpgradeStep {
+        id: "0012_email_gmail_handlers",
+        run: email_gmail_handlers,
     },
 ];
 
@@ -1648,6 +1672,59 @@ fn event_google_handler(w: &Writer) -> Result<()> {
     Ok(())
 }
 
+/// The script the shipped `email` type's mail action handlers name (TV-25).
+const EMAIL_HANDLER_SCRIPT: &str = "google_mail";
+
+/// Step `0012_email_gmail_handlers` (TV-25): an `email` type from before mail actions has no
+/// handler naming `google_mail`, and the seeding only ever adds fields to a type the vault has.
+/// As step `0003_event_google_handler` does for `event`, one planned type change that edits no
+/// note gives it the shipped type's `handler` blocks, before its first template. A vault without
+/// the type gets it whole, handlers included, from the seeding.
+fn email_gmail_handlers(w: &Writer) -> Result<()> {
+    const STEP: &str = "0012_email_gmail_handlers";
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(EMAIL_TYPE) else {
+        return Ok(());
+    };
+    if ty.handlers.iter().any(|h| h.script == EMAIL_HANDLER_SCRIPT) {
+        return Ok(());
+    }
+    if !w.is_built_in_def(ty) {
+        eprintln!("step {STEP} skipped type \"email\": a type of the user's holds the name");
+        return Ok(());
+    }
+    let path = type_path(EMAIL_TYPE);
+    let shipped: Source = store::parse_data_only(DEFAULT_EMAIL_TYPE, &path)?;
+    let handlers: Vec<Item> = shipped
+        .items
+        .into_iter()
+        .filter(|i| block(i, "handler").is_some())
+        .collect();
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    let at = ast
+        .items
+        .iter()
+        .position(|i| block(i, "template").is_some())
+        .unwrap_or(ast.items.len());
+    ast.items.splice(at..at, handlers);
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(EMAIL_TYPE, &change)?;
+    if !plan.changes.is_empty() {
+        eprintln!("step {STEP} was not applied: it would edit notes");
+        return Ok(());
+    }
+    w.apply_type_change(
+        EMAIL_TYPE,
+        &change,
+        &plan.token,
+        &Author::Task(SERVER_AUTHOR.to_owned()),
+    )?;
+    Ok(())
+}
+
 /// The person fields whose values carry labels, each with the field holding its labels.
 const LABELLED: [(&str, &str); 3] = [
     ("emails", "email_labels"),
@@ -2562,6 +2639,7 @@ mod tests {
         paths.push("tasks/google_calendar.wcl".to_owned());
         paths.push(crate::defs::script_path("google_gmail"));
         paths.push(crate::defs::task_path("google_gmail"));
+        paths.push(crate::defs::script_path("google_mail"));
         paths.push(crate::defs::script_path("google_event"));
         paths.push(crate::defs::script_path("google_series"));
         paths.push(crate::defs::script_path("outbox_send"));

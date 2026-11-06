@@ -5,7 +5,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{Error, Result, State, random_hex};
+use crate::{Error, LiveEvent, Result, State, random_hex};
 
 /// What a pinned entry is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +101,19 @@ fn remove_lifting_children(conn: &Connection, e: &PinEntry) -> Result<()> {
 }
 
 impl State {
+    /// How many times the pinned tree changed since this `state.db` was opened: the apps' sync
+    /// status carries it, since their webviews have no live stream to hear `pins.changed`.
+    pub fn pin_changes(&self) -> u64 {
+        self.pin_changes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Count a change to the pinned tree and tell open clients (TV-12).
+    fn pins_changed(&self) {
+        self.pin_changes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.events.publish(LiveEvent::PinsChanged);
+    }
+
     /// The pinned note ids, in tree order: each entry before its children.
     pub fn pins(&self) -> Result<Vec<String>> {
         fn walk(nodes: &[PinNode], out: &mut Vec<String>) {
@@ -193,6 +206,9 @@ impl State {
                      ?2)",
             params![note_id, now],
         )?;
+        if added == 1 {
+            self.pins_changed();
+        }
         Ok(added == 1)
     }
 
@@ -205,6 +221,7 @@ impl State {
         };
         remove_lifting_children(&tx, &e)?;
         tx.commit()?;
+        self.pins_changed();
         Ok(true)
     }
 
@@ -231,6 +248,7 @@ impl State {
         )?;
         let e = entry(&tx, &id)?.ok_or_else(|| Error::UnknownPin(id.clone()))?;
         tx.commit()?;
+        self.pins_changed();
         Ok(e)
     }
 
@@ -248,7 +266,9 @@ impl State {
         if changed == 0 {
             return Err(Error::UnknownPin(id.to_owned()));
         }
-        entry(&conn, id)?.ok_or_else(|| Error::UnknownPin(id.to_owned()))
+        let e = entry(&conn, id)?.ok_or_else(|| Error::UnknownPin(id.to_owned()))?;
+        self.pins_changed();
+        Ok(e)
     }
 
     /// Delete folder `id`; its children move up into its place.
@@ -260,6 +280,7 @@ impl State {
         };
         remove_lifting_children(&tx, &e)?;
         tx.commit()?;
+        self.pins_changed();
         Ok(())
     }
 
@@ -296,7 +317,46 @@ impl State {
         set_children(&tx, parent, &new)?;
         let moved = entry(&tx, id)?.ok_or_else(|| Error::UnknownPin(id.to_owned()))?;
         tx.commit()?;
+        self.pins_changed();
         Ok(moved)
+    }
+
+    /// Make the tree exactly `entries`, each with its parent and position: what an app does with
+    /// the home server's tree each sync round, so its pins are the server's (TV-12). Returns
+    /// whether anything changed; only then is `pins.changed` published.
+    pub fn replace_pins(&self, entries: &[PinEntry]) -> Result<bool> {
+        let now = self.now();
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let mut current: Vec<PinEntry> = {
+            let mut stmt = tx.prepare(&format!("SELECT {ENTRY_COLUMNS} FROM pin_entries"))?;
+            stmt.query_map([], entry_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let mut wanted = entries.to_vec();
+        let key = |e: &PinEntry| e.id.clone();
+        current.sort_by_key(key);
+        wanted.sort_by_key(key);
+        if current == wanted {
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM pin_entries", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO pin_entries (id, kind, name, parent, position, created_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for e in &wanted {
+                let (kind, name) = match &e.kind {
+                    PinKind::Note => ("note", None),
+                    PinKind::Folder { name } => ("folder", Some(name.as_str())),
+                };
+                stmt.execute(params![e.id, kind, name, e.parent, e.position, now])?;
+            }
+        }
+        tx.commit()?;
+        self.pins_changed();
+        Ok(true)
     }
 }
 
@@ -551,5 +611,36 @@ mod tests {
             )
             .unwrap();
         assert!(!old);
+    }
+
+    #[test]
+    fn replace_pins_makes_the_tree_exactly_the_given_one_and_counts_only_a_change() {
+        let (_dir, s) = open();
+        s.pin("a").unwrap();
+        let before = s.pin_changes();
+        let folder = PinEntry {
+            id: "f1".into(),
+            kind: PinKind::Folder {
+                name: "Work".into(),
+            },
+            parent: None,
+            position: 0,
+        };
+        let note = |id: &str, parent: Option<&str>, position: i64| PinEntry {
+            id: id.into(),
+            kind: PinKind::Note,
+            parent: parent.map(str::to_owned),
+            position,
+        };
+        let tree = vec![folder, note("b", Some("f1"), 0), note("c", None, 1)];
+        assert!(s.replace_pins(&tree).unwrap());
+        assert_eq!(shape(&s, &[]), "[Work](b) c");
+        assert_eq!(s.pin_changes(), before + 1);
+        // The same tree again changes nothing and is not counted.
+        assert!(!s.replace_pins(&tree).unwrap());
+        assert_eq!(s.pin_changes(), before + 1);
+        // An empty tree removes every pin.
+        assert!(s.replace_pins(&[]).unwrap());
+        assert!(s.pins().unwrap().is_empty());
     }
 }

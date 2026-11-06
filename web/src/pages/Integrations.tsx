@@ -404,9 +404,10 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
               <p class="google-account" role="status">
                 Connected as {s().account ?? "an unknown address"}
               </p>
-              <Show when={!s().can_send}>
+              <Show when={!s().can_send || !s().can_modify}>
                 <p class="google-reconnect">
-                  Reconnect Google in Settings &gt; Integrations to send email.{" "}
+                  <Show when={!s().can_send}>Reconnect Google in Settings &gt; Integrations to send email. </Show>
+                  <Show when={!s().can_modify}>Reconnect Google to sync mail actions. </Show>
                   <button type="button" disabled={busy()} onClick={() => setReconnecting(true)}>
                     Connect
                   </button>

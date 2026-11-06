@@ -8,6 +8,7 @@ import { createSignal } from "solid-js";
 import { type AppSync, api } from "../api";
 import { onNoteWritten } from "../changes";
 import { definitionsChanged } from "../definitions";
+import { pinsChangedElsewhere } from "../changes";
 
 /** How often the status is asked while it is green or red. */
 export const IDLE_MS = 3000;
@@ -39,8 +40,11 @@ export function refreshSync(): Promise<void> {
       (s) => {
         // A round pulled a type, agent or skill: the app has no live stream to say so.
         const before = status()?.definitions;
+        const pinsBefore = status()?.pins;
         setStatus(s);
         if (before !== undefined && s.definitions !== undefined && s.definitions !== before) void definitionsChanged(null);
+        // A round took the server's pins (TV-12): the same, for the sidebar's pinned tree.
+        if (pinsBefore !== undefined && s.pins !== undefined && s.pins !== pinsBefore) pinsChangedElsewhere();
       },
       () => {},
     )

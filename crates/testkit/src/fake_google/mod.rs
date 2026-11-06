@@ -40,7 +40,7 @@ mod gmail;
 mod oauth;
 
 pub use calendar::CalendarWrite;
-pub use gmail::{SendRoute, SentMessage};
+pub use gmail::{MailAction, SendRoute, SentMessage};
 
 pub use oauth::{
     AUTH_PATH, DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN,

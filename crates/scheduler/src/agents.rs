@@ -31,6 +31,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, OnceLock, Weak};
+use std::thread;
 
 use query::{BinOp, Expr, From, Lit, PageRequest, Query};
 use schema::{Agent, Doc, Schedule, Schema, Trigger, TriggerWhen};
@@ -923,6 +924,22 @@ impl TriggerHooks {
     }
 }
 
+/// Lets go of a scheduler the hooks upgraded. The hooks run inside a write, with the writer's
+/// locks held, so the scheduler must not drop here: its drop drops its host, which waits for the
+/// script workers, and a worker in a run that writes waits for those locks. When this is the last
+/// reference, as when its owner dropped during the write, the scheduler drops on a thread of its
+/// own, which waits for the workers once the write has let go of the locks.
+fn release(s: Arc<Scheduler>) {
+    if let Some(last) = Arc::into_inner(s) {
+        let spawned = thread::Builder::new()
+            .name("scheduler-drop".into())
+            .spawn(move || drop(last));
+        if let Err(e) = spawned {
+            eprintln!("scheduler: no thread to drop the scheduler on, so it dropped here: {e}");
+        }
+    }
+}
+
 impl Hooks for TriggerHooks {
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<(), String> {
         self.inner.before(change, author)?;
@@ -931,6 +948,7 @@ impl Hooks for TriggerHooks {
             && let Some(s) = self.scheduler()
         {
             s.before_delete(&change.id, &change.type_name);
+            release(s);
         }
         Ok(())
     }
@@ -943,6 +961,7 @@ impl Hooks for TriggerHooks {
         self.inner.after(saved, author, schema);
         if let Some(s) = self.scheduler() {
             s.heard(saved, author);
+            release(s);
         }
     }
 

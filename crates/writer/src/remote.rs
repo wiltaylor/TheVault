@@ -187,6 +187,8 @@ impl Writer {
                 event: Event::Update,
                 version: self.head(id, type_name, wcl)?,
                 wcl: wcl.to_owned(),
+                previous: None,
+                author: None,
                 also: Vec::new(),
             });
         }
@@ -218,6 +220,8 @@ impl Writer {
             },
             version: version.token,
             wcl: wcl.to_owned(),
+            previous: None,
+            author: None,
             also: Vec::new(),
         };
         self.announce(std::slice::from_ref(&saved), &|_| None);
@@ -256,6 +260,8 @@ impl Writer {
                         event: Event::Delete,
                         version: entry.version.clone(),
                         wcl: entry.content,
+                        previous: None,
+                        author: None,
                         also: Vec::new(),
                     }],
                     &|_| None,

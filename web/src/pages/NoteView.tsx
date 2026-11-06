@@ -5,6 +5,7 @@ import { clearActiveNote, setActiveNote } from "../archive";
 import { type Autosave, type SaveState, createAutosave } from "../autosave";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { AssetInput } from "../components/AssetField";
+import { EventResponse } from "../components/EventResponse";
 import { ConflictView } from "../components/ConflictView";
 import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { FieldInput, type RelatedFields, hasInput } from "../components/FieldInput";
@@ -915,6 +916,14 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                   {status()}
                 </span>
                 <Show when={!props.newType && !preview() && !conflict()}>
+                  <Show when={n().type === "event"}>
+                    {/* After a failed save the answer shown is the stored one; autosave still retries the edit. */}
+                    <EventResponse response={saveState() === "error" ? n().note.fields.my_response : doc().fields.my_response} disabled={busy()} onAnswer={async (response) => {
+                      setFields({ my_response: response });
+                      await autosave?.flush();
+                      if (autosave?.state() === "error") throw new Error("Your invitation response could not be saved. Try again.");
+                    }} />
+                  </Show>
                   <NoteOutboxActions
                     id={n().id}
                     type={n().type}

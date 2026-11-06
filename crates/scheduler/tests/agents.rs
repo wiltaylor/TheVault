@@ -3,15 +3,16 @@
 //! limits, the run records and the failure notification; calls of agents committed in notes,
 //! each answered once by its call id and never by rewriting the note.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 use std::time::Duration;
 
 use scheduler::{AgentRunner, Scheduler, TestClock, TriggerHooks, TurnReport};
 use schema::Agent;
-use script::{Ai, Host, Limits};
+use script::{Ai, Host, Job, Kind, Limits};
 use serde_json::json;
-use state::{AgentRunOutcome, Author, State};
+use state::{AgentRunOutcome, Author, Clock, State};
 use writer::{Input, NoHooks, Writer};
 
 /// Monday 2026-01-05, half past midnight UTC.
@@ -358,6 +359,41 @@ fn an_agent_s_own_writes_never_fire_triggers() {
     assert_eq!(r.fake.turns().len(), 1);
 }
 
+/// A series an agent saves makes its occurrences in the same write, written as the server's. The
+/// write is the agent's, so no trigger fires, also not for the occurrences: an agent cannot start
+/// itself again through them (TV-25).
+#[test]
+fn an_agent_s_series_and_its_occurrences_fire_no_triggers() {
+    let r = Rig::new();
+    r.writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    r.agent("any", ANY);
+    let series = json!({ "fields": {
+        "title": "Standup",
+        "rule": ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+        "starts": { "start": "2026-01-05", "end": "2026-01-05" },
+    } });
+    let saved = r
+        .writer
+        .create(
+            writer::EVENT_SERIES_TYPE,
+            &Input::Json(series),
+            &Author::Agent("any".into()),
+        )
+        .unwrap();
+    assert!(
+        !saved.also.is_empty(),
+        "the occurrences come in the same write"
+    );
+    r.advance(31);
+    assert!(r.fake.turns().is_empty(), "{:?}", r.fake.turns());
+    // A user's note still fires.
+    r.create("memo", "Roof", "open", &user());
+    r.advance(31);
+    assert_eq!(r.fake.turns().len(), 1);
+}
+
 const ANY: &str = r#"label = "Any"
 
 trigger every {
@@ -597,4 +633,145 @@ fn a_successful_run_sends_no_notification() {
     assert_eq!(r.fake.turns().len(), 1);
     let notes = r.writer.state().notifications(false, 50, None).unwrap();
     assert!(notes.items.is_empty());
+}
+
+/// A clock that, once armed, holds the first thread to read it until the test lets it go.
+struct Gate {
+    inner: TestClock,
+    armed: AtomicBool,
+    entered: Mutex<mpsc::Sender<()>>,
+    go: Mutex<mpsc::Receiver<()>>,
+}
+
+impl Clock for Gate {
+    fn now_ms(&self) -> i64 {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            let _ = self.entered.lock().unwrap().send(());
+            let _ = self.go.lock().unwrap().recv();
+        }
+        self.inner.now_ms()
+    }
+}
+
+/// The scheduler's owner drops it while `write` is held inside the writer's hooks, the scheduler
+/// they upgraded in hand, and a run on the host waits for the writer's locks. `prepare` runs on
+/// the writer first, unheld, and what it answers is given to `write`. Both the held write and the
+/// run must finish, and the host must drop (TV-50).
+fn drop_the_scheduler_during_a_held_write(
+    prepare: impl FnOnce(&Writer) -> String,
+    write: impl FnOnce(&Writer, &str) -> bool + Send + 'static,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("types")).unwrap();
+    std::fs::write(dir.path().join("types/memo.wcl"), MEMO).unwrap();
+    let vault = store::Vault::init(dir.path()).unwrap();
+    let clock = Arc::new(TestClock::new(scheduler::parse_time(START).unwrap()));
+    let state =
+        State::open_with_clock(&vault.server_dir().join("state.db"), None, clock.clone()).unwrap();
+    let (hooks, binding) = TriggerHooks::wrap(Box::new(NoHooks));
+    let writer = Arc::new(
+        Writer::open(vault, state)
+            .unwrap()
+            .with_clock(clock.clone())
+            .with_hooks(hooks),
+    );
+    let host = Arc::new(Host::new(
+        writer.clone(),
+        1,
+        Limits::default(),
+        Ai::unavailable(),
+    ));
+    let host_left = Arc::downgrade(&host);
+    let (entered_tx, entered) = mpsc::channel();
+    let (go, go_rx) = mpsc::channel();
+    let gate = Arc::new(Gate {
+        inner: TestClock::new(scheduler::parse_time(START).unwrap()),
+        armed: AtomicBool::new(false),
+        entered: Mutex::new(entered_tx),
+        go: Mutex::new(go_rx),
+    });
+    let scheduler = Scheduler::new(writer.clone(), host, gate.clone()).unwrap();
+    binding.bind(&scheduler);
+    scheduler.set_agent_runner(Arc::new(Fake::default()));
+    let prepared = prepare(&writer);
+
+    // A write that the scheduler's clock holds inside the hooks, while it holds the writer's
+    // locks and the scheduler it upgraded to tell of the change.
+    gate.armed.store(true, Ordering::SeqCst);
+    let w = writer.clone();
+    let (saved_tx, saved) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = saved_tx.send(write(&w, &prepared));
+    });
+    entered
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the write reached the hooks");
+
+    // A run on the host that writes, so its worker waits for the writer's locks. Its caller gives
+    // up at the timeout, which leaves the scheduler the only holder of the host. The timeout is
+    // long enough for the run to reach vault::create under load: a host call that starts past it
+    // faults without writing.
+    let src = "use vault\nfn run() -> Result[(), string] {\n    vault::create(\"memo\", Value::Map(#{ \"fields\": Value::Map(#{ \"title\": Value::String(\"Late\") }) }))?\n    Ok(())\n}\n";
+    let mut job = Job::new(Kind::Task, "late", src, "run");
+    job.timeout = Some(Duration::from_secs(1));
+    let h = host_left.upgrade().unwrap();
+    let out = h.run(job);
+    assert!(
+        matches!(out.result, Err(script::Error::Timeout { .. })),
+        "{:?}",
+        out.result
+    );
+    drop(h);
+
+    // The owner goes: the write's hooks now hold the last reference to the scheduler.
+    drop(scheduler);
+    go.send(()).unwrap();
+
+    assert_eq!(
+        saved.recv_timeout(Duration::from_secs(30)),
+        Ok(true),
+        "the held write finished"
+    );
+    let gone = (0..300).any(|_| {
+        thread::sleep(Duration::from_millis(100));
+        host_left.upgrade().is_none()
+    });
+    assert!(
+        gone,
+        "the host dropped once its worker finished the late write"
+    );
+    let titles: Vec<String> = writer
+        .list(Some("memo"))
+        .unwrap()
+        .into_iter()
+        .map(|r| r.title)
+        .collect();
+    assert!(titles.contains(&"Late".to_owned()), "{titles:?}");
+}
+
+#[test]
+fn the_scheduler_dropped_during_a_write_with_a_run_waiting_to_write_lets_both_finish() {
+    // A create is held in the after hook, which tells the scheduler of the change.
+    drop_the_scheduler_during_a_held_write(
+        |_| String::new(),
+        |w, _| {
+            let doc = json!({ "fields": { "title": "Held", "status": "open" } });
+            w.create("memo", &Input::Json(doc), &user()).is_ok()
+        },
+    );
+}
+
+#[test]
+fn the_scheduler_dropped_during_a_delete_with_a_run_waiting_to_write_lets_both_finish() {
+    // A delete is held in the before hook, which tells the scheduler of the delete to come.
+    drop_the_scheduler_during_a_held_write(
+        |w| {
+            let doc = json!({ "fields": { "title": "Doomed", "status": "open" } });
+            w.create("memo", &Input::Json(doc), &user()).unwrap().id
+        },
+        |w, id| {
+            let n = w.read(id).unwrap();
+            w.delete(id, Some(&n.version), &user()).is_ok()
+        },
+    );
 }

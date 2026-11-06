@@ -63,7 +63,7 @@ pub use git_remote::{
 };
 
 pub use fake_google::{
-    CALENDAR_PATH, FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, TOKEN_PATH, USERINFO_PATH,
+    CALENDAR_PATH, FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, MailAction, TOKEN_PATH, USERINFO_PATH,
 };
 pub use standin::{Reply, Request, StandIn};
 
@@ -287,6 +287,20 @@ impl TestServer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// The server's stderr lines once `ready` holds for them, or, after 10 seconds, whatever lines
+    /// came. A trail line can reach the stream after the response, and a reader thread copies it,
+    /// so a test that checks one waits for it here.
+    pub fn stderr_lines_when(&self, ready: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let lines = self.stderr_lines();
+            if ready(&lines) || Instant::now() >= deadline {
+                return lines;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// The address the server is listening on.

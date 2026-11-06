@@ -149,6 +149,8 @@ pub struct State {
     events: Events,
     /// When the activity log was last pruned (activity Y1).
     activity_pruned: AtomicI64,
+    /// How many times the pinned tree changed since this `state.db` was opened (TV-12).
+    pin_changes: std::sync::atomic::AtomicU64,
 }
 
 const SCHEMA_VERSION: i64 = 18;
@@ -500,6 +502,7 @@ impl State {
             clock,
             events: Events::default(),
             activity_pruned: AtomicI64::new(now),
+            pin_changes: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -531,6 +534,25 @@ impl State {
             .to_str()
             .ok_or_else(|| Error::Corrupt(format!("{} is not UTF-8", path.display())))?;
         self.conn().execute("VACUUM INTO ?1", [target])?;
+        Ok(())
+    }
+
+    /// A fact kept in the `meta` table under `key`, such as a one-time step being done.
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn()
+            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// Keep `value` under `key` in the `meta` table.
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, value],
+        )?;
         Ok(())
     }
 

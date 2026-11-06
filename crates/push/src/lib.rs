@@ -88,7 +88,9 @@ pub fn message(event: &LiveEvent) -> Option<Message> {
         | LiveEvent::DeviceSettings { .. }
         | LiveEvent::ClientsUpdated { .. }
         | LiveEvent::AiTurn { .. }
-        | LiveEvent::Activity { .. } => return None,
+        | LiveEvent::Activity { .. }
+        // A device takes the pinned tree in its next sync round (TV-12).
+        | LiveEvent::PinsChanged => return None,
     };
     Some(Message {
         device,

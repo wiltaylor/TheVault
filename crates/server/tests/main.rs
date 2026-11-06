@@ -41,6 +41,7 @@ mod devices;
 mod event_series;
 mod events;
 mod fleeting;
+mod gmail_actions;
 mod google_calendar;
 mod google_connect;
 mod google_event;

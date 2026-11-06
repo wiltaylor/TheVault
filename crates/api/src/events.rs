@@ -14,6 +14,7 @@
 //! | `device.settings` | `{device}` |
 //! | `clients.updated` | `{clients: [{kind, arch, version, build}]}`: every app build listed now |
 //! | `ai_turn` | `{agent, thread, turn, running}`: a chat turn on an agent's thread started or ended (agents G17); `turn` is `null` for a trigger's run |
+//! | `pins.changed` | `{}`: the pinned tree changed; load `GET /api/pins` again (TV-12) |
 //! | `activity` | `{item}`: an entry of the activity log, as `GET /api/activity` lists it (activity Y3); a coalesced `note.update` entry comes again with the same `id` and replaces it. Only `admin` callers get these |
 //!
 //! Each event's SSE `id` is its sequence number since the server started. A comment line goes
@@ -82,6 +83,7 @@ fn sse(seq: u64, event: &LiveEvent) -> Event {
             running,
         } => json!({ "agent": agent, "thread": thread, "turn": turn, "running": running }),
         LiveEvent::Activity { item } => json!({ "item": crate::activity::item_json(item) }),
+        LiveEvent::PinsChanged => json!({}),
     };
     Event::default()
         .event(event.name())
