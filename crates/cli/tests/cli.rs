@@ -506,6 +506,151 @@ fn backup_keeps_the_schema_version_of_an_older_state_db() {
     assert!(!has_table);
 }
 
+/// The `.vault/state.db` held in the archive at `archive`, written to `path` and opened.
+fn archived_state(archive: &str, path: &Path) -> rusqlite::Connection {
+    let data: Vec<u8> = rusqlite::Connection::open(archive)
+        .unwrap()
+        .query_row(
+            "SELECT data FROM sqlar WHERE name = '.vault/state.db'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    std::fs::write(path, data).unwrap();
+    rusqlite::Connection::open(path).unwrap()
+}
+
+fn stored_vault_id(conn: &rusqlite::Connection) -> Option<String> {
+    use rusqlite::OptionalExtension;
+    conn.query_row("SELECT value FROM meta WHERE key = 'vault_id'", [], |r| {
+        r.get(0)
+    })
+    .optional()
+    .unwrap()
+}
+
+/// A vault that never ran git sync and was never backed up has no vault id. Its pre-upgrade
+/// backup must still work, or the entrypoint does not start the server: the archive gets a new
+/// id, and the live state.db is not written (TV-41).
+#[test]
+fn backup_of_a_vault_with_no_vault_id_gives_the_archive_one() {
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let vault_dir = tmp_path(&dirs, "v");
+    vault.ok(&["init", &vault_dir, "--password-stdin"], "pw\n");
+    let db = Path::new(&vault_dir).join(".vault/state.db");
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("DELETE FROM meta WHERE key = 'vault_id'", [])
+        .unwrap();
+
+    let archive = tmp_path(&dirs, "b.sqlar");
+    let made = vault.ok(&["backup", &archive, "--vault", &vault_dir], "");
+    let id = s(&made["vault_id"]).to_owned();
+    assert_eq!(id.len(), 32, "{made}");
+
+    let live = rusqlite::Connection::open(&db).unwrap();
+    assert_eq!(stored_vault_id(&live), None, "backup wrote the live state.db");
+    let copy = archived_state(&archive, &dirs.path().join("copy.db"));
+    assert_eq!(stored_vault_id(&copy).as_deref(), Some(id.as_str()));
+}
+
+/// state.db is in WAL mode. Closed cleanly, it has no -wal or -shm file, and the read-only open
+/// of the backup must still read it (TV-41).
+#[test]
+fn backup_reads_a_closed_wal_state_db_with_no_wal_or_shm_file() {
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let vault_dir = tmp_path(&dirs, "v");
+    let init = vault.ok(&["init", &vault_dir, "--password-stdin"], "pw\n");
+    let db = Path::new(&vault_dir).join(".vault/state.db");
+    let mode: String = rusqlite::Connection::open(&db)
+        .unwrap()
+        .pragma_query_value(None, "journal_mode", |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+    for end in ["-wal", "-shm"] {
+        let side = PathBuf::from(format!("{}{end}", db.display()));
+        assert!(!side.exists(), "{} is left after a clean close", side.display());
+    }
+
+    let archive = tmp_path(&dirs, "b.sqlar");
+    let made = vault.ok(&["backup", &archive, "--vault", &vault_dir], "");
+    assert_eq!(made["vault_id"], init["vault_id"]);
+    let copy = archived_state(&archive, &dirs.path().join("copy.db"));
+    let check: String = copy
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(check, "ok");
+}
+
+/// The entrypoint can back up while a server has state.db open and writes to it: the archive
+/// holds a consistent copy with every row committed before the copy began (TV-41).
+#[test]
+fn backup_while_another_connection_writes_holds_a_consistent_state_db() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let vault_dir = tmp_path(&dirs, "v");
+    vault.ok(&["init", &vault_dir, "--password-stdin"], "pw\n");
+    let db = Path::new(&vault_dir).join(".vault/state.db");
+
+    let writer = rusqlite::Connection::open(&db).unwrap();
+    writer
+        .busy_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    writer
+        .execute_batch("CREATE TABLE tv41_rows (n INTEGER NOT NULL)")
+        .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let written = Arc::new(AtomicI64::new(0));
+    let rows = std::thread::spawn({
+        let (stop, written) = (stop.clone(), written.clone());
+        move || {
+            let mut n = 0;
+            while !stop.load(Ordering::SeqCst) {
+                n += 1;
+                writer
+                    .execute("INSERT INTO tv41_rows (n) VALUES (?1)", [n])
+                    .unwrap();
+                written.store(n, Ordering::SeqCst);
+            }
+        }
+    });
+    // The writer is running and has committed rows before the backup starts.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while written.load(Ordering::SeqCst) < 100 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let before = written.load(Ordering::SeqCst);
+    assert!(before >= 100, "the writer committed {before} rows");
+
+    let archive = tmp_path(&dirs, "b.sqlar");
+    vault.ok(&["backup", &archive, "--vault", &vault_dir], "");
+    let after = written.load(Ordering::SeqCst);
+    stop.store(true, Ordering::SeqCst);
+    rows.join().unwrap();
+
+    let copy = archived_state(&archive, &dirs.path().join("copy.db"));
+    let check: String = copy
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(check, "ok");
+    let (count, max): (i64, i64) = copy
+        .query_row("SELECT COUNT(*), MAX(n) FROM tv41_rows", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    // A row can be committed just before the writer counts it, so the copy may hold one more.
+    assert!(
+        count >= before && count <= after + 1,
+        "{before} <= {count} <= {after} + 1"
+    );
+    assert_eq!(count, max, "the copy holds every row up to its last one");
+}
+
 #[test]
 fn version_compare_sorts_a_pre_release_before_its_release() {
     let vault = Vault::offline();

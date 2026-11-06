@@ -8,7 +8,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
 
 use crate::Fail;
@@ -49,11 +49,17 @@ fn io(path: &Path) -> impl Fn(std::io::Error) -> Fail + '_ {
 /// `vault backup`: write `vault`'s files and `state.db` into a new archive at `out`.
 pub fn backup(vault: &Path, out: &Path, include_key: bool) -> Result<Value, Fail> {
     let state = open_state_read_only(vault)?;
-    let vault_id: String = state
+    let stored: Option<String> = state
         .query_row("SELECT value FROM meta WHERE key = 'vault_id'", [], |r| {
             r.get(0)
         })
-        .map_err(|e| Fail::new("state", format!("state.db has no vault id: {e}")))?;
+        .optional()
+        .map_err(state_err)?;
+    // A vault that never ran git sync and was never backed up has no id yet. The archive gets a
+    // new one in its copy of state.db, as `State::vault_id` would have made, and the live
+    // state.db is left as it is (TV-41).
+    let made_id = stored.is_none();
+    let vault_id = stored.unwrap_or_else(|| state::random_hex(16));
     if out.exists() {
         return Err(Fail::new(
             "exists",
@@ -90,6 +96,16 @@ pub fn backup(vault: &Path, out: &Path, include_key: bool) -> Result<Value, Fail
         .execute("VACUUM INTO ?1", [target])
         .map_err(state_err)?;
     drop(state);
+    if made_id {
+        Connection::open(&state_copy)
+            .and_then(|copy| {
+                copy.execute(
+                    "INSERT INTO meta (key, value) VALUES ('vault_id', ?1)",
+                    [&vault_id],
+                )
+            })
+            .map_err(state_err)?;
+    }
 
     // Build the archive beside `out` and move it into place, so a failed backup leaves nothing.
     let partial = out.with_extension("partial");
