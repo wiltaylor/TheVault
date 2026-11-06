@@ -300,6 +300,62 @@ fn standup() -> Value {
 }
 
 #[test]
+fn existing_invitations_are_relisted_once_when_rsvp_support_arrives() {
+    let api = Api::start();
+    let mut event = standup();
+    event["attendees"] = json!([{ "email": "me@example.com", "self": true, "responseStatus": "needsAction" }]);
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    let mut note = api.note(&id)["note"].clone();
+    note["fields"].as_object_mut().unwrap().remove("my_response");
+    for block in note["blocks"].as_array_mut().unwrap() {
+        if block["kind"] == "dict" && block["labels"] == json!(["snapshot"]) {
+            block["fields"].as_object_mut().unwrap().remove("my_response");
+        }
+    }
+    put_note(&api, &id, note);
+    let mut state = api.server.secret_json("google_calendar_state");
+    state.as_object_mut().unwrap().remove("rsvp");
+    expect(
+        api.req("PUT", "/api/secrets/google_calendar_state")
+            .json(&json!({ "value": state.to_string() }))
+            .send().unwrap(),
+        200,
+    );
+    api.google.clear_requests();
+    api.sync();
+    assert_eq!(api.note(&id)["note"]["fields"]["my_response"], "needs_action");
+    assert!(api.writes().is_empty());
+    assert_eq!(api.server.secret_json("google_calendar_state")["rsvp"], "1");
+    let versions = api.history_len(&id);
+    api.sync();
+    assert_eq!(api.history_len(&id), versions);
+}
+
+#[test]
+fn organisers_and_non_attendees_have_no_invitation_response() {
+    let api = Api::start();
+    for (id, attendees, organiser) in [
+        ("organiser", json!([{ "email": "me@example.com", "self": true, "organizer": true, "responseStatus": "accepted" }]), json!({ "email": "me@example.com" })),
+        ("organiser-self", json!([{ "email": "me@example.com", "self": true, "responseStatus": "accepted" }]), json!({ "email": "me@example.com", "self": true })),
+        ("not-attending", json!([{ "email": "ann@example.com", "responseStatus": "needsAction" }]), json!({ "email": "ann@example.com" })),
+    ] {
+        let mut event = standup();
+        event["id"] = json!(id);
+        event["attendees"] = attendees;
+        event["organizer"] = organiser;
+        api.google.put_event("primary", event);
+    }
+    api.sync();
+    for id in ["organiser", "organiser-self", "not-attending"] {
+        let note = api.note(&api.event_id(id));
+        assert!(note["note"]["fields"].get("my_response").is_none(), "{note}");
+    }
+    assert!(api.writes().is_empty());
+}
+
+#[test]
 fn invitations_pull_and_answer_only_self_with_notifications_and_merge_on_412() {
     let api = Api::start();
     let other = json!({ "email": "ann@example.com", "responseStatus": "accepted", "optional": true });
