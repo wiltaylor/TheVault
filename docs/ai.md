@@ -192,8 +192,9 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | Tool | Does |
 |---|---|
 | `search_notes` | Full-text search, at most 20 notes |
-| `query_notes` | A query in the vault query language, at most 50 notes |
-| `get_note` | Reads one note, body included, and lists the assets it references (id, file name, media type, size); each text over 40,000 characters is cut with a marker |
+| `query_notes` | A query in the vault query language, at most 50 notes. A failed query's error names the SQL habit it shows, such as `=` for `==` or `AND` for `&&`, and points at `query_format` |
+| `query_format` | The [Query language](vault-format.md#query-language) and [Query views](vault-format.md#query-views) sections of the vault format: clauses, values, operators, every function, the SQL habits to avoid, and examples |
+| `get_note` | Reads one note, body included, and lists the assets it references (id, file name, media type, size); each text over 40,000 characters is cut with a marker A note that is not there, or an id that is not one, gets an error telling the model to find the id with `query_notes` or `search_notes` rather than guess |
 | `read_asset` | Reads one attachment by asset id; see [Attachments](#attachments) |
 | `find_assets` | Finds stored files by name: those whose file name contains `text`, ignoring case, newest first, 1 to 50 (`limit`, 20 when absent); empty text lists the newest. Each is its `id`, `filename`, `media_type`, `size` and `created` time |
 | `backlinks` | The notes that link to a note |

@@ -225,6 +225,7 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
     tools: [
       ["search_notes", "Search notes"],
       ["query_notes", "Query notes"],
+      ["query_format", "Read the query language"],
       ["get_note", "Read a note"],
       ["backlinks", "List backlinks"],
     ],

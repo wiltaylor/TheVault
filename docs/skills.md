@@ -34,6 +34,10 @@ A skill holds at most 200 files and 20 MiB, and no symlinks. A write that would 
 
 Backups include `skills/` like every other vault folder. The desktop and Android apps receive skills when they sync, binary files too. Skills need apps that know the vault format version 3: publish the new app builds with the server (see [Releasing a format change](android-release.md#releasing-a-format-change)).
 
+## Shipped skills
+
+The app writes two skills into every vault: `wscript`, for writing scripts, and `vault-queries`, for writing queries. They are shipped defaults: a vault without one gains it on the next start, an unchanged one is replaced by the newer version when the app updates, and one the user changed is kept, with a bell notice that a newer version exists (see [Shipped defaults and upgrades](vault-format.md#shipped-defaults-and-upgrades)). Delete a shipped skill's folder and it comes back on the next start; to keep an agent from using it, leave it out of the agent's `skills` list.
+
 ## Import and export
 
 An import takes a zip in one of two shapes:
