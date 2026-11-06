@@ -21,6 +21,10 @@ A card passes when each recipe it needs exits 0.
 
 At most N = 2 validation runs at once. More runs queue first in, first out.
 
+## Emulators on a shared machine
+
+A machine can run emulators that are not yours, such as `emulator-5554` on thevault-android. Run `just android-emulator-checks` and `just android-release-smoke` there with `EMULATOR_PORT` set to a free console port (5556, 5558, ...) and your own AVD (`THEVAULT_AVD`, `ANDROID_AVD_HOME`). The recipes then set `ANDROID_SERIAL` to that emulator and kill only it. `boot.sh --wipe` refuses a port that already has an emulator.
+
 ## Only at release time
 
 These do not run per card. They run on `release/<X.Y.Z>`:

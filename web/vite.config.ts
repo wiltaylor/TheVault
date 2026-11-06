@@ -47,5 +47,9 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["./src/test-setup.ts"],
+    // Validations share a target with other builds and suites. Under that load some tests that
+    // render long lists or encode a MiB take more than the 5 s default, with nothing to wait on
+    // (TV-57). A test that hangs still fails, after 15 s.
+    testTimeout: 15_000,
   },
 });

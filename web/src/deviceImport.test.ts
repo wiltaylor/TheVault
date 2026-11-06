@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generalActions } from "./palette/actions";
-import { type ImportKindReport, describeKind, importPayload, missingPermissions } from "./deviceImport";
+import { type ImportKindReport, describeKind, importPayload, missingPermissions, permissionList } from "./deviceImport";
 
 const NOW = new Date("2026-10-16T12:00:00Z");
 
@@ -62,6 +62,12 @@ describe("reports", () => {
     expect(describeKind(missing)).toBe("MMS: not read. Android has not given TheVault READ_SMS.");
     const report = { kinds: [missing, { ...missing, kind: "sms" as const }], since: null, until: null, done: true };
     expect(missingPermissions(report)).toEqual(["android.permission.READ_SMS"]);
+  });
+
+  it("list each missing permission once, as the phone's answer names one per kind (TV-46)", () => {
+    const answer = ["android.permission.READ_SMS", "android.permission.READ_SMS", "android.permission.READ_CALL_LOG", "READ_SMS"];
+    expect(permissionList(answer)).toBe("READ_SMS, READ_CALL_LOG");
+    expect(permissionList([])).toBe("");
   });
 });
 

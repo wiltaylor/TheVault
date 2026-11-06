@@ -12,7 +12,7 @@ import {
   isImportReport,
   isoDay,
   missingPermissions,
-  permissionName,
+  permissionList,
   thisPhone,
 } from "../deviceImport";
 import { CaptureProblems, CaptureProblemsBadge } from "./CaptureProblems";
@@ -121,7 +121,7 @@ function MissingPermissions(props: { permissions: string[]; here: boolean }) {
     <Show when={props.permissions.length > 0}>
       <div class="import-permissions" role="alert">
         <p>
-          Android has not given TheVault {props.permissions.map(permissionName).join(", ")}, so that part was not read.{" "}
+          Android has not given TheVault {permissionList(props.permissions)}, so that part was not read.{" "}
           {props.here
             ? "Allow it in the permission step, then import again."
             : "Open TheVault on the phone and allow it in Settings > Devices > This device, then import again."}
