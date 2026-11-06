@@ -32,6 +32,12 @@ field duration {
   description = "In seconds."
 }
 
+field processed {
+  kind    = "bool"
+  label   = "Processed"
+  default = false
+}
+
 field device_ref {
   kind        = "string"
   label       = "Device reference"
@@ -41,6 +47,7 @@ field device_ref {
 template default {
   tab "Call" {
     slot "direction"
+    slot "processed"
     slot "person"
     slot "number"
     slot "started"
@@ -52,5 +59,6 @@ template card {
   tab "Card" {
     slot "title"
     slot "started"
+    slot "processed"
   }
 }

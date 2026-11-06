@@ -9,11 +9,8 @@ import { serializeInline } from "../editor/markup";
 /** The built-in type of a quick capture. */
 export const FLEETING = "fleeting";
 
-/** The bool field that takes a fleeting note out of the inbox. */
+/** The bool field that takes a note out of the inbox (src/inbox/sources.ts). */
 export const PROCESSED = "processed";
-
-/** The inbox: fleeting notes not processed yet. */
-export const INBOX_QUERY = `from ${FLEETING} where !${PROCESSED}`;
 
 /** The longest title a capture's first line gives, in characters, before it is cut. */
 export const TITLE_MAX = 80;
