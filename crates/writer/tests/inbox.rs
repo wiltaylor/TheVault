@@ -49,16 +49,44 @@ fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
 fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marked() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    let old_mail = make(&w, "email", json!({ "title": "Old", "sent": "2026-09-01T10:00:00Z" }));
+    let old_mail = make(
+        &w,
+        "email",
+        json!({ "title": "Old", "sent": "2026-09-01T10:00:00Z" }),
+    );
     // Sent mail counts too: the rule is the date, not the direction.
-    let old_sent = make(&w, "email", json!({ "title": "Old sent", "sent": "2026-09-02T10:00:00Z", "labels": ["system/SENT"] }));
-    let new_mail = make(&w, "email", json!({ "title": "New", "sent": "2026-11-02T10:00:00Z" }));
+    let old_sent = make(
+        &w,
+        "email",
+        json!({ "title": "Old sent", "sent": "2026-09-02T10:00:00Z", "labels": ["system/SENT"] }),
+    );
+    let new_mail = make(
+        &w,
+        "email",
+        json!({ "title": "New", "sent": "2026-11-02T10:00:00Z" }),
+    );
     let undated = make(&w, "email", json!({ "title": "No date" }));
-    let done_mail = make(&w, "email", json!({ "title": "Done", "sent": "2026-09-03T10:00:00Z", "processed": true }));
+    let done_mail = make(
+        &w,
+        "email",
+        json!({ "title": "Done", "sent": "2026-09-03T10:00:00Z", "processed": true }),
+    );
     // An offset is honoured: 2026-11-01T01:00+02:00 is 2026-10-31T23:00Z, before the date.
-    let sms = make(&w, "message", json!({ "title": "Hi", "direction": "in", "sent": "2026-11-01T01:00:00+02:00", "device_ref": "sms:1" }));
-    let sms_new = make(&w, "message", json!({ "title": "Later", "direction": "in", "sent": "2026-11-01T00:00:00Z", "device_ref": "sms:2" }));
-    let call = make(&w, "call", json!({ "title": "Missed", "direction": "missed", "started": "2026-10-01T08:00:00Z", "device_ref": "call:1" }));
+    let sms = make(
+        &w,
+        "message",
+        json!({ "title": "Hi", "direction": "in", "sent": "2026-11-01T01:00:00+02:00", "device_ref": "sms:1" }),
+    );
+    let sms_new = make(
+        &w,
+        "message",
+        json!({ "title": "Later", "direction": "in", "sent": "2026-11-01T00:00:00Z", "device_ref": "sms:2" }),
+    );
+    let call = make(
+        &w,
+        "call",
+        json!({ "title": "Missed", "direction": "missed", "started": "2026-10-01T08:00:00Z", "device_ref": "call:1" }),
+    );
     let fleeting = make(&w, "fleeting", json!({ "title": "A thought" }));
     let mail_before = w.read(&old_mail).unwrap().doc;
 
@@ -67,7 +95,11 @@ fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marke
     assert!(dry.dry_run);
     assert_eq!(
         dry.matched,
-        [("email".to_owned(), 2), ("message".to_owned(), 1), ("call".to_owned(), 1)]
+        [
+            ("email".to_owned(), 2),
+            ("message".to_owned(), 1),
+            ("call".to_owned(), 1)
+        ]
     );
     assert_eq!(dry.total(), 4);
     assert_eq!((dry.changed, dry.chunks), (0, 0));
@@ -83,7 +115,11 @@ fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marke
         assert_ne!(processed(&w, id), Some(true), "{id}");
     }
     assert_eq!(processed(&w, &done_mail), Some(true));
-    assert_eq!(processed(&w, &fleeting), Some(false), "fleeting notes are never touched");
+    assert_eq!(
+        processed(&w, &fleeting),
+        Some(false),
+        "fleeting notes are never touched"
+    );
     // Only `processed` changed.
     let mut mail_after = w.read(&old_mail).unwrap().doc;
     mail_after.fields.retain(|(n, _)| n != "processed");
@@ -96,16 +132,33 @@ fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marke
 fn a_second_run_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    make(&w, "email", json!({ "title": "Old", "sent": "2026-09-01T10:00:00Z" }));
-    make(&w, "call", json!({ "title": "Missed", "direction": "missed", "started": "2026-10-01T08:00:00Z", "device_ref": "call:1" }));
+    make(
+        &w,
+        "email",
+        json!({ "title": "Old", "sent": "2026-09-01T10:00:00Z" }),
+    );
+    make(
+        &w,
+        "call",
+        json!({ "title": "Missed", "direction": "missed", "started": "2026-10-01T08:00:00Z", "device_ref": "call:1" }),
+    );
     let before = at("2026-11-01T00:00:00Z");
-    assert_eq!(w.mark_processed_before(before, false, &author()).unwrap().changed, 2);
+    assert_eq!(
+        w.mark_processed_before(before, false, &author())
+            .unwrap()
+            .changed,
+        2
+    );
 
     let gen_before = generation(dir.path());
     let again = w.mark_processed_before(before, false, &author()).unwrap();
     assert_eq!(again.total(), 0);
     assert_eq!((again.changed, again.chunks), (0, 0));
-    assert_eq!(generation(dir.path()), gen_before, "a second run made a commit");
+    assert_eq!(
+        generation(dir.path()),
+        gen_before,
+        "a second run made a commit"
+    );
 }
 
 #[test]
@@ -142,8 +195,17 @@ fn writer_query_total(w: &Writer, text: &str) -> usize {
 
 #[test]
 fn a_time_reads_with_an_offset_or_without_one_as_utc() {
-    assert_eq!(instant("2026-11-01T01:00:00+02:00"), Some(at("2026-10-31T23:00:00Z")));
-    assert_eq!(instant("2026-11-01T01:00:00"), Some(at("2026-11-01T01:00:00Z")));
-    assert_eq!(instant("2026-11-01T01:00"), Some(at("2026-11-01T01:00:00Z")));
+    assert_eq!(
+        instant("2026-11-01T01:00:00+02:00"),
+        Some(at("2026-10-31T23:00:00Z"))
+    );
+    assert_eq!(
+        instant("2026-11-01T01:00:00"),
+        Some(at("2026-11-01T01:00:00Z"))
+    );
+    assert_eq!(
+        instant("2026-11-01T01:00"),
+        Some(at("2026-11-01T01:00:00Z"))
+    );
     assert_eq!(instant("yesterday"), None);
 }

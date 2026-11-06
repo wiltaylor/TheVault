@@ -42,8 +42,16 @@ const MARK: &str = "/api/inbox/mark-processed";
 fn a_dry_run_counts_and_a_run_marks_the_old_mail_messages_and_calls() {
     let server = TestServer::start();
     let admin = server.admin_token();
-    create(&server, "email", json!({ "title": "Old", "sent": "2026-09-01T10:00:00Z" }));
-    create(&server, "email", json!({ "title": "New", "sent": "2026-11-02T10:00:00Z" }));
+    create(
+        &server,
+        "email",
+        json!({ "title": "Old", "sent": "2026-09-01T10:00:00Z" }),
+    );
+    create(
+        &server,
+        "email",
+        json!({ "title": "New", "sent": "2026-11-02T10:00:00Z" }),
+    );
     create(
         &server,
         "message",
@@ -78,7 +86,12 @@ fn a_dry_run_counts_and_a_run_marks_the_old_mail_messages_and_calls() {
     assert_eq!(again["changed"], 0);
 
     let left = expect(
-        post(&server, &admin, "/api/query", json!({ "query": "from fleeting where !processed" })),
+        post(
+            &server,
+            &admin,
+            "/api/query",
+            json!({ "query": "from fleeting where !processed" }),
+        ),
         StatusCode::OK,
     );
     assert_eq!(left["total"], 1, "fleeting notes are not touched");
@@ -92,7 +105,12 @@ fn a_date_that_does_not_read_is_refused_and_a_write_token_may_not_run_it() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 
     let token = expect(
-        post(&server, &admin, "/api/tokens", json!({ "name": "agent", "scope": "write" })),
+        post(
+            &server,
+            &admin,
+            "/api/tokens",
+            json!({ "name": "agent", "scope": "write" }),
+        ),
         StatusCode::CREATED,
     );
     let res = post(

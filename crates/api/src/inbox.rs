@@ -42,11 +42,21 @@ pub async fn mark_processed(
         ));
     }
     let before = writer::instant(&body.before).ok_or_else(|| {
-        ApiError::bad_request(format!("`before` must be a datetime such as 2026-11-01T00:00:00Z, not {:?}", body.before))
+        ApiError::bad_request(format!(
+            "`before` must be a datetime such as 2026-11-01T00:00:00Z, not {:?}",
+            body.before
+        ))
     })?;
     let dry_run = body.dry_run;
-    let done = blocking(w, move |w| w.mark_processed_before(before, dry_run, &author)).await?;
-    let matched: Map<String, Value> = done.matched.iter().map(|(t, n)| (t.clone(), json!(n))).collect();
+    let done = blocking(w, move |w| {
+        w.mark_processed_before(before, dry_run, &author)
+    })
+    .await?;
+    let matched: Map<String, Value> = done
+        .matched
+        .iter()
+        .map(|(t, n)| (t.clone(), json!(n)))
+        .collect();
     Ok(Json(json!({
         "dry_run": done.dry_run,
         "matched": matched,

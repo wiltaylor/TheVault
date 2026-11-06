@@ -21,7 +21,8 @@ use crate::note::{Input, doc_to_json};
 use crate::{Error, Result, Writer};
 
 /// The types the catch-up covers, each with the field holding its own time.
-pub const CATCH_UP_TYPES: [(&str, &str); 3] = [("email", "sent"), ("message", "sent"), ("call", "started")];
+pub const CATCH_UP_TYPES: [(&str, &str); 3] =
+    [("email", "sent"), ("message", "sent"), ("call", "started")];
 
 /// Updates per atomic batch.
 pub const CHUNK: usize = 200;
@@ -60,8 +61,16 @@ pub fn instant(s: &str) -> Option<DateTime<Utc>> {
 impl Writer {
     /// Mark every email, message and call whose own time is before `before` processed, in chunks
     /// of [`CHUNK`]; with `dry_run`, only count them.
-    pub fn mark_processed_before(&self, before: DateTime<Utc>, dry_run: bool, author: &Author) -> Result<CatchUp> {
-        let mut out = CatchUp { dry_run, ..CatchUp::default() };
+    pub fn mark_processed_before(
+        &self,
+        before: DateTime<Utc>,
+        dry_run: bool,
+        author: &Author,
+    ) -> Result<CatchUp> {
+        let mut out = CatchUp {
+            dry_run,
+            ..CatchUp::default()
+        };
         let mut ids: Vec<String> = Vec::new();
         for (type_name, time) in CATCH_UP_TYPES {
             let found = self.unprocessed_before(type_name, time, before)?;
@@ -76,7 +85,10 @@ impl Writer {
                 Some(n) => n,
                 // A note changed since it was read: read the chunk again and retry once.
                 None => self.set_processed(chunk, author)?.ok_or_else(|| {
-                    Error::Rejected("notes kept changing while they were marked processed; run it again".to_owned())
+                    Error::Rejected(
+                        "notes kept changing while they were marked processed; run it again"
+                            .to_owned(),
+                    )
                 })?,
             };
             if changed > 0 {
@@ -89,7 +101,12 @@ impl Writer {
 
     /// The ids of the notes of `type_name` with `processed` not set whose `time` field is before
     /// `before`. A vault without the type, or whose type lacks `processed`, has none.
-    fn unprocessed_before(&self, type_name: &str, time: &str, before: DateTime<Utc>) -> Result<Vec<String>> {
+    fn unprocessed_before(
+        &self,
+        type_name: &str,
+        time: &str,
+        before: DateTime<Utc>,
+    ) -> Result<Vec<String>> {
         let has_field = self
             .schema()
             .type_def(type_name)
@@ -97,8 +114,10 @@ impl Writer {
         if !has_field {
             return Ok(Vec::new());
         }
-        let q = query::parse(&format!("from {type_name} where !{PROCESSED} select {time}"))
-            .map_err(|e| Error::BadRequest(e.to_string()))?;
+        let q = query::parse(&format!(
+            "from {type_name} where !{PROCESSED} select {time}"
+        ))
+        .map_err(|e| Error::BadRequest(e.to_string()))?;
         let mut ids = Vec::new();
         let mut cursor = None;
         loop {
@@ -107,12 +126,19 @@ impl Writer {
                     query::run(
                         &q,
                         &query::Context::new(index, schema),
-                        &query::PageRequest { cursor: cursor.take(), size: query::MAX_PAGE },
+                        &query::PageRequest {
+                            cursor: cursor.take(),
+                            size: query::MAX_PAGE,
+                        },
                     )
                 })
                 .map_err(|e| Error::BadRequest(e.to_string()))?;
             for row in page.rows {
-                let at = row.fields.get(time).and_then(|v| v.as_str()).and_then(instant);
+                let at = row
+                    .fields
+                    .get(time)
+                    .and_then(|v| v.as_str())
+                    .and_then(instant);
                 if at.is_some_and(|t| t < before) {
                     ids.push(row.id);
                 }
@@ -140,7 +166,11 @@ impl Writer {
             }
             let mut doc = doc_to_json(&note.doc);
             doc["fields"][PROCESSED] = json!(true);
-            ops.push(Op::Update { id: id.clone(), base: Some(note.version), input: Input::Json(doc) });
+            ops.push(Op::Update {
+                id: id.clone(),
+                base: Some(note.version),
+                input: Input::Json(doc),
+            });
         }
         if ops.is_empty() {
             return Ok(Some(0));
@@ -150,7 +180,10 @@ impl Writer {
         if report.ok {
             return Ok(Some(n));
         }
-        let conflict = report.items.iter().any(|i| matches!(i, Err(Error::Conflict { .. })));
+        let conflict = report
+            .items
+            .iter()
+            .any(|i| matches!(i, Err(Error::Conflict { .. })));
         match (conflict, report.error) {
             (true, _) => Ok(None),
             (false, Some(e)) => Err(e),
