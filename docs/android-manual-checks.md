@@ -66,7 +66,7 @@ Run these on Android 15 or later, with the app installed by `adb` or Obtainium r
 | # | Do this | Expect this |
 |---|---------|-------------|
 | 24 | After pairing, step through the capture setup. On the **Messages** step, tap **Allow**. | Android does not show its permission dialog, or says the setting is restricted. The app shows the three Allow restricted settings steps and an **Open App info** button. |
-| 25 | Tap **Open App info**. Tap the three-dot menu at the top right, then **Allow restricted settings**, and confirm with your screen lock. Go back to the app and tap **Try again**. | Android asks for the SMS permissions. Once you allow them, the setup moves to the **Calls** step. |
+| 25 | Tap **Open App info**. Tap the three-dot menu at the top right, then **Allow restricted settings**, and confirm with your screen lock. Go back to the app and tap **Try again**. | Android asks for the SMS permissions. Once you allow them, the setup moves to the **RCS messages** step. |
 | 26 | Allow the **Calls**, **Contacts** and **Notifications** steps. Skip **Sending SMS**. | Each step asks for its permissions once and moves on. Skipping **Sending SMS** moves on without asking. |
 | 27 | Grant notification access for RCS: in Android's Settings, open **Notifications** > **Device & app notifications** (named **Notification read, reply & control** on some phones), and turn on TheVault. If the switch is greyed out, allow restricted settings from App info as in check 25 first. | TheVault is listed with notification access on. |
 | 28 | On the import page, leave the import off and finish. | The app opens. No old messages, calls or contacts arrive in the web app. |
