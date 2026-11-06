@@ -1359,16 +1359,16 @@ fn pins_are_the_servers_offline_reads_keep_the_last_tree_and_offline_writes_fail
 
     // A pin made on the paired phone is made on the server, and the phone reads it there.
     phone.call("PUT", &format!("/api/pins/{first}"), None, 200);
-    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [first.clone()]);
+    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [first.as_str()]);
     assert_eq!(
         pin_ids(&phone.call("GET", "/api/pins", None, 200)),
-        [first.clone()]
+        [first.as_str()]
     );
     // The round stores the server's tree on the phone.
     phone.sync();
     assert_eq!(
         phone.embedded.writer().state().pins().unwrap(),
-        [first.clone()]
+        [first.as_str()]
     );
     assert!(phone.embedded.sync_status()["pins"].as_u64().unwrap() > 0);
 
@@ -1379,7 +1379,7 @@ fn pins_are_the_servers_offline_reads_keep_the_last_tree_and_offline_writes_fail
     }));
     assert_eq!(
         pin_ids(&phone.call("GET", "/api/pins", None, 200)),
-        [first.clone()]
+        [first.as_str()]
     );
     let refused = phone.call("PUT", &format!("/api/pins/{second}"), None, 503);
     assert!(
@@ -1389,7 +1389,7 @@ fn pins_are_the_servers_offline_reads_keep_the_last_tree_and_offline_writes_fail
             .contains("Changing pins needs the home server"),
         "{refused}"
     );
-    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [first.clone()]);
+    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [first.as_str()]);
 
     // Back online, a pin removed on the server leaves the phone with the next round.
     phone.embedded.set_remote(Some(phone.remote.clone()));
@@ -1424,11 +1424,11 @@ fn pins_made_before_the_update_reach_the_server_once() {
     phone.sync();
     assert_eq!(
         pin_ids(&admin.get("/api/pins", 200)),
-        [shared.clone(), own.clone()]
+        [shared.as_str(), own.as_str()]
     );
     assert_eq!(
         phone.embedded.writer().state().pins().unwrap(),
-        [shared.clone(), own.clone()]
+        [shared.as_str(), own.as_str()]
     );
     // Later rounds take the tree and send nothing again, even after the pin is removed there.
     admin.send(
@@ -1437,6 +1437,6 @@ fn pins_made_before_the_update_reach_the_server_once() {
     );
     phone.sync();
     phone.sync();
-    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [shared.clone()]);
+    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [shared.as_str()]);
     assert_eq!(phone.embedded.writer().state().pins().unwrap(), [shared]);
 }
