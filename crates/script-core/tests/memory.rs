@@ -2,7 +2,7 @@
 //! it, as a device runs them (D6).
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use script_core::{Archived, Author, Error, Extensions, Host, Job, Kind, Limits, Vault, host_call};
@@ -256,4 +256,68 @@ fn extensions_add_modules_only_to_the_kind_they_name() {
         let err = host.check(kind, "probe", src).unwrap_err();
         assert!(matches!(err, Error::Compile { .. }), "{kind:?}: {err:?}");
     }
+}
+
+#[test]
+fn a_dropped_host_has_let_go_of_the_vault_when_the_drop_returns() {
+    let memory = Arc::new(Memory::default());
+    let host = Host::new(memory.clone() as Arc<dyn Vault>, 2, limits());
+    let src = "use vault\nfn run() -> Result[int, string] { Ok(vault::query(\"from memo\")?.len()) }\n";
+    let out = host.run(Job::new(Kind::Device, "count", src, "run"));
+    assert_eq!(out.result.unwrap(), json!(0));
+    assert!(Arc::strong_count(&memory) > 1, "the workers hold the vault");
+
+    drop(host);
+
+    assert_eq!(Arc::strong_count(&memory), 1, "every worker let go of the vault");
+}
+
+/// A `probe::let_go()` that waits until the test says go, then drops the host it was given, on
+/// the worker running the script.
+struct LetGo {
+    host: Arc<Mutex<Option<Arc<Host>>>>,
+    go: Arc<Mutex<mpsc::Receiver<()>>>,
+    dropped: Arc<Mutex<mpsc::Sender<()>>>,
+}
+
+impl Extensions for LetGo {
+    fn modules(&self, _: Kind, _: &Arc<dyn Vault>) -> Vec<Module> {
+        let (host, go, dropped) = (self.host.clone(), self.go.clone(), self.dropped.clone());
+        let mut m = Module::new("probe");
+        m.fn_("let_go", move || -> Fault<Result<bool, String>> {
+            let _ = go.lock().unwrap().recv();
+            let last = host.lock().unwrap().take();
+            drop(last);
+            let _ = dropped.lock().unwrap().send(());
+            Fault(Ok(Ok(true)))
+        });
+        vec![m]
+    }
+}
+
+#[test]
+fn a_host_dropped_on_its_own_worker_does_not_wait_for_that_worker() {
+    let (go_tx, go_rx) = mpsc::channel();
+    let (dropped_tx, dropped_rx) = mpsc::channel();
+    let slot = Arc::new(Mutex::new(None));
+    let probe = LetGo {
+        host: slot.clone(),
+        go: Arc::new(Mutex::new(go_rx)),
+        dropped: Arc::new(Mutex::new(dropped_tx)),
+    };
+    let host = Arc::new(Host::with_extensions(Arc::new(Memory::default()), 2, limits(), &probe));
+    *slot.lock().unwrap() = Some(host.clone());
+    let mut job = Job::new(Kind::Device, "let-go", "use probe\nfn run() -> Result[bool, string] { probe::let_go() }\n", "run");
+    job.timeout = Some(Duration::from_millis(100));
+    // The run gives up after its timeout while the worker still waits in let_go, so the slot
+    // holds the last reference once this one is gone.
+    let out = host.run(job);
+    assert!(matches!(out.result, Err(Error::Timeout { .. })), "{:?}", out.result);
+    drop(host);
+
+    go_tx.send(()).unwrap();
+
+    dropped_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the worker dropped its host and went on");
 }

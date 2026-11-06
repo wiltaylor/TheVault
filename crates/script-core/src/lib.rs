@@ -250,7 +250,9 @@ const MAX_UNITS: usize = 64;
 
 const WORKER_STACK: usize = 8 << 20;
 
-/// The wscript host of one vault.
+/// The wscript host of one vault. A drop stops it taking jobs and waits for each worker to
+/// finish the run in hand, so do not drop the last reference to it while holding a lock that a
+/// run may wait for, such as the writer's.
 pub struct Host {
     contexts: Arc<Contexts>,
     jobs: Mutex<Option<Sender<Request>>>,
