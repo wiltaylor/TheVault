@@ -46,3 +46,24 @@ In another app, choose **Share** and then **TheVault inbox**. The app saves a fl
 - Several files shared at once make one note with every file attached, whichever way the sharing app hands them over.
 - The files are stored in the phone's vault with the note and reach the home server with it. On the server the note shows the same images and files.
 - A file the app cannot read saves nothing: the toast says "TheVault could not save this" and why, so you can share it again.
+
+## The inbox
+
+**Inbox** in the side menu lists what waits to be processed, in one list, newest first by each item's own time:
+
+- **Captures**: fleeting notes, by when they were made.
+- **Mail**: `email` notes that are not sent mail (no `system/SENT` label), by `sent`.
+- **Messages**: incoming `message` notes (`direction` `in`), SMS, MMS and RCS, by `sent`.
+- **Calls**: missed `call` notes (`direction` `missed`), by `started`.
+
+Each counts only while its `processed` field is not ticked; a note with no value counts as unprocessed. The chips **All**, **Captures**, **Mail**, **Messages** and **Calls** narrow the list to one kind. It shows 50 items, and **Show more** adds 50. **Show processed** lists the processed ones too, with the same rules for sent mail, outgoing messages and calls that were not missed. The number beside **Inbox** in the side menu counts what **All** lists.
+
+Each row has **Open** and **Done**. **Done** ticks `processed`, and the row leaves the list; the toast's **Undo**, or **Back to inbox** under **Show processed**, clears it again. A capture also has **Convert to…**, which makes a note of another type from it and deletes the fleeting note. Every row but a mail has **Delete**, which moves the note to the trash; a mail has none, because the trash removes only the vault's copy and not the mail in Gmail.
+
+The desktop and Android apps show the same inbox and answer it from their local vault, so it works with no connection.
+
+### Mark older items processed
+
+A vault with years of mail would start with all of it in the inbox. **Mark older processed…**, in the inbox's header, clears it once: pick a date, and the dialog counts the emails, messages and calls sent or made before it that are not processed yet, by kind. **Mark N items processed** ticks `processed` on each of them; nothing else in the notes changes, and nothing is sent to Gmail. Captures are never touched, and an item with no date is left alone. Running it again finds nothing more, since it counts only what is not processed.
+
+The home server does the work, in batches of 200 notes, each one commit, so syncing and other edits go on between batches (`POST /api/inbox/mark-processed`, which needs an admin session or token). The apps do not offer it: run it in the web app, and the change reaches the apps with the next sync.
