@@ -127,6 +127,15 @@ export function describeKind(k: ImportKindReport): string {
   return `${label}: ${parts.join(", ")}${k.done ? "" : "…"}`;
 }
 
+/**
+ * The permissions in `permissions` as a person reads them: each name once, without the
+ * `android.permission.` prefix, in the order they first come. The phone's answer names a
+ * permission once per kind that needs it, so SMS and MMS both name READ_SMS (TV-46).
+ */
+export function permissionList(permissions: readonly string[]): string {
+  return [...new Set(permissions.map(permissionName))].join(", ");
+}
+
 /** The permissions a report says are missing. */
 export function missingPermissions(report: ImportReport | null | undefined): string[] {
   return [...new Set((report?.kinds ?? []).flatMap((k) => (k.missing_permission ? [k.missing_permission] : [])))];
