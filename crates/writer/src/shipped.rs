@@ -2569,7 +2569,10 @@ mod tests {
     #[test]
     fn every_query_example_in_the_shipped_skills_parses() {
         let mut seen = 0;
-        for file in SHIPPED_FILES.iter().filter(|f| f.path.starts_with("skills/")) {
+        for file in SHIPPED_FILES
+            .iter()
+            .filter(|f| f.path.starts_with("skills/"))
+        {
             let mut rest = file.source;
             while let Some(start) = rest.find("```query\n") {
                 let body = &rest[start + "```query\n".len()..];

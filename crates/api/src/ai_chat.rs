@@ -3850,7 +3850,12 @@ pub fn block_format_text() -> &'static str {
 /// views, with their subsections.
 pub fn query_format_text() -> &'static str {
     static TEXT: OnceLock<String> = OnceLock::new();
-    TEXT.get_or_init(|| format!("{}\n", format_section("\n## Query language\n", "\n## Ink\n")))
+    TEXT.get_or_init(|| {
+        format!(
+            "{}\n",
+            format_section("\n## Query language\n", "\n## Ink\n")
+        )
+    })
 }
 
 /// `query_format`: the query language.
@@ -4162,7 +4167,10 @@ mod tests {
     fn query_format_names_every_function_the_parser_takes() {
         let t = query_format_text();
         for (name, _) in query::FUNCTIONS {
-            assert!(t.contains(&format!("| `{name}(")), "{name} is not in the functions table");
+            assert!(
+                t.contains(&format!("| `{name}(")),
+                "{name} is not in the functions table"
+            );
         }
     }
 
@@ -4195,21 +4203,42 @@ mod tests {
             "from task where status = 'Todo' AND due IS NULL ORDER BY due",
             "query syntax error at line 1, column 24: unexpected character `=`",
         );
-        assert!(e.starts_with("query syntax error at line 1, column 24"), "{e}");
-        for hint in ["`==`", "`&&`", "`sort <field>", "`empty(field)`", "query_format"] {
+        assert!(
+            e.starts_with("query syntax error at line 1, column 24"),
+            "{e}"
+        );
+        for hint in [
+            "`==`",
+            "`&&`",
+            "`sort <field>",
+            "`empty(field)`",
+            "query_format",
+        ] {
             assert!(e.contains(hint), "{hint} missing: {e}");
         }
         let e = query_error("from tasks", "there is no type \"tasks\"");
         assert!(e.contains("list_types"), "{e}");
-        let e = query_error("from task where", "query syntax error at line 1, column 16: expected an expression, found the end");
+        let e = query_error(
+            "from task where",
+            "query syntax error at line 1, column 16: expected an expression, found the end",
+        );
         assert!(!e.contains("not SQL"), "{e}");
-        assert!(e.ends_with("Read query_format for the whole grammar and examples."), "{e}");
+        assert!(
+            e.ends_with("Read query_format for the whole grammar and examples."),
+            "{e}"
+        );
     }
 
     #[test]
     fn a_missing_note_says_to_find_ids_rather_than_guess() {
-        let e = get_note_error("01J00000000000000000000000", "note 01J00000000000000000000000 does not exist");
-        assert!(e.starts_with("There is no note 01J00000000000000000000000."), "{e}");
+        let e = get_note_error(
+            "01J00000000000000000000000",
+            "note 01J00000000000000000000000 does not exist",
+        );
+        assert!(
+            e.starts_with("There is no note 01J00000000000000000000000."),
+            "{e}"
+        );
         assert!(e.contains("query_notes or search_notes"), "{e}");
         let e = get_note_error("task-12", "bad id");
         assert!(e.starts_with("\"task-12\" is not a note id"), "{e}");
