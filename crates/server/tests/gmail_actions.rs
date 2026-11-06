@@ -370,8 +370,7 @@ fn without_gmail_modify_nothing_is_sent_and_a_deleted_email_still_stays_out() {
 fn a_gmail_error_fails_the_handler_run_with_its_message() {
     let api = Api::start(&["one"], &[MODIFY_SCOPE]);
     let one = api.email("one");
-    api.google
-        .set_action_error(Some((500, "Backend Error")));
+    api.google.set_action_error(Some((500, "Backend Error")));
     let mut note = api.note(&one);
     note["note"]["fields"]["processed"] = json!(true);
     expect(

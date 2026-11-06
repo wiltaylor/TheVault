@@ -209,7 +209,8 @@ fn after_update(note: Value) -> Result[(), string] {
     if !gmail.ok {
         return Ok(())
     }
-    act(gmail, id, "modify", "{\"removeLabelIds\":[\"INBOX\"]}")
+    let body = Value::Map(#{ "removeLabelIds": Value::List([Value::String("INBOX")]) })
+    act(gmail, id, "modify", json::to_string(body))
 }
 
 fn after_delete(note: Value) -> Result[(), string] {

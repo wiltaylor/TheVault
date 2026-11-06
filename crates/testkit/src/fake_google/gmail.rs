@@ -402,10 +402,7 @@ impl FakeGoogle {
     /// When there is no such message.
     pub fn set_message_labels(&self, id: &str, labels: &[&str]) {
         let new: Vec<String> = labels.iter().map(|l| (*l).to_owned()).collect();
-        assert!(
-            relabel(&mut self.gmail(), id, new),
-            "a fake Gmail message"
-        );
+        assert!(relabel(&mut self.gmail(), id, new), "a fake Gmail message");
     }
 
     /// Delete message `id` for good, recording `messagesDeleted` in history.
