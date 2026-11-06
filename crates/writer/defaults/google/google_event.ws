@@ -756,7 +756,9 @@ fn gone_reason(google_ref: string) -> string {
 }
 
 // PATCH the groups of the note that differ from its snapshot; on 412, merge and try once more.
-fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], snapshot: Map[string, string], changed: List[List[string]]) -> Result[string, string] {
+// `mine` is what to send, `basis` what the note held: they differ only in a refused answer,
+// which the write-back then replaces with Google's.
+fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], basis: Map[string, string], snapshot: Map[string, string], changed: List[List[string]]) -> Result[string, string] {
     let google_ref = text_of(fields, "google_ref")
     let url = event_url(ctx, calendar_of(ctx, fields), google_ref)
     let updates = answer_updates(fields, changed)
@@ -779,7 +781,7 @@ fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], 
     let reply = call(ctx, "PATCH", url + updates, text_of(fields, "etag"), Value::Map(to_google(mine, changed, held)))?
     let status = status_of(reply)
     if status == 200 {
-        write_back(ctx, id, mine, body_of(reply), "", "", false)?;
+        write_back(ctx, id, basis, body_of(reply), "", "", false)?;
         return Ok("")
     }
     if status == 404 || status == 410 {
@@ -811,7 +813,7 @@ fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], 
         }
         event = body_of(again)
     }
-    write_back(ctx, id, mine, event, "", "", false)?;
+    write_back(ctx, id, basis, event, "", "", false)?;
     Ok("")
 }
 
@@ -852,9 +854,28 @@ fn push(id: string, created: bool) -> Result[string, string] {
     }
 
     let changed = differing(mine, snapshot, writable())
+    // A refused answer (a hand edit: the app offers only valid ones) is not sent. The rest of
+    // the change still is, and the note takes Google's answer back, so later edits go through.
+    let basis = mine
     if changed.any(|g| g[0] == "my_response") &&
         (value(snapshot, "my_response") == "" || !["accepted", "tentative", "declined"].any(|r| r == value(mine, "my_response"))) {
-        return Err("Invitation answer ignored: only an invited attendee can choose accepted, tentative or declined.")
+        let ignored = "Invitation answer ignored: only an invited attendee can choose accepted, tentative or declined."
+        changed = changed.filter(|g| g[0] != "my_response")
+        let answer = value(snapshot, "my_response")
+        if changed.is_empty() {
+            let reset = #{ "my_response": if answer == "" { Value::Null } else { Value::String(answer) } }
+            match vault::patch(id, Value::Map(reset), "") {
+                Ok(_) => {},
+                Err(e) => vault::log("The answer was not set back: " + e),
+            }
+            return Err(ignored)
+        }
+        vault::log(ignored + " The rest of the change is sent.")
+        let sendable: Map[string, string] = #{}
+        for k in snapshot_keys() {
+            sendable[k] = if k == "my_response" { answer } else { value(mine, k) }
+        }
+        mine = sendable
     }
     let unchanged = "The event already is as the change asks, so Google had nothing to send."
     if created {
@@ -878,7 +899,7 @@ fn push(id: string, created: bool) -> Result[string, string] {
         if changed.is_empty() {
             return Ok(unchanged)
         }
-        return send_changes(ctx, id, fields, mine, snapshot, changed)
+        return send_changes(ctx, id, fields, mine, basis, snapshot, changed)
     }
 
     // The loop guard: nothing differs from what Google last sent.
@@ -889,7 +910,7 @@ fn push(id: string, created: bool) -> Result[string, string] {
     if !ctx.ok {
         return Ok(not_connected_reason())
     }
-    send_changes(ctx, id, fields, mine, snapshot, changed)
+    send_changes(ctx, id, fields, mine, basis, snapshot, changed)
 }
 
 // Send the change to note `id`, then settle the Outbox items that asked for it (outbox X5). When

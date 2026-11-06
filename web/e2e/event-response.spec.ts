@@ -13,6 +13,9 @@ test("a failed invitation save shows an error on the event page", async ({ page,
   const invitation = activePane(page).getByRole("group", { name: "Invitation response" });
   await invitation.getByRole("button", { name: "Accept", exact: true }).click();
   await expect(invitation.getByRole("alert")).toContainText("could not be saved");
+  // The page shows the stored answer, not the one that was not saved.
+  await expect(invitation).not.toContainText("Your response");
+  await expect(invitation.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
 });
 
 test("accept an invitation on its event page, then change the answer on its card", async ({ page, admin }) => {

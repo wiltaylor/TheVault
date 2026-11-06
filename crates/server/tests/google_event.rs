@@ -422,6 +422,7 @@ fn invalid_invitation_edits_fail_visibly_without_contacting_google() {
             api.edit(&id, json!({ "my_response": "accepted" }));
         }
         let mut note = api.note(&id);
+        let before = note["note"]["fields"]["my_response"].clone();
         note["note"]["fields"]["my_response"] = json!(response);
         api.google.clear_requests();
         expect(
@@ -446,7 +447,42 @@ fn invalid_invitation_edits_fail_visibly_without_contacting_google() {
             "{failed:?}"
         );
         assert!(api.google.requests_to(CALENDAR_PATH).is_empty());
+        // The refused answer is set back, so it does not hold up the next edit.
+        assert_eq!(
+            api.note(&id)["note"]["fields"]["my_response"],
+            before,
+            "{response}"
+        );
     }
+}
+
+#[test]
+fn a_refused_answer_beside_other_changes_sends_the_rest_and_later_edits_go_through() {
+    let api = Api::start();
+    let mut event = standup();
+    event["organizer"] = json!({ "email": "me@example.com", "self": true });
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    api.google.clear_requests();
+
+    // An organiser cannot answer: the title goes to Google, the answer does not, and no run fails.
+    api.edit(
+        &id,
+        json!({ "my_response": "accepted", "title": "Standup (moved)" }),
+    );
+    let writes = api.writes();
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(writes[0].json(), json!({ "summary": "Standup (moved)" }));
+    let note = api.note(&id);
+    assert_eq!(note["note"]["fields"]["title"], "Standup (moved)");
+    assert_eq!(note["note"]["fields"]["my_response"], Value::Null);
+
+    api.google.clear_requests();
+    api.edit(&id, json!({ "title": "Standup (again)" }));
+    let writes = api.writes();
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(writes[0].json(), json!({ "summary": "Standup (again)" }));
 }
 
 #[test]
@@ -993,6 +1029,68 @@ fn editing_an_occurrence_patches_only_that_instance() {
         api.note(&id)["note"]["fields"]["title"],
         "Review (quarterly)"
     );
+}
+
+#[test]
+fn answering_an_occurrence_answers_only_that_instance() {
+    let api = Api::start();
+    let me = json!({ "email": "me@example.com", "self": true, "responseStatus": "needsAction" });
+    api.google.put_event(
+        "primary",
+        json!({
+            "id": "review",
+            "summary": "Review",
+            "start": { "dateTime": "2026-03-03T15:00:00+11:00" },
+            "end": { "dateTime": "2026-03-03T16:00:00+11:00" },
+            "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=3"],
+            "organizer": { "email": "ann@example.com" },
+            "attendees": [{ "email": "ann@example.com", "organizer": true, "responseStatus": "accepted" }, me.clone()],
+        }),
+    );
+    api.sync();
+    let second = "review_20260310T040000Z";
+    let id = api.event_id(second);
+    assert_eq!(
+        api.note(&id)["note"]["fields"]["my_response"],
+        "needs_action"
+    );
+    let master_before = api.google.event("primary", "review").unwrap();
+    api.google.clear_requests();
+
+    api.edit(&id, json!({ "my_response": "accepted" }));
+
+    let writes = api.writes();
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert_eq!(
+        writes[0].route(),
+        format!("{CALENDAR_PATH}/calendars/primary/events/{second}")
+    );
+    assert!(writes[0].path.contains("sendUpdates=all"), "{:?}", writes[0]);
+    let answered = |event: &Value| {
+        event["attendees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["self"] == json!(true))
+            .unwrap()["responseStatus"]
+            .clone()
+    };
+    assert_eq!(answered(&api.google.event("primary", second).unwrap()), "accepted");
+    assert_eq!(
+        api.google.event("primary", "review").unwrap(),
+        master_before
+    );
+    for other in ["review_20260303T040000Z", "review_20260317T040000Z"] {
+        assert_eq!(
+            answered(&api.google.event("primary", other).unwrap()),
+            "needsAction",
+            "{other}"
+        );
+    }
+    assert_eq!(api.note(&id)["note"]["fields"]["my_response"], "accepted");
+    api.google.clear_requests();
+    api.sync();
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
 }
 
 // ---- rich descriptions (rich-import H4, H8) ----------------------------------------------------
