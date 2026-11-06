@@ -1529,6 +1529,8 @@ impl Writer {
                         }
                     };
                     acts.push((by.clone(), act, id.clone()));
+                    // The version below is not recorded yet, so the head is still the note as it
+                    // was before this write, as for the person and Outbox changes above.
                     let previous = match event {
                         Event::Update
                             if inner.schema.type_def(&type_name).is_some_and(|t| {
@@ -1596,7 +1598,13 @@ impl Writer {
             Author::Token(name) => Some(name.clone()),
             _ => None,
         });
-        self.hooks.after(&saved, author, &inner.schema);
+        // Each note's after_* handlers see the author of that note's change: a note a before_*
+        // handler staged is the handler's, not the batch's (TV-25). Consecutive notes of one
+        // author go together, so the handlers queue in commit order.
+        let by = |s: &Saved| authors.get(&s.id).unwrap_or(author);
+        for run in saved.chunk_by(|a, b| by(a) == by(b)) {
+            self.hooks.after(run, by(&run[0]), &inner.schema);
+        }
         self.people_to_contacts(&people);
         self.outbox_notifications(&items);
         Ok(saved)

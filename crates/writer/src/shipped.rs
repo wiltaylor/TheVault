@@ -161,7 +161,7 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
             "72d25f21d756250ca02dc77802c24ed1b417138c99ed2644e0b8b387092fbb0a",
             "e5881bf43ba5f4381156ccb56ef2d3f0e3d0d3ac349830b0b49f7d5e1595e307",
             "41fe0334ecdd4e4c2f43403331a36339fb47d236f215f9c6671d41a4f39e2f33",
-            "2ab07c64d9fb056d6b063f497bb51d871900827af1e6dbb03fd891ad2a5d6a38",
+            "1b2796fa010585134eb1c98c79ee322b1e4d3999deeacfdb061da53204323c88",
         ],
     },
     ShippedFile {
@@ -177,7 +177,7 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
     ShippedFile {
         path: "scripts/google_mail.ws",
         source: include_str!("../defaults/google/google_mail.ws"),
-        hashes: &["58a49ebe168c0bd1e2c1d535b0f19202f1c26a6648cd948002620d1eadc53d61"],
+        hashes: &["bf8fda07c1cd113ddc57c19a026f2da51e51516939d7471c85de19a2346ffe40"],
     },
     // The Google Calendar write-back, named by the shipped `event` type's handlers.
     ShippedFile {

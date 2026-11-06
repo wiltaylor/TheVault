@@ -121,9 +121,9 @@ field images_pending {
 }
 
 field inbox_catch_up {
-  kind        = "bool"
-  label       = "Marked by catch-up"
-  description = "Set with Processed by Mark older processed, which changes nothing in Gmail."
+  kind        = "string"
+  label       = "Catch-up run"
+  description = "The run of Mark older processed that last set Processed. A write that changes it sends nothing to Gmail."
   hidden      = true
 }
 

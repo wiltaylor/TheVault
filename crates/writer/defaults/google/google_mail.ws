@@ -20,13 +20,17 @@ use json
 //
 // The loop guard: a write by a scheduled task, such as the `google_gmail` sync, or by a handler
 // sends nothing. The handler sees who wrote the note in its argument's `author`. The inbox's
-// "Mark older processed" (TV-30) sets `inbox_catch_up` with `processed`, and a write that sets
-// `inbox_catch_up` sends nothing either, so the catch-up never archives mail in Gmail.
+// "Mark older processed" (TV-30) writes its run's own id to `inbox_catch_up` with `processed`,
+// and a write that changes `inbox_catch_up` sends nothing either. So no catch-up run archives
+// mail in Gmail, also one that marks an email again after the user unticked it. The user's own
+// tick leaves `inbox_catch_up` as it is, so it archives as usual.
 //
 // Without `gmail.modify` in the settings' `scopes`, as for a connection made before mail actions,
 // nothing is sent: the run logs it and ends successfully, and the Google card asks the user to
 // reconnect. Without Google connected the run also ends successfully. A message Gmail no longer
-// has (404) counts as done. Any other answer fails the run, which records Gmail's message.
+// has (404) counts as done. Any other answer, or a failed sign-in, fails the run, which records
+// Gmail's message, and raises a notification on the email: nothing retries it, so the user does
+// it in Gmail.
 //
 // The settings are the JSON object in the `google_settings` secret: `scopes` and the `endpoints`
 // test seam (google-sync D21).
@@ -198,19 +202,15 @@ fn after_update(note: Value) -> Result[(), string] {
     if !is_true(now, "processed") || is_true(before, "processed") {
         return Ok(())
     }
-    if is_true(now, "inbox_catch_up") && !is_true(before, "inbox_catch_up") {
+    if text_of(now, "inbox_catch_up") != text_of(before, "inbox_catch_up") {
         return Ok(())
     }
     let id = text_of(now, "gmail_ref")
     if id == "" {
         return Ok(())
     }
-    let gmail = connect()?
-    if !gmail.ok {
-        return Ok(())
-    }
     let body = Value::Map(#{ "removeLabelIds": Value::List([Value::String("INBOX")]) })
-    act(gmail, id, "modify", json::to_string(body))
+    reported(note, "archive", send(id, "modify", json::to_string(body)))
 }
 
 fn after_delete(note: Value) -> Result[(), string] {
@@ -222,11 +222,31 @@ fn after_delete(note: Value) -> Result[(), string] {
         return Ok(())
     }
     remember_trashed(id)?
+    reported(note, "trash", send(id, "trash", ""))
+}
+
+// Connect and POST `body` to message `id`'s `action`. Not connected, or without gmail.modify,
+// sends nothing and succeeds.
+fn send(id: string, action: string, body: string) -> Result[(), string] {
     let gmail = connect()?
     if !gmail.ok {
         return Ok(())
     }
-    act(gmail, id, "trash", "")
+    act(gmail, id, action, body)
+}
+
+// `result` as it is, after a notification on the email when it failed: nothing retries a mail
+// action, so the user must know to `verb` the message in Gmail.
+fn reported(note: Value, verb: string, result: Result[(), string]) -> Result[(), string] {
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let title = "Gmail did not " + verb + " an email"
+            let body = e + ". Nothing retries it: " + verb + " the message in Gmail."
+            vault::notify(title, body, text_of(note, "id"))?
+            Err(e)
+        },
+    }
 }
 
 // Add `id` to the `google_gmail_trashed` secret, the refs the Gmail sync skips.

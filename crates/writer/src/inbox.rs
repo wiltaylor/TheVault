@@ -2,9 +2,11 @@
 //! a date as processed, so the unified inbox does not start with years of old mail.
 //!
 //! Only `processed` changes, and only on notes where it is not set yet, so a second run changes
-//! nothing. Fleeting notes are never touched. Nothing is sent anywhere: an email also gets
-//! `inbox_catch_up`, when its type has the field, and the `email` type's mail action handler sends
-//! nothing to Gmail for a write that sets it (TV-25). The query language has no datetime literal, so each type's unprocessed notes are
+//! nothing. Fleeting notes are never touched. Nothing is sent anywhere: an email also gets the
+//! run's own id in `inbox_catch_up`, when its type has the field, and the `email` type's mail
+//! action handler sends nothing to Gmail for a write that changes it (TV-25). So a later run that
+//! marks an email again, after the user unticked it, archives nothing either. The query language
+//! has no datetime literal, so each type's unprocessed notes are
 //! read through the index with their time field, and the date rule runs here. A note with no time,
 //! or one that does not read as a datetime, is left alone.
 //!
@@ -30,7 +32,8 @@ pub const CHUNK: usize = 200;
 
 const PROCESSED: &str = "processed";
 
-/// The hidden email field that marks a catch-up write, so Gmail is not changed (TV-25).
+/// The hidden email field that holds the id of the catch-up run that last marked the note, so
+/// Gmail is not changed by any run (TV-25).
 const CATCH_UP: &str = "inbox_catch_up";
 
 /// What a catch-up matched and changed, per type in [`CATCH_UP_TYPES`] order.
@@ -84,11 +87,12 @@ impl Writer {
         if dry_run {
             return Ok(out);
         }
+        let run = ulid::Ulid::new().to_string();
         for chunk in ids.chunks(CHUNK) {
-            let changed = match self.set_processed(chunk, author)? {
+            let changed = match self.set_processed(chunk, &run, author)? {
                 Some(n) => n,
                 // A note changed since it was read: read the chunk again and retry once.
-                None => self.set_processed(chunk, author)?.ok_or_else(|| {
+                None => self.set_processed(chunk, &run, author)?.ok_or_else(|| {
                     Error::Rejected(
                         "notes kept changing while they were marked processed; run it again"
                             .to_owned(),
@@ -154,9 +158,10 @@ impl Writer {
         }
     }
 
-    /// Set `processed` on each note of `ids` that does not have it yet, as one batch. `None` when
-    /// a note changed between its read and the write, so nothing was committed.
-    fn set_processed(&self, ids: &[String], author: &Author) -> Result<Option<usize>> {
+    /// Set `processed` on each note of `ids` that does not have it yet, and `inbox_catch_up` to
+    /// `run`, as one batch. `None` when a note changed between its read and the write, so nothing
+    /// was committed.
+    fn set_processed(&self, ids: &[String], run: &str, author: &Author) -> Result<Option<usize>> {
         let schema = self.schema();
         let marks = |type_name: &str| {
             schema
@@ -177,7 +182,7 @@ impl Writer {
             let mut doc = doc_to_json(&note.doc);
             doc["fields"][PROCESSED] = json!(true);
             if marks(&note.type_name) {
-                doc["fields"][CATCH_UP] = json!(true);
+                doc["fields"][CATCH_UP] = json!(run);
             }
             ops.push(Op::Update {
                 id: id.clone(),

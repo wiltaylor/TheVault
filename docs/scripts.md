@@ -721,11 +721,13 @@ The `email` type's `after_update` and `after_delete` handlers run `scripts/googl
 Neither sends anything when:
 
 - the argument's `author` is a `task` or a `handler`, such as the `google_gmail` sync or a handler's own write. This is the loop guard;
-- an update also turns `inbox_catch_up` on, as the inbox's Mark older processed does (TV-30);
+- an update also changes `inbox_catch_up`, as each run of the inbox's Mark older processed does by writing its own id (TV-30). So a later run that marks an email again after the user unticked it sends nothing either;
 - the note has no `gmail_ref`;
 - Google is not connected, or `google_settings` lacks `https://www.googleapis.com/auth/gmail.modify` in `scopes`. The run logs the reason and ends successfully.
 
-Turning `processed` off and restoring an email from the trash send nothing. A 404 from Gmail counts as done. Any other answer fails the run with Gmail's status and message.
+Turning `processed` off and restoring an email from the trash send nothing. A 404 from Gmail counts as done. Any other answer, or a failed sign-in, fails the run with Gmail's status and message and raises a notification on the email ("Gmail did not archive an email" or "Gmail did not trash an email"): nothing retries it.
+
+The `google_gmail` task reads `google_gmail_trashed`. A `tasks/google_gmail.wcl` the user edited before mail actions may not list it in `secrets`: each sync run then logs that it cannot read it, and an email trashed in the vault can be imported again until the secret is added.
 
 ## The Outbox's send handler
 

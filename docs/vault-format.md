@@ -338,7 +338,7 @@ The fields of the Google sync types, as a new vault gets them. The Gmail and cal
 | | `processed` | `bool`, default `false` | Set when the user, or an agent, has dealt with the email. Its slot sits beside `from` on the page and on the card. The Gmail sync never writes it: a label change rewrites only `labels`. Turning it on archives the message in Gmail (TV-25) |
 | | `gmail_ref` | `string`, hidden | Gmail's message id, so a message is pulled once |
 | | `inline_images`, `converter`, `images_pending` | hidden | See [Imported email](#imported-email) |
-| | `inbox_catch_up` | `bool`, hidden | Set with `processed` by the inbox's Mark older processed (TV-30), so that write sends nothing to Gmail (TV-25). A vault from before mail actions gains it on its next start |
+| | `inbox_catch_up` | `string`, hidden | The id of the run of the inbox's Mark older processed (TV-30) that last set `processed`. A write that changes it sends nothing to Gmail, so no run archives mail there (TV-25). A vault from before mail actions gains it on its next start |
 | `email_thread` | `participants` | list of `reference` to `person` | The people in the thread. The title is the subject |
 | | `thread_ref` | `string`, hidden | Gmail's thread id |
 | `event` | `when` | `date_range`, `of = "date_or_datetime"` | Dates for an all-day event, datetimes with their offsets for a timed one |

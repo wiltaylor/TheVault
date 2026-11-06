@@ -159,11 +159,11 @@ It goes one way only:
 
 - Nothing in Gmail changes the vault through these actions. Archiving or trashing a message in Gmail does not mark its note done or delete it. The sync still brings label changes and archives a note whose message Gmail deleted for good, as before.
 - Nothing is undone. Turning `processed` off again or restoring the email from the vault's trash sends nothing. Turning `processed` on again later archives the message again.
-- **Mark older processed…** in the inbox sends nothing to Gmail. It sets the hidden field `inbox_catch_up` with `processed`, and a write that sets it is not sent.
+- **Mark older processed…** in the inbox sends nothing to Gmail, also when it marks an email again that you unticked after an earlier run. Each run writes its own id to the hidden field `inbox_catch_up` with `processed`, and a write that changes that field is not sent.
 - Writes by the Gmail sync, by any scheduled task and by handlers send nothing, so the sync and the mail actions never feed each other.
 - A deleted email is never imported again, also when Gmail was not reached: its Gmail id goes into the secret `google_gmail_trashed`, which the sync skips. The sync also skips any message in Gmail's trash.
 
-The action runs on the home server, from the `email` type's handlers in `scripts/google_mail.ws`. An action taken in the desktop or Android app is sent once the change syncs to the server; offline, it waits in the app's queue. A message Gmail no longer has counts as done. Any other Gmail error fails the handler run, which the server records with Gmail's message; the action is not retried.
+The action runs on the home server, from the `email` type's handlers in `scripts/google_mail.ws`. An action taken in the desktop or Android app is sent once the change syncs to the server; offline, it waits in the app's queue. A message Gmail no longer has counts as done. Any other Gmail error fails the handler run, which the server records with Gmail's message, and the bell shows "Gmail did not archive an email" or "Gmail did not trash an email" on the email. The action is not retried, so do it in Gmail.
 
 ### Reconnect for mail actions
 

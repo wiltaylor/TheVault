@@ -2708,6 +2708,61 @@ fn the_email_template_alpha_18_shipped_moves_its_html_slot_and_no_note_changes()
     assert_eq!(read(root, path).unwrap(), edited);
 }
 
+/// Step 0012 on an `email` type the user edited (a renamed tab and a field of their own) gives it
+/// the mail action handlers before its first template and keeps the edits, and no note changes.
+/// A second run changes nothing (TV-25).
+#[test]
+fn step_0012_gives_an_edited_email_type_the_handlers_and_keeps_the_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let path = "types/email.wcl";
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let edited = EMAIL_FF793C6
+        .replacen("tab \"Email\" {", "tab \"Mail\" {", 1)
+        .replacen(
+            "template default {",
+            "field my_note {\n  kind = \"string\"\n}\n\ntemplate default {",
+            1,
+        );
+    assert!(!edited.contains("handler \""), "{edited}");
+    std::fs::write(root.join(path), store::canonical(&edited, path).unwrap()).unwrap();
+    let w = open(root);
+    let email = w
+        .create(
+            "email",
+            &writer::Input::Json(json!({ "fields": { "title": "Hello", "gmail_ref": "m1" } })),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    let note_path = format!("notes/email/{email}.wcl");
+    let before = read(root, &note_path).unwrap();
+
+    assert_eq!(
+        run_step_again(&w, "0012_email_gmail_handlers"),
+        ["test_0012_email_gmail_handlers"]
+    );
+    let after = read(root, path).unwrap();
+    assert!(after.contains("tab \"Mail\""), "{after}");
+    assert!(after.contains("field my_note"), "{after}");
+    assert_eq!(after.matches("\"google_mail\"").count(), 2, "{after}");
+    let handlers = after.find("handler \"after_update\"").unwrap();
+    assert!(handlers < after.find("template default").unwrap(), "{after}");
+    assert_eq!(read(root, &note_path).unwrap(), before);
+
+    // The type has the handlers now: the step leaves it as it is.
+    let step = writer::UPGRADE_STEPS
+        .iter()
+        .find(|s| s.id == "0012_email_gmail_handlers")
+        .unwrap();
+    w.run_upgrade_steps(&[UpgradeStep {
+        id: "test_0012_email_gmail_handlers_again",
+        run: step.run,
+    }])
+    .unwrap();
+    assert_eq!(read(root, path).unwrap(), after);
+}
+
 /// The `call` type as 0.1.14-alpha.23 shipped it, before `processed`.
 const CALL_0_1_14: &str = include_str!("fixtures/shipped/call_0_1_14.wcl");
 

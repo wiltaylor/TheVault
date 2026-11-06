@@ -1621,9 +1621,24 @@ fn new_ctx(endpoints: Value, token: string, started: int) -> Ctx {
         archived: 0,
         failed: 0,
         first_failure: "",
-        trashed: match secret_json("google_gmail_trashed") {
-            Value::List(items) => items.map(|v| v.as_string().unwrap_or("")),
+        trashed: trashed_refs(),
+    }
+}
+
+// The refs in the `google_gmail_trashed` secret. A task file the user edited before mail actions
+// may not grant it: the run says so and imports as before, so an email trashed in the vault can
+// come back (TV-25).
+fn trashed_refs() -> List[string] {
+    match secrets::get("google_gmail_trashed") {
+        Ok(text) => match json::parse(text) {
+            Ok(Value::List(items)) => items.map(|v| v.as_string().unwrap_or("")),
             _ => [],
+        },
+        Err(e) => {
+            if e.contains("not granted") {
+                vault::log("This task cannot read the google_gmail_trashed secret: add it to the secrets of tasks/google_gmail.wcl, or emails trashed in the vault can be imported again.")
+            }
+            []
         },
     }
 }

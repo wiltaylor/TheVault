@@ -214,6 +214,26 @@ impl Api {
         self.settle();
     }
 
+    fn notifications(&self) -> Vec<Value> {
+        expect(self.req("GET", "/api/notifications").send().unwrap(), 200)["items"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    /// Mark every email processed with the inbox's Mark older processed, and let the handlers run.
+    fn mark_older_processed(&self) -> Value {
+        let done = expect(
+            self.req("POST", "/api/inbox/mark-processed")
+                .json(&json!({ "before": "2100-01-01T00:00:00Z" }))
+                .send()
+                .unwrap(),
+            200,
+        );
+        self.settle();
+        done
+    }
+
     fn status(&self) -> Value {
         expect(
             self.req("GET", "/api/integrations/google").send().unwrap(),
@@ -331,13 +351,86 @@ fn mark_older_processed_sends_nothing_and_a_later_done_still_archives() {
     let one = api.email("one");
     let fields = api.note(&one)["note"]["fields"].clone();
     assert_eq!(fields["processed"], true, "{fields}");
-    assert_eq!(fields["inbox_catch_up"], true, "{fields}");
+    assert!(
+        fields["inbox_catch_up"].as_str().is_some_and(|run| !run.is_empty()),
+        "{fields}"
+    );
     assert!(api.google.mail_actions().is_empty());
 
     // The user unticks one and marks it done again: that is the user's Done.
     api.edit(&one, json!({ "processed": false }));
     api.edit(&one, json!({ "processed": true }));
     assert_eq!(api.google.mail_actions(), [modify("one")]);
+}
+
+/// The catch-up never archives, whatever the note's history (operator decision): an email the
+/// user unticked after one run and a later run marks again stays in Gmail's inbox.
+#[test]
+fn a_second_mark_older_processed_after_an_untick_sends_nothing() {
+    let api = Api::start(&["one", "two"], &[MODIFY_SCOPE]);
+    let one = api.email("one");
+    assert_eq!(api.mark_older_processed()["changed"], 2);
+    let first = api.note(&one)["note"]["fields"]["inbox_catch_up"].clone();
+
+    api.edit(&one, json!({ "processed": false }));
+    assert_eq!(api.mark_older_processed()["changed"], 1);
+    let fields = api.note(&one)["note"]["fields"].clone();
+    assert_eq!(fields["processed"], true, "{fields}");
+    assert_ne!(fields["inbox_catch_up"], first, "each run writes its own id");
+    assert!(api.google.mail_actions().is_empty());
+
+    // The user's own Done after that still archives.
+    api.edit(&one, json!({ "processed": false }));
+    api.edit(&one, json!({ "processed": true }));
+    assert_eq!(api.google.mail_actions(), [modify("one")]);
+}
+
+#[test]
+fn a_message_gmail_no_longer_has_counts_as_done() {
+    let api = Api::start(&["one", "two"], &[MODIFY_SCOPE]);
+    let one = api.email("one");
+    let two = api.email("two");
+    api.google.delete_message("one");
+    api.google.delete_message("two");
+
+    // Both answer 404: the runs succeed (settle fails on a failed run) and nothing is notified.
+    api.edit(&one, json!({ "processed": true }));
+    api.delete(&two);
+    assert_eq!(api.google.mail_actions(), [modify("one"), trash("two")]);
+    assert!(api.notifications().is_empty(), "{:#?}", api.notifications());
+}
+
+#[test]
+fn a_gmail_refusal_fails_the_run_and_notifies_on_the_email() {
+    let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+    let one = api.email("one");
+    api.google.set_action_error(Some((403, "Insufficient Permission")));
+    let note = api.note(&one);
+    let version = note["version"].as_str().unwrap();
+    expect(
+        api.req("DELETE", &format!("/api/notes/{one}?base_version={version}"))
+            .send()
+            .unwrap(),
+        200,
+    );
+    let failed = api.server.settle_handlers();
+    assert_eq!(failed.len(), 1, "{failed:#?}");
+    assert!(
+        failed[0].contains("Gmail answered 403 to trash of message one: Insufficient Permission"),
+        "{failed:#?}"
+    );
+    // Nothing retries it, so the user is told on the email.
+    let items = api.notifications();
+    assert_eq!(items.len(), 1, "{items:#?}");
+    assert_eq!(items[0]["title"], "Gmail did not trash an email");
+    assert!(
+        items[0]["body"]
+            .as_str()
+            .unwrap()
+            .ends_with("Nothing retries it: trash the message in Gmail."),
+        "{items:#?}"
+    );
+    assert_eq!(items[0]["note"], one.as_str());
 }
 
 #[test]
@@ -383,4 +476,8 @@ fn a_gmail_error_fails_the_handler_run_with_its_message() {
         failed[0].contains("Gmail answered 500 to modify of message one: Backend Error"),
         "{failed:#?}"
     );
+    let items = api.notifications();
+    assert_eq!(items.len(), 1, "{items:#?}");
+    assert_eq!(items[0]["title"], "Gmail did not archive an email");
+    assert_eq!(items[0]["note"], one.as_str());
 }
