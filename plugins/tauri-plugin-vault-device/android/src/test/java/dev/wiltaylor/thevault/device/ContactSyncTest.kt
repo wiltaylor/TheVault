@@ -89,6 +89,13 @@ class ContactSyncTest {
 
     private fun person(): JSONObject = people().single()
 
+    /** The person's phones, each `{ number, label }` dict as "number label". */
+    private fun phones(person: JSONObject): List<String> {
+        val phones = person.getJSONObject("fields").getJSONArray("phones")
+        return (0 until phones.length()).map { phones.getJSONObject(it) }
+            .map { it.getString("number") + " " + it.optString("label") }
+    }
+
     private companion object {
         /** The vault the home server holds, as pairing named it. */
         const val VAULT = "01VAULTB000000000000000000"
@@ -103,7 +110,7 @@ class ContactSyncTest {
         val ada = person()
         val fields = ada.getJSONObject("fields")
         assertEquals("Ada Lovelace", fields.getString("title"))
-        assertEquals("[\"+61412345678\"]", fields.getJSONArray("phones").toString())
+        assertEquals(listOf("+61412345678 mobile"), phones(ada))
         assertEquals("3", links(ada)!!.getString("device_${FakeHome.DEVICE_ID}"))
 
         // The contact holds the person's id and what the two now agree on, and keeps its own
@@ -131,7 +138,7 @@ class ContactSyncTest {
         val ada = person()
         assertEquals(id, ada.getString("id"))
         assertEquals("Ada King", ada.getJSONObject("fields").getString("title"))
-        assertEquals("[\"+61412345678\",\"+61499999999\"]", ada.getJSONObject("fields").getJSONArray("phones").toString())
+        assertEquals(listOf("+61412345678 mobile", "+61499999999 mobile"), phones(ada))
         assertEquals("Ada King", JSONObject(vaultRow(3).substringAfter(" ")).getString("name"))
         assertEquals("one person", 1, people().size)
     }
@@ -194,7 +201,7 @@ class ContactSyncTest {
             title   = "Carla Created"
             created = "2026-10-12T09:15:00Z"
             updated = "2026-10-12T09:15:00Z"
-            phones  = ["+16502530005"]
+            phones  = [{ number: "+16502530005", label: "mobile" }]
             """.trimIndent() + "\n",
         )
         VaultCore.sync()

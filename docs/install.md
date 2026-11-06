@@ -1,6 +1,6 @@
 # Install TheVault with Docker Compose
 
-This guide runs the TheVault server on one machine with Docker Compose. It covers the first start, how you reach the server, backups, upgrades, restoring and removing it.
+This guide runs the TheVault server on one machine with Docker Compose. It covers the first start, how you reach the server, backups, upgrades, restoring, rolling back and removing it.
 
 The server is one container, `thevault`. It keeps the vault in the `/data` volume and the vault's secret key in the `/config` volume. Two optional profiles add a front door: `https` adds Caddy for your own domain, and `cloudflare` adds a Cloudflare Tunnel. A third, `browser`, adds the [browser box](#browser-box), a desktop where agents drive a web browser.
 
@@ -288,13 +288,14 @@ To put the key in a backup anyway, add `--include-key` to the `vault backup` com
 
 ## Upgrade
 
-1. Pull the new image and restart:
+1. If you may want to go back to this version, take a backup with it first, as [Roll back an upgrade](#roll-back-an-upgrade) says.
+2. Pull the new image and restart:
 
    ```sh
    docker compose pull && docker compose up -d
    ```
 
-2. Check that `docker compose ps` shows `thevault` as `healthy`.
+3. Check that `docker compose ps` shows `thevault` as `healthy`.
 
 The container writes a backup to `/data/backups` before it starts the new version. `docker compose logs thevault` shows its path.
 
@@ -351,6 +352,35 @@ If the backup was made with `--include-key`, `restore-backup` writes the key its
 The container runs as uid 1000. If your host user is not uid 1000, make the files readable first with `chmod a+r restore.sqlar vault.key`.
 
 With host folders instead of named volumes, empty the `THEVAULT_DATA` folder instead of removing the volume in step 2.
+
+## Roll back an upgrade
+
+Some versions change the format of `state.db`. An older version refuses to start on a `state.db` that a newer version changed, so going back then needs a backup that the older version wrote.
+
+The backup that the container writes before an upgrade, `<old>-to-<new>-<time>.sqlar`, does not help here. The new version writes it after it has already changed `state.db`. So take your own backup before the upgrade:
+
+1. Before you upgrade, back up with the version that runs now, and copy the backup beside `compose.yaml`:
+
+   ```sh
+   docker compose exec thevault vault backup /data/backups/before-upgrade.sqlar
+   docker compose cp thevault:/data/backups/before-upgrade.sqlar ./restore.sqlar
+   docker compose exec thevault rm /data/backups/before-upgrade.sqlar
+   ```
+
+2. Upgrade as in [Upgrade](#upgrade).
+
+To go back:
+
+1. Set `THEVAULT_VERSION` in `.env` to the version you ran before, such as `0.1.14-alpha.20`, and start it:
+
+   ```sh
+   docker compose up -d
+   ```
+
+2. If `docker compose ps` shows `thevault` as `healthy`, you are done.
+3. If the server does not start and `docker compose logs thevault` shows a line like `state.db is corrupt: schema version 18 is newer than this build supports (17)`, restore `restore.sqlar` as in [Restore a backup](#restore-a-backup), from step 2, with the old version still in `.env`.
+
+Everything written to the vault since you took `restore.sqlar` is lost.
 
 ## Uninstall
 
