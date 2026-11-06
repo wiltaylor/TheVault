@@ -10067,6 +10067,23 @@ button.toast-action {
   gap: 0.5rem;
 }
 
+/* The inbox's one-time catch-up (TV-30): a date, the count before it, and a confirm. */
+.inbox-catch-up {
+  width: min(32rem, 100%);
+}
+
+.inbox-catch-up-date {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.inbox-catch-up .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 /* Agents in the left sidebar (agents G3): below Types, with a + and a ⋯ menu per agent */
 .agents-nav-heading {
   display: flex;

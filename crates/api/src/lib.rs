@@ -100,6 +100,7 @@ mod error;
 mod events;
 mod gitsync;
 mod google;
+mod inbox;
 mod inspect;
 mod notes;
 mod notifications;
@@ -253,6 +254,7 @@ fn build() -> Built {
         .put("/api/notes/{id}/canvas/{name}", defs::put_canvas)
         .post_up_to("/api/batch", MAX_BATCH, batch::run)
         .post("/api/upsert", batch::upsert)
+        .post("/api/inbox/mark-processed", inbox::mark_processed)
         .get("/api/query", query::run_get)
         .post("/api/query", query::run_post)
         .post("/api/query/parse", query::parse_query)

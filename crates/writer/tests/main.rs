@@ -19,6 +19,7 @@ mod dicts;
 mod dividers;
 mod event_series;
 mod gitsync;
+mod inbox;
 mod ink;
 mod office_text;
 mod open_taxonomies;
