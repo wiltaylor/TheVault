@@ -252,6 +252,7 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
             "attendees_raw",
             "organiser",
             "status",
+            "my_response",
             "meet_url",
             "series",
             "series_ref",
@@ -281,6 +282,11 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
     assert_eq!(field(event, "meet_url")["kind"], "url");
     assert_eq!(field(event, "series")["kind"], "string");
     assert_eq!(field(event, "series")["computed"], true);
+    assert_eq!(
+        field(event, "my_response")["options"],
+        json!(["needs_action", "accepted", "tentative", "declined"])
+    );
+    assert_eq!(field(event, "my_response")["hidden"], true);
     for name in ["google_ref", "etag", "snapshot", "send_updates"] {
         assert_eq!(field(event, name)["hidden"], true, "{name}");
     }
