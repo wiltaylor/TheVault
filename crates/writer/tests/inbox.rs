@@ -103,7 +103,11 @@ fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marke
     );
     assert_eq!(dry.total(), 4);
     assert_eq!((dry.changed, dry.chunks), (0, 0));
-    assert_eq!(processed(&w, &old_mail), None, "a dry run changes nothing");
+    assert_eq!(
+        processed(&w, &old_mail),
+        Some(false),
+        "a dry run changes nothing"
+    );
 
     let done = w.mark_processed_before(before, false, &author()).unwrap();
     assert_eq!(done.total(), 4);

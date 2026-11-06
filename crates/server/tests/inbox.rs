@@ -27,7 +27,7 @@ fn create(server: &TestServer, ty: &str, fields: Value) -> String {
     let made = expect(
         post(
             server,
-            &server.admin_token(),
+            server.admin_token(),
             &format!("/api/notes?type={ty}"),
             json!({ "note": { "fields": fields } }),
         ),
@@ -65,7 +65,7 @@ fn a_dry_run_counts_and_a_run_marks_the_old_mail_messages_and_calls() {
     create(&server, "fleeting", json!({ "title": "A thought" }));
 
     let body = json!({ "before": "2026-11-01T00:00:00Z", "dry_run": true });
-    let dry = expect(post(&server, &admin, MARK, body), StatusCode::OK);
+    let dry = expect(post(&server, admin, MARK, body), StatusCode::OK);
     assert_eq!(
         dry,
         json!({
@@ -78,17 +78,17 @@ fn a_dry_run_counts_and_a_run_marks_the_old_mail_messages_and_calls() {
     );
 
     let body = json!({ "before": "2026-11-01T00:00:00Z" });
-    let done = expect(post(&server, &admin, MARK, body.clone()), StatusCode::OK);
+    let done = expect(post(&server, admin, MARK, body.clone()), StatusCode::OK);
     assert_eq!(done["changed"], 3);
     assert_eq!(done["chunks"], 1);
-    let again = expect(post(&server, &admin, MARK, body), StatusCode::OK);
+    let again = expect(post(&server, admin, MARK, body), StatusCode::OK);
     assert_eq!(again["total"], 0);
     assert_eq!(again["changed"], 0);
 
     let left = expect(
         post(
             &server,
-            &admin,
+            admin,
             "/api/query",
             json!({ "query": "from fleeting where !processed" }),
         ),
@@ -101,13 +101,13 @@ fn a_dry_run_counts_and_a_run_marks_the_old_mail_messages_and_calls() {
 fn a_date_that_does_not_read_is_refused_and_a_write_token_may_not_run_it() {
     let server = TestServer::start();
     let admin = server.admin_token();
-    let res = post(&server, &admin, MARK, json!({ "before": "last week" }));
+    let res = post(&server, admin, MARK, json!({ "before": "last week" }));
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 
     let token = expect(
         post(
             &server,
-            &admin,
+            admin,
             "/api/tokens",
             json!({ "name": "agent", "scope": "write" }),
         ),
