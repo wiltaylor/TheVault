@@ -188,7 +188,7 @@ fn act(gmail: Gmail, id: string, action: string, body: string) -> Result[(), str
         Err(_) => "",
     }
     let why = if message == "" { r.body.trim() } else { message }
-    Err(fmt("Gmail answered {} to {} of message {}: {}", r.status, action, id, why))
+    Err(fmt("Gmail answered {} to {} of message {}: {}", r.status, action, id, clip(why, 300)))
 }
 
 // ---- the handlers ---------------------------------------------------------------------------
@@ -221,9 +221,43 @@ fn after_delete(note: Value) -> Result[(), string] {
     if id == "" {
         return Ok(())
     }
-    remember_trashed(id)?
-    // The email is in the vault's trash, so the notification is not tied to it.
-    reported(note, "trash", "", send(id, "trash", ""))
+    // The trash is sent also when the ref cannot be remembered, and each failure raises its own
+    // notification, not tied to the email, which is in the vault's trash.
+    let remembered = remember_trashed(id)
+    let sent = reported(note, "trash", "", send(id, "trash", ""))
+    match remembered {
+        Ok(_) => sent,
+        Err(e) => {
+            let why = "the vault could not remember it as trashed: " + clip(e, 300)
+            let body = sentence(why) + about(note) + " The Gmail sync can import it again."
+            notice("A trashed email can come back", body, "")
+            Err(why)
+        },
+    }
+}
+
+// `s` cut to at most `n` characters, with an ellipsis when it was cut.
+fn clip(s: string, n: int) -> string {
+    if s.len() > n { s.slice(0, n - 1) + "…" } else { s }
+}
+
+// `s` ending in one full stop.
+fn sentence(s: string) -> string {
+    if s.ends_with(".") { s } else { s + "." }
+}
+
+// " Email: <subject>." for the email in the handler's argument, or "" when it has no subject.
+fn about(note: Value) -> string {
+    let subject = text_of(fields_at(note, "note"), "title")
+    if subject == "" { "" } else { " Email: " + clip(subject, 200) + "." }
+}
+
+// Raise a notification on note `on` unless that is "", and log it when it cannot be raised.
+fn notice(title: string, body: string, on: string) {
+    match vault::notify(title, body, on) {
+        Ok(_) => {},
+        Err(n) => vault::log("The notification was not raised: " + n),
+    }
 }
 
 // Connect and POST `body` to message `id`'s `action`. Not connected, or without gmail.modify,
@@ -244,13 +278,8 @@ fn reported(note: Value, verb: string, on: string, result: Result[(), string]) -
         Ok(_) => Ok(()),
         Err(e) => {
             let title = "Gmail did not " + verb + " an email"
-            let subject = text_of(fields_at(note, "note"), "title")
-            let about = if subject == "" { "" } else { " Email: " + subject + "." }
-            let body = e + "." + about + " Nothing retries it: " + verb + " the message in Gmail."
-            match vault::notify(title, body, on) {
-                Ok(_) => {},
-                Err(n) => vault::log("The notification was not raised: " + n),
-            }
+            let body = sentence(clip(e, 600)) + about(note) + " Nothing retries it: " + verb + " the message in Gmail."
+            notice(title, body, on)
             Err(e)
         },
     }
