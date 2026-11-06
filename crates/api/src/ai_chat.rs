@@ -312,7 +312,7 @@ fn change_scope(caller: Scope, agent: &Agent) -> Scope {
 /// nothing.
 fn change_switch(name: &str) -> Option<&'static str> {
     Some(match name {
-        "propose_edit" | "propose_create" => "notes",
+        "propose_edit" | "propose_fields" | "propose_create" => "notes",
         "propose_archive" => "archive",
         "propose_delete" => "delete",
         "propose_type_change" | "propose_type_delete" => "types",
@@ -363,6 +363,81 @@ fn turn_tools(
         tools.retain(|t| change_switch(&t.name).is_none_or(|s| direct.makes(s)));
     }
     tools
+}
+
+/// Each confirmation switch: its key, its label on the agent's Permissions tab, and the change
+/// it guards, in the tab's order.
+const SWITCHES: [(&str, &str, &str); 9] = [
+    (
+        "notes",
+        "Ask before creating and editing notes",
+        "create or edit notes",
+    ),
+    ("archive", "Ask before archiving notes", "archive notes"),
+    (
+        "delete",
+        "Ask before moving notes to the trash",
+        "move notes to the trash",
+    ),
+    (
+        "types",
+        "Ask before changing types",
+        "change or delete types",
+    ),
+    (
+        "downloads",
+        "Ask before downloading files into the vault",
+        "store files in the vault",
+    ),
+    (
+        "taxonomies",
+        "Ask before changing taxonomies",
+        "change or delete taxonomies",
+    ),
+    (
+        "agents",
+        "Ask before changing agents",
+        "change agents or their memories",
+    ),
+    ("skills", "Ask before changing skills", "change skills"),
+    (
+        "tools",
+        "Ask before changing script tools",
+        "change script tools",
+    ),
+];
+
+/// For an unattended run: the changes `agent` may make with someone present that this run is not
+/// offered, because their switch asks first and no one can apply a proposal (agents G12), as a
+/// section of the system text. `None` when nothing is held back.
+fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
+    let names: std::collections::BTreeSet<String> = tool_specs()
+        .into_iter()
+        .chain(crate::ai_web::tool_specs())
+        .chain(crate::ai_browser::tool_specs())
+        .map(|t| t.name)
+        .collect();
+    let held: Vec<String> = SWITCHES
+        .iter()
+        .filter(|(key, ..)| {
+            !direct.makes(key)
+                && names.iter().any(|n| {
+                    change_switch(n).is_some_and(|s| s == *key) && agent.permissions.allows_tool(n)
+                })
+        })
+        .map(|(_, label, what)| format!("- {what}: your \"{label}\" switch is on"))
+        .collect();
+    if held.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "\n## This run is unattended\n\nNo one is present to apply a proposal, so this run has \
+         no tools for the changes that would only be proposed:\n\n{}\n\nWhen the task needs one \
+         of them, do not say you have no tool for it. Say which change you would make, and that \
+         it needs the user: in a chat with you, or with that switch turned off on your \
+         Permissions tab.\n",
+        held.join("\n")
+    ))
 }
 
 /// The tools an unattended run of `agent` is offered, by name (agents G12).
@@ -993,7 +1068,8 @@ impl Limits {
         let input = &call.input;
         let (type_name, verb) = match call.name.as_str() {
             "propose_create" => (input["type"].as_str()?.trim().to_owned(), "change"),
-            "get_note" | "propose_edit" | "propose_archive" | "propose_delete" => {
+            "get_note" | "propose_edit" | "propose_fields" | "propose_archive"
+            | "propose_delete" => {
                 let id = input["id"].as_str()?.trim();
                 let n = w.read(id).ok()?;
                 let verb = if call.name == "get_note" {
@@ -1123,6 +1199,7 @@ fn web_of(agent: &Agent) -> ai::Web {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     w: &Writer,
     scope: Scope,
@@ -1131,6 +1208,7 @@ fn setup(
     model: Option<String>,
     note_id: Option<String>,
     skills: Option<&str>,
+    unattended: bool,
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let settings = Settings::load(state)?;
@@ -1201,6 +1279,12 @@ fn setup(
     if let Some(note) = crate::ai_scripts::prompt_note(&scripts, skills_offered) {
         system.push_str(&note);
     }
+    let direct = Direct::of(confirm_of(agent), change_scope(scope, agent));
+    // An unattended run is offered no change tool that would only propose (agents G12): say
+    // which, so the model names the switch rather than saying it has no tool (TV-34).
+    if unattended && let Some(note) = withheld_note(agent, direct) {
+        system.push_str(&note);
+    }
     // The skills come last, the thread's snapshot, so what comes before stays a stable prefix
     // (skills S6).
     if let Some(section) = skills {
@@ -1211,7 +1295,7 @@ fn setup(
         model,
         cred,
         system,
-        direct: Direct::of(confirm_of(agent), change_scope(scope, agent)),
+        direct,
         web_search: crate::brave::Search::load(state),
         fetch_private: settings.fetch_private,
         web: web_of(agent),
@@ -1486,6 +1570,7 @@ impl Turn {
     ) {
         let w = self.writer.clone();
         let scope = self.scope;
+        let unattended = self.unattended;
         let skills = self.skills.section().map(str::to_owned);
         let uses_skills = crate::ai_skills::uses_skills(&agent);
         let setup = match tokio::task::spawn_blocking(move || {
@@ -1497,6 +1582,7 @@ impl Turn {
                 model,
                 note_id,
                 skills.as_deref(),
+                unattended,
             )
         })
         .await
@@ -2859,6 +2945,11 @@ pub fn tool_specs() -> Vec<ToolSpec> {
             json!({ "name": { "type": "string", "description": "The type's name, such as `task`." } }),
         ),
         tool(
+            "value_format",
+            "How each field value is written: dates, datetimes with their offset, times, date ranges, durations, URLs, note and asset references, taxonomy terms, locations and colours, with the JSON form of a note and which fields only the server writes. Read it before writing a field you are not sure of, and after a note is refused.",
+            json!({}),
+        ),
+        tool(
             "query_format",
             "The whole query language: clauses and their order, field names and values, operators, every function, what SQL habits to avoid, worked examples, and query views. Read it before writing a query that is more than a type and a simple condition, and after a query syntax error.",
             json!({}),
@@ -2983,6 +3074,18 @@ pub fn tool_specs() -> Vec<ToolSpec> {
                 "note": {
                     "type": "string",
                     "description": "The whole new note as JSON text, {\"fields\": {...}, \"blocks\": [...]}, with every field and block it keeps.",
+                },
+            }),
+        ),
+        tool(
+            "propose_fields",
+            "Propose setting some fields of one note, keeping every other field and the whole body as they are: the way to tick `processed`, change a status or a due date, or fix a title without resending the note. It is checked and shown to the user like propose_edit, and written at once when the user lets note changes go ahead without asking. A content field (the body) is a block: change it with propose_edit.",
+            json!({
+                "id": { "type": "string", "description": "The note's id." },
+                "base_version": { "type": "string", "description": "The version get_note returned." },
+                "fields": {
+                    "type": "string",
+                    "description": "JSON text of an object: each field to set and its new value, such as {\"processed\": true, \"due\": \"2026-12-01\"}. null removes a field.",
                 },
             }),
         ),
@@ -3461,11 +3564,13 @@ fn propose_or_read(
                 .map_err(ToolOut::error)
         }),
         "propose_edit" => propose(w, author, &call.id, input),
+        "propose_fields" => propose_fields(w, author, &call.id, input),
         "propose_create" => propose_create(w, author, &call.id, input),
         "propose_archive" => propose_archive(w, &call.id, input),
         "propose_delete" => propose_delete(w, author, &call.id, input),
         "list_types" => Ok(list_types(w)),
         "get_type" => get_type(w, input),
+        "value_format" => Ok(value_format()),
         "query_format" => Ok(query_format()),
         "type_format" => Ok(type_format()),
         "block_format" => Ok(block_format()),
@@ -3582,6 +3687,50 @@ fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<
         summary,
         proposal: Some(("proposal", proposal)),
     })
+}
+
+/// `propose_fields`: the current note with the given fields set (or removed, for `null`), checked
+/// and proposed as [`propose`] does, so every other field and every block stays as it is (TV-34).
+fn propose_fields(
+    w: &Writer,
+    author: &Author,
+    call_id: &str,
+    input: &Value,
+) -> Result<ToolOut, ToolOut> {
+    let id = str_arg(input, "id")?;
+    let base = str_arg(input, "base_version")?;
+    let fields = match &input["fields"] {
+        Value::String(s) => serde_json::from_str::<Value>(s)
+            .map_err(|e| ToolOut::error(format!("fields is not JSON: {e}")))?,
+        v => v.clone(),
+    };
+    let Value::Object(fields) = fields else {
+        return Err(ToolOut::error(
+            "fields must be a JSON object of field names and their new values",
+        ));
+    };
+    if fields.is_empty() {
+        return Err(ToolOut::error("fields names no field to set"));
+    }
+    let current = w
+        .read(id)
+        .map_err(|e| ToolOut::error(get_note_error(id, &e.to_string())))?;
+    let mut note = doc_to_json(&current.doc);
+    for (name, value) in fields {
+        if value.is_null() {
+            if let Some(map) = note["fields"].as_object_mut() {
+                map.remove(&name);
+            }
+        } else {
+            note["fields"][name] = value;
+        }
+    }
+    propose(
+        w,
+        author,
+        call_id,
+        &json!({ "id": id, "base_version": base, "note": note }),
+    )
 }
 
 /// A note that changed since the version the model based its change on.
@@ -3844,6 +3993,39 @@ pub fn block_format_text() -> &'static str {
             format_section("\n## Content blocks\n", "\n## Imported HTML\n"),
         )
     })
+}
+
+/// How the vault format's WCL maps onto the JSON form the note tools take: the start of
+/// `value_format`, before the sections it quotes, which show WCL.
+const NOTE_JSON: &str = "## A note as JSON\n\n\
+The note tools take and give a note as `{ \"fields\": { ... }, \"blocks\": [ ... ] }`. A plain \
+field is a member of `fields` with its value: text, a number, true or false, a list as an array, \
+and a record (a date range, a location) as an object with every member, such as \
+`{ \"start\": \"2026-11-01\", \"end\": \"2026-11-03\" }`. Leave an optional field with no value \
+out. A compound field (content, dict, ink, canvas) is a block under `blocks`: \
+`{ \"kind\": \"content\", \"labels\": [\"body\"], \"blocks\": [ ... ] }`, each inner block as \
+`{ \"kind\": ..., \"fields\": { ... }, \"blocks\": [ ... ] }` (block_format lists the kinds). \
+`created`, `updated` and `archived` are the server's: it ignores them in a write. A field the \
+type marks `computed` (get_type's summary shows the flag) is written by its handlers only: \
+leave it as it is. The sections below \
+show each value in WCL, the vault's file format; the JSON value is the same.\n";
+
+/// The sections of `docs/vault-format.md` a field value is written from: value encodings and
+/// note files, after [`NOTE_JSON`].
+pub fn value_format_text() -> &'static str {
+    static TEXT: OnceLock<String> = OnceLock::new();
+    TEXT.get_or_init(|| {
+        format!(
+            "{NOTE_JSON}\n{}\n\n{}\n",
+            format_section("\n## Value encodings\n", "\n## Type files\n"),
+            format_section("\n## Note files\n", "\n## Event series occurrences\n"),
+        )
+    })
+}
+
+/// `value_format`: how field values are written.
+fn value_format() -> ToolOut {
+    type_out(json!({ "format": value_format_text() }), Vec::new(), None)
 }
 
 /// The sections of `docs/vault-format.md` a query is written from: the query language and query
@@ -4150,6 +4332,49 @@ mod tests {
         assert!(!t.contains("## Handlers"));
         assert!(!t.contains("## Imported HTML"));
         assert!(t.len() < RESULT_LIMIT * 8 / 10, "{} bytes", t.len());
+    }
+
+    #[test]
+    fn value_format_holds_the_json_form_value_encodings_and_note_files() {
+        let t = value_format_text();
+        assert!(t.starts_with("## A note as JSON"), "{}", &t[..40]);
+        assert!(t.contains("## Value encodings"));
+        assert!(t.contains("| Date range |"));
+        assert!(t.contains("## Note files"));
+        assert!(t.contains("computed"));
+        assert!(!t.contains("## Type files"));
+        assert!(!t.contains("## Event series occurrences"));
+        assert!(t.len() < RESULT_LIMIT * 8 / 10, "{} bytes", t.len());
+    }
+
+    #[test]
+    fn an_unattended_run_names_the_switches_that_hold_its_changes_back() {
+        let agent = |wcl: &str| Agent::parse("a", wcl).unwrap();
+        let note = |a: &Agent| withheld_note(a, Direct::of(confirm_of(a), unattended_scope(a)));
+        // Every switch on, every tool: everything is held back, types included.
+        let text = note(&agent("label = \"A\"\n")).unwrap();
+        assert!(text.contains("## This run is unattended"), "{text}");
+        assert!(
+            text.contains(
+                "create or edit notes: your \"Ask before creating and editing notes\" switch is on"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("change or delete types"), "{text}");
+        assert!(text.contains("do not say you have no tool"), "{text}");
+        // Notes allowed without asking, and a tools list without type tools: neither is listed.
+        let text = note(&agent(
+            "label = \"A\"\n\npermissions {\n  tools = [\"get_note\", \"propose_fields\", \"propose_archive\"]\n  confirm {\n    notes = false\n  }\n}\n",
+        ))
+        .unwrap();
+        assert!(!text.contains("edit notes"), "{text}");
+        assert!(!text.contains("types"), "{text}");
+        assert!(text.contains("archive notes"), "{text}");
+        // Nothing held back: no section.
+        assert!(note(&agent(
+            "label = \"A\"\n\npermissions {\n  tools = [\"get_note\", \"propose_edit\"]\n  confirm {\n    notes = false\n  }\n}\n",
+        ))
+        .is_none());
     }
 
     #[test]

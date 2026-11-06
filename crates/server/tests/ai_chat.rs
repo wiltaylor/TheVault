@@ -53,9 +53,10 @@ impl Api {
             .unwrap();
         let api = Api { server, client };
         // These tests read the system text and the tools as the shipped prompt alone makes
-        // them: start without the shipped skills, `wscript` (script-tools T5) and
-        // `vault-queries` (TV-29), which would add the skills section and the skill tools.
-        for skill in ["wscript", "vault-queries"] {
+        // them: start without the shipped skills, `wscript` (script-tools T5), `vault-queries`
+        // (TV-29) and `vault-notes` (TV-34), which would add the skills section and the skill
+        // tools.
+        for skill in ["wscript", "vault-queries", "vault-notes"] {
             let res = api
                 .client
                 .delete(api.server.url(&format!("/api/skills/{skill}")))
@@ -316,7 +317,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 51);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 53);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
@@ -508,6 +509,59 @@ fn propose_edit_emits_a_proposal_and_writes_nothing() {
             .unwrap()
             .contains("awaits the user")
     );
+}
+
+#[test]
+fn propose_fields_changes_only_the_named_fields_and_keeps_the_body() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let (id, version) = api.memo("Groceries", "Milk");
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_f",
+        "propose_fields",
+        json!({ "id": id, "base_version": version, "fields": "{\"title\": \"Groceries for Friday\"}" }),
+    ));
+    fake.push(AnthropicMessage::text("I proposed the new title."));
+    let events = api.chat(json!([user("Retitle my groceries for Friday.")]));
+    assert_eq!(
+        shape(&events),
+        ["tool", "proposal", "tool_result", "text", "done"],
+        "{events:?}"
+    );
+    let p = last(&events, "proposal");
+    assert_eq!(p["note_id"], id.as_str());
+    assert_eq!(p["base_version"], version.as_str());
+    // One change, the title; the body is the same blocks as before.
+    assert_eq!(p["ops"].as_array().unwrap().len(), 1, "{p}");
+    assert_eq!(p["ops"][0]["name"], "title");
+    assert_eq!(p["after"]["fields"]["title"], "Groceries for Friday");
+    assert_eq!(p["after"]["blocks"], p["before"]["blocks"]);
+    assert!(p["after"]["blocks"].to_string().contains("Milk"));
+    // Nothing was written.
+    assert_eq!(api.note(&id)["version"], version.as_str());
+}
+
+#[test]
+fn propose_fields_refuses_fields_that_are_not_an_object() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let (id, version) = api.memo("Groceries", "Milk");
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_f",
+        "propose_fields",
+        json!({ "id": id, "base_version": version, "fields": "[\"title\"]" }),
+    ));
+    fake.push(AnthropicMessage::text("Let me fix that."));
+    let events = api.chat(json!([user("Retitle it.")]));
+    assert_eq!(last(&events, "tool_result")["is_error"], true);
+    let second = fake.message_requests()[1].json();
+    let text = second["messages"][2]["content"][0]["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(text.contains("fields must be a JSON object"), "{text}");
 }
 
 #[test]

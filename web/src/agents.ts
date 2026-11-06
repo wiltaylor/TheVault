@@ -226,6 +226,7 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["search_notes", "Search notes"],
       ["query_notes", "Query notes"],
       ["query_format", "Read the query language"],
+      ["value_format", "Read the field value formats"],
       ["get_note", "Read a note"],
       ["backlinks", "List backlinks"],
     ],
@@ -234,6 +235,7 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
     group: "Notes (changes)",
     tools: [
       ["propose_edit", "Edit notes"],
+      ["propose_fields", "Set note fields"],
       ["propose_create", "Create notes"],
       ["propose_archive", "Archive notes"],
       ["propose_delete", "Move notes to the trash"],

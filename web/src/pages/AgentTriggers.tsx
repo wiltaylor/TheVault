@@ -45,7 +45,7 @@ export const MENTION_WARNING =
 
 /** Whether an agent with these permissions can change a note itself, with no one to confirm. */
 export function changesNotes(p: AgentTabProps["draft"]["permissions"]): boolean {
-  return !p.confirm.notes && (p.tools === null || p.tools.includes("propose_edit"));
+  return !p.confirm.notes && (p.tools === null || p.tools.includes("propose_edit") || p.tools.includes("propose_fields"));
 }
 
 /** The browser's IANA time zone, a new schedule's default. */
