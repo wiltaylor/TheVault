@@ -18,6 +18,9 @@ use regex
 // - The run's state is the JSON object in the `google_gmail_state` secret, written with
 //   `secrets::set` and by nothing else: `history_id`, `listed`, `backfill_page`, `last_run`,
 //   `last_error` and `notified_invalid_grant`. No note is written for it.
+// - The `google_gmail_trashed` secret, a JSON list written by the `email` type's `google_mail`
+//   handler (TV-25), holds the Gmail ids of the emails the user moved to the vault's trash. They
+//   are never imported again, and neither is a message labelled `TRASH`.
 // - The first run lists the window. Later runs read Gmail's history from `history_id`:
 //   new messages are pulled, a label change updates the email's labels and nothing else, and a
 //   message deleted in Gmail archives its note. A history id Gmail no longer keeps (404) lists
@@ -132,6 +135,9 @@ struct Ctx {
     archived: int,
     failed: int,
     first_failure: string,
+    // The Gmail ids of the emails the user moved to the vault's trash (TV-25), never imported
+    // again.
+    trashed: List[string],
 }
 
 fn text_of(v: Value, key: string) -> string {
@@ -891,7 +897,7 @@ fn import(ctx: Ctx, id: string) -> Result[bool, string] {
     if out_of_budget(ctx) {
         return Ok(false)
     }
-    if !stored(id)?.is_null() {
+    if ctx.trashed.contains(id) || !stored(id)?.is_null() {
         return Ok(true)
     }
     match save(ctx, id) {
@@ -938,6 +944,10 @@ fn save(ctx: Ctx, id: string) -> Result[(), string] {
     let from = person_of(ctx, from_raw)?
     let to = people_of(ctx, to_raw)?
     let cc = people_of(ctx, cc_raw)?
+    // A message in Gmail's trash is not pulled, as Gmail's own listing leaves it out (TV-25).
+    if strings_of(message, "labelIds").contains("TRASH") {
+        return Ok(())
+    }
     let labels = terms_of(ctx, strings_of(message, "labelIds"))?
 
     let body = if too_large {
@@ -1611,6 +1621,10 @@ fn new_ctx(endpoints: Value, token: string, started: int) -> Ctx {
         archived: 0,
         failed: 0,
         first_failure: "",
+        trashed: match secret_json("google_gmail_trashed") {
+            Value::List(items) => items.map(|v| v.as_string().unwrap_or("")),
+            _ => [],
+        },
     }
 }
 

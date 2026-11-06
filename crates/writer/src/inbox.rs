@@ -2,8 +2,9 @@
 //! a date as processed, so the unified inbox does not start with years of old mail.
 //!
 //! Only `processed` changes, and only on notes where it is not set yet, so a second run changes
-//! nothing. Fleeting notes are never touched. Nothing is sent anywhere: the Gmail sync never reads
-//! `processed`. The query language has no datetime literal, so each type's unprocessed notes are
+//! nothing. Fleeting notes are never touched. Nothing is sent anywhere: an email also gets
+//! `inbox_catch_up`, when its type has the field, and the `email` type's mail action handler sends
+//! nothing to Gmail for a write that sets it (TV-25). The query language has no datetime literal, so each type's unprocessed notes are
 //! read through the index with their time field, and the date rule runs here. A note with no time,
 //! or one that does not read as a datetime, is left alone.
 //!
@@ -28,6 +29,9 @@ pub const CATCH_UP_TYPES: [(&str, &str); 3] =
 pub const CHUNK: usize = 200;
 
 const PROCESSED: &str = "processed";
+
+/// The hidden email field that marks a catch-up write, so Gmail is not changed (TV-25).
+const CATCH_UP: &str = "inbox_catch_up";
 
 /// What a catch-up matched and changed, per type in [`CATCH_UP_TYPES`] order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -153,6 +157,12 @@ impl Writer {
     /// Set `processed` on each note of `ids` that does not have it yet, as one batch. `None` when
     /// a note changed between its read and the write, so nothing was committed.
     fn set_processed(&self, ids: &[String], author: &Author) -> Result<Option<usize>> {
+        let schema = self.schema();
+        let marks = |type_name: &str| {
+            schema
+                .type_def(type_name)
+                .is_some_and(|t| t.field(CATCH_UP).is_some())
+        };
         let mut ops = Vec::new();
         for id in ids {
             let note = match self.read(id) {
@@ -166,6 +176,9 @@ impl Writer {
             }
             let mut doc = doc_to_json(&note.doc);
             doc["fields"][PROCESSED] = json!(true);
+            if marks(&note.type_name) {
+                doc["fields"][CATCH_UP] = json!(true);
+            }
             ops.push(Op::Update {
                 id: id.clone(),
                 base: Some(note.version),

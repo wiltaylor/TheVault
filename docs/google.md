@@ -110,7 +110,7 @@ A vault from 0.1.7 had a **Google sync** settings note instead. The first start 
 
 | Scope | Why |
 |---|---|
-| `https://www.googleapis.com/auth/gmail.readonly` | Read mail and labels. TheVault never deletes or changes mail. Google classes this scope as restricted; no narrower scope can read message bodies. |
+| `https://www.googleapis.com/auth/gmail.modify` | Read mail and labels, archive an email you mark done and move an email you delete to Gmail's trash. See [Mail actions in Gmail](#mail-actions-in-gmail). TheVault never deletes mail for good. Google classes this scope as restricted; no narrower scope can read message bodies. Connections made before mail actions hold `gmail.readonly` instead. |
 | `https://www.googleapis.com/auth/gmail.send` | Send the emails you approve in the Outbox. See [Sending email from the Outbox](#sending-email-from-the-outbox). |
 | `https://www.googleapis.com/auth/calendar` | Read events, and write back the events you edit, create or delete in the vault. |
 | `openid`, `email` | Learn which Google address signed in, to show it on the card. |
@@ -145,6 +145,31 @@ A connection made before TheVault could send has no `gmail.send` scope. The Goog
 4. Tick every permission on Google's consent screen, including **Send email on your behalf**, and finish connecting.
 
 The card stops showing the line once Google has granted the scope. `GET /api/integrations/google` answers `can_send: true` from then on.
+
+## Mail actions in Gmail
+
+What you do with an email in TheVault goes back to Gmail (TV-25). This reverses google-sync D2, which kept Gmail read-only.
+
+| In TheVault | In Gmail |
+|---|---|
+| Mark an email done, so `processed` turns on | The message is archived: `messages.modify` removes the `INBOX` label. It keeps its other labels and stays in All Mail |
+| Delete an email | The message moves to Gmail's trash with `messages.trash`. Gmail deletes it for good after 30 days |
+
+It goes one way only:
+
+- Nothing in Gmail changes the vault through these actions. Archiving or trashing a message in Gmail does not mark its note done or delete it. The sync still brings label changes and archives a note whose message Gmail deleted for good, as before.
+- Nothing is undone. Turning `processed` off again or restoring the email from the vault's trash sends nothing. Turning `processed` on again later archives the message again.
+- **Mark older processed…** in the inbox sends nothing to Gmail. It sets the hidden field `inbox_catch_up` with `processed`, and a write that sets it is not sent.
+- Writes by the Gmail sync, by any scheduled task and by handlers send nothing, so the sync and the mail actions never feed each other.
+- A deleted email is never imported again, also when Gmail was not reached: its Gmail id goes into the secret `google_gmail_trashed`, which the sync skips. The sync also skips any message in Gmail's trash.
+
+The action runs on the home server, from the `email` type's handlers in `scripts/google_mail.ws`. An action taken in the desktop or Android app is sent once the change syncs to the server; offline, it waits in the app's queue. A message Gmail no longer has counts as done. Any other Gmail error fails the handler run, which the server records with Gmail's message; the action is not retried.
+
+### Reconnect for mail actions
+
+A connection made before mail actions has `gmail.readonly`, not `gmail.modify`. The Google card then shows **Reconnect Google to sync mail actions.** with a **Connect** button, and no mail action is sent until you connect again: the handler run logs that and ends without an error. Reconnect as in [Reconnect to send](#reconnect-to-send), and tick every permission on Google's consent screen. `GET /api/integrations/google` answers `can_modify: true` from then on.
+
+Emails you marked done before you reconnect stay in Gmail's inbox: only a change of `processed` made after the reconnect is sent.
 
 ## Keeping the sign-in alive
 

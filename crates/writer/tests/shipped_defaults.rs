@@ -123,7 +123,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
     let fields: Vec<&str> = done
@@ -480,7 +481,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -681,7 +683,8 @@ fn a_0_1_6_vault_ends_with_lists_of_dicts_and_an_image_photo() {
                 "0008_outbox_template",
                 "0009_outbox_statuses",
                 "0010_ai_accounts",
-                "0011_email_template"
+                "0011_email_template",
+                "0012_email_gmail_handlers"
             ],
             "{name}"
         );
@@ -870,7 +873,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
     // One more for step 0007's Correspondence tab on the person type, one for each of the
@@ -1330,7 +1334,8 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
 
@@ -1426,7 +1431,8 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
     assert!(w.schema().type_def("google_sync").is_none());
@@ -1460,7 +1466,8 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
                 "0008_outbox_template",
                 "0009_outbox_statuses",
                 "0010_ai_accounts",
-                "0011_email_template"
+                "0011_email_template",
+                "0012_email_gmail_handlers"
             ]
         );
         assert!(w.schema().type_def("google_sync").is_some());
