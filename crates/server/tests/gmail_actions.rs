@@ -440,7 +440,108 @@ fn a_gmail_refusal_fails_the_run_and_notifies_on_the_email() {
             .ends_with("Nothing retries it: trash the message in Gmail."),
         "{items:#?}"
     );
+    assert!(
+        items[0]["body"]
+            .as_str()
+            .unwrap()
+            .contains(" Email: Subject one. "),
+        "{items:#?}"
+    );
     assert_eq!(items[0]["note"], Value::Null, "{items:#?}");
+}
+
+/// Gmail can answer with a long body, such as an HTML error page. The notice clips it, so it stays
+/// under the notification's 2000 characters and is raised (TV-54).
+#[test]
+fn a_long_gmail_error_is_clipped_in_the_notice() {
+    let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+    let one = api.email("one");
+    let long = format!("{}end.", "x".repeat(5000));
+    api.google.set_action_error(Some((500, &long)));
+    let mut note = api.note(&one);
+    note["note"]["fields"]["processed"] = json!(true);
+    expect(
+        api.req("PUT", &format!("/api/notes/{one}"))
+            .json(&json!({ "note": note["note"], "base_version": note["version"] }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    let failed = api.server.settle_handlers();
+    assert_eq!(failed.len(), 1, "{failed:#?}");
+    let items = api.notifications();
+    assert_eq!(items.len(), 1, "{failed:#?}");
+    let body = items[0]["body"].as_str().unwrap();
+    assert!(body.chars().count() <= 2000, "{} characters", body.chars().count());
+    assert!(body.contains('…'), "{body}");
+    assert!(!body.contains(".."), "{body}");
+    assert!(body.ends_with("Nothing retries it: archive the message in Gmail."), "{body}");
+}
+
+/// An `email` type whose `after_delete` handler lost the `google_gmail_trashed` secret cannot
+/// remember the ref. The trash still goes to Gmail, and the user is told the email can come back
+/// (TV-54).
+#[test]
+fn a_ref_the_handler_cannot_remember_still_trashes_and_notifies() {
+    let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+    let one = api.email("one");
+    let email = api.file("types/email.wcl");
+    let without = email.replacen(", \"google_gmail_trashed\"]", "]", 1);
+    assert_ne!(without, email);
+    expect(
+        api.req("PUT", "/api/types/email")
+            .body(without)
+            .send()
+            .unwrap(),
+        200,
+    );
+    let note = api.note(&one);
+    let version = note["version"].as_str().unwrap();
+    expect(
+        api.req(
+            "DELETE",
+            &format!("/api/notes/{one}?base_version={version}"),
+        )
+        .send()
+        .unwrap(),
+        200,
+    );
+    let failed = api.server.settle_handlers();
+    assert_eq!(failed.len(), 1, "{failed:#?}");
+    assert!(
+        failed[0].contains("the vault could not remember it as trashed"),
+        "{failed:#?}"
+    );
+    assert_eq!(api.google.mail_actions(), [trash("one")]);
+    let items = api.notifications();
+    assert_eq!(items.len(), 1, "{items:#?}");
+    assert_eq!(items[0]["title"], "A trashed email can come back");
+    assert_eq!(items[0]["note"], Value::Null, "{items:#?}");
+}
+
+/// A `tasks/google_gmail.wcl` edited before mail actions does not grant `google_gmail_trashed`:
+/// the sync says so in its log and imports as before (TV-25, TV-54).
+#[test]
+fn a_sync_task_without_the_trashed_secret_says_so() {
+    let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+    let task = api.file("tasks/google_gmail.wcl");
+    let without = task.replacen(", \"google_gmail_trashed\"]", "]", 1);
+    assert_ne!(without, task);
+    expect(
+        api.req("PUT", "/api/tasks/google_gmail")
+            .body(without)
+            .send()
+            .unwrap(),
+        200,
+    );
+    let run = api.run_gmail();
+    assert!(
+        run["log"]
+            .as_str()
+            .unwrap()
+            .contains("This task cannot read the google_gmail_trashed secret"),
+        "{run:#}"
+    );
 }
 
 #[test]

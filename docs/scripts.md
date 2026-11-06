@@ -725,7 +725,11 @@ Neither sends anything when:
 - the note has no `gmail_ref`;
 - Google is not connected, or `google_settings` lacks `https://www.googleapis.com/auth/gmail.modify` in `scopes`. The run logs the reason and ends successfully.
 
-Turning `processed` off and restoring an email from the trash send nothing. A 404 from Gmail counts as done. Any other answer, or a failed sign-in, fails the run with Gmail's status and message and raises a notification on the email ("Gmail did not archive an email" or "Gmail did not trash an email"): nothing retries it.
+Turning `processed` off and restoring an email from the trash send nothing. A 404 from Gmail counts as done. Any other answer, or a failed sign-in, fails the run with Gmail's status and message and raises a notification ("Gmail did not archive an email" on the email, or "Gmail did not trash an email", which is not tied to the trashed email and names its subject in the body): nothing retries it. Gmail's reason is clipped, so the notification stays within its 2000 characters.
+
+When the handler cannot add the ref to `google_gmail_trashed`, for example because an edited `email` type no longer grants the secret to `after_delete`, the trash still goes to Gmail, the run fails, and the notification "A trashed email can come back" says that the sync can import the message again.
+
+`previous` is the note's last recorded version before the write. A note with no recorded version, such as one whose history was never stored, has `previous` null, so an update that keeps `processed` true counts as turning it on and archives the message again in Gmail, which changes nothing there when it is archived already.
 
 The `google_gmail` task reads `google_gmail_trashed`. A `tasks/google_gmail.wcl` the user edited before mail actions may not list it in `secrets`: each sync run then logs that it cannot read it, and an email trashed in the vault can be imported again until the secret is added.
 
