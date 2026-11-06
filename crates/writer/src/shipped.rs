@@ -71,8 +71,9 @@ pub struct ShippedFile {
 /// Google sync's scripts, each before the task that names it (google-sync D19), the event series
 /// write-back (event-series E3), the Outbox's send handler (outbox X3), then the built-in agent
 /// (agents G6), then the built-in `wscript` skill (script-tools T5), then the `vault-queries` skill
-/// (TV-29) and the `vault-notes` skill (TV-34).
-pub const SHIPPED_FILES: [ShippedFile; 23] = [
+/// (TV-29), the `vault-notes` skill (TV-34), and the `vault-comms` and `vault-automation` skills
+/// (TV-35).
+pub const SHIPPED_FILES: [ShippedFile; 25] = [
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -274,6 +275,18 @@ pub const SHIPPED_FILES: [ShippedFile; 23] = [
         path: "skills/vault-notes/SKILL.md",
         source: include_str!("../defaults/skills/vault-notes/SKILL.md"),
         hashes: &["9d41e06d86277eab708d43e4ff1c4cf2e45db829f0281e437eb82a49a5d5c59f"],
+    },
+    // Mail, messages, calls, the inbox and the Outbox (TV-35).
+    ShippedFile {
+        path: "skills/vault-comms/SKILL.md",
+        source: include_str!("../defaults/skills/vault-comms/SKILL.md"),
+        hashes: &["39a30bcfd3bd2e8dcaaa140fdee8041f80fc0cee9a9d9c58627906bad2fd4996"],
+    },
+    // Tasks, handlers, script tools and which agent tools need which switch (TV-35).
+    ShippedFile {
+        path: "skills/vault-automation/SKILL.md",
+        source: include_str!("../defaults/skills/vault-automation/SKILL.md"),
+        hashes: &["78cf2b3c5414f5aae98dc0c1d172e83e725d6f9ac1a9bc1424f17219500b1c6c"],
     },
 ];
 
@@ -2560,6 +2573,8 @@ mod tests {
         );
         paths.push("skills/vault-queries/SKILL.md".to_owned());
         paths.push("skills/vault-notes/SKILL.md".to_owned());
+        paths.push("skills/vault-comms/SKILL.md".to_owned());
+        paths.push("skills/vault-automation/SKILL.md".to_owned());
         let shipped: Vec<String> = SHIPPED_FILES.iter().map(|f| f.path.to_owned()).collect();
         assert_eq!(shipped, paths);
         for (name, source) in crate::DEFAULT_DEVICE_SCRIPTS {
@@ -2590,7 +2605,39 @@ mod tests {
                 rest = &body[end..];
             }
         }
-        assert!(seen >= 15, "{seen} query examples");
+        assert!(seen >= 25, "{seen} query examples");
+    }
+
+    /// Every ```` ```json ```` block of a shipped skill is JSON, and every shipped `SKILL.md` is
+    /// valid and named after its folder (TV-35).
+    #[test]
+    fn every_shipped_skill_is_valid_and_its_json_examples_parse() {
+        let mut seen = 0;
+        for file in SHIPPED_FILES
+            .iter()
+            .filter(|f| f.path.starts_with("skills/"))
+        {
+            if let Some(name) = file
+                .path
+                .strip_prefix("skills/")
+                .and_then(|p| p.strip_suffix("/SKILL.md"))
+            {
+                let (md, issues) = schema::parse_skill_md(file.source, name);
+                assert!(issues.is_empty(), "{}: {issues:?}", file.path);
+                assert_eq!(md.name.as_deref(), Some(name));
+            }
+            let mut rest = file.source;
+            while let Some(start) = rest.find("```json") {
+                let after = &rest[start + "```json".len()..];
+                let body = &after[after.find('\n').map_or(after.len(), |n| n + 1)..];
+                let end = body.find("```").unwrap_or(body.len());
+                serde_json::from_str::<serde_json::Value>(&body[..end])
+                    .unwrap_or_else(|e| panic!("{}: {e}\n{}", file.path, &body[..end]));
+                seen += 1;
+                rest = &body[end..];
+            }
+        }
+        assert!(seen >= 6, "{seen} json examples");
     }
 
     #[test]

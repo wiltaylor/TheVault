@@ -124,11 +124,13 @@ Agent files that hold `browser = true` are new: an app from before the browser b
 
 Skills are folders of instructions and files in the vault's `skills/` folder, in the open Agent Skills format; [Agent skills](skills.md) covers writing and importing them. An agent is offered the valid skills its **Skills** permission allows: every valid skill (no `skills` list in the file, the default) or only those named (`permissions.skills = ["pdf-forms"]`). A skill with errors is offered to no agent. `[]` offers none, and the agent gets no skill tools.
 
-The vault ships three skills, which every agent with no `skills` list is offered, and which an existing vault gains on its next start:
+The vault ships five skills, which every agent with no `skills` list is offered, and which an existing vault gains on its next start:
 
 - `wscript`: the scripting language and the vault API, for `run_script`, script tools, handlers and tasks.
 - `vault-queries`: how to write a query, with the rules that differ from SQL and worked examples for tasks, people, mail, messages, captures, events and links. Every example in it is checked against the parser.
 - `vault-notes`: how to write notes and types: the JSON form, a note with every common field kind, every content block, computed fields, reference, inverse and taxonomy fields, and which query views need which items. Its type files and notes are checked against the writer.
+- `vault-comms`: the email, message, call, conversation and email thread types, the inbox and when to mark an item `processed` (and what to leave for you), reading a message's attachments and its conversation, finding mail and messages, and drafting into the Outbox. Its queries are checked against the parser and its JSON examples parse.
+- `vault-automation`: scheduled tasks, handlers and script tools, which of the agent's tools come from which permission switch, and what no tool can do (write a task or a saved script, send a notification). Its WCL examples parse and its wscript compiles.
 
 A shipped skill the user has not changed is replaced by the newer version when the app updates; one the user changed stays, and the bell says a newer one exists. The model also has `query_format`, the whole query language, and `value_format`, how each field value is written, both from the vault format.
 
