@@ -381,7 +381,10 @@ fn an_agent_s_series_and_its_occurrences_fire_no_triggers() {
             &Author::Agent("any".into()),
         )
         .unwrap();
-    assert!(!saved.also.is_empty(), "the occurrences come in the same write");
+    assert!(
+        !saved.also.is_empty(),
+        "the occurrences come in the same write"
+    );
     r.advance(31);
     assert!(r.fake.turns().is_empty(), "{:?}", r.fake.turns());
     // A user's note still fires.
