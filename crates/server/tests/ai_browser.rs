@@ -358,10 +358,7 @@ fn browser_run_answers_the_exit_code_and_output_and_writes_a_trail_line() {
     let lines = api
         .server
         .stderr_lines_when(|lines| lines.iter().any(|l| l == line));
-    assert!(
-        lines.iter().any(|l| l == line),
-        "{lines:?}"
-    );
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
 }
 
 #[test]
