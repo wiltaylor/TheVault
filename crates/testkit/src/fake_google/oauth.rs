@@ -272,7 +272,7 @@ fn token(oauth: &mut State, request: &Request) -> Reply {
                 &json!({
                     "access_token": access,
                     "expires_in": 3599,
-                    "scope": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar openid https://www.googleapis.com/auth/userinfo.email",
+                    "scope": "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar openid https://www.googleapis.com/auth/userinfo.email",
                     "token_type": "Bearer",
                 }),
             )

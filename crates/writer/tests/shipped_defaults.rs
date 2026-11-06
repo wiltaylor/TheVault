@@ -123,7 +123,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
     let fields: Vec<&str> = done
@@ -224,6 +225,7 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "google_calendar",
             "google_event",
             "google_gmail",
+            "google_mail",
             "google_series",
             "outbox_send"
         ]
@@ -480,7 +482,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -681,7 +684,8 @@ fn a_0_1_6_vault_ends_with_lists_of_dicts_and_an_image_photo() {
                 "0008_outbox_template",
                 "0009_outbox_statuses",
                 "0010_ai_accounts",
-                "0011_email_template"
+                "0011_email_template",
+                "0012_email_gmail_handlers"
             ],
             "{name}"
         );
@@ -870,7 +874,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
     // One more for step 0007's Correspondence tab on the person type, one for each of the
@@ -1330,7 +1335,8 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
 
@@ -1426,7 +1432,8 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
             "0008_outbox_template",
             "0009_outbox_statuses",
             "0010_ai_accounts",
-            "0011_email_template"
+            "0011_email_template",
+            "0012_email_gmail_handlers"
         ]
     );
     assert!(w.schema().type_def("google_sync").is_none());
@@ -1460,7 +1467,8 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
                 "0008_outbox_template",
                 "0009_outbox_statuses",
                 "0010_ai_accounts",
-                "0011_email_template"
+                "0011_email_template",
+                "0012_email_gmail_handlers"
             ]
         );
         assert!(w.schema().type_def("google_sync").is_some());
@@ -1553,6 +1561,7 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
         [
             ("email".to_owned(), "converter".to_owned()),
             ("email".to_owned(), "images_pending".to_owned()),
+            ("email".to_owned(), "inbox_catch_up".to_owned()),
             ("email".to_owned(), "inline_images".to_owned()),
             ("email".to_owned(), "processed".to_owned()),
             ("message".to_owned(), "processed".to_owned())
@@ -1568,9 +1577,10 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
         } else {
             writer::DEFAULT_MESSAGE_TYPE
         };
-        // Step `0011_email_template` ran on the first start too, so the email's `html` slot is
-        // where the older template has it.
-        let shipped = without_list_page(&store::canonical(source, &path).unwrap()).replace(
+        // Steps `0011_email_template` and `0012_email_gmail_handlers` ran on the first start too,
+        // so the email's `html` slot is where the older template has it, and it has no handlers.
+        let canonical = store::canonical(source, &path).unwrap();
+        let shipped = without_handlers(&without_list_page(&canonical)).replace(
             "    slot \"attachments\"\n  }\n\n  tab \"Original\" {\n    slot \"html\"\n  }\n",
             "    slot \"attachments\"\n    slot \"html\"\n  }\n",
         );
@@ -1639,7 +1649,8 @@ fn a_vault_card_template_gains_no_slot_when_the_vault_type_has_no_card() {
             ("email".to_owned(), "processed".to_owned()),
             ("email".to_owned(), "inline_images".to_owned()),
             ("email".to_owned(), "converter".to_owned()),
-            ("email".to_owned(), "images_pending".to_owned())
+            ("email".to_owned(), "images_pending".to_owned()),
+            ("email".to_owned(), "inbox_catch_up".to_owned())
         ]
     );
     let schema = w.schema();
@@ -2220,6 +2231,22 @@ fn run_outbox_step(w: &Writer) -> Vec<String> {
 }
 
 /// Run upgrade step `id` again under the id `test_<id>`.
+/// Type file `text`, canonical, without its `handler` blocks.
+fn without_handlers(text: &str) -> String {
+    let mut out = text.to_owned();
+    while let Some(start) = out.find("\nhandler \"") {
+        let end = start + 1 + out[start + 1..].find("\n}\n").unwrap() + 3;
+        // The blank line after the block goes with it.
+        let end = if out[end..].starts_with('\n') {
+            end + 1
+        } else {
+            end
+        };
+        out.replace_range(start + 1..end, "");
+    }
+    out
+}
+
 fn run_step_again(w: &Writer, id: &'static str) -> Vec<String> {
     let step = writer::UPGRADE_STEPS.iter().find(|s| s.id == id).unwrap();
     let test_id: &'static str = Box::leak(format!("test_{id}").into_boxed_str());
@@ -2653,7 +2680,12 @@ fn the_email_template_alpha_18_shipped_moves_its_html_slot_and_no_note_changes()
         run_step_again(&w, "0011_email_template"),
         ["test_0011_email_template"]
     );
-    // The start after the step adds the fields alpha.18 lacked.
+    // Alpha.18 had no mail action handlers either: step 0012 gives them.
+    assert_eq!(
+        run_step_again(&w, "0012_email_gmail_handlers"),
+        ["test_0012_email_gmail_handlers"]
+    );
+    // The start after the steps adds the fields alpha.18 lacked.
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     assert_eq!(read(root, path).unwrap(), current);
     assert_eq!(read(root, &note_path).unwrap(), before);
@@ -2674,6 +2706,64 @@ fn the_email_template_alpha_18_shipped_moves_its_html_slot_and_no_note_changes()
     }])
     .unwrap();
     assert_eq!(read(root, path).unwrap(), edited);
+}
+
+/// Step 0012 on an `email` type the user edited (a renamed tab and a field of their own) gives it
+/// the mail action handlers before its first template and keeps the edits, and no note changes.
+/// A second run changes nothing (TV-25).
+#[test]
+fn step_0012_gives_an_edited_email_type_the_handlers_and_keeps_the_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let path = "types/email.wcl";
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let edited = EMAIL_FF793C6
+        .replacen("tab \"Email\" {", "tab \"Mail\" {", 1)
+        .replacen(
+            "template default {",
+            "field my_note {\n  kind = \"string\"\n}\n\ntemplate default {",
+            1,
+        );
+    assert!(!edited.contains("handler \""), "{edited}");
+    std::fs::write(root.join(path), store::canonical(&edited, path).unwrap()).unwrap();
+    let w = open(root);
+    let email = w
+        .create(
+            "email",
+            &writer::Input::Json(json!({ "fields": { "title": "Hello", "gmail_ref": "m1" } })),
+            &author(),
+        )
+        .unwrap()
+        .id;
+    let note_path = format!("notes/email/{email}.wcl");
+    let before = read(root, &note_path).unwrap();
+
+    assert_eq!(
+        run_step_again(&w, "0012_email_gmail_handlers"),
+        ["test_0012_email_gmail_handlers"]
+    );
+    let after = read(root, path).unwrap();
+    assert!(after.contains("tab \"Mail\""), "{after}");
+    assert!(after.contains("field my_note"), "{after}");
+    assert_eq!(after.matches("\"google_mail\"").count(), 2, "{after}");
+    let handlers = after.find("handler \"after_update\"").unwrap();
+    assert!(
+        handlers < after.find("template default").unwrap(),
+        "{after}"
+    );
+    assert_eq!(read(root, &note_path).unwrap(), before);
+
+    // The type has the handlers now: the step leaves it as it is.
+    let step = writer::UPGRADE_STEPS
+        .iter()
+        .find(|s| s.id == "0012_email_gmail_handlers")
+        .unwrap();
+    w.run_upgrade_steps(&[UpgradeStep {
+        id: "test_0012_email_gmail_handlers_again",
+        run: step.run,
+    }])
+    .unwrap();
+    assert_eq!(read(root, path).unwrap(), after);
 }
 
 /// The `call` type as 0.1.14-alpha.23 shipped it, before `processed`.

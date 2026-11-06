@@ -49,9 +49,12 @@ from message where !processed && direction == "in" sort sent desc
 from call where !processed && direction == "missed" sort started desc
 ```
 
-An item leaves the inbox when `processed` is set. Setting it changes nothing in Gmail or on the
-phone. For years of old mail the user has **Mark older processed…** in the inbox, which marks every
-email, message and call before a date at once; do not mark old items one by one for that.
+An item leaves the inbox when `processed` is set. Setting it on an email archives the message in
+Gmail: it leaves Gmail's inbox and stays in All Mail. Deleting an email moves it to Gmail's trash.
+Neither is undone by unsetting `processed` or restoring the note, and nothing changes on the phone.
+For years of old mail the user has **Mark older processed…** in the inbox, which marks every
+email, message and call before a date at once and changes nothing in Gmail; do not mark old items
+one by one for that.
 
 ## Marking processed
 

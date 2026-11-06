@@ -325,6 +325,7 @@ The Google sync keeps its settings and state in secrets, never in notes (google-
 | `google_settings` | Settings > Integrations | every Google script | The settings, below, and the scopes the connection granted |
 | `google_gmail_state` | the `google_gmail` task | the `google_gmail` task | `{ history_id, listed, backfill_page, last_run, last_error, notified_invalid_grant }` |
 | `google_calendar_state` | the `google_calendar` task | the `google_calendar` task | `{ sync_tokens, window_end, last_run, last_error, notified_invalid_grant }` |
+| `google_gmail_trashed` | the `email` type's `after_delete` handler, `google_mail` | the `google_gmail` task | A JSON list of the Gmail ids of the emails the user deleted in the vault, newest last, at most 2000, which the sync never pulls again (TV-25) |
 
 `google_settings` is `{ gmail_mode, gmail_labels, gmail_window_days, gmail_backfill_to, calendars, default_calendar, endpoints, scopes }`:
 
@@ -338,11 +339,11 @@ The Google sync keeps its settings and state in secrets, never in notes (google-
 | `default_calendar` | The calendar a new event note goes to when it names none | `primary` |
 | `endpoints` | The test seam: `{ token, gmail, calendar, userinfo }` URLs, and `gmail_upload`, the Gmail media upload base, which defaults to `gmail` with `/gmail/v1` replaced by `/upload/gmail/v1`. The Integrations page never shows or sets it | Google's own hosts |
 | `image_budget` | A test seam: how many milliseconds into a Gmail run images may be fetched, after which they wait for a later run | The run's whole time budget |
-| `scopes` | The scopes Google granted when the user connected, a list of strings. Connecting writes it and disconnecting removes it. The Outbox sends email only when it holds `https://www.googleapis.com/auth/gmail.send` (outbox X4) | `[]`: nothing granted is known, so no email is sent |
+| `scopes` | The scopes Google granted when the user connected, a list of strings. Connecting writes it and disconnecting removes it. The Outbox sends email only when it holds `https://www.googleapis.com/auth/gmail.send` (outbox X4), and mail actions go to Gmail only when it holds `https://www.googleapis.com/auth/gmail.modify` (TV-25) | `[]`: nothing granted is known, so no email is sent |
 
 A missing `google_settings` means every default. In the two state objects, `last_run` is an RFC 3339 time, `last_error` the last run's error or null, and `notified_invalid_grant` is true once the run has told the user Google refused the sign-in; it goes back to false when a token refresh succeeds. `history_id` and `backfill_page` are Gmail's history id and back-fill page token. `listed` is what the last finished window listing covered, `{ mode, labels, window_days }` with `labels` the sorted Gmail label ids, or null before one: a run whose settings differ lists the window again besides reading history (all of it for a new mode or window, only the added labels otherwise, nothing when labels were only removed) and starts the back-fill over, and a run with nothing to list saves no `history_id`. `sync_tokens` holds each calendar's sync token by calendar id, `window_end` is the date recurring events have occurrence notes up to, and `converter` the version of the description conversion the tokens were listed with. Disconnecting Google sets the cursors (`history_id`, `listed`, `backfill_page`, `sync_tokens`, `window_end`) back to null or empty.
 
-Each task writes only its own state secret, so the two never overwrite each other, and its task file's `secrets` list names exactly what it reads and writes. The write-back handler reads `google_settings` and writes nothing but notes.
+Each task writes only its own state secret, so the two never overwrite each other, and its task file's `secrets` list names exactly what it reads and writes. The `google_mail` handler alone writes `google_gmail_trashed`; handler runs go one at a time, so its writes never overlap. The write-back handler reads `google_settings` and writes nothing but notes.
 
 ## `ai`
 
@@ -707,6 +708,26 @@ The write-back writes `etag`, the new `snapshot`, and for an insert `google_ref`
 | `starts` of datetimes | `start.dateTime` and `end.dateTime` as the note holds them, each with `timeZone` set to `timezone` when it holds one |
 | `rule` | `recurrence`, one string per line |
 | `location`, `description`, `attendees_raw`, `status` | as for an event |
+
+## The Gmail mail actions
+
+The `email` type's `after_update` and `after_delete` handlers run `scripts/google_mail.ws` on the home server (TV-25; `docs/google.md`, "Mail actions in Gmail"). They send to Gmail at `endpoints.gmail`, by default `https://gmail.googleapis.com/gmail/v1`, after refreshing an access token as the sync does:
+
+| Event | Sends |
+|-------|-------|
+| `after_update` | `POST /users/me/messages/<gmail_ref>/modify` with `{ "removeLabelIds": ["INBOX"] }`, when `processed` is true in the note and was not in `previous` |
+| `after_delete` | `POST /users/me/messages/<gmail_ref>/trash`. Before it, the `gmail_ref` joins the `google_gmail_trashed` secret, so the sync never pulls the message again, whether or not Gmail is reached |
+
+Neither sends anything when:
+
+- the argument's `author` is a `task` or a `handler`, such as the `google_gmail` sync or a handler's own write. This is the loop guard;
+- an update also changes `inbox_catch_up`, as each run of the inbox's Mark older processed does by writing its own id (TV-30). So a later run that marks an email again after the user unticked it sends nothing either;
+- the note has no `gmail_ref`;
+- Google is not connected, or `google_settings` lacks `https://www.googleapis.com/auth/gmail.modify` in `scopes`. The run logs the reason and ends successfully.
+
+Turning `processed` off and restoring an email from the trash send nothing. A 404 from Gmail counts as done. Any other answer, or a failed sign-in, fails the run with Gmail's status and message and raises a notification on the email ("Gmail did not archive an email" or "Gmail did not trash an email"): nothing retries it.
+
+The `google_gmail` task reads `google_gmail_trashed`. A `tasks/google_gmail.wcl` the user edited before mail actions may not list it in `secrets`: each sync run then logs that it cannot read it, and an email trashed in the vault can be imported again until the secret is added.
 
 ## The Outbox's send handler
 

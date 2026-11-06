@@ -23,6 +23,8 @@
 //! google.delete_message(&id); // recorded in history as messagesDeleted
 //! let sent = google.sent_messages(); // what messages.send received, parsed
 //! google.set_send_error(Some((500, "Backend Error"))); // messages.send answers that
+//! let actions = google.mail_actions(); // each messages.modify and messages.trash, in order
+//! google.set_action_error(Some((403, "Insufficient Permission"))); // modify and trash answer that
 //! google.set_history_not_found(true); // history.list answers 404
 //! google.set_gmail_delay(Some(std::time::Duration::from_secs(2))); // each request waits 2 s
 //! google.set_gmail_delay(None); // and any request still waiting answers now
@@ -36,7 +38,8 @@
 //!   `DRAFT`, `UNREAD`, `STARRED`, `IMPORTANT`, `SPAM` and `TRASH` are always there; user labels
 //!   come from [`FakeGoogle::add_label`], with ids `Label_<n>`.
 //! - `GET /messages`: `{ messages: [{ id, threadId }], resultSizeEstimate, nextPageToken? }`,
-//!   newest first, filtered by every `labelIds` given and by `q`, of which only `after:` and
+//!   newest first, without messages labelled `SPAM` or `TRASH` unless `includeSpamTrash=true`, as
+//!   Gmail lists, filtered by every `labelIds` given and by `q`, of which only `after:` and
 //!   `before:` terms (epoch seconds, or `YYYY/MM/DD` read as UTC) are understood. A page holds
 //!   `maxResults` messages (default 100), at most the builder's
 //!   [`FakeGoogleBuilder::gmail_page_size`].
@@ -55,6 +58,13 @@
 //!   [`FakeGoogle::set_send_error`] error.
 //! - `POST /upload/gmail/v1/users/me/messages/send?uploadType=media` with `Content-Type:
 //!   message/rfc822`: the same, with the message as the body.
+//! - `POST /messages/<id>/modify`: `{ addLabelIds?, removeLabelIds? }` changes the message's
+//!   labels, recorded in history like [`FakeGoogle::set_message_labels`]. Answers the message as
+//!   `{ id, threadId, labelIds }`, 404 for a message there is not, or the
+//!   [`FakeGoogle::set_action_error`] error (TV-25).
+//! - `POST /messages/<id>/trash`: adds `TRASH` to the message's labels, the same way.
+//!
+//! Every modify and trash request is recorded, answered or not, in [`FakeGoogle::mail_actions`].
 //!
 //! Every message has a `Message-ID` header, `<id@mail.fake.example>` unless `add_message` was
 //! given `message_id`, and a `References` header when it was given `references`.
@@ -90,6 +100,7 @@ pub(super) struct Config {
     history_not_found: bool,
     delay: Option<Duration>,
     send_error: Option<(u16, String)>,
+    action_error: Option<(u16, String)>,
 }
 
 impl FakeGoogleBuilder {
@@ -159,6 +170,19 @@ struct History {
     change: Change,
 }
 
+/// One `messages.modify` or `messages.trash` request the fake Gmail received (TV-25).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailAction {
+    /// `modify` or `trash`.
+    pub action: String,
+    /// The message id in the path.
+    pub id: String,
+    /// The labels `modify` asked to add.
+    pub add: Vec<String>,
+    /// The labels `modify` asked to remove.
+    pub remove: Vec<String>,
+}
+
 /// How a message reached `messages.send`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendRoute {
@@ -208,6 +232,7 @@ pub(super) struct State {
     history_id: u64,
     issued: usize,
     sent: Vec<SentMessage>,
+    actions: Vec<MailAction>,
 }
 
 impl State {
@@ -227,6 +252,7 @@ impl State {
             history_id: 1000,
             issued: 0,
             sent: Vec::new(),
+            actions: Vec::new(),
         }
     }
 
@@ -375,41 +401,8 @@ impl FakeGoogle {
     ///
     /// When there is no such message.
     pub fn set_message_labels(&self, id: &str, labels: &[&str]) {
-        let mut gmail = self.gmail();
-        let history_id = gmail.next_history();
-        let message = gmail
-            .messages
-            .iter_mut()
-            .find(|m| m.id == id)
-            .expect("a fake Gmail message");
         let new: Vec<String> = labels.iter().map(|l| (*l).to_owned()).collect();
-        let added: Vec<String> = new
-            .iter()
-            .filter(|l| !message.labels.contains(l))
-            .cloned()
-            .collect();
-        let removed: Vec<String> = message
-            .labels
-            .iter()
-            .filter(|l| !new.contains(l))
-            .cloned()
-            .collect();
-        message.labels = new;
-        message.history_id = history_id;
-        if !added.is_empty() {
-            gmail.history.push(History {
-                id: history_id,
-                message: id.to_owned(),
-                change: Change::LabelsAdded(added),
-            });
-        }
-        if !removed.is_empty() {
-            gmail.history.push(History {
-                id: history_id,
-                message: id.to_owned(),
-                change: Change::LabelsRemoved(removed),
-            });
-        }
+        assert!(relabel(&mut self.gmail(), id, new), "a fake Gmail message");
     }
 
     /// Delete message `id` for good, recording `messagesDeleted` in history.
@@ -452,6 +445,59 @@ impl FakeGoogle {
     pub fn set_send_error(&self, error: Option<(u16, &str)>) {
         self.gmail().config.send_error = error.map(|(s, m)| (s, m.to_owned()));
     }
+
+    /// Every `messages.modify` and `messages.trash` request, oldest first (TV-25).
+    pub fn mail_actions(&self) -> Vec<MailAction> {
+        self.gmail().actions.clone()
+    }
+
+    /// Answer every `messages.modify` and `messages.trash` with Google's error body of `status`
+    /// and `message`, or apply them again with `None`.
+    pub fn set_action_error(&self, error: Option<(u16, &str)>) {
+        self.gmail().config.action_error = error.map(|(s, m)| (s, m.to_owned()));
+    }
+}
+
+/// Give message `id` exactly `new` labels, recording what was added and removed in history.
+/// `false` when there is no such message.
+fn relabel(gmail: &mut State, id: &str, new: Vec<String>) -> bool {
+    if !gmail.messages.iter().any(|m| m.id == id && !m.deleted) {
+        return false;
+    }
+    let history_id = gmail.next_history();
+    let message = gmail
+        .messages
+        .iter_mut()
+        .find(|m| m.id == id)
+        .expect("checked above");
+    let added: Vec<String> = new
+        .iter()
+        .filter(|l| !message.labels.contains(l))
+        .cloned()
+        .collect();
+    let removed: Vec<String> = message
+        .labels
+        .iter()
+        .filter(|l| !new.contains(l))
+        .cloned()
+        .collect();
+    message.labels = new;
+    message.history_id = history_id;
+    if !added.is_empty() {
+        gmail.history.push(History {
+            id: history_id,
+            message: id.to_owned(),
+            change: Change::LabelsAdded(added),
+        });
+    }
+    if !removed.is_empty() {
+        gmail.history.push(History {
+            id: history_id,
+            message: id.to_owned(),
+            change: Change::LabelsRemoved(removed),
+        });
+    }
+    true
 }
 
 /// Answer a Gmail request, or `None` when `request` is not one.
@@ -479,6 +525,20 @@ pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
     }
     if upload {
         return Some(not_found());
+    }
+    if let Some((id, action)) = rest
+        .strip_prefix("messages/")
+        .and_then(|r| r.split_once('/'))
+        .filter(|(_, a)| *a == "modify" || *a == "trash")
+    {
+        if request.method != "POST" {
+            return Some(error(
+                405,
+                "METHOD_NOT_ALLOWED",
+                "messages.modify and messages.trash take POST.",
+            ));
+        }
+        return Some(act(&mut lock(&shared.gmail), id, action, request));
     }
     if request.method != "GET" {
         return Some(error(
@@ -558,6 +618,7 @@ fn page<T: Clone>(items: &[T], request: &Request, size: usize) -> (Vec<T>, Optio
 
 fn list(gmail: &State, request: &Request) -> Reply {
     let q = request.query("q").unwrap_or_default();
+    let spam_trash = request.query("includeSpamTrash").as_deref() == Some("true");
     let mut after = None;
     let mut before = None;
     for term in q.split_whitespace() {
@@ -580,6 +641,7 @@ fn list(gmail: &State, request: &Request) -> Reply {
         .messages
         .iter()
         .filter(|m| !m.deleted)
+        .filter(|m| spam_trash || !m.labels.iter().any(|l| l == "SPAM" || l == "TRASH"))
         .filter(|m| wanted.iter().all(|l| m.labels.contains(l)))
         .filter(|m| after.is_none_or(|a| m.at >= a))
         .filter(|m| before.is_none_or(|b| m.at < b))
@@ -757,6 +819,55 @@ fn history(gmail: &State, request: &Request) -> Reply {
 }
 
 /// `messages.send`, by `raw` or by media upload.
+/// `messages.modify` or `messages.trash` of message `id`.
+fn act(gmail: &mut State, id: &str, action: &str, request: &Request) -> Reply {
+    let body = if action == "modify" {
+        request.json()
+    } else {
+        Value::Null
+    };
+    gmail.actions.push(MailAction {
+        action: action.to_owned(),
+        id: id.to_owned(),
+        add: strings(&body["addLabelIds"]),
+        remove: strings(&body["removeLabelIds"]),
+    });
+    if let Some((status, message)) = &gmail.config.action_error {
+        let code = match status {
+            400 => "INVALID_ARGUMENT",
+            403 => "PERMISSION_DENIED",
+            _ => "INTERNAL",
+        };
+        return error(*status, code, message);
+    }
+    let Some(message) = gmail.message(id) else {
+        return not_found();
+    };
+    let mut labels = message.labels.clone();
+    let (add, remove) = if action == "modify" {
+        (
+            strings(&body["addLabelIds"]),
+            strings(&body["removeLabelIds"]),
+        )
+    } else {
+        (vec!["TRASH".to_owned()], Vec::new())
+    };
+    labels.retain(|l| !remove.contains(l));
+    for l in add {
+        if !labels.contains(&l) {
+            labels.push(l);
+        }
+    }
+    if labels != message.labels {
+        relabel(gmail, id, labels);
+    }
+    let m = gmail.message(id).expect("checked above");
+    Reply::json(
+        200,
+        &json!({ "id": m.id, "threadId": m.thread, "labelIds": m.labels }),
+    )
+}
+
 fn send(gmail: &mut State, request: &Request, upload: bool) -> Reply {
     if let Some((status, message)) = &gmail.config.send_error {
         let code = match status {

@@ -120,6 +120,25 @@ field images_pending {
   hidden      = true
 }
 
+field inbox_catch_up {
+  kind        = "string"
+  label       = "Catch-up run"
+  description = "The run of Mark older processed that last set Processed. A write that changes it sends nothing to Gmail."
+  hidden      = true
+}
+
+handler "after_update" {
+  script        = "google_mail"
+  allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings"]
+}
+
+handler "after_delete" {
+  script        = "google_mail"
+  allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_trashed"]
+}
+
 template default {
   tab "Email" {
     columns {

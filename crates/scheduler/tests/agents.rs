@@ -358,6 +358,41 @@ fn an_agent_s_own_writes_never_fire_triggers() {
     assert_eq!(r.fake.turns().len(), 1);
 }
 
+/// A series an agent saves makes its occurrences in the same write, written as the server's. The
+/// write is the agent's, so no trigger fires, also not for the occurrences: an agent cannot start
+/// itself again through them (TV-25).
+#[test]
+fn an_agent_s_series_and_its_occurrences_fire_no_triggers() {
+    let r = Rig::new();
+    r.writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    r.agent("any", ANY);
+    let series = json!({ "fields": {
+        "title": "Standup",
+        "rule": ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+        "starts": { "start": "2026-01-05", "end": "2026-01-05" },
+    } });
+    let saved = r
+        .writer
+        .create(
+            writer::EVENT_SERIES_TYPE,
+            &Input::Json(series),
+            &Author::Agent("any".into()),
+        )
+        .unwrap();
+    assert!(
+        !saved.also.is_empty(),
+        "the occurrences come in the same write"
+    );
+    r.advance(31);
+    assert!(r.fake.turns().is_empty(), "{:?}", r.fake.turns());
+    // A user's note still fires.
+    r.create("memo", "Roof", "open", &user());
+    r.advance(31);
+    assert_eq!(r.fake.turns().len(), 1);
+}
+
 const ANY: &str = r#"label = "Any"
 
 trigger every {
