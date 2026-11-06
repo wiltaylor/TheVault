@@ -472,10 +472,17 @@ fn a_long_gmail_error_is_clipped_in_the_notice() {
     let items = api.notifications();
     assert_eq!(items.len(), 1, "{failed:#?}");
     let body = items[0]["body"].as_str().unwrap();
-    assert!(body.chars().count() <= 2000, "{} characters", body.chars().count());
+    assert!(
+        body.chars().count() <= 2000,
+        "{} characters",
+        body.chars().count()
+    );
     assert!(body.contains('…'), "{body}");
     assert!(!body.contains(".."), "{body}");
-    assert!(body.ends_with("Nothing retries it: archive the message in Gmail."), "{body}");
+    assert!(
+        body.ends_with("Nothing retries it: archive the message in Gmail."),
+        "{body}"
+    );
 }
 
 /// An `email` type whose `after_delete` handler lost the `google_gmail_trashed` secret cannot
@@ -488,9 +495,17 @@ fn a_ref_the_handler_cannot_remember_still_trashes_and_notifies() {
     let email = api.file("types/email.wcl");
     let without = email.replacen(", \"google_gmail_trashed\"]", "]", 1);
     assert_ne!(without, email);
+    // The type has notes, so the change is planned, then applied with the plan's token.
+    let plan = expect(
+        api.req("POST", "/api/types/email/change")
+            .json(&json!({ "wcl": without }))
+            .send()
+            .unwrap(),
+        200,
+    );
     expect(
-        api.req("PUT", "/api/types/email")
-            .body(without)
+        api.req("POST", "/api/types/email/change")
+            .json(&json!({ "wcl": without, "plan": plan["plan"] }))
             .send()
             .unwrap(),
         200,
