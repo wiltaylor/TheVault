@@ -326,7 +326,9 @@ fn with_a_key_web_search_returns_stripped_results_and_the_query_stays_out_of_the
     );
     assert_eq!(event(&events, "done")["stop"], "end_turn");
 
-    let lines = api.server.stderr_lines();
+    let lines = api.server.stderr_lines_when(|lines| {
+        lines.iter().filter(|l| l.starts_with("brave: ")).count() >= 1
+    });
     let trail: Vec<&String> = lines.iter().filter(|l| l.starts_with("brave: ")).collect();
     assert_eq!(trail.len(), 1, "{lines:?}");
     assert!(
@@ -390,7 +392,9 @@ fn rate_limits_and_refused_keys_are_error_results_with_their_kind() {
     assert!(results.iter().all(|r| r["is_error"] == true));
     assert_eq!(results[0]["summary"]["kind"], "rate_limit");
 
-    let lines = api.server.stderr_lines();
+    let lines = api.server.stderr_lines_when(|lines| {
+        lines.iter().filter(|l| l.starts_with("brave: ")).count() >= 2
+    });
     let trail: Vec<&String> = lines.iter().filter(|l| l.starts_with("brave: ")).collect();
     assert_eq!(trail.len(), 2, "{lines:?}");
     assert!(

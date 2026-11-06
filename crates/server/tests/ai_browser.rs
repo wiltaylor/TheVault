@@ -354,11 +354,12 @@ fn browser_run_answers_the_exit_code_and_output_and_writes_a_trail_line() {
     assert_eq!(step["command"], "playwright-cli snapshot");
     assert_eq!(step["exit"], 2);
     assert_eq!(step["stdout"], "- button \"Go\" [ref=e21]");
-    let lines = api.server.stderr_lines();
+    let line = "browser: exit=2 ms=42 timed_out=false cmd=playwright-cli snapshot";
+    let lines = api
+        .server
+        .stderr_lines_when(|lines| lines.iter().any(|l| l == line));
     assert!(
-        lines
-            .iter()
-            .any(|l| l == "browser: exit=2 ms=42 timed_out=false cmd=playwright-cli snapshot"),
+        lines.iter().any(|l| l == line),
         "{lines:?}"
     );
 }
@@ -404,7 +405,9 @@ fn browser_run_cuts_long_output_to_its_tail_and_reports_timeouts_and_a_busy_box(
     let third = result(&fake, 2);
     assert_eq!(third["is_error"], true);
     assert!(result_text(&third).contains("already running 4 commands"));
-    let lines = api.server.stderr_lines();
+    let lines = api.server.stderr_lines_when(|lines| {
+        lines.iter().filter(|l| l.starts_with("browser: ")).count() >= 3
+    });
     let trail: Vec<&String> = lines
         .iter()
         .filter(|l| l.starts_with("browser: "))
