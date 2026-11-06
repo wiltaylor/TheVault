@@ -197,7 +197,8 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
             "gmail_ref",
             "inline_images",
             "converter",
-            "images_pending"
+            "images_pending",
+            "inbox_catch_up"
         ]
     );
     for (name, target, multiple) in [
@@ -232,6 +233,9 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
     assert_eq!(field(email, "processed")["default"], false);
     assert_eq!(field(email, "processed")["required"], false);
     assert_eq!(field(email, "processed")["computed"], false);
+    // Mark older processed sets it with `processed`, so the Gmail handler leaves the mail alone.
+    assert_eq!(field(email, "inbox_catch_up")["kind"], "bool");
+    assert_eq!(field(email, "inbox_catch_up")["hidden"], true);
 
     let thread = find(&types, "email_thread");
     assert_eq!(field_names(thread), ["participants", "thread_ref"]);
