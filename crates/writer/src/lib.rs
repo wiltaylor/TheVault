@@ -307,6 +307,9 @@ pub struct Saved {
     pub version: String,
     /// The canonical WCL now on disk, or for a delete the WCL that went to the trash.
     pub wcl: String,
+    /// For an update of a note whose type has an `after_update` handler, the canonical WCL the
+    /// note held before it, so the handler can tell what changed (TV-25). `None` otherwise.
+    pub previous: Option<String>,
     /// The other notes the same write changed: reverse references and `on_delete` effects
     /// (D4, D5). Empty on those other notes themselves.
     pub also: Vec<Saved>,
@@ -902,6 +905,7 @@ impl Writer {
                 event: Event::Update,
                 version,
                 wcl: old,
+                previous: None,
                 also: Vec::new(),
             });
         }
@@ -1413,6 +1417,7 @@ impl Writer {
                         event,
                         version,
                         wcl,
+                        previous: None,
                         also: Vec::new(),
                     })
                 })
@@ -1524,6 +1529,16 @@ impl Writer {
                         }
                     };
                     acts.push((by.clone(), act, id.clone()));
+                    let previous = match event {
+                        Event::Update
+                            if inner.schema.type_def(&type_name).is_some_and(|t| {
+                                t.handlers.iter().any(|h| h.event == "after_update")
+                            }) =>
+                        {
+                            self.state.head(&id)?.map(|v| v.content)
+                        }
+                        _ => None,
+                    };
                     let v = if flips.contains(&id) {
                         self.state
                             .record_distinct_version(&id, &type_name, by, &text)?
@@ -1542,6 +1557,7 @@ impl Writer {
                         event,
                         version: v.token,
                         wcl: text,
+                        previous,
                         also: Vec::new(),
                     });
                 }
@@ -1556,6 +1572,7 @@ impl Writer {
                         event,
                         version: entry.version,
                         wcl: entry.content,
+                        previous: None,
                         also: Vec::new(),
                     });
                 }

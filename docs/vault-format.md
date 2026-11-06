@@ -1472,7 +1472,7 @@ handler "after_create" {
 }
 ```
 
-A handler function takes one `Value`, the note as `{ id, type, event, version, note }`, where `note` is `{ fields, blocks }` and `version` is `null` for a note being created. What it returns:
+A handler function takes one `Value`, the note as `{ id, type, event, version, note }`, where `note` is `{ fields, blocks }` and `version` is `null` for a note being created. An `after_*` handler's `Value` also has `author`, who made the write, as `{ kind, name }` with `kind` one of `session`, `token`, `handler`, `task` and `agent`, and `previous`: for `after_update`, the note before the write as `{ fields, blocks }`, else `null` (TV-25). What it returns:
 
 | Event | Return |
 |-------|--------|

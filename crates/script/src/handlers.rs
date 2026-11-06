@@ -13,7 +13,9 @@
 //! - `after_create`, `after_update` and `after_delete` are queued in `state.db` after the commit
 //!   and run one at a time on a queue thread, as [`Kind::After`] runs with the handler's
 //!   allowlist and secrets. Jobs still queued when the server stops run when it starts again. A
-//!   failed job stays in `state.db` with its message.
+//!   failed job stays in `state.db` with its message. Their `Value` also carries `author`, the
+//!   write's author as `{ kind, name }`, and `previous`, for an update the note before it as
+//!   `{ fields, blocks }`, else `null` (TV-25).
 //! - A migration function takes the note in the same form and returns the note body to write, or
 //!   `null` to leave it. It cannot change other notes.
 //!
@@ -337,12 +339,13 @@ impl Shared {
         Ok(())
     }
 
-    /// Queue the `after_*` handlers of every saved note.
-    fn after(&self, saved: &[Saved], schema: &Schema) {
+    /// Queue the `after_*` handlers of every saved note, written by `author`.
+    fn after(&self, saved: &[Saved], author: &Author, schema: &Schema) {
         let Ok(writer) = self.writer() else {
             return;
         };
         let chain = inherited();
+        let (kind, name) = author.parts();
         let mut queue = Vec::new();
         for s in saved {
             let event = format!("after_{}", event_name(s.event));
@@ -360,6 +363,8 @@ impl Shared {
                     "event": event,
                     "version": s.version,
                     "wcl": s.wcl,
+                    "previous": s.previous,
+                    "author": { "kind": kind, "name": name },
                     "script": h.script,
                     "function": h.function,
                     "allow_domains": h.allow_domains,
@@ -459,6 +464,14 @@ impl Shared {
             let doc = Input::Wcl(text("wcl"))
                 .parse(&note_path(&type_name, &id))
                 .map_err(|e| e.to_string())?;
+            let previous = match p.get("previous").and_then(Json::as_str) {
+                Some(wcl) => doc_to_json(
+                    &Input::Wcl(wcl.to_owned())
+                        .parse(&note_path(&type_name, &id))
+                        .map_err(|e| e.to_string())?,
+                ),
+                None => Json::Null,
+            };
             let script = text("script");
             let source = script_source(writer, &script)?;
             let mut job = Job::new(Kind::After, &script, &source, &text("function"));
@@ -468,6 +481,8 @@ impl Shared {
                 "event": event,
                 "version": text("version"),
                 "note": doc_to_json(&doc),
+                "previous": previous,
+                "author": p.get("author").cloned().unwrap_or(Json::Null),
             })];
             job.allow_domains = list("allow_domains");
             job.secrets = list("secrets");
@@ -541,8 +556,8 @@ impl Hooks for HandlerHooks {
         self.0.before(change)
     }
 
-    fn after(&self, saved: &[Saved], _author: &Author, schema: &Schema) {
-        self.0.after(saved, schema);
+    fn after(&self, saved: &[Saved], author: &Author, schema: &Schema) {
+        self.0.after(saved, author, schema);
     }
 
     fn migrate(

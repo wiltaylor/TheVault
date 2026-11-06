@@ -63,7 +63,8 @@ pub use git_remote::{
 };
 
 pub use fake_google::{
-    CALENDAR_PATH, FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, TOKEN_PATH, USERINFO_PATH,
+    CALENDAR_PATH, FakeGoogle, FakeGoogleBuilder, GMAIL_PATH, MailAction, TOKEN_PATH,
+    USERINFO_PATH,
 };
 pub use standin::{Reply, Request, StandIn};
 

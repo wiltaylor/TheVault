@@ -26,8 +26,8 @@
 //!   keeping its `endpoints`. `gmail_mode` is `labels` or `all`, the window 1 to 3650 days, the
 //!   back-fill date `YYYY-MM-DD` or null, and `calendars` not empty.
 //! - `GET /api/integrations/google` answers `{ connected, account, client_stored, can_send,
-//!   settings, gmail, calendar }`, `can_send` true when the connection granted [`SEND_SCOPE`]
-//!   (outbox X4), each side `{ task, installed, paused, running, last_run, last_error,
+//!   can_modify, settings, gmail, calendar }`, `can_send` true when the connection granted
+//!   [`SEND_SCOPE`] (outbox X4), `can_modify` when it granted [`MODIFY_SCOPE`] (TV-25), each side `{ task, installed, paused, running, last_run, last_error,
 //!   summary }`, from the secrets of [`writer::google`] and the tasks. `paused` is `null` when the
 //!   task does not exist; `running` is the scheduler's, true while a run is going; `last_run` is
 //!   RFC 3339 in UTC ending `Z`; `summary` is the last line the latest finished run logged.
@@ -68,11 +68,15 @@ const TASKS: [(&str, &str, &str); 2] = [
     ("google_calendar", "calendar", CALENDAR_STATE),
 ];
 
-/// The scopes the consent page asks for. `gmail.send` lets the Outbox send email (outbox X4).
-pub const SCOPES: &str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar openid email";
+/// The scopes the consent page asks for. `gmail.modify` reads mail and lets Done archive and
+/// delete trash a message (TV-25), `gmail.send` lets the Outbox send email (outbox X4).
+pub const SCOPES: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar openid email";
 
 /// The scope the Outbox needs to send email (outbox X4).
 pub const SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
+
+/// The scope mail actions need: archive on Done, trash on delete (TV-25).
+pub const MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
 
 /// The key of `google_settings` holding the scopes the connection granted, as a list.
 const SCOPES_KEY: &str = "scopes";
@@ -597,15 +601,16 @@ async fn status_of(g: &Arc<Google>) -> Result<Value, ApiError> {
         // The test seam is the server's own business.
         settings.remove("endpoints");
         let connected = has(CLIENT_ID) && has(CLIENT_SECRET) && has(REFRESH_TOKEN);
-        let can_send = connected
-            && settings
-                .remove(SCOPES_KEY)
-                .and_then(|v| v.as_array().cloned())
-                .is_some_and(|s| s.iter().any(|v| v.as_str() == Some(SEND_SCOPE)));
+        let granted = settings
+            .remove(SCOPES_KEY)
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
+        let grants = |scope: &str| connected && granted.iter().any(|v| v.as_str() == Some(scope));
         let mut out = json!({
             "connected": connected,
             "client_stored": has(CLIENT_ID) && has(CLIENT_SECRET),
-            "can_send": can_send,
+            "can_send": grants(SEND_SCOPE),
+            "can_modify": grants(MODIFY_SCOPE),
             "account": account,
             "settings": settings,
         });

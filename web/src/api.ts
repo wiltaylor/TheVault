@@ -791,6 +791,8 @@ export interface GoogleStatus {
   client_stored: boolean;
   /** Whether the connection granted gmail.send, so the Outbox can send email (outbox X4). */
   can_send?: boolean;
+  /** Whether the connection granted gmail.modify, so Done archives and delete trashes in Gmail (TV-25). */
+  can_modify?: boolean;
   /** The connected address, from the `google_account` secret. */
   account: string | null;
   /** The settings, the defaults where none are saved. */

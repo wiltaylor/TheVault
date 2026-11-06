@@ -217,6 +217,7 @@ impl Writer {
                     event: Event::Update,
                     version: v.token,
                     wcl: text,
+                    previous: None,
                     also: Vec::new(),
                 });
             }
