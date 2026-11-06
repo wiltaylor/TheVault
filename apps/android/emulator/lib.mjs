@@ -339,9 +339,16 @@ export async function appPage(timeout = 30_000) {
     const seen = devices.map((d) => d.serial()).join(", ") || "none";
     throw new Error(serial ? `Playwright sees no Android device ${serial} (it sees ${seen})` : "Playwright sees no Android device");
   }
-  const webview = await device.webView({ pkg: PKG }, { timeout });
-  const page = await webview.page();
-  return { device, page };
+  // A device left open keeps polling adb and keeps the run's process alive (TV-51), so one whose
+  // WebView did not come up is closed before the error goes on.
+  try {
+    const webview = await device.webView({ pkg: PKG }, { timeout });
+    const page = await webview.page();
+    return { device, page };
+  } catch (e) {
+    await device.close().catch(() => {});
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
