@@ -65,14 +65,22 @@ impl Api {
             );
         }
         // These tests count the skills offered: start from the test's own, without the shipped
-        // `wscript` skill (script-tools T5).
-        let res = api
-            .client
-            .delete(api.server.url("/api/skills/wscript"))
-            .bearer_auth(api.token())
-            .send()
-            .unwrap();
-        assert!(res.status().is_success(), "{}", res.text().unwrap());
+        // skills `wscript` (script-tools T5), `vault-queries` (TV-29) and `vault-notes` (TV-34).
+        for skill in [
+            "wscript",
+            "vault-queries",
+            "vault-notes",
+            "vault-comms",
+            "vault-automation",
+        ] {
+            let res = api
+                .client
+                .delete(api.server.url(&format!("/api/skills/{skill}")))
+                .bearer_auth(api.token())
+                .send()
+                .unwrap();
+            assert!(res.status().is_success(), "{}", res.text().unwrap());
+        }
         api
     }
 

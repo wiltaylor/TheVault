@@ -94,6 +94,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/upsert",
         "Create or update the note matching a key field",
     ),
+    (
+        "POST",
+        "/api/inbox/mark-processed",
+        "Mark every email, message and call sent or made before a date processed, or count them",
+    ),
     ("GET", "/api/query", "Run a query, a page at a time"),
     (
         "POST",

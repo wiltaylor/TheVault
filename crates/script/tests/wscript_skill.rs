@@ -46,13 +46,24 @@ template default {
 "#;
 
 fn skill_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../writer/defaults/skills/wscript")
+    dir_of("wscript")
 }
 
-/// Every Markdown file of the skill, by path from its folder, sorted.
+/// The folder of shipped skill `name`.
+fn dir_of(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../writer/defaults/skills/{name}"))
+}
+
+/// Every Markdown file of the `wscript` skill, by path from its folder, sorted.
 fn files() -> Vec<(String, String)> {
+    files_of("wscript")
+}
+
+/// Every Markdown file of shipped skill `name`, by path from its folder, sorted.
+fn files_of(name: &str) -> Vec<(String, String)> {
+    let root = dir_of(name);
     let mut out = Vec::new();
-    let mut stack = vec![skill_dir()];
+    let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
         for e in std::fs::read_dir(&dir).unwrap() {
             let p = e.unwrap().path();
@@ -60,7 +71,7 @@ fn files() -> Vec<(String, String)> {
                 stack.push(p);
             } else if p.extension().is_some_and(|x| x == "md") {
                 let rel = p
-                    .strip_prefix(skill_dir())
+                    .strip_prefix(&root)
                     .unwrap()
                     .to_string_lossy()
                     .into_owned();
@@ -135,9 +146,30 @@ fn fixture() -> (tempfile::TempDir, Arc<Writer>, Host) {
 
 #[test]
 fn every_example_in_the_wscript_skill_compiles_and_the_runnable_ones_run() {
+    let (compiled, ran, wcl) = check_examples("wscript");
+    assert!(compiled >= 35, "{compiled} wscript examples");
+    assert!(ran >= 20, "{ran} runnable examples");
+    assert!(wcl >= 2, "{wcl} wcl examples");
+}
+
+/// The `vault-automation` skill (TV-35) holds task, handler and tool files and their scripts.
+#[test]
+fn every_example_in_the_vault_automation_skill_compiles() {
+    let (compiled, _ran, wcl) = check_examples("vault-automation");
+    assert!(compiled >= 4, "{compiled} wscript examples");
+    assert!(wcl >= 3, "{wcl} wcl examples");
+    let text = std::fs::read_to_string(dir_of("vault-automation").join("SKILL.md")).unwrap();
+    let (md, issues) = schema::parse_skill_md(&text, "vault-automation");
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(md.name.as_deref(), Some("vault-automation"));
+}
+
+/// Compile every ```wscript block of shipped skill `name`, run its ```wscript run blocks, and
+/// parse its ```wcl blocks. Returns how many compiled, ran and parsed.
+fn check_examples(name: &str) -> (usize, usize, usize) {
     let (_dir, _writer, host) = fixture();
     let (mut compiled, mut ran, mut wcl) = (0, 0, 0);
-    for (path, text) in files() {
+    for (path, text) in files_of(name) {
         for (i, (info, body)) in blocks(&text).into_iter().enumerate() {
             let at = format!("{path} block {}", i + 1);
             let mut words = info.split_whitespace();
@@ -174,9 +206,7 @@ fn every_example_in_the_wscript_skill_compiles_and_the_runnable_ones_run() {
             }
         }
     }
-    assert!(compiled >= 35, "{compiled} wscript examples");
-    assert!(ran >= 20, "{ran} runnable examples");
-    assert!(wcl >= 2, "{wcl} wcl examples");
+    (compiled, ran, wcl)
 }
 
 #[test]

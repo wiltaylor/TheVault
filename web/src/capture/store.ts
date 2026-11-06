@@ -1,10 +1,11 @@
-// Whether the capture dialog is open, and the inbox's count of fleeting notes waiting.
+// Whether the capture dialog is open, and the inbox's count of items waiting.
 
 import { createSignal } from "solid-js";
 import { ASSISTANT, callableAgents } from "../agents";
-import { type AgentSummary, api } from "../api";
+import type { AgentSummary } from "../api";
 import { onNoteChangedElsewhere, onNoteWritten } from "../changes";
-import { FLEETING, INBOX_QUERY } from "./model";
+import { countInbox } from "../inbox/load";
+import { FLEETING } from "./model";
 
 const [open, setOpen] = createSignal(false);
 
@@ -59,7 +60,7 @@ export function sendToAgents(list: readonly AgentSummary[]): Pick<AgentSummary, 
 
 const [count, setCount] = createSignal<number | null>(null);
 
-/** Reactive: how many fleeting notes wait in the inbox, once counted. */
+/** Reactive: how many items wait in the inbox's All view, once counted. */
 export const inboxCount = count;
 
 let counting = 0;
@@ -68,10 +69,10 @@ let counting = 0;
 export async function refreshInboxCount(): Promise<void> {
   const mine = ++counting;
   try {
-    const page = await api.query(INBOX_QUERY, null, 1);
-    if (mine === counting) setCount(page.total);
+    const n = await countInbox();
+    if (mine === counting) setCount(n);
   } catch {
-    // A vault without the type, or a failed request, shows no badge.
+    // A vault without any of the types, or a failed request, shows no badge.
     if (mine === counting) setCount(null);
   }
 }

@@ -880,11 +880,11 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
         generation(root).trim().parse::<u64>().unwrap(),
         before + 4 + 3 + 1
     );
-    // The message type 0.1.6 had gains only `processed`.
+    // The message and call types 0.1.6 had gain only `processed`.
     assert!(
         done.fields_added
             .iter()
-            .all(|(t, f)| t == "person" || (t == "message" && f == "processed")),
+            .all(|(t, f)| t == "person" || ((t == "message" || t == "call") && f == "processed")),
         "{:?}",
         done.fields_added
     );
@@ -2674,4 +2674,81 @@ fn the_email_template_alpha_18_shipped_moves_its_html_slot_and_no_note_changes()
     }])
     .unwrap();
     assert_eq!(read(root, path).unwrap(), edited);
+}
+
+/// The `call` type as 0.1.14-alpha.23 shipped it, before `processed`.
+const CALL_0_1_14: &str = include_str!("fixtures/shipped/call_0_1_14.wcl");
+
+#[test]
+fn a_0_1_14_vault_gains_processed_on_call_and_no_note_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    std::fs::write(
+        root.join("types/call.wcl"),
+        store::canonical(CALL_0_1_14, "types/call.wcl").unwrap(),
+    )
+    .unwrap();
+    let missed = {
+        let w = open(root);
+        assert!(
+            w.schema()
+                .type_def("call")
+                .unwrap()
+                .field("processed")
+                .is_none()
+        );
+        w.create(
+            "call",
+            &writer::Input::Json(
+                json!({ "fields": { "title": "Missed call", "direction": "missed", "device_ref": "call:1" } }),
+            ),
+            &author(),
+        )
+        .unwrap()
+        .id
+    };
+    let path = format!("notes/call/{missed}.wcl");
+    let before = read(root, &path).unwrap();
+    assert!(!before.contains("processed"), "{before}");
+
+    let w = open(root);
+    let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    assert_eq!(
+        done.fields_added,
+        [("call".to_owned(), "processed".to_owned())]
+    );
+    // The page and the card both gain the slot (ticket 148), so the type is the shipped one.
+    assert_eq!(
+        read(root, "types/call.wcl").unwrap(),
+        store::canonical(writer::DEFAULT_CALL_TYPE, "types/call.wcl").unwrap()
+    );
+    assert_eq!(read(root, &path).unwrap(), before);
+    drop(w);
+
+    // A second start does nothing.
+    let gen_before = generation(root);
+    let w = open(root);
+    assert_eq!(
+        w.upgrade_shipped_defaults(Upkeep::Home).unwrap(),
+        Upgraded::default()
+    );
+    assert_eq!(generation(root), gen_before, "a second start made a commit");
+
+    // `!processed` matches a call with no value as well as a false one.
+    let make = |processed: bool| {
+        w.create(
+            "call",
+            &writer::Input::Json(json!({ "fields": { "title": "Call", "processed": processed } })),
+            &author(),
+        )
+        .unwrap()
+        .id
+    };
+    let call_false = make(false);
+    let call_true = make(true);
+    let mut want = vec![missed, call_false];
+    want.sort();
+    assert_eq!(matched(&w, "from call where !processed"), want);
+    assert_eq!(matched(&w, "from call where processed"), [call_true]);
 }
