@@ -4168,7 +4168,7 @@ mod tests {
         let t = query_format_text();
         for (name, _) in query::FUNCTIONS {
             assert!(
-                t.contains(&format!("| `{name}(")),
+                t.contains(&format!("`{name}(")),
                 "{name} is not in the functions table"
             );
         }

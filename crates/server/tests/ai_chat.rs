@@ -53,15 +53,17 @@ impl Api {
             .unwrap();
         let api = Api { server, client };
         // These tests read the system text and the tools as the shipped prompt alone makes
-        // them: start without the shipped `wscript` skill (script-tools T5), which would add
-        // the skills section and the skill tools.
-        let res = api
-            .client
-            .delete(api.server.url("/api/skills/wscript"))
-            .bearer_auth(api.token())
-            .send()
-            .unwrap();
-        assert!(res.status().is_success(), "{}", res.text().unwrap());
+        // them: start without the shipped skills, `wscript` (script-tools T5) and
+        // `vault-queries` (TV-29), which would add the skills section and the skill tools.
+        for skill in ["wscript", "vault-queries"] {
+            let res = api
+                .client
+                .delete(api.server.url(&format!("/api/skills/{skill}")))
+                .bearer_auth(api.token())
+                .send()
+                .unwrap();
+            assert!(res.status().is_success(), "{}", res.text().unwrap());
+        }
         api
     }
 
@@ -314,7 +316,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 50);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 51);
     // The tool result went back with the body.
     let third = requests[2].json();
     assert!(third.to_string().contains("slate tiles"));
