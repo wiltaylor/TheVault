@@ -550,7 +550,11 @@ fn backup_of_a_vault_with_no_vault_id_gives_the_archive_one() {
     assert_eq!(id.len(), 32, "{made}");
 
     let live = rusqlite::Connection::open(&db).unwrap();
-    assert_eq!(stored_vault_id(&live), None, "backup wrote the live state.db");
+    assert_eq!(
+        stored_vault_id(&live),
+        None,
+        "backup wrote the live state.db"
+    );
     let copy = archived_state(&archive, &dirs.path().join("copy.db"));
     assert_eq!(stored_vault_id(&copy).as_deref(), Some(id.as_str()));
 }
@@ -571,7 +575,11 @@ fn backup_reads_a_closed_wal_state_db_with_no_wal_or_shm_file() {
     assert_eq!(mode, "wal");
     for end in ["-wal", "-shm"] {
         let side = PathBuf::from(format!("{}{end}", db.display()));
-        assert!(!side.exists(), "{} is left after a clean close", side.display());
+        assert!(
+            !side.exists(),
+            "{} is left after a clean close",
+            side.display()
+        );
     }
 
     let archive = tmp_path(&dirs, "b.sqlar");
