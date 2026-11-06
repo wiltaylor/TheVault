@@ -2631,6 +2631,7 @@ mod tests {
         paths.push("tasks/google_calendar.wcl".to_owned());
         paths.push(crate::defs::script_path("google_gmail"));
         paths.push(crate::defs::task_path("google_gmail"));
+        paths.push(crate::defs::script_path("google_mail"));
         paths.push(crate::defs::script_path("google_event"));
         paths.push(crate::defs::script_path("google_series"));
         paths.push(crate::defs::script_path("outbox_send"));
