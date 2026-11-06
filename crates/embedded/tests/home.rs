@@ -632,6 +632,8 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
     let definitions = out["definitions"]
         .as_u64()
         .expect("a count of definition changes");
+    // How often the pinned tree changed (TV-12): nothing has changed it here.
+    assert_eq!(out["pins"], 0, "{out}");
     assert_eq!(
         out,
         json!({
@@ -650,6 +652,7 @@ fn the_sync_status_says_synced_syncing_with_writes_waiting_or_error() {
             // No round has run on this device: no progress yet (ticket 144).
             "progress": null,
             "definitions": definitions,
+            "pins": 0,
         })
     );
 

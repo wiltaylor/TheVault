@@ -1411,10 +1411,11 @@ fn pins_made_before_the_update_reach_the_server_once() {
     admin.put(&format!("/api/pins/{shared}"), json!({}), 200);
     let phone = Device::pair(&server, "Pixel");
     // Before the first round, as an app from before the change: its own note and its own pin.
+    // The device has only the built-in types before it pulls, so its note is a capture.
     let made = phone.call(
         "POST",
-        "/api/notes?type=memo",
-        Some(json!({ "note": memo("Phone only", "", "", &[]) })),
+        "/api/notes?type=fleeting",
+        Some(json!({ "note": { "fields": { "title": "Phone only" }, "blocks": [] } })),
         201,
     );
     let own = str(&made["id"]);
