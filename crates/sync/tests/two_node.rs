@@ -694,7 +694,11 @@ fn a_skill_with_a_binary_asset_reaches_the_device_and_its_delete_follows() {
         .collect();
     assert_eq!(
         names,
-        [json!("vault-notes"), json!("vault-queries"), json!("wscript")]
+        [
+            json!("vault-notes"),
+            json!("vault-queries"),
+            json!("wscript")
+        ]
     );
     phone.call("GET", "/api/skills/pdf", None, 404);
 }

@@ -74,7 +74,13 @@ fn every_type_and_note_in_the_vault_notes_skill_is_valid() {
         }
     }
     // The two-way `project` field gave project its `tasks`.
-    assert!(w.schema().type_def("project").unwrap().field("tasks").is_some());
+    assert!(
+        w.schema()
+            .type_def("project")
+            .unwrap()
+            .field("tasks")
+            .is_some()
+    );
 
     // What the notes name.
     let make = |id: &str, ty: &str, title: &str| {

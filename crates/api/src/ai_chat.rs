@@ -368,15 +368,43 @@ fn turn_tools(
 /// Each confirmation switch: its key, its label on the agent's Permissions tab, and the change
 /// it guards, in the tab's order.
 const SWITCHES: [(&str, &str, &str); 9] = [
-    ("notes", "Ask before creating and editing notes", "create or edit notes"),
+    (
+        "notes",
+        "Ask before creating and editing notes",
+        "create or edit notes",
+    ),
     ("archive", "Ask before archiving notes", "archive notes"),
-    ("delete", "Ask before moving notes to the trash", "move notes to the trash"),
-    ("types", "Ask before changing types", "change or delete types"),
-    ("downloads", "Ask before downloading files into the vault", "store files in the vault"),
-    ("taxonomies", "Ask before changing taxonomies", "change or delete taxonomies"),
-    ("agents", "Ask before changing agents", "change agents or their memories"),
+    (
+        "delete",
+        "Ask before moving notes to the trash",
+        "move notes to the trash",
+    ),
+    (
+        "types",
+        "Ask before changing types",
+        "change or delete types",
+    ),
+    (
+        "downloads",
+        "Ask before downloading files into the vault",
+        "store files in the vault",
+    ),
+    (
+        "taxonomies",
+        "Ask before changing taxonomies",
+        "change or delete taxonomies",
+    ),
+    (
+        "agents",
+        "Ask before changing agents",
+        "change agents or their memories",
+    ),
     ("skills", "Ask before changing skills", "change skills"),
-    ("tools", "Ask before changing script tools", "change script tools"),
+    (
+        "tools",
+        "Ask before changing script tools",
+        "change script tools",
+    ),
 ];
 
 /// For an unattended run: the changes `agent` may make with someone present that this run is not
@@ -1040,7 +1068,8 @@ impl Limits {
         let input = &call.input;
         let (type_name, verb) = match call.name.as_str() {
             "propose_create" => (input["type"].as_str()?.trim().to_owned(), "change"),
-            "get_note" | "propose_edit" | "propose_fields" | "propose_archive" | "propose_delete" => {
+            "get_note" | "propose_edit" | "propose_fields" | "propose_archive"
+            | "propose_delete" => {
                 let id = input["id"].as_str()?.trim();
                 let n = w.read(id).ok()?;
                 let verb = if call.name == "get_note" {
@@ -4320,13 +4349,16 @@ mod tests {
     #[test]
     fn an_unattended_run_names_the_switches_that_hold_its_changes_back() {
         let agent = |wcl: &str| Agent::parse("a", wcl).unwrap();
-        let note = |a: &Agent| {
-            withheld_note(a, Direct::of(confirm_of(a), unattended_scope(a)))
-        };
+        let note = |a: &Agent| withheld_note(a, Direct::of(confirm_of(a), unattended_scope(a)));
         // Every switch on, every tool: everything is held back, types included.
         let text = note(&agent("label = \"A\"\n")).unwrap();
         assert!(text.contains("## This run is unattended"), "{text}");
-        assert!(text.contains("create or edit notes: your \"Ask before creating and editing notes\" switch is on"), "{text}");
+        assert!(
+            text.contains(
+                "create or edit notes: your \"Ask before creating and editing notes\" switch is on"
+            ),
+            "{text}"
+        );
         assert!(text.contains("change or delete types"), "{text}");
         assert!(text.contains("do not say you have no tool"), "{text}");
         // Notes allowed without asking, and a tools list without type tools: neither is listed.
