@@ -1304,7 +1304,9 @@ fn black_hole() -> (String, Vec<std::net::TcpStream>, socket2::Socket) {
     listener.listen(0).unwrap();
     let addr = listener.local_addr().unwrap().as_socket().unwrap();
     let fill: Vec<_> = (0..4)
-        .filter_map(|_| std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).ok())
+        .filter_map(|_| {
+            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).ok()
+        })
         .collect();
     assert!(!fill.is_empty(), "the accept queue took a connection");
     assert!(
@@ -1328,7 +1330,8 @@ fn a_server_that_cannot_be_reached_ends_the_round_at_once_and_holds_up_no_other(
     let _runtime = core
         .device(&paired.device_id, || Arc::new(NoPhone))
         .unwrap();
-    core.set_capture_health(json!({ "problems": ["sms"] })).unwrap();
+    core.set_capture_health(json!({ "problems": ["sms"] }))
+        .unwrap();
     core.sync_now().unwrap();
 
     let (dead, _fill, _listener) = black_hole();
