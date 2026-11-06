@@ -5,14 +5,13 @@
 import { createSignal } from "solid-js";
 import { api } from "../api";
 import { needsServer } from "../inApp";
-import { noteChangedElsewhere } from "../changes";
+import { noteChangedElsewhere, pinsChangedElsewhere } from "../changes";
 import { refreshAgents } from "../agents";
 import { callsSaved } from "../agentCalls";
 import { bumpTurns, liveTurn } from "../ai/running";
 import { activityResync, liveActivity } from "../activity/live";
 import { definitionsChanged } from "../definitions";
 import { connectLive } from "../live";
-import { pinsChangedElsewhere } from "../pins";
 import {
   type ListState,
   type NotificationEvent,

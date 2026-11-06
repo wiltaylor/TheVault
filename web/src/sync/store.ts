@@ -8,7 +8,7 @@ import { createSignal } from "solid-js";
 import { type AppSync, api } from "../api";
 import { onNoteWritten } from "../changes";
 import { definitionsChanged } from "../definitions";
-import { pinsChangedElsewhere } from "../pins";
+import { pinsChangedElsewhere } from "../changes";
 
 /** How often the status is asked while it is green or red. */
 export const IDLE_MS = 3000;

@@ -4,7 +4,7 @@
 
 import { createResource, createSignal } from "solid-js";
 import { type PinItem, api } from "./api";
-import { changes } from "./changes";
+import { changes, pinsElsewhere } from "./changes";
 import { appendEntry, findItem, keepShown, moveEntry, removeLifting } from "./pinTree";
 import { sessionState } from "./session";
 
@@ -12,7 +12,7 @@ const [pinChanges, setPinChanges] = createSignal(0);
 
 const [pins, { mutate }] = createResource(
   // Nothing to load until signed in; a falsy source skips the fetch.
-  () => sessionState() === "in" && ([changes(), pinChanges()] as const),
+  () => sessionState() === "in" && ([changes(), pinChanges(), pinsElsewhere()] as const),
   // A failed load keeps the sidebar working with no pins rather than throwing on read. Entries the
   // load brings back unchanged keep the objects already shown, so their rows stay in place.
   async (_, { value }) => keepShown(value ?? [], await api.pins().catch(() => [] as PinItem[])),
@@ -20,11 +20,6 @@ const [pins, { mutate }] = createResource(
 );
 
 export { pins };
-
-/** Load the tree again: another client, or this app's sync round, changed it (TV-12). */
-export function pinsChangedElsewhere() {
-  setPinChanges((n) => n + 1);
-}
 
 export function isPinned(id: string): boolean {
   const item = findItem(pins() ?? [], id);

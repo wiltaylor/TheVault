@@ -40,3 +40,16 @@ export function onNoteChangedElsewhere(fn: (change: ElsewhereChange) => void): (
 export function noteChangedElsewhere(change: ElsewhereChange) {
   for (const fn of elsewhere) fn(change);
 }
+
+const [pinsElsewhere, setPinsElsewhere] = createSignal(0);
+
+/**
+ * Reactive: bumped when the pinned tree changed somewhere else, so the sidebar loads it again
+ * (TV-12). It lives here, not in pins.ts, so the live stream and the sync status can bump it
+ * without loading the pins.
+ */
+export { pinsElsewhere };
+
+export function pinsChangedElsewhere() {
+  setPinsElsewhere((n) => n + 1);
+}
