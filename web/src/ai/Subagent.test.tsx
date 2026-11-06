@@ -122,6 +122,9 @@ describe("a sub agent's block", () => {
     expect(block.queryByRole("button", { name: "Stop" })).toBeNull();
     fireEvent.click(block.getByText("Result"));
     expect(block.getByText("hall").tagName).toBe("STRONG");
+    // End the turn, so the store does not read it again after the test: a stream that closes
+    // without its end makes it reattach, and a later test's stream would get that (TV-56).
+    emit("done", { stop: "end_turn", messages: [] });
     live!.end();
   });
 
@@ -138,6 +141,9 @@ describe("a sub agent's block", () => {
     });
     await waitFor(() => expect(block.getAllByRole("status")[0]).toHaveTextContent("failed"));
     expect(block.getByText("The sub agent failed: the account is out of credit.")).toBeTruthy();
+    // End the turn, so the store does not read it again after the test: a stream that closes
+    // without its end makes it reattach, and a later test's stream would get that (TV-56).
+    emit("done", { stop: "end_turn", messages: [] });
     live!.end();
   });
 });
@@ -211,14 +217,16 @@ describe("a sub agent's session", () => {
   });
 
   // Under a parallel load the first render of the streamed text can take over the 1 s default
-  // wait, so the waits here are longer (TV-48).
+  // wait, so the waits here are longer (TV-48). The text goes to the stream of this session's own
+  // turn, not to the last stream opened, which can be another test's turn reattaching (TV-56).
   it("streams a running session, with Stop", { timeout: 20_000 }, async () => {
     agentThread.mockResolvedValue(session({ running: true, turn: "turn-sub", started_ms: Date.now() }));
     const s = createChatSession({ agent: "lead" });
     render(() => <Conversation session={s} readOnly />);
     void s.openThread("01JSUB");
-    await waitFor(() => expect(live).not.toBeNull(), { timeout: 8000 });
-    emit("text", { delta: "Still looking" });
+    const sub = () => turns.streamTurn.mock.calls.find((c) => c[0] === "turn-sub");
+    await waitFor(() => expect(sub()).toBeTruthy(), { timeout: 8000 });
+    sub()![2]({ event: "text", data: { delta: "Still looking" } });
     expect(await screen.findByText("Still looking", {}, { timeout: 8000 })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(turns.aiTurnStop).toHaveBeenCalledWith("turn-sub");
