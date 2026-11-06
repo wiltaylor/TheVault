@@ -1218,8 +1218,12 @@ async function main() {
       const box = section.getByLabel("SMS and MMS messages", { exact: true });
       if (!(await box.isChecked())) await box.click();
       await section.getByRole("button", { name: "Import from phone" }).click();
-      const alert = section.getByText("Android has not given TheVault READ_SMS");
+      // The import's own alert: the capture health card above also says the permission is
+      // missing, in its own words (TV-46).
+      const alert = section.locator(".import-permissions").getByText("Android has not given TheVault READ_SMS");
       await alert.waitFor({ timeout: 20_000 });
+      const said = await alert.innerText();
+      const once = !/READ_SMS, READ_SMS/.test(said);
       const offered = await section.getByRole("button", { name: "Open the permission step" }).isVisible();
       const shot = snap("52-permission-missing");
       await section.getByRole("button", { name: "Check for new messages and calls now" }).click();
@@ -1230,8 +1234,8 @@ async function main() {
       const setupShot = snap("52-permission-step");
       shell("input keyevent KEYCODE_BACK");
       await p.goto("http://vault.localhost/").catch(() => {});
-      const ok = offered && Boolean(setup) && Boolean(checked);
-      return [ok ? "pass" : "fail", `With READ_SMS revoked the import did not start and the page said so; "Open the permission step" ${offered ? "was offered" : "was missing"} and ${setup ? "opened the capture setup" : "did not open the capture setup"}. The check said "${checked}".`, [shot, setupShot]];
+      const ok = once && offered && Boolean(setup) && Boolean(checked);
+      return [ok ? "pass" : "fail", `With READ_SMS revoked the import did not start and the page said "${said}"${once ? "" : ", naming the permission twice"}; "Open the permission step" ${offered ? "was offered" : "was missing"} and ${setup ? "opened the capture setup" : "did not open the capture setup"}. The check said "${checked}".`, [shot, setupShot]];
     } finally {
       shell(`pm grant ${PKG} android.permission.READ_SMS`);
     }
