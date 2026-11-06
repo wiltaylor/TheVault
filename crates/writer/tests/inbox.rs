@@ -124,11 +124,16 @@ fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marke
         Some(false),
         "fleeting notes are never touched"
     );
-    // Only `processed` changed.
+    // Only `processed` changed. `updated` moves when the write lands in a later second than the
+    // create, so it is left out too.
     let mut mail_after = w.read(&old_mail).unwrap().doc;
-    mail_after.fields.retain(|(n, _)| n != "processed");
+    mail_after
+        .fields
+        .retain(|(n, _)| n != "processed" && n != "updated");
     let mut mail_before = mail_before;
-    mail_before.fields.retain(|(n, _)| n != "processed");
+    mail_before
+        .fields
+        .retain(|(n, _)| n != "processed" && n != "updated");
     assert_eq!(mail_after, mail_before);
 }
 
