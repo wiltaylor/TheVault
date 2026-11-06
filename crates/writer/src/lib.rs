@@ -45,6 +45,7 @@ mod devices;
 mod feed;
 mod fleeting;
 pub mod google;
+mod inbox;
 mod note;
 mod notify;
 pub mod outbox;
@@ -98,6 +99,7 @@ pub use devices::{
 };
 pub use feed::{SYNCED_FILES, synced_file};
 pub use fleeting::{DEFAULT_FLEETING_TYPE, FLEETING_PROCESSED_FIELD, FLEETING_TYPE};
+pub use inbox::{CATCH_UP_TYPES, CHUNK, CatchUp, instant};
 pub use index::{
     Archived, AssetHow, AssetUse, Extracted, Graph, GraphEdge, GraphNode, StoredText, TextKind,
     extract_pdf_text, extract_text,

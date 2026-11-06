@@ -214,6 +214,7 @@ The listing has 86 routes. `/api/test/clock` is left out of the listing on purpo
 | `PUT /api/notes/{id}/canvas/{name}` | `vault canvas put` | not used | Explained: the UI saves canvases inside the note `PUT`, through the same writer |
 | `POST /api/batch` | `vault batch [--dry-run]` | not used | Agent and import path (D32). The PRD has no batch UI |
 | `POST /api/upsert` | `vault upsert [--dry-run]` | not used | Agent and import path (D32) |
+| `POST /api/inbox/mark-processed` | none | Inbox, Mark older processed… (not in the apps) | Explained: a one-time catch-up for a vault with years of mail (TV-30). An agent marks notes one at a time with `vault put` |
 | `GET /api/query` | `vault query` (sends `POST`) | not used | Explained: the same query as a URL, for links and simple clients |
 | `POST /api/query` | `vault query` | Lists and views | |
 | `POST /api/query/parse` | `vault query-parse` | Visual builder | |

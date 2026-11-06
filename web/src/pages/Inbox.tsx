@@ -7,11 +7,13 @@ import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 import { type Note, type Row, api, assetUrl } from "../api";
 import { FLEETING, PROCESSED, assetIds, blocksText, captureFields, convertDoc } from "../capture/model";
-import { openCapture } from "../capture/store";
+import { openCapture, refreshInboxCount } from "../capture/store";
 import { changes } from "../changes";
 import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
 import { showToast } from "../components/Toasts";
 import { knowTitle } from "../editor/titles";
+import { appInfo } from "../inApp";
+import { CatchUpDialog } from "../inbox/CatchUpDialog";
 import { loadInbox } from "../inbox/load";
 import { FILTERS, type Filter, type Item } from "../inbox/sources";
 import { applyEdits } from "../notes";
@@ -38,6 +40,10 @@ export function Inbox() {
   const navigate = useNavigate();
   const [showProcessed, setShowProcessed] = createSignal(false);
   const [filter, setFilter] = createSignal<Filter>("all");
+  // The one-time catch-up runs on the home server only, so the apps do not offer it (TV-30).
+  const [app] = createResource(appInfo);
+  const [catchingUp, setCatchingUp] = createSignal(false);
+  const [reload, setReload] = createSignal(0);
   const [limit, setLimit] = createSignal(PAGE);
   const [error, setError] = createSignal<string | null>(null);
   // Notes acted on, hidden until the list loads again without them.
@@ -48,7 +54,7 @@ export function Inbox() {
     return image ? [image.name] : [];
   };
   const [page] = createResource(
-    () => ({ f: filter(), all: showProcessed(), n: limit(), extra: extra(), v: changes() }),
+    () => ({ f: filter(), all: showProcessed(), n: limit(), extra: extra(), v: changes(), r: reload() }),
     async ({ f, all, n, extra }) => {
       const p = await loadInbox(f, all, n, extra);
       setGone(new Set<string>());
@@ -135,11 +141,27 @@ export function Inbox() {
             <input type="checkbox" checked={showProcessed()} onChange={(e) => setShowProcessed(e.currentTarget.checked)} />
             Show processed
           </label>
+          <Show when={app.state === "ready" && app() === null}>
+            <button type="button" onClick={() => setCatchingUp(true)}>
+              Mark older processed…
+            </button>
+          </Show>
           <button type="button" class="primary" onClick={openCapture}>
             New capture
           </button>
         </div>
       </header>
+      <Show when={catchingUp()}>
+        <CatchUpDialog
+          onCancel={() => setCatchingUp(false)}
+          onDone={(changed) => {
+            setCatchingUp(false);
+            setReload((n) => n + 1);
+            void refreshInboxCount();
+            showToast(changed === 1 ? "Marked 1 item processed" : `Marked ${changed} items processed`);
+          }}
+        />
+      </Show>
       <Show when={error()}>
         <p class="error" role="alert">
           {error()}
