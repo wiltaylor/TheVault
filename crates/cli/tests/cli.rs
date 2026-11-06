@@ -475,7 +475,11 @@ fn backup_keeps_the_schema_version_of_an_older_state_db() {
     vault.ok(&["backup", &archive, "--vault", &vault_dir], "");
 
     let live = rusqlite::Connection::open(&db).unwrap();
-    assert_eq!(user_version(&live), previous, "backup migrated the live state.db");
+    assert_eq!(
+        user_version(&live),
+        previous,
+        "backup migrated the live state.db"
+    );
     let copy = dirs.path().join("copy.db");
     let data: Vec<u8> = rusqlite::Connection::open(&archive)
         .unwrap()
@@ -487,7 +491,11 @@ fn backup_keeps_the_schema_version_of_an_older_state_db() {
         .unwrap();
     std::fs::write(&copy, data).unwrap();
     let copy = rusqlite::Connection::open(&copy).unwrap();
-    assert_eq!(user_version(&copy), previous, "the archive holds a migrated state.db");
+    assert_eq!(
+        user_version(&copy),
+        previous,
+        "the archive holds a migrated state.db"
+    );
     let has_table: bool = copy
         .query_row(
             "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'gitsync_notes')",

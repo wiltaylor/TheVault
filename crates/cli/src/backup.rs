@@ -27,7 +27,8 @@ fn open_state_read_only(vault: &Path) -> Result<Connection, Fail> {
             ),
         ));
     }
-    Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| Fail::new("state", format!("{}: {e}", db.display())))
+    Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| Fail::new("state", format!("{}: {e}", db.display())))
 }
 
 fn state_err(e: rusqlite::Error) -> Fail {
