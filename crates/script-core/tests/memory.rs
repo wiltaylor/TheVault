@@ -262,14 +262,19 @@ fn extensions_add_modules_only_to_the_kind_they_name() {
 fn a_dropped_host_has_let_go_of_the_vault_when_the_drop_returns() {
     let memory = Arc::new(Memory::default());
     let host = Host::new(memory.clone() as Arc<dyn Vault>, 2, limits());
-    let src = "use vault\nfn run() -> Result[int, string] { Ok(vault::query(\"from memo\")?.len()) }\n";
+    let src =
+        "use vault\nfn run() -> Result[int, string] { Ok(vault::query(\"from memo\")?.len()) }\n";
     let out = host.run(Job::new(Kind::Device, "count", src, "run"));
     assert_eq!(out.result.unwrap(), json!(0));
     assert!(Arc::strong_count(&memory) > 1, "the workers hold the vault");
 
     drop(host);
 
-    assert_eq!(Arc::strong_count(&memory), 1, "every worker let go of the vault");
+    assert_eq!(
+        Arc::strong_count(&memory),
+        1,
+        "every worker let go of the vault"
+    );
 }
 
 /// A `probe::let_go()` that waits until the test says go, then drops the host it was given, on
@@ -305,14 +310,28 @@ fn a_host_dropped_on_its_own_worker_does_not_wait_for_that_worker() {
         go: Arc::new(Mutex::new(go_rx)),
         dropped: Arc::new(Mutex::new(dropped_tx)),
     };
-    let host = Arc::new(Host::with_extensions(Arc::new(Memory::default()), 2, limits(), &probe));
+    let host = Arc::new(Host::with_extensions(
+        Arc::new(Memory::default()),
+        2,
+        limits(),
+        &probe,
+    ));
     *slot.lock().unwrap() = Some(host.clone());
-    let mut job = Job::new(Kind::Device, "let-go", "use probe\nfn run() -> Result[bool, string] { probe::let_go() }\n", "run");
+    let mut job = Job::new(
+        Kind::Device,
+        "let-go",
+        "use probe\nfn run() -> Result[bool, string] { probe::let_go() }\n",
+        "run",
+    );
     job.timeout = Some(Duration::from_millis(100));
     // The run gives up after its timeout while the worker still waits in let_go, so the slot
     // holds the last reference once this one is gone.
     let out = host.run(job);
-    assert!(matches!(out.result, Err(Error::Timeout { .. })), "{:?}", out.result);
+    assert!(
+        matches!(out.result, Err(Error::Timeout { .. })),
+        "{:?}",
+        out.result
+    );
     drop(host);
 
     go_tx.send(()).unwrap();

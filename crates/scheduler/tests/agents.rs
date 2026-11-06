@@ -673,19 +673,30 @@ fn the_scheduler_dropped_during_a_write_with_a_run_waiting_to_write_lets_both_fi
     job.timeout = Some(Duration::from_millis(100));
     let h = host_left.upgrade().unwrap();
     let out = h.run(job);
-    assert!(matches!(out.result, Err(script::Error::Timeout { .. })), "{:?}", out.result);
+    assert!(
+        matches!(out.result, Err(script::Error::Timeout { .. })),
+        "{:?}",
+        out.result
+    );
     drop(h);
 
     // The owner goes: the write's hooks now hold the last reference to the scheduler.
     drop(scheduler);
     go.send(()).unwrap();
 
-    assert_eq!(saved.recv_timeout(Duration::from_secs(30)), Ok(true), "the held write finished");
+    assert_eq!(
+        saved.recv_timeout(Duration::from_secs(30)),
+        Ok(true),
+        "the held write finished"
+    );
     let gone = (0..300).any(|_| {
         thread::sleep(Duration::from_millis(100));
         host_left.upgrade().is_none()
     });
-    assert!(gone, "the host dropped once its worker finished the late write");
+    assert!(
+        gone,
+        "the host dropped once its worker finished the late write"
+    );
     let titles: Vec<String> = writer
         .list(Some("memo"))
         .unwrap()
