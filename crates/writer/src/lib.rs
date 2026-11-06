@@ -310,6 +310,10 @@ pub struct Saved {
     /// For an update of a note whose type has an `after_update` handler, the canonical WCL the
     /// note held before it, so the handler can tell what changed (TV-25). `None` otherwise.
     pub previous: Option<String>,
+    /// The author of this note's change when it is not the write's, such as a note a `before_*`
+    /// handler staged, for the `after_*` handlers' argument (TV-25). `None` is the write's
+    /// author. The other hooks hear the write's author, as before.
+    pub author: Option<Author>,
     /// The other notes the same write changed: reverse references and `on_delete` effects
     /// (D4, D5). Empty on those other notes themselves.
     pub also: Vec<Saved>,
@@ -906,6 +910,7 @@ impl Writer {
                 version,
                 wcl: old,
                 previous: None,
+                author: None,
                 also: Vec::new(),
             });
         }
@@ -1418,6 +1423,7 @@ impl Writer {
                         version,
                         wcl,
                         previous: None,
+                        author: None,
                         also: Vec::new(),
                     })
                 })
@@ -1560,6 +1566,7 @@ impl Writer {
                         version: v.token,
                         wcl: text,
                         previous,
+                        author: (by != author).then(|| by.clone()),
                         also: Vec::new(),
                     });
                 }
@@ -1575,6 +1582,7 @@ impl Writer {
                         version: entry.version,
                         wcl: entry.content,
                         previous: None,
+                        author: (by != author).then(|| by.clone()),
                         also: Vec::new(),
                     });
                 }
@@ -1598,13 +1606,7 @@ impl Writer {
             Author::Token(name) => Some(name.clone()),
             _ => None,
         });
-        // Each note's after_* handlers see the author of that note's change: a note a before_*
-        // handler staged is the handler's, not the batch's (TV-25). Consecutive notes of one
-        // author go together, so the handlers queue in commit order.
-        let by = |s: &Saved| authors.get(&s.id).unwrap_or(author);
-        for run in saved.chunk_by(|a, b| by(a) == by(b)) {
-            self.hooks.after(run, by(&run[0]), &inner.schema);
-        }
+        self.hooks.after(&saved, author, &inner.schema);
         self.people_to_contacts(&people);
         self.outbox_notifications(&items);
         Ok(saved)

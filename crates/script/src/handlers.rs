@@ -339,15 +339,16 @@ impl Shared {
         Ok(())
     }
 
-    /// Queue the `after_*` handlers of every saved note, written by `author`.
+    /// Queue the `after_*` handlers of every saved note, written by `author`. A note whose change
+    /// had its own author, such as one a `before_*` handler staged, gives its handlers that one.
     fn after(&self, saved: &[Saved], author: &Author, schema: &Schema) {
         let Ok(writer) = self.writer() else {
             return;
         };
         let chain = inherited();
-        let (kind, name) = author.parts();
         let mut queue = Vec::new();
         for s in saved {
+            let (kind, name) = s.author.as_ref().unwrap_or(author).parts();
             let event = format!("after_{}", event_name(s.event));
             for h in handlers_of(schema, &s.type_name, &event) {
                 let mut links = chain.clone();

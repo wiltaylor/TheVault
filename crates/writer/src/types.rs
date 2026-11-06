@@ -218,6 +218,7 @@ impl Writer {
                     version: v.token,
                     wcl: text,
                     previous: None,
+                    author: None,
                     also: Vec::new(),
                 });
             }
