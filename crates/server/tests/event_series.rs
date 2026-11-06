@@ -334,6 +334,7 @@ fn occurrences_from_before_series_notes_are_linked_and_their_master_fetched() {
     api.google.put_event("primary", standup());
     // An older vault: occurrence notes as the sync made them before series notes, and a sync
     // token that lists nothing new, so the master must be fetched to make its series note.
+    // RSVP migration has already run, otherwise it forces a full listing of the master.
     let script = r#"use vault
 
 fn run() -> Result[string, string] {
@@ -406,7 +407,7 @@ fn run() -> Result[string, string] {
     assert!(api.series().is_empty());
     api.put_secret(
         "google_calendar_state",
-        &json!({ "sync_tokens": { "primary": "sync_1_1" }, "window_end": "2027-03-01", "converter": "2" })
+        &json!({ "sync_tokens": { "primary": "sync_1_1" }, "window_end": "2027-03-01", "converter": "2", "rsvp": "1" })
             .to_string(),
     );
     api.google.clear_requests();
