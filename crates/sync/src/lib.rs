@@ -333,10 +333,6 @@ struct Pushing {
     chain: Vec<String>,
 }
 
-/// Whether a failed push of one note is that note's own problem, which holds it back while the
-/// rest of the queue goes on: the server refused the note (a 4xx other than a refused token or
-/// a request to slow down) or answered it with something the protocol does not allow. A server
-/// that cannot be reached, refuses the token or fails ends the round.
 /// The key in the device's `meta` table that records that its own pins went to the home server
 /// once (TV-12).
 const PINS_PUSHED: &str = "pins_pushed";
@@ -363,6 +359,10 @@ fn pin_entries(nodes: &Json, parent: Option<&str>, out: &mut Vec<state::PinEntry
     }
 }
 
+/// Whether a failed push of one note is that note's own problem, which holds it back while the
+/// rest of the queue goes on: the server refused the note (a 4xx other than a refused token or
+/// a request to slow down) or answered it with something the protocol does not allow. A server
+/// that cannot be reached, refuses the token or fails ends the round.
 fn held_for(e: &Error) -> bool {
     match e {
         Error::Server { status, .. } => {

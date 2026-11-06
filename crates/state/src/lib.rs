@@ -537,7 +537,6 @@ impl State {
         Ok(())
     }
 
-    /// The live events of this vault's changes, for open clients (D4).
     /// A fact kept in the `meta` table under `key`, such as a one-time step being done.
     pub fn meta(&self, key: &str) -> Result<Option<String>> {
         use rusqlite::OptionalExtension;
@@ -557,6 +556,7 @@ impl State {
         Ok(())
     }
 
+    /// The live events of this vault's changes, for open clients (D4).
     pub fn events(&self) -> &Events {
         &self.events
     }
