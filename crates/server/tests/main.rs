@@ -49,6 +49,7 @@ mod google_types;
 mod graph;
 mod handlers;
 mod health;
+mod inbox;
 mod notes;
 mod notifications;
 mod office_assets;

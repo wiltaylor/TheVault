@@ -351,6 +351,15 @@ export interface PinEntry {
   index: number;
 }
 
+/** What the inbox's catch-up matched and changed (`POST /api/inbox/mark-processed`). */
+export interface CatchUp {
+  dry_run: boolean;
+  matched: { email: number; message: number; call: number };
+  total: number;
+  changed: number;
+  chunks: number;
+}
+
 export interface Page {
   rows: Row[];
   next: string | null;
@@ -2075,6 +2084,12 @@ export const api = {
   clients: () => request<{ clients: ClientBuild[]; enabled: boolean }>("GET", "/api/clients"),
   /** The home server's version. In an app the embedded server asks the home server. */
   serverVersion: async () => (await request<{ server_version: string }>("GET", "/api/version")).server_version,
+  /**
+   * The inbox's one-time catch-up: mark every email, message and call sent or made before
+   * `before` processed, or with `dryRun` count them. The home server only (TV-30).
+   */
+  markProcessedBefore: (before: string, dryRun: boolean) =>
+    request<CatchUp>("POST", "/api/inbox/mark-processed", { before, dry_run: dryRun }),
   /** The app this page runs in, or null in a browser: the home server answers 404. */
   app: async (): Promise<AppInfo | null> => {
     try {

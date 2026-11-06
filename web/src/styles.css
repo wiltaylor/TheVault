@@ -9140,6 +9140,7 @@ button.toast-action {
 
 .inbox-tools {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
 }
@@ -10066,6 +10067,23 @@ button.toast-action {
   gap: 0.5rem;
 }
 
+/* The inbox's one-time catch-up (TV-30): a date, the count before it, and a confirm. */
+.inbox-catch-up {
+  width: min(32rem, 100%);
+}
+
+.inbox-catch-up-date {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.inbox-catch-up .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 /* Agents in the left sidebar (agents G3): below Types, with a + and a ⋯ menu per agent */
 .agents-nav-heading {
   display: flex;
@@ -10397,13 +10415,15 @@ button.toast-action {
   margin-bottom: 0.75rem;
 }
 
-.log-chips {
+.log-chips,
+.inbox-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
 }
 
-.log-chip {
+.log-chip,
+.inbox-chip {
   padding: 0.2rem 0.65rem;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -10413,7 +10433,8 @@ button.toast-action {
   font-size: 0.85rem;
 }
 
-.log-chip[aria-pressed="true"] {
+.log-chip[aria-pressed="true"],
+.inbox-chip[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);

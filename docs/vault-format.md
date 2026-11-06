@@ -283,12 +283,13 @@ The fields of the phone data types, as a new vault gets them:
 | | `number` | `string` | The other party's number |
 | | `started` | `datetime` | When the call started |
 | | `duration` | `int` | Its length in seconds |
+| | `processed` | `bool`, default `false` | Set when the user, or an agent, has dealt with the call. Its slot sits after `direction` on the page and after `started` on the card. The inbox lists a missed call until it is set. No device script writes it, so a call captured again keeps it |
 | | `device_ref` | `string` | The phone's call log id, so a call is captured once |
 | `conversation` | `participants` | list of `reference` to `person` | The people in the thread |
 | | `channel` | `select`: `sms`, `mms`, `rcs` | |
 | | `thread_ref` | `string` | The phone's id for the thread |
 
-A note with no `processed` value, such as one made before 0.1.13 added the field, counts as unprocessed: a missing field is false in a query, so `from email where !processed` and `from message where !processed` list the unprocessed ones, both those with `processed = false` and those without the field.
+A note with no `processed` value, such as an email or message made before 0.1.13 added the field, or a call made before 0.1.14 did, counts as unprocessed: a missing field is false in a query, so `from email where !processed`, `from message where !processed` and `from call where !processed` list the unprocessed ones, both those with `processed = false` and those without the field.
 
 The `email` and `message` types end with a [`list_page`](#list-page-settings) block, so their list pages open in the details view, newest `sent` first, 50 to a page (lists L5):
 
@@ -2157,6 +2158,125 @@ The Gmail sync converts each message's HTML part with quote folding on, or its t
 
 The email page's View original shows the stored `html` asset as the sender wrote it (rich-import H6). `GET /api/notes/<id>/original` serves it as `text/html` with each `cid:` image the note's `inline_images` names in place as a `data:` URI, without `<meta http-equiv="refresh">` and `<base>`, and with the policy `sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'`: no scripts, forms or requests. The web client shows it in an iframe's `srcdoc` whose `sandbox` allows only popups that leave the sandbox, so a link opens in a tab of its own, under a policy of the same kind and no referrer. Remote images stay blocked until the user chooses Load remote images, which shows the page again with `https:` images allowed. The assets route still serves an HTML asset as plain text.
 
+## Query language
+
+A query picks notes and orders them. Lists, query views, `vault query`, `/api/query`, scripts (`vault::query`) and the AI's `query_notes` all read the same language. This section is the reference: PRD Appendix B is where it started, and this is what the parser takes now.
+
+### Clauses
+
+A query is a `from` clause followed by optional clauses, always in this order, each at most once:
+
+```
+from <type>[, <type>...]    or    from *
+include archived
+where <expression>
+search "<text>"
+sort <field> [asc|desc][, <field> [asc|desc]...]
+group by <field>
+select <field>[, <field>...]
+limit <n>
+```
+
+- `from` names one type, several types separated by commas, or `*` for every type. A type name is the type's `name`, such as `task`, not its label.
+- `include archived` reads archived notes too. See [Archived notes in queries](#archived-notes-in-queries).
+- `where` keeps the notes for which the expression is true.
+- `search "<text>"` keeps the notes whose title or text holds every word, ignoring case, and ranks them by relevance unless `sort` is given. See [Query views](#query-views) for how the last word matches.
+- `sort` orders by one or more fields, `asc` (the default) or `desc`. A note with no value goes last either way. Add `id` as a last key for a stable order: `sort due asc, id asc`.
+- `group by` groups the result by one field, as a kanban view does.
+- `select` returns only these fields in each row. Without it a row holds every stored field. A row never holds a `content` field (the body): read the note itself for that.
+- `limit` caps the result at a whole number of notes.
+
+### Field names and values
+
+- A field is named by its `name` in the type, such as `due` or `status`. Every note also has the built-in fields `id`, `type`, `title`, `created`, `updated` and `archived`.
+- A dot follows a single `reference` field to the note it points at: `project.status` is the status of the note in `project`. A dot also reads the `start` or `end` of a date range, as in `when.start`, and a member of a location or dict field. Inside `any()` and `all()`, a dot reads a key of a dict: `p.number`.
+- `this` is the note that holds the query, in a template or a note's content. A query run on its own, from the API or a tool, has no `this`.
+- A field the note does not have is missing. A missing value is false, so `where !processed` lists notes with `processed = false` and those without the field. `==` and the ordering operators are false when a side is missing, and `!=` is true.
+- Text is in double quotes, with the escapes `\n`, `\t`, `\\` and `\"`. Single quotes are not strings.
+- Numbers are written as they are: `3`, `2.5`. Bools are `true` and `false`.
+- A `date` or `datetime` field compares with `today()`, `now()`, date arithmetic, or a string holding a date or a datetime: `due < "2026-12-01"`, `sent >= "2026-11-01T00:00:00Z"`.
+- A `taxonomy` field holds a term path, such as `"Doing/Blocked"`. `==` compares the whole path. `under()` also matches the terms below it.
+- A `select` field holds one of its options: `priority == "high"`. A `list` field is tested with `has()`, `has_ci()`, `contains()`, `any()`, `all()` or `empty()`, not with `==`.
+
+### Operators
+
+| Operators | Meaning |
+|-----------|---------|
+| `==`, `!=` | Equal, not equal |
+| `<`, `<=`, `>`, `>=` | Order: numbers, text, dates and datetimes |
+| `&&`, `\|\|`, `!` | And, or, not. Use parentheses to group: `(a \|\| b) && c` |
+| `+`, `-`, `*`, `/`, `%` | Arithmetic. A date plus `days(n)` is a date: `today() + days(7)` |
+
+`//` starts a comment that runs to the end of the line.
+
+### Functions
+
+| Function | Returns |
+|----------|---------|
+| `today()`, `now()` | Today's date in the user's time zone, or the current datetime |
+| `days(n)` | A duration of `n` days, for date arithmetic |
+| `has(list, value)` | True if a list field contains `value` |
+| `has_ci(list, value)` | As `has()`, with text compared ignoring case. Given a single value, it compares that value |
+| `contains(field, "text")` | True if a text field, or any item of a text list, holds the text, ignoring case |
+| `empty(field)` | True if the field has no value: missing, blank text or an empty list |
+| `under(field, "term")` | True if a taxonomy field holds `term` or a term below it |
+| `any(list, \|x\| expr)` | True if `expr` is true for any item of the list |
+| `all(list, \|x\| expr)` | True if `expr` is true for every item of the list |
+| `linked_from(type, field)` | The notes of `type` whose reference `field` points at the note being tested, as a list for `any()` and `all()`: `from project where any(linked_from(task, project), \|t\| !t.done)` lists the projects with an open task |
+
+No other function exists. A call to any other name is a syntax error.
+
+### It is not SQL
+
+| Not this | Write this |
+|----------|------------|
+| `status = 'Todo'` | `status == "Todo"` |
+| `a AND b`, `a OR b`, `NOT a` | `a && b`, `a \|\| b`, `!a` |
+| `ORDER BY due DESC` | `sort due desc` |
+| `title LIKE '%plan%'` | `contains(title, "plan")` |
+| `tags IN ('a', 'b')` | `has(tags, "a") \|\| has(tags, "b")` |
+| `due IS NULL` | `empty(due)` |
+| `SELECT title FROM task` | `from task select title` |
+| `where done == false` on a note without the field | `where !done` |
+
+### Examples
+
+```query
+from task where status == "Todo" sort due asc limit 20
+```
+
+```query
+from task where under(status, "Active") && due < today() + days(7) group by status
+```
+
+```query
+from task where project == this && !done sort due asc
+```
+
+```query
+from person where any(emails, |e| has_ci(e.address, "ann@example.com"))
+```
+
+```query
+from book, article search "event sourcing" sort updated desc limit 20
+```
+
+```query
+from email where !processed && sent >= "2026-11-01T00:00:00Z" sort sent desc select title, from_raw, sent
+```
+
+```query
+from task include archived where contains(title, "release") && !empty(due)
+```
+
+```query
+from event where when.start >= today() && when.start < today() + days(7) sort when.start asc
+```
+
+```query
+from project where any(linked_from(task, project), |t| !t.done) sort title asc
+```
+
 ## Query views
 
 A `query_view` block runs one query and shows its results through one or more saved views (D8, D33).
@@ -2164,7 +2284,7 @@ A `query_view` block runs one query and shows its results through one or more sa
 | Item | Form | Meaning |
 |------|------|---------|
 | `title` | string | Heading shown above the view |
-| `query` | string | Required. A query in the grammar of PRD Appendix B, with the `include archived` clause of [Archived notes in queries](#archived-notes-in-queries). `this` is the note that holds the block |
+| `query` | string | Required. A query in the [query language](#query-language). `this` is the note that holds the block |
 | `default_view` | string | The view shown first. Default: the first view |
 | `allow_new` | bool | The views add notes. Default `false`. See [Adding notes from a query view](#adding-notes-from-a-query-view) |
 | `view <name> { ... }` | block | At least one. `<name>` is unique within the block |
@@ -2877,7 +2997,7 @@ The app ships defaults into every vault: the built-in types (and the `person` ty
    | `0003_event_google_handler` | An `event` type with no handler naming `google_event`, as main wrote it before the Google Calendar write-back: it gains the shipped type's three `handler` blocks, before its first template (see [Built-in types](#built-in-types)). The seeding below only adds fields, so it would not carry them. It edits no note. A user's own `event` type (see step 2) is skipped |
    | `0004_remove_google_sync` | The Google sync's settings move from the 0.1.7 `google_sync` note type into secrets (google-sync D21). Every `event` handler naming `google_event` gains the `google_settings` secret, as a planned type change that edits no note. When the vault has a `google_sync` note, the first one's settings, cursors and `account` move into `google_settings`, `google_gmail_state`, `google_calendar_state` and `google_account`, each key only where the secret does not hold it already; `calendar_sync_tokens` keys such as `c_me_40example_2ecom` become calendar ids such as `me@example.com`. Then every `google_sync` note is deleted for good, not to the trash, and the type is deleted. A vault with the type and no note just loses the type. A `google_sync` type without the 0.1.7 type's `gmail_history_id` field is the user's own: the step leaves it and its notes alone. Moving a note needs the secrets key: without it the step changes nothing more, keeps the type and the note, and runs again on the next start |
    | `0005_list_page_defaults` | An `email` or `message` type with no `list_page` block, as every release before lists L5 shipped it: it gains the shipped type's block (details view, `sent desc`, 50 a page) after its last item, as one planned type change that edits no note (lists L5). The rest of the file stays as it is, so a type the user edited, such as one with a slot added to its card, keeps the edit; the seeding below only adds fields, so it would not carry the block. A type that has a `list_page` block, whatever it holds, is left alone, and so is a user's own type holding the name (see step 2). A type without the `sent` field gains the block without its `sort` |
-2. **Built-in taxonomies and types.** A built-in taxonomy the vault lacks is added whole, before the types that use it; one the vault has is never changed. A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` or `card` template places an added field, the vault's template of the same name gains that slot, after the nearest slot the shipped template puts before it, else before the nearest slot it puts after it, or at the end of its first tab. A vault type without that template gains none. Slots inside `columns` and `column` count, so a slot the shipped template puts after `from` in a column lands after `from` in the vault's column. Nothing else in either template changes: a vault from before 0.1.13 gains `processed` on `email` and `message` with its slot on their pages and on their cards, and an old starter vault's `person` card gains `photo` before the title. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
+2. **Built-in taxonomies and types.** A built-in taxonomy the vault lacks is added whole, before the types that use it; one the vault has is never changed. A type the vault lacks is added whole. A built-in type the vault has, and its `person` type, gain every field the shipped default declares and the vault's type lacks. The fields are added as a planned schema change that edits no note: a field the vault has is never removed, renamed or changed, even when its kind differs from the shipped one, and no note is rewritten. Each added field goes after the nearest field the shipped default puts before it. When the shipped `default` or `card` template places an added field, the vault's template of the same name gains that slot, after the nearest slot the shipped template puts before it, else before the nearest slot it puts after it, or at the end of its first tab. A vault type without that template gains none. Slots inside `columns` and `column` count, so a slot the shipped template puts after `from` in a column lands after `from` in the vault's column. Nothing else in either template changes: a vault from before 0.1.13 gains `processed` on `email` and `message` with its slot on their pages and on their cards, a vault from before 0.1.14 gains `processed` on `call` with its slot on its page and its card, and an old starter vault's `person` card gains `photo` before the title. A field that the user removes from a built-in type is added again on the next start; hide a field with `hidden = true` instead.
 
    A vault type that holds a built-in's name is the built-in only in one of two cases. Either `state.db` records that the server wrote it (the server records each built-in type it adds, in the shipped-file table under the type file's path, such as `types/event.wcl`), or it matches the built-in's identity: it declares the built-in's key field as a single string field. The key fields are `device_ref` for `message` and `call`, `thread_ref` for `conversation` and `email_thread`, `gmail_ref` for `email` and `google_ref` for `event` and `event_series`. Each is the field the phone or the Google sync captures a note once by, and every version the app shipped declares it. A type found by its identity is recorded on that start, so it stays the built-in whatever the user changes in it later. The planner types, `dailynote`, `weeklynote`, `monthlynote`, `quarterlynote` and `yearlynote`, and `fleeting` are always the built-in. Any other type holding a built-in's name, such as an `event` type with unrelated fields made before `event` was a built-in, is the user's own: the server leaves it as it is, adds no shipped field to it, does not mark it built-in, lets it be deleted, and logs one line on each start saying it skipped the built-in because a type of the user's holds the name. Once the user deletes or renames it, the next start adds the built-in in its place.
 3. **Missing files.** Each default device script, the default device file, each shipped task and its script, and the built-in agent the vault lacks is written, the scripts before the device file or task that names them. A deleted one comes back on the next start; pause a shipped task to stop it. That changes nothing on a device: a vault with no `devices/android.wcl` runs the same built-in default, and a script the device file names cannot be deleted while it does.

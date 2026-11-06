@@ -70,6 +70,8 @@ const SHIPPED = "You are the assistant inside TheVault.";
 const TOOLS = [
   "search_notes",
   "query_notes",
+  "query_format",
+  "value_format",
   "get_note",
   "read_asset",
   "find_assets",
@@ -102,6 +104,7 @@ const TOOLS = [
   "propose_archive",
   "propose_delete",
   "propose_edit",
+  "propose_fields",
   "remember",
   "recall",
   "update_memory",

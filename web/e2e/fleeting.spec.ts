@@ -59,7 +59,7 @@ const dialog = (page: Page) => page.getByRole("dialog", { name: "Capture" });
 const captureText = (page: Page) => dialog(page).getByRole("textbox", { name: "Capture text" });
 const inboxLink = (page: Page) => page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Inbox/ });
 const inboxItem = (page: Page, title: string) =>
-  activePane(page).getByRole("list", { name: "Fleeting notes" }).getByRole("listitem").filter({ has: page.getByRole("link", { name: title, exact: true }) });
+  activePane(page).getByRole("list", { name: "Inbox" }).getByRole("listitem").filter({ has: page.getByRole("link", { name: title, exact: true }) });
 
 /** Paste `png` into the capture dialog as the clipboard's image. */
 async function pasteImage(page: Page, png: Buffer, name = "") {
@@ -74,9 +74,21 @@ async function pasteImage(page: Page, png: Buffer, name = "") {
   );
 }
 
+/** What the badge counts: the inbox's All view (src/inbox/sources.ts). */
+const INBOX_QUERIES = [
+  "from fleeting where !processed",
+  'from email where !processed && !under(labels, "system/SENT")',
+  'from message where !processed && direction == "in"',
+  'from call where !processed && direction == "missed"',
+];
+
 async function inboxTotal(admin: APIRequestContext): Promise<number> {
-  const res = await admin.post("/api/query", { data: { query: "from fleeting where !processed", page_size: 1 } });
-  return ((await res.json()) as { total: number }).total;
+  let n = 0;
+  for (const query of INBOX_QUERIES) {
+    const res = await admin.post("/api/query", { data: { query, page_size: 1 } });
+    n += ((await res.json()) as { total: number }).total;
+  }
+  return n;
 }
 
 async function fleeting(admin: APIRequestContext, title: string, body: string, image?: string): Promise<{ id: string; version: string }> {
