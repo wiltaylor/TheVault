@@ -1,5 +1,20 @@
 import { activePane, expect, logIn, test } from "./fixtures";
 
+test("a failed invitation save shows an error on the event page", async ({ page, admin }) => {
+  const made = await admin.post("/api/notes?type=event", {
+    data: { note: { fields: { title: "Failed RSVP", my_response: "needs_action" }, blocks: [] } },
+  });
+  expect(made.status()).toBe(201);
+  const { id } = await made.json();
+  await logIn(page, `/notes/${id}`);
+  await page.route(`**/api/notes/${id}`, (route) => route.request().method() === "PUT"
+    ? route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Save failed" }) })
+    : route.continue());
+  const invitation = activePane(page).getByRole("group", { name: "Invitation response" });
+  await invitation.getByRole("button", { name: "Accept", exact: true }).click();
+  await expect(invitation.getByRole("alert")).toContainText("could not be saved");
+});
+
 test("accept an invitation on its event page, then change the answer on its card", async ({ page, admin }) => {
   const made = await admin.post("/api/notes?type=event", {
     data: { note: { fields: { title: "Invitation RSVP", my_response: "needs_action" }, blocks: [] } },

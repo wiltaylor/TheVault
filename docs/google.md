@@ -117,6 +117,12 @@ The answer is a normal note edit, so apps can save it offline. The home server
 sends it when the edit syncs. Other attendees and their responses are preserved.
 Concurrent changes use the existing field-by-field calendar merge.
 
+For recurring invitations, answer on an occurrence's event page or card. This
+answers only that occurrence. Whole-series RSVP is not supported, and series
+notes have no response controls. Invalid hand-edits (including organiser or
+non-attendee answers, or setting `needs_action`) send nothing and appear as
+failed Google event handler runs with an explanation.
+
 ## The permissions TheVault asks for
 
 | Scope | Why |

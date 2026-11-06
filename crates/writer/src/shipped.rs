@@ -131,6 +131,7 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
         path: "scripts/google_calendar.ws",
         source: include_str!("../defaults/google/google_calendar.ws"),
         hashes: &[
+            "54c5b6fb03f926e16ef935dc2f7cd5a493470d5f187faafa96d0f0afa8f09ad3",
             "c3f42196166b550d457a9c1f3aa9db7b89c0502a36924efc072448bd61e70e64",
             "c8645c85e00a3fe1ede2ac7e41e98788d6936550744afc791261e7ce80a7266b",
             "a8caf6855a648b44dfe49dd682e246bb87a0ef921ba6b85cd3a36a9585f30da9",
@@ -176,6 +177,7 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
         path: "scripts/google_event.ws",
         source: include_str!("../defaults/google/google_event.ws"),
         hashes: &[
+            "1fdc331fcbcefb5df07233a2eb2b2075784824d41c1d31f27375860053877680",
             "5f4a59e376bae6ab443affc0c0fdf241b1f26347a870f35ab03cedf110584cd3",
             "87423adde9c434f260c4d07f2cb1196cb7d89a91411c783838391cf2434c9e1d",
             "dc7c8f91ab0b2c8bdda7e31ccd2422b4edc628f0beb7a11b7dbb45c52fe15b7b",

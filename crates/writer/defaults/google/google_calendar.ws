@@ -998,6 +998,7 @@ fn series_body(sync: Sync, fields: Map[string, Value], blocks: List[Value], valu
     f.remove("when");
     f.remove("series");
     f.remove("series_ref");
+    f.remove("my_response");
     if value(values, "start") != "" {
         f["starts"] = Value::Map(#{
             "start": Value::String(value(values, "start")),

@@ -917,9 +917,10 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                 </span>
                 <Show when={!props.newType && !preview() && !conflict()}>
                   <Show when={n().type === "event"}>
-                    <EventResponse response={doc().fields.my_response} disabled={busy()} onAnswer={(response) => {
+                    <EventResponse response={doc().fields.my_response} disabled={busy()} onAnswer={async (response) => {
                       setFields({ my_response: response });
-                      flush();
+                      await autosave?.flush();
+                      if (autosave?.state() === "error") throw new Error("Your invitation response could not be saved. Try again.");
                     }} />
                   </Show>
                   <NoteOutboxActions
