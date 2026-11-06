@@ -130,12 +130,13 @@ impl Vault {
             cmd.env("VAULT_TOKEN", token);
         }
         let mut child = cmd.spawn().expect("start vault");
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
+        // `vault` can exit, or close stdin, before it reads all of it, for example a command that
+        // does not read stdin. Then the write fails with BrokenPipe, and the exit status and
+        // output below decide the run (TV-37).
+        match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            other => other.unwrap(),
+        }
         let output = child.wait_with_output().unwrap();
         let stdout = String::from_utf8(output.stdout).unwrap();
         let json = serde_json::from_str(&stdout).unwrap_or_else(|e| {
