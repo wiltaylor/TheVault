@@ -917,7 +917,8 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                 </span>
                 <Show when={!props.newType && !preview() && !conflict()}>
                   <Show when={n().type === "event"}>
-                    <EventResponse response={doc().fields.my_response} disabled={busy()} onAnswer={async (response) => {
+                    {/* After a failed save the answer shown is the stored one; autosave still retries the edit. */}
+                    <EventResponse response={saveState() === "error" ? n().note.fields.my_response : doc().fields.my_response} disabled={busy()} onAnswer={async (response) => {
                       setFields({ my_response: response });
                       await autosave?.flush();
                       if (autosave?.state() === "error") throw new Error("Your invitation response could not be saved. Try again.");

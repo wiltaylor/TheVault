@@ -119,9 +119,12 @@ Concurrent changes use the existing field-by-field calendar merge.
 
 For recurring invitations, answer on an occurrence's event page or card. This
 answers only that occurrence. Whole-series RSVP is not supported, and series
-notes have no response controls. Invalid hand-edits (including organiser or
-non-attendee answers, or setting `needs_action`) send nothing and appear as
-failed Google event handler runs with an explanation.
+notes have no response controls. An invalid hand-edit of the answer (an
+organiser or non-attendee answer, or setting `needs_action`) is not sent, and
+the note takes back the answer Google holds, so later edits are not held up.
+When the answer was the only change, the Google event handler run fails with an
+explanation. Other changes in the same edit are still sent, and the run log
+says the answer was ignored.
 
 ## The permissions TheVault asks for
 
