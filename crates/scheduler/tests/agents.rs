@@ -653,8 +653,14 @@ impl Clock for Gate {
     }
 }
 
-#[test]
-fn the_scheduler_dropped_during_a_write_with_a_run_waiting_to_write_lets_both_finish() {
+/// The scheduler's owner drops it while `write` is held inside the writer's hooks, the scheduler
+/// they upgraded in hand, and a run on the host waits for the writer's locks. `prepare` runs on
+/// the writer first, unheld, and what it answers is given to `write`. Both the held write and the
+/// run must finish, and the host must drop (TV-50).
+fn drop_the_scheduler_during_a_held_write(
+    prepare: impl FnOnce(&Writer) -> String,
+    write: impl FnOnce(&Writer, &str) -> bool + Send + 'static,
+) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();
     std::fs::write(dir.path().join("types/memo.wcl"), MEMO).unwrap();
@@ -687,6 +693,7 @@ fn the_scheduler_dropped_during_a_write_with_a_run_waiting_to_write_lets_both_fi
     let scheduler = Scheduler::new(writer.clone(), host, gate.clone()).unwrap();
     binding.bind(&scheduler);
     scheduler.set_agent_runner(Arc::new(Fake::default()));
+    let prepared = prepare(&writer);
 
     // A write that the scheduler's clock holds inside the hooks, while it holds the writer's
     // locks and the scheduler it upgraded to tell of the change.
@@ -694,18 +701,19 @@ fn the_scheduler_dropped_during_a_write_with_a_run_waiting_to_write_lets_both_fi
     let w = writer.clone();
     let (saved_tx, saved) = mpsc::channel();
     thread::spawn(move || {
-        let doc = json!({ "fields": { "title": "Held", "status": "open" } });
-        let _ = saved_tx.send(w.create("memo", &Input::Json(doc), &user()).is_ok());
+        let _ = saved_tx.send(write(&w, &prepared));
     });
     entered
         .recv_timeout(Duration::from_secs(30))
         .expect("the write reached the hooks");
 
     // A run on the host that writes, so its worker waits for the writer's locks. Its caller gives
-    // up at the timeout, which leaves the scheduler the only holder of the host.
+    // up at the timeout, which leaves the scheduler the only holder of the host. The timeout is
+    // long enough for the run to reach vault::create under load: a host call that starts past it
+    // faults without writing.
     let src = "use vault\nfn run() -> Result[(), string] {\n    vault::create(\"memo\", Value::Map(#{ \"fields\": Value::Map(#{ \"title\": Value::String(\"Late\") }) }))?\n    Ok(())\n}\n";
     let mut job = Job::new(Kind::Task, "late", src, "run");
-    job.timeout = Some(Duration::from_millis(100));
+    job.timeout = Some(Duration::from_secs(1));
     let h = host_left.upgrade().unwrap();
     let out = h.run(job);
     assert!(
@@ -739,4 +747,31 @@ fn the_scheduler_dropped_during_a_write_with_a_run_waiting_to_write_lets_both_fi
         .map(|r| r.title)
         .collect();
     assert!(titles.contains(&"Late".to_owned()), "{titles:?}");
+}
+
+#[test]
+fn the_scheduler_dropped_during_a_write_with_a_run_waiting_to_write_lets_both_finish() {
+    // A create is held in the after hook, which tells the scheduler of the change.
+    drop_the_scheduler_during_a_held_write(
+        |_| String::new(),
+        |w, _| {
+            let doc = json!({ "fields": { "title": "Held", "status": "open" } });
+            w.create("memo", &Input::Json(doc), &user()).is_ok()
+        },
+    );
+}
+
+#[test]
+fn the_scheduler_dropped_during_a_delete_with_a_run_waiting_to_write_lets_both_finish() {
+    // A delete is held in the before hook, which tells the scheduler of the delete to come.
+    drop_the_scheduler_during_a_held_write(
+        |w| {
+            let doc = json!({ "fields": { "title": "Doomed", "status": "open" } });
+            w.create("memo", &Input::Json(doc), &user()).unwrap().id
+        },
+        |w, id| {
+            let n = w.read(id).unwrap();
+            w.delete(id, Some(&n.version), &user()).is_ok()
+        },
+    );
 }
