@@ -355,9 +355,15 @@ With host folders instead of named volumes, empty the `THEVAULT_DATA` folder ins
 
 ## Roll back an upgrade
 
-Some versions change the format of `state.db`. An older version refuses to start on a `state.db` that a newer version changed, so going back then needs a backup that the older version wrote.
+Some versions change the format of `state.db`. An older version refuses to start on a `state.db` that a newer version changed, so going back then needs a backup that holds `state.db` as the older version left it.
 
-The backup that the container writes before an upgrade, `<old>-to-<new>-<time>.sqlar`, does not help here. The new version writes it after it has already changed `state.db`. So take your own backup before the upgrade:
+The backup that the container writes before an upgrade, `<old>-to-<new>-<time>.sqlar` in `/data/backups`, is such a backup when `<new>` is `0.1.14-alpha.25` or later. Copy it beside `compose.yaml` and go on at "To go back":
+
+```sh
+docker compose cp thevault:/data/backups/<old>-to-<new>-<time>.sqlar ./restore.sqlar
+```
+
+When `<new>` is `0.1.14-alpha.24` or earlier, that backup does not help. Those versions change `state.db` before they back it up. So for an upgrade to one of them, take your own backup first:
 
 1. Before you upgrade, back up with the version that runs now, and copy the backup beside `compose.yaml`:
 
@@ -380,7 +386,7 @@ To go back:
 2. If `docker compose ps` shows `thevault` as `healthy`, you are done.
 3. If the server does not start and `docker compose logs thevault` shows a line like `state.db is corrupt: schema version 18 is newer than this build supports (17)`, restore `restore.sqlar` as in [Restore a backup](#restore-a-backup), from step 2, with the old version still in `.env`.
 
-Everything written to the vault since you took `restore.sqlar` is lost.
+Everything written to the vault since `restore.sqlar` was taken is lost.
 
 ## Uninstall
 

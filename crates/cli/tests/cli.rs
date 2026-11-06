@@ -448,6 +448,56 @@ fn backup_creates_the_folder_the_archive_goes_in() {
     assert!(!archive.with_extension("partial").exists());
 }
 
+/// The entrypoint backs up with the new image before the server migrates `state.db`, so the
+/// backup must keep the old schema version for the old image to restore it (TV-41).
+#[test]
+fn backup_keeps_the_schema_version_of_an_older_state_db() {
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let vault_dir = tmp_path(&dirs, "v");
+    vault.ok(&["init", &vault_dir, "--password-stdin"], "pw\n");
+    let db = Path::new(&vault_dir).join(".vault/state.db");
+    let user_version = |conn: &rusqlite::Connection| -> i64 {
+        conn.pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap()
+    };
+    // Turn the fresh state.db back into the previous schema version: drop the table the last
+    // migration adds and lower user_version.
+    let previous = {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let previous = user_version(&conn) - 1;
+        conn.execute_batch("DROP TABLE gitsync_notes;").unwrap();
+        conn.pragma_update(None, "user_version", previous).unwrap();
+        previous
+    };
+
+    let archive = tmp_path(&dirs, "old.sqlar");
+    vault.ok(&["backup", &archive, "--vault", &vault_dir], "");
+
+    let live = rusqlite::Connection::open(&db).unwrap();
+    assert_eq!(user_version(&live), previous, "backup migrated the live state.db");
+    let copy = dirs.path().join("copy.db");
+    let data: Vec<u8> = rusqlite::Connection::open(&archive)
+        .unwrap()
+        .query_row(
+            "SELECT data FROM sqlar WHERE name = '.vault/state.db'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    std::fs::write(&copy, data).unwrap();
+    let copy = rusqlite::Connection::open(&copy).unwrap();
+    assert_eq!(user_version(&copy), previous, "the archive holds a migrated state.db");
+    let has_table: bool = copy
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'gitsync_notes')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!has_table);
+}
+
 #[test]
 fn version_compare_sorts_a_pre_release_before_its_release() {
     let vault = Vault::offline();
