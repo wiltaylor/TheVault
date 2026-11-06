@@ -125,7 +125,8 @@ fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marke
         "fleeting notes are never touched"
     );
     // Only `processed` changed, and on an email `inbox_catch_up`, so Gmail is not changed
-    // (TV-25). A message or call has no such field.
+    // (TV-25). A message or call has no such field. `updated` moves when the write lands in a
+    // later second than the create, so it is left out too.
     let mut mail_after = w.read(&old_mail).unwrap().doc;
     assert_eq!(
         mail_after.field("inbox_catch_up"),
@@ -134,9 +135,11 @@ fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marke
     assert_eq!(w.read(&sms).unwrap().doc.field("inbox_catch_up"), None);
     mail_after
         .fields
-        .retain(|(n, _)| n != "processed" && n != "inbox_catch_up");
+        .retain(|(n, _)| !["processed", "inbox_catch_up", "updated"].contains(&n.as_str()));
     let mut mail_before = mail_before;
-    mail_before.fields.retain(|(n, _)| n != "processed");
+    mail_before
+        .fields
+        .retain(|(n, _)| n != "processed" && n != "updated");
     assert_eq!(mail_after, mail_before);
 }
 
