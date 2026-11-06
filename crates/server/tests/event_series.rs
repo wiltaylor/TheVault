@@ -259,7 +259,8 @@ fn standup() -> Value {
 fn a_recurring_master_becomes_a_series_note_with_its_occurrences_linked() {
     let api = Api::start();
     let mut invited = standup();
-    invited["attendees"] = json!([{ "email": "guest@example.com", "self": true, "responseStatus": "needsAction" }]);
+    invited["attendees"] =
+        json!([{ "email": "guest@example.com", "self": true, "responseStatus": "needsAction" }]);
     let stored = api.google.put_event("primary", invited);
     api.sync();
 
@@ -269,7 +270,10 @@ fn a_recurring_master_becomes_a_series_note_with_its_occurrences_linked() {
     let note = api.note(&id);
     let f = &note["note"]["fields"];
     assert_eq!(f["title"], "Standup");
-    assert!(f.get("my_response").is_none(), "series notes have no RSVP field");
+    assert!(
+        f.get("my_response").is_none(),
+        "series notes have no RSVP field"
+    );
     assert_eq!(f["rule"], json!(["RRULE:FREQ=WEEKLY;COUNT=5"]));
     assert_eq!(
         f["starts"],
