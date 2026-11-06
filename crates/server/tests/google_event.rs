@@ -1065,7 +1065,11 @@ fn answering_an_occurrence_answers_only_that_instance() {
         writes[0].route(),
         format!("{CALENDAR_PATH}/calendars/primary/events/{second}")
     );
-    assert!(writes[0].path.contains("sendUpdates=all"), "{:?}", writes[0]);
+    assert!(
+        writes[0].path.contains("sendUpdates=all"),
+        "{:?}",
+        writes[0]
+    );
     let answered = |event: &Value| {
         event["attendees"]
             .as_array()
@@ -1075,7 +1079,10 @@ fn answering_an_occurrence_answers_only_that_instance() {
             .unwrap()["responseStatus"]
             .clone()
     };
-    assert_eq!(answered(&api.google.event("primary", second).unwrap()), "accepted");
+    assert_eq!(
+        answered(&api.google.event("primary", second).unwrap()),
+        "accepted"
+    );
     assert_eq!(
         api.google.event("primary", "review").unwrap(),
         master_before
