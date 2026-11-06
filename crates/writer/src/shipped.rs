@@ -2613,7 +2613,10 @@ mod tests {
     #[test]
     fn every_shipped_skill_is_valid_and_its_json_examples_parse() {
         let mut seen = 0;
-        for file in SHIPPED_FILES.iter().filter(|f| f.path.starts_with("skills/")) {
+        for file in SHIPPED_FILES
+            .iter()
+            .filter(|f| f.path.starts_with("skills/"))
+        {
             if let Some(name) = file
                 .path
                 .strip_prefix("skills/")
