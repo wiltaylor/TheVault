@@ -323,11 +323,22 @@ export function playwrightAndroid() {
   return require("@playwright/test")._android;
 }
 
-/** The app's WebView page, through adb (debuggable builds expose it). */
+/**
+ * The app's WebView page, through adb (debuggable builds expose it), on the device adb uses:
+ * ANDROID_SERIAL's when it is set, as with another emulator on the same machine, else the first.
+ * Playwright opens every device it lists and polls each for WebViews, so the others are closed at
+ * once and left alone.
+ */
 export async function appPage(timeout = 30_000) {
   const android = playwrightAndroid();
-  const [device] = await android.devices();
-  if (!device) throw new Error("Playwright sees no Android device");
+  const devices = await android.devices();
+  const serial = process.env.ANDROID_SERIAL;
+  const device = serial ? devices.find((d) => d.serial() === serial) : devices[0];
+  await Promise.all(devices.filter((d) => d !== device).map((d) => d.close().catch(() => {})));
+  if (!device) {
+    const seen = devices.map((d) => d.serial()).join(", ") || "none";
+    throw new Error(serial ? `Playwright sees no Android device ${serial} (it sees ${seen})` : "Playwright sees no Android device");
+  }
   const webview = await device.webView({ pkg: PKG }, { timeout });
   const page = await webview.page();
   return { device, page };
