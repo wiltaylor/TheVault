@@ -231,14 +231,11 @@ fn done_archives_the_message_in_gmail_and_nothing_else_sends_again() {
     api.edit(&one, json!({ "processed": true }));
     assert_eq!(api.google.mail_actions(), [modify("one")]);
 
-    // The sync sees the label change and rewrites the note's labels: a task's write, so the loop
-    // guard sends nothing.
+    // The sync sees the label change and rewrites the note's labels, here to none, so the field
+    // goes: a task's write, so the loop guard sends nothing.
     api.run_gmail();
     let labels = api.note(&one)["note"]["fields"]["labels"].clone();
-    assert!(
-        !labels.as_array().unwrap().contains(&json!("system/INBOX")),
-        "{labels}"
-    );
+    assert!(labels.is_null(), "{labels}");
     assert_eq!(api.google.mail_actions(), [modify("one")]);
 
     // Another edit of a processed email, and unticking it, send nothing: there is no undo.

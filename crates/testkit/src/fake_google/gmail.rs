@@ -641,9 +641,7 @@ fn list(gmail: &State, request: &Request) -> Reply {
         .messages
         .iter()
         .filter(|m| !m.deleted)
-        .filter(|m| {
-            spam_trash || !m.labels.iter().any(|l| l == "SPAM" || l == "TRASH")
-        })
+        .filter(|m| spam_trash || !m.labels.iter().any(|l| l == "SPAM" || l == "TRASH"))
         .filter(|m| wanted.iter().all(|l| m.labels.contains(l)))
         .filter(|m| after.is_none_or(|a| m.at >= a))
         .filter(|m| before.is_none_or(|b| m.at < b))
@@ -847,7 +845,10 @@ fn act(gmail: &mut State, id: &str, action: &str, request: &Request) -> Reply {
     };
     let mut labels = message.labels.clone();
     let (add, remove) = if action == "modify" {
-        (strings(&body["addLabelIds"]), strings(&body["removeLabelIds"]))
+        (
+            strings(&body["addLabelIds"]),
+            strings(&body["removeLabelIds"]),
+        )
     } else {
         (vec!["TRASH".to_owned()], Vec::new())
     };

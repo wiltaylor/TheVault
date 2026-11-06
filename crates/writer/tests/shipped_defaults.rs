@@ -2237,7 +2237,11 @@ fn without_handlers(text: &str) -> String {
     while let Some(start) = out.find("\nhandler \"") {
         let end = start + 1 + out[start + 1..].find("\n}\n").unwrap() + 3;
         // The blank line after the block goes with it.
-        let end = if out[end..].starts_with('\n') { end + 1 } else { end };
+        let end = if out[end..].starts_with('\n') {
+            end + 1
+        } else {
+            end
+        };
         out.replace_range(start + 1..end, "");
     }
     out
