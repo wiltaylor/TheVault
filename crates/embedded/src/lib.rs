@@ -433,6 +433,8 @@ impl Embedded {
         let mut out = report.to_json(&Waiting::of(self.queue()));
         out["progress"] = sync_status::progress_json(&self.sync_progress().snapshot());
         out["definitions"] = self.writer().definition_changes().into();
+        // A round took a changed pinned tree from the server (TV-12).
+        out["pins"] = self.writer().state().pin_changes().into();
         out
     }
 
@@ -539,6 +541,20 @@ impl Embedded {
                 };
                 let res = home.forward_definition(req, message).await;
                 // The home server wrote the file: a round brings it to the local copy.
+                if res.status().is_success() {
+                    self.request_sync();
+                }
+                res
+            }
+            Route::Pins => {
+                // An app on its own keeps its own pins.
+                if home.remote().is_none() {
+                    return self.local(req).await;
+                }
+                let res = home
+                    .forward_definition(req, home::PINS_NEED_SERVER_MESSAGE)
+                    .await;
+                // A round brings the server's tree into the local copy.
                 if res.status().is_success() {
                     self.request_sync();
                 }

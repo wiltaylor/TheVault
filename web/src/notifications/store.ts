@@ -12,6 +12,7 @@ import { bumpTurns, liveTurn } from "../ai/running";
 import { activityResync, liveActivity } from "../activity/live";
 import { definitionsChanged } from "../definitions";
 import { connectLive } from "../live";
+import { pinsChangedElsewhere } from "../pins";
 import {
   type ListState,
   type NotificationEvent,
@@ -136,6 +137,7 @@ export function startPolling(): () => void {
         bumpTurns();
         void definitionsChanged(null);
         activityResync();
+        pinsChangedElsewhere();
       }
     },
     down: poll,
@@ -150,6 +152,10 @@ export function startPolling(): () => void {
         // A type, taxonomy, agent or skill changed on the server.
         const { kind } = (data ?? {}) as { kind?: unknown };
         void definitionsChanged(typeof kind === "string" ? kind : null);
+      }
+      else if (name === "pins.changed") {
+        // The pinned tree changed on the server, from another client or device (TV-12).
+        pinsChangedElsewhere();
       }
       else if (name === "ai_turn") {
         // A chat turn on an agent's thread started or ended (agents G17).

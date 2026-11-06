@@ -140,6 +140,21 @@ test("pinning a note puts it in the sidebar, on every device, until it is unpinn
   expect(await tree(admin)).toEqual([]);
 });
 
+test("a pin made elsewhere shows in an open page at once, and so does its removal", async ({ page, admin }) => {
+  await unpinAll(admin);
+  const title = `Elsewhere ${token()}`;
+  const note = await createTask(admin, title);
+  await logIn(page, "/daily");
+  const pinned = page.getByRole("navigation", { name: "Pinned" });
+  await expect(pinned.getByRole("link")).toHaveCount(0);
+  // Another client, or an app, pins it: the server announces pins.changed (TV-12).
+  await pinNote(admin, note.id);
+  await expect(pinned.getByRole("link", { name: title })).toBeVisible();
+  const res = await admin.delete(`/api/pins/${note.id}`);
+  expect(res.status(), await res.text()).toBe(204);
+  await expect(pinned.getByRole("link", { name: title })).toHaveCount(0);
+});
+
 test("a pinned note's new title shows in the sidebar after it is saved", async ({ page, admin }) => {
   await unpinAll(admin);
   const title = `Rename me ${token()}`;

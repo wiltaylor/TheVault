@@ -21,6 +21,11 @@ const [pins, { mutate }] = createResource(
 
 export { pins };
 
+/** Load the tree again: another client, or this app's sync round, changed it (TV-12). */
+export function pinsChangedElsewhere() {
+  setPinChanges((n) => n + 1);
+}
+
 export function isPinned(id: string): boolean {
   const item = findItem(pins() ?? [], id);
   return item?.kind === "note";

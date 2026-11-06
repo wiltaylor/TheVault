@@ -772,8 +772,11 @@ fn desktop_keeps_every_asset_and_android_fetches_on_demand() {
         recent: 0,
     };
     phone.engine(policy).sync().unwrap();
-    phone.call("PUT", &format!("/api/pins/{pinned_id}"), None, 200);
+    // Pins are the home server's (TV-12): one pinned in the web app is the phone's too.
+    admin.put(&format!("/api/pins/{pinned_id}"), json!({}), 200);
     let report = phone.engine(policy).sync().unwrap();
+    let pins = phone.call("GET", "/api/pins", None, 200);
+    assert_eq!(pins["pins"][0]["id"], pinned_id.as_str(), "{pins}");
     assert_eq!(report.assets_fetched, 1, "{report:?}");
     phone.call("GET", &format!("/api/assets/{pinned_pic}"), None, 200);
     phone.call("GET", &format!("/api/assets/{other_pic}"), None, 404);
@@ -1332,4 +1335,97 @@ fn the_send_this_devices_notes_endpoint_queues_the_notes_the_server_lacks() {
         Http::admin(&b).note(&only)["note"]["fields"]["title"],
         "Inbox"
     );
+}
+
+/// The ids of the pinned tree's top level, as `GET /api/pins` answers it.
+fn pin_ids(tree: &Value) -> Vec<String> {
+    tree["pins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| str(&p["id"]))
+        .collect()
+}
+
+#[test]
+fn pins_are_the_servers_offline_reads_keep_the_last_tree_and_offline_writes_fail() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Http::admin(&server);
+    let (first, _) = admin.create(memo("First", "", "", &[]));
+    let (second, _) = admin.create(memo("Second", "", "", &[]));
+    let phone = Device::pair(&server, "Pixel");
+    phone.embedded.set_remote(Some(phone.remote.clone()));
+    phone.sync();
+
+    // A pin made on the paired phone is made on the server, and the phone reads it there.
+    phone.call("PUT", &format!("/api/pins/{first}"), None, 200);
+    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [first.clone()]);
+    assert_eq!(pin_ids(&phone.call("GET", "/api/pins", None, 200)), [first.clone()]);
+    // The round stores the server's tree on the phone.
+    phone.sync();
+    assert_eq!(phone.embedded.writer().state().pins().unwrap(), [first.clone()]);
+    assert!(phone.embedded.sync_status()["pins"].as_u64().unwrap() > 0);
+
+    // Offline, the phone shows the tree it last took, and a change says it needs the server.
+    phone.embedded.set_remote(Some(Remote {
+        url: "http://127.0.0.1:1".to_owned(),
+        ..phone.remote.clone()
+    }));
+    assert_eq!(pin_ids(&phone.call("GET", "/api/pins", None, 200)), [first.clone()]);
+    let refused = phone.call("PUT", &format!("/api/pins/{second}"), None, 503);
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("Changing pins needs the home server"),
+        "{refused}"
+    );
+    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [first.clone()]);
+
+    // Back online, a pin removed on the server leaves the phone with the next round.
+    phone.embedded.set_remote(Some(phone.remote.clone()));
+    admin.send(
+        admin.client.delete(server.url(&format!("/api/pins/{first}"))),
+        204,
+    );
+    phone.sync();
+    assert!(phone.embedded.writer().state().pins().unwrap().is_empty());
+}
+
+#[test]
+fn pins_made_before_the_update_reach_the_server_once() {
+    let server = TestServer::start_seeded(seed);
+    let admin = Http::admin(&server);
+    let (shared, _) = admin.create(memo("Shared", "", "", &[]));
+    admin.put(&format!("/api/pins/{shared}"), json!({}), 200);
+    let phone = Device::pair(&server, "Pixel");
+    // Before the first round, as an app from before the change: its own note and its own pin.
+    let made = phone.call(
+        "POST",
+        "/api/notes?type=memo",
+        Some(json!({ "note": memo("Phone only", "", "", &[]) })),
+        201,
+    );
+    let own = str(&made["id"]);
+    phone.call("PUT", &format!("/api/pins/{own}"), None, 200);
+
+    // The first round sends the note, then pins it on the server after the server's own pins.
+    phone.sync();
+    assert_eq!(
+        pin_ids(&admin.get("/api/pins", 200)),
+        [shared.clone(), own.clone()]
+    );
+    assert_eq!(
+        phone.embedded.writer().state().pins().unwrap(),
+        [shared.clone(), own.clone()]
+    );
+    // Later rounds take the tree and send nothing again, even after the pin is removed there.
+    admin.send(
+        admin.client.delete(server.url(&format!("/api/pins/{own}"))),
+        204,
+    );
+    phone.sync();
+    phone.sync();
+    assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [shared.clone()]);
+    assert_eq!(phone.embedded.writer().state().pins().unwrap(), [shared]);
 }
