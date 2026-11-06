@@ -352,7 +352,9 @@ fn mark_older_processed_sends_nothing_and_a_later_done_still_archives() {
     let fields = api.note(&one)["note"]["fields"].clone();
     assert_eq!(fields["processed"], true, "{fields}");
     assert!(
-        fields["inbox_catch_up"].as_str().is_some_and(|run| !run.is_empty()),
+        fields["inbox_catch_up"]
+            .as_str()
+            .is_some_and(|run| !run.is_empty()),
         "{fields}"
     );
     assert!(api.google.mail_actions().is_empty());
@@ -376,7 +378,10 @@ fn a_second_mark_older_processed_after_an_untick_sends_nothing() {
     assert_eq!(api.mark_older_processed()["changed"], 1);
     let fields = api.note(&one)["note"]["fields"].clone();
     assert_eq!(fields["processed"], true, "{fields}");
-    assert_ne!(fields["inbox_catch_up"], first, "each run writes its own id");
+    assert_ne!(
+        fields["inbox_catch_up"], first,
+        "each run writes its own id"
+    );
     assert!(api.google.mail_actions().is_empty());
 
     // The user's own Done after that still archives.
@@ -404,13 +409,17 @@ fn a_message_gmail_no_longer_has_counts_as_done() {
 fn a_gmail_refusal_fails_the_run_and_notifies_on_the_email() {
     let api = Api::start(&["one"], &[MODIFY_SCOPE]);
     let one = api.email("one");
-    api.google.set_action_error(Some((403, "Insufficient Permission")));
+    api.google
+        .set_action_error(Some((403, "Insufficient Permission")));
     let note = api.note(&one);
     let version = note["version"].as_str().unwrap();
     expect(
-        api.req("DELETE", &format!("/api/notes/{one}?base_version={version}"))
-            .send()
-            .unwrap(),
+        api.req(
+            "DELETE",
+            &format!("/api/notes/{one}?base_version={version}"),
+        )
+        .send()
+        .unwrap(),
         200,
     );
     let failed = api.server.settle_handlers();

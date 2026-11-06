@@ -131,7 +131,7 @@ fn only_email_message_and_call_notes_before_the_date_and_not_processed_are_marke
     assert!(
         matches!(
             mail_after.field("inbox_catch_up"),
-            Some(schema::Value::String(run)) if schema::is_ulid(run)
+            Some(schema::Value::Str(run)) if schema::is_ulid(run)
         ),
         "{:?}",
         mail_after.field("inbox_catch_up")

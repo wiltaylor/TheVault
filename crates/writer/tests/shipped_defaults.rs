@@ -2747,7 +2747,10 @@ fn step_0012_gives_an_edited_email_type_the_handlers_and_keeps_the_edits() {
     assert!(after.contains("field my_note"), "{after}");
     assert_eq!(after.matches("\"google_mail\"").count(), 2, "{after}");
     let handlers = after.find("handler \"after_update\"").unwrap();
-    assert!(handlers < after.find("template default").unwrap(), "{after}");
+    assert!(
+        handlers < after.find("template default").unwrap(),
+        "{after}"
+    );
     assert_eq!(read(root, &note_path).unwrap(), before);
 
     // The type has the handlers now: the step leaves it as it is.
