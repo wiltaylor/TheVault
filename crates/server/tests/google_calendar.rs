@@ -397,6 +397,7 @@ fn the_first_run_imports_single_events_all_day_as_dates_and_timed_with_offsets()
             "status": "tentative",
             "meet_url": "https://meet.google.com/abc-defg-hij",
             "converter": "2",
+            "my_response": "",
         })
     );
 

@@ -5,7 +5,7 @@
 import { createSignal } from "solid-js";
 import { api } from "../api";
 import { needsServer } from "../inApp";
-import { noteChangedElsewhere } from "../changes";
+import { noteChangedElsewhere, pinsChangedElsewhere } from "../changes";
 import { refreshAgents } from "../agents";
 import { callsSaved } from "../agentCalls";
 import { bumpTurns, liveTurn } from "../ai/running";
@@ -136,6 +136,7 @@ export function startPolling(): () => void {
         bumpTurns();
         void definitionsChanged(null);
         activityResync();
+        pinsChangedElsewhere();
       }
     },
     down: poll,
@@ -150,6 +151,10 @@ export function startPolling(): () => void {
         // A type, taxonomy, agent or skill changed on the server.
         const { kind } = (data ?? {}) as { kind?: unknown };
         void definitionsChanged(typeof kind === "string" ? kind : null);
+      }
+      else if (name === "pins.changed") {
+        // The pinned tree changed on the server, from another client or device (TV-12).
+        pinsChangedElsewhere();
       }
       else if (name === "ai_turn") {
         // A chat turn on an agent's thread started or ended (agents G17).

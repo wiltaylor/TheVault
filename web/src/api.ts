@@ -791,6 +791,8 @@ export interface GoogleStatus {
   client_stored: boolean;
   /** Whether the connection granted gmail.send, so the Outbox can send email (outbox X4). */
   can_send?: boolean;
+  /** Whether the connection granted gmail.modify, so Done archives and delete trashes in Gmail (TV-25). */
+  can_modify?: boolean;
   /** The connected address, from the `google_account` secret. */
   account: string | null;
   /** The settings, the defaults where none are saved. */
@@ -1410,6 +1412,8 @@ export interface AppSync {
    * device's vault has changed since the app started. It goes up when a round pulls one.
    */
   definitions?: number;
+  /** How many times the device's pinned tree changed, such as when a round took the server's (TV-12). */
+  pins?: number;
   /** When the last round ended, succeeded or not. */
   last_attempt_ms?: number | null;
   /** Why the last round failed, or what a round that finished could not do, such as an asset that would not upload. */

@@ -71,6 +71,7 @@ const connected: GoogleStatus = {
   connected: true,
   client_stored: true,
   can_send: true,
+  can_modify: true,
   account: "me@example.com",
   settings: { ...defaults, gmail_labels: ["INBOX"] },
   gmail: side("google_gmail", { paused: false, last_run: "2026-10-18T09:00:00Z" }),
@@ -216,6 +217,16 @@ describe("GoogleCard", () => {
     render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
     expect(await screen.findByText("Connected as me@example.com")).toBeTruthy();
     expect(screen.queryByText(/to send email/)).toBeNull();
+    expect(screen.queryByText(/mail actions/)).toBeNull();
+  });
+
+  it("asks a connection without gmail.modify to connect again for mail actions (TV-25)", async () => {
+    googleStatus.mockResolvedValue({ ...connected, can_modify: false });
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+    expect(await screen.findByText("Connected as me@example.com")).toBeTruthy();
+    expect(screen.getByText(/Reconnect Google to sync mail actions\./)).toBeTruthy();
+    expect(screen.queryByText(/to send email/)).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Connect" })).toHaveLength(1);
   });
 
   it("keeps the connection when Disconnect is not confirmed", async () => {

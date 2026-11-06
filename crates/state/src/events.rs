@@ -63,6 +63,9 @@ pub enum LiveEvent {
     /// An entry was added to the activity log, or a coalesced `note.update` entry counted another
     /// edit, keeping its id (activity Y3).
     Activity { item: crate::Activity },
+    /// The pinned tree changed: a pin, an unpin, a folder or a move (TV-12). Clients load the
+    /// tree again.
+    PinsChanged,
 }
 
 /// One app build in a [`LiveEvent::ClientsUpdated`].
@@ -92,6 +95,7 @@ impl LiveEvent {
             LiveEvent::ClientsUpdated { .. } => "clients.updated",
             LiveEvent::AiTurn { .. } => "ai_turn",
             LiveEvent::Activity { .. } => "activity",
+            LiveEvent::PinsChanged => "pins.changed",
         }
     }
 }

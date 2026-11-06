@@ -8,11 +8,32 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
 
 use crate::Fail;
 use crate::local::{key_path, open_state, state_db};
+
+/// Open `state.db` of the vault at `vault` read-only, without migrating it, so the backup holds
+/// the schema version the vault was at and the build that wrote it can restore it (TV-41).
+fn open_state_read_only(vault: &Path) -> Result<Connection, Fail> {
+    let db = state_db(vault);
+    if !db.is_file() {
+        return Err(Fail::new(
+            "not_a_vault",
+            format!(
+                "{} is not a vault: it has no .vault/state.db",
+                vault.display()
+            ),
+        ));
+    }
+    Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| Fail::new("state", format!("{}: {e}", db.display())))
+}
+
+fn state_err(e: rusqlite::Error) -> Fail {
+    Fail::new("state", e.to_string())
+}
 
 const STATE_ENTRY: &str = ".vault/state.db";
 const KEY_DIR: &str = "key";
@@ -27,8 +48,18 @@ fn io(path: &Path) -> impl Fn(std::io::Error) -> Fail + '_ {
 
 /// `vault backup`: write `vault`'s files and `state.db` into a new archive at `out`.
 pub fn backup(vault: &Path, out: &Path, include_key: bool) -> Result<Value, Fail> {
-    let state = open_state(vault)?;
-    let vault_id = state.vault_id().map_err(Fail::from_display("state"))?;
+    let state = open_state_read_only(vault)?;
+    let stored: Option<String> = state
+        .query_row("SELECT value FROM meta WHERE key = 'vault_id'", [], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(state_err)?;
+    // A vault that never ran git sync and was never backed up has no id yet. The archive gets a
+    // new one in its copy of state.db, as `State::vault_id` would have made, and the live
+    // state.db is left as it is (TV-41).
+    let made_id = stored.is_none();
+    let vault_id = stored.unwrap_or_else(|| state::random_hex(16));
     if out.exists() {
         return Err(Fail::new(
             "exists",
@@ -56,10 +87,25 @@ pub fn backup(vault: &Path, out: &Path, include_key: bool) -> Result<Value, Fail
 
     let scratch = tempfile::tempdir().map_err(Fail::from_display("io"))?;
     let state_copy = scratch.path().join("state.db");
+    let target = state_copy
+        .to_str()
+        .ok_or_else(|| Fail::new("io", format!("{} is not UTF-8", state_copy.display())))?;
+    // VACUUM INTO writes a consistent copy, also while the server has state.db open, and keeps
+    // its user_version.
     state
-        .backup_to(&state_copy)
-        .map_err(Fail::from_display("state"))?;
+        .execute("VACUUM INTO ?1", [target])
+        .map_err(state_err)?;
     drop(state);
+    if made_id {
+        Connection::open(&state_copy)
+            .and_then(|copy| {
+                copy.execute(
+                    "INSERT INTO meta (key, value) VALUES ('vault_id', ?1)",
+                    [&vault_id],
+                )
+            })
+            .map_err(state_err)?;
+    }
 
     // Build the archive beside `out` and move it into place, so a failed backup leaves nothing.
     let partial = out.with_extension("partial");

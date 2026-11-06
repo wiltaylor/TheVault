@@ -266,6 +266,7 @@ fn note_as_snapshot(note: &Value) -> Value {
         ),
         "attendees": attendees.join("\n"),
         "organiser": s(&f["organiser"]),
+        "my_response": s(&f["my_response"]),
         "status": s(&f["status"]),
         "meet_url": s(&f["meet_url"]),
         "converter": "2",
@@ -296,6 +297,231 @@ fn standup() -> Value {
         "attendees": [{ "email": "ann@example.com" }],
         "organizer": { "email": "me@example.com" },
     })
+}
+
+#[test]
+fn existing_invitations_are_relisted_once_when_rsvp_support_arrives() {
+    let api = Api::start();
+    let mut event = standup();
+    event["attendees"] =
+        json!([{ "email": "me@example.com", "self": true, "responseStatus": "needsAction" }]);
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    let mut note = api.note(&id)["note"].clone();
+    note["fields"]
+        .as_object_mut()
+        .unwrap()
+        .remove("my_response");
+    for block in note["blocks"].as_array_mut().unwrap() {
+        if block["kind"] == "dict" && block["labels"] == json!(["snapshot"]) {
+            block["fields"]
+                .as_object_mut()
+                .unwrap()
+                .remove("my_response");
+        }
+    }
+    put_note(&api, &id, note);
+    let mut state = api.server.secret_json("google_calendar_state");
+    state.as_object_mut().unwrap().remove("rsvp");
+    expect(
+        api.req("PUT", "/api/secrets/google_calendar_state")
+            .json(&json!({ "value": state.to_string() }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    api.google.clear_requests();
+    api.sync();
+    assert_eq!(
+        api.note(&id)["note"]["fields"]["my_response"],
+        "needs_action"
+    );
+    assert!(api.writes().is_empty());
+    assert_eq!(api.server.secret_json("google_calendar_state")["rsvp"], "1");
+    let versions = api.history_len(&id);
+    api.sync();
+    assert_eq!(api.history_len(&id), versions);
+}
+
+#[test]
+fn organisers_and_non_attendees_have_no_invitation_response() {
+    let api = Api::start();
+    for (id, attendees, organiser) in [
+        (
+            "organiser",
+            json!([{ "email": "me@example.com", "self": true, "organizer": true, "responseStatus": "accepted" }]),
+            json!({ "email": "me@example.com" }),
+        ),
+        (
+            "organiser-self",
+            json!([{ "email": "me@example.com", "self": true, "responseStatus": "accepted" }]),
+            json!({ "email": "me@example.com", "self": true }),
+        ),
+        (
+            "not-attending",
+            json!([{ "email": "ann@example.com", "responseStatus": "needsAction" }]),
+            json!({ "email": "ann@example.com" }),
+        ),
+    ] {
+        let mut event = standup();
+        event["id"] = json!(id);
+        event["attendees"] = attendees;
+        event["organizer"] = organiser;
+        api.google.put_event("primary", event);
+    }
+    api.sync();
+    for id in ["organiser", "organiser-self", "not-attending"] {
+        let note = api.note(&api.event_id(id));
+        assert!(
+            note["note"]["fields"].get("my_response").is_none(),
+            "{note}"
+        );
+    }
+    assert!(api.writes().is_empty());
+}
+
+#[test]
+fn invalid_invitation_edits_fail_visibly_without_contacting_google() {
+    for (organizer, attendees, response) in [
+        (
+            json!({ "self": true }),
+            json!([{ "self": true, "organizer": true }]),
+            "accepted",
+        ),
+        (
+            json!({ "self": true }),
+            json!([{ "self": true }]),
+            "accepted",
+        ),
+        (
+            json!({}),
+            json!([{ "email": "other@example.com" }]),
+            "accepted",
+        ),
+        (
+            json!({}),
+            json!([{ "self": true, "responseStatus": "needsAction" }]),
+            "needs_action",
+        ),
+        (
+            json!({}),
+            json!([{ "self": true, "responseStatus": "accepted" }]),
+            "",
+        ),
+    ] {
+        let api = Api::start();
+        let mut event = standup();
+        event["organizer"] = organizer;
+        event["attendees"] = attendees;
+        api.google.put_event("primary", event);
+        api.sync();
+        let id = api.event_id("standup");
+        // needs_action must differ from the snapshot to exercise a forbidden edit.
+        if response == "needs_action" {
+            api.edit(&id, json!({ "my_response": "accepted" }));
+        }
+        let mut note = api.note(&id);
+        note["note"]["fields"]["my_response"] = json!(response);
+        api.google.clear_requests();
+        expect(
+            api.req("PUT", &format!("/api/notes/{id}"))
+                .json(&json!({ "note": note["note"], "base_version": note["version"] }))
+                .send()
+                .unwrap(),
+            if response.is_empty() { 400 } else { 200 },
+        );
+        if response.is_empty() {
+            // The schema refuses an empty enum value before a handler can run.
+            assert!(api.google.requests_to(CALENDAR_PATH).is_empty());
+            continue;
+        }
+        let failed = api.server.settle_handlers();
+        assert!(
+            !failed.is_empty(),
+            "invalid answer must produce a visible handler failure"
+        );
+        assert!(
+            format!("{failed:?}").contains("Invitation answer ignored"),
+            "{failed:?}"
+        );
+        assert!(api.google.requests_to(CALENDAR_PATH).is_empty());
+    }
+}
+
+#[test]
+fn a_412_that_drops_the_answer_does_not_notify_on_the_remaining_title_patch() {
+    let api = Api::start();
+    let mut event = standup();
+    event["attendees"] =
+        json!([{ "email": "me@example.com", "self": true, "responseStatus": "needsAction" }]);
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    api.google.change_event("primary", "standup", json!({
+        "attendees": [{ "email": "me@example.com", "self": true, "responseStatus": "declined" }],
+        "updated": "2026-03-01T09:00:00Z"
+    }));
+    api.google.clear_requests();
+    api.edit(
+        &id,
+        json!({ "my_response": "accepted", "title": "New title" }),
+    );
+    let writes = api.writes();
+    assert_eq!(writes.len(), 2);
+    assert!(writes[0].path.contains("sendUpdates=all"));
+    assert!(!writes[1].path.contains("sendUpdates"));
+    assert_eq!(writes[1].json(), json!({ "summary": "New title" }));
+    assert_eq!(api.note(&id)["note"]["fields"]["my_response"], "declined");
+}
+
+#[test]
+fn invitations_pull_and_answer_only_self_with_notifications_and_merge_on_412() {
+    let api = Api::start();
+    let other =
+        json!({ "email": "ann@example.com", "responseStatus": "accepted", "optional": true });
+    let me = json!({ "email": "me@example.com", "self": true, "responseStatus": "needsAction" });
+    let mut event = standup();
+    event["attendees"] = json!([other.clone(), me.clone()]);
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    assert_eq!(
+        api.note(&id)["note"]["fields"]["my_response"],
+        "needs_action"
+    );
+    assert!(api.writes().is_empty());
+
+    for response in ["accepted", "tentative", "declined"] {
+        // An unrelated concurrent Google edit forces the existing field merge.
+        if response == "tentative" {
+            api.google.change_event(
+                "primary",
+                "standup",
+                json!({
+                    "location": "Room 2", "updated": "2026-03-01T07:00:00.000Z"
+                }),
+            );
+        }
+        api.google.clear_requests();
+        api.edit(&id, json!({ "my_response": response }));
+        let writes = api.writes();
+        assert_eq!(writes.len(), if response == "tentative" { 2 } else { 1 });
+        let mut answered = me.clone();
+        answered["responseStatus"] = json!(response);
+        for patch in writes {
+            assert!(patch.path.contains("sendUpdates=all"), "{patch:?}");
+            assert_eq!(
+                patch.json(),
+                json!({ "attendees": [other.clone(), answered.clone()] })
+            );
+        }
+        assert_eq!(api.note(&id)["note"]["fields"]["my_response"], response);
+        assert_in_step(&api, &api.note(&id), "primary");
+        api.google.clear_requests();
+        api.sync();
+        assert!(api.writes().is_empty());
+    }
 }
 
 #[test]

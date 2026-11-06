@@ -371,11 +371,29 @@ fn rule_text(master: Value) -> string {
 // The snapshot keys, grouped as they merge: `start` and `end` settle together, so a range never
 // mixes a date with a datetime.
 fn groups() -> List[List[string]] {
-    [["title"], ["start", "end"], ["location"], ["description"], ["attendees"], ["organiser"], ["status"], ["meet_url"]]
+    [["title"], ["start", "end"], ["location"], ["description"], ["attendees"], ["organiser"], ["status"], ["meet_url"], ["my_response"]]
 }
 
 fn snapshot_keys() -> List[string] {
-    ["title", "start", "end", "location", "description", "attendees", "organiser", "status", "meet_url"]
+    ["title", "start", "end", "location", "description", "attendees", "organiser", "status", "meet_url", "my_response"]
+}
+
+// Only an invited attendee answers. Organisers and calendar-only copies have no RSVP.
+fn my_response(item: Value) -> string {
+    let organiser = item.get("organizer").unwrap_or(Value::Null)
+    if organiser.get("self").unwrap_or(Value::Null) == Value::Bool(true) {
+        return ""
+    }
+    match list_of(item, "attendees").find(|a| a.get("self").unwrap_or(Value::Null) == Value::Bool(true)) {
+        Some(a) => {
+            if a.get("organizer").unwrap_or(Value::Null) == Value::Bool(true) {
+                return ""
+            }
+            let response = text_of(a, "responseStatus")
+            if response == "needsAction" { "needs_action" } else { response }
+        },
+        None => "",
+    }
 }
 
 // Text as a description holds it: lines without their line-ending spaces, blank lines dropped.
@@ -410,6 +428,7 @@ fn synced(item: Value) -> Map[string, string] {
         "location": text_of(item, "location"),
         "description": description_html(text_of(item, "description")),
         "attendees": attendees.join("\n"),
+        "my_response": my_response(item),
         "organiser": organiser,
         "status": if status == "" { "confirmed" } else { status },
         "meet_url": text_of(item, "hangoutLink"),
@@ -510,6 +529,7 @@ fn note_values(fields: Value, blocks: List[Value]) -> Map[string, string] {
         "location": text_of(fields, "location"),
         "description": content_text(blocks, "description"),
         "attendees": strings(list_of(fields, "attendees_raw")).join("\n"),
+        "my_response": text_of(fields, "my_response"),
         "organiser": text_of(fields, "organiser"),
         "status": text_of(fields, "status"),
         "meet_url": text_of(fields, "meet_url"),
@@ -581,6 +601,7 @@ fn body_for(sync: Sync, fields: Map[string, Value], blocks: List[Value], values:
     }
     put(fields, "location", value(values, "location"))
     put(fields, "organiser", value(values, "organiser"))
+    put(fields, "my_response", value(values, "my_response"))
     put(fields, "status", value(values, "status"))
     put(fields, "meet_url", value(values, "meet_url"))
     let addresses = value(values, "attendees").split("\n").filter(|a| a != "")
@@ -977,6 +998,7 @@ fn series_body(sync: Sync, fields: Map[string, Value], blocks: List[Value], valu
     f.remove("when");
     f.remove("series");
     f.remove("series_ref");
+    f.remove("my_response");
     if value(values, "start") != "" {
         f["starts"] = Value::Map(#{
             "start": Value::String(value(values, "start")),
@@ -1173,6 +1195,10 @@ fn run() -> Result[string, string] {
     let end = add_days(today, 365)
     let old_end = text_of(Value::Map(state), "window_end")
     let old_tokens = map_of(Value::Map(state), "sync_tokens")
+    // Re-list once when RSVP support arrives, including invitations unchanged at Google.
+    if text_of(Value::Map(state), "rsvp") != "1" {
+        old_tokens = #{}
+    }
     // A newer description conversion lists every event again, so each note's description is
     // converted afresh (rich-import H8).
     if text_of(Value::Map(state), "converter") != converter_version() {
@@ -1198,6 +1224,7 @@ fn run() -> Result[string, string] {
         }
     }
     state["sync_tokens"] = Value::Map(tokens);
+    state["rsvp"] = Value::String("1");
     state["converter"] = Value::String(converter_version());
     state["window_end"] = Value::String(end);
     state["last_run"] = Value::String(now);

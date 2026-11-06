@@ -72,6 +72,10 @@ pub const AGENT_NEEDS_SERVER_MESSAGE: &str =
 pub const SKILL_NEEDS_SERVER_MESSAGE: &str =
     "Changing a skill needs the home server, which is not reachable.";
 
+/// The message of a pin change while the home server cannot be reached: pins are the home
+/// server's (TV-12).
+pub const PINS_NEED_SERVER_MESSAGE: &str = "Changing pins needs the home server, which is not reachable. Your pins show as they were last synced.";
+
 /// How long a poll of a turn's events waits for one before answering with none.
 const POLL_WAIT: Duration = Duration::from_secs(2);
 
@@ -128,6 +132,9 @@ pub(crate) enum Route {
     /// Credentials, a skill import, and changes to script tools, that need `admin`, which a
     /// device token never has (skills S3, script-tools T2).
     NeedsWebApp,
+    /// A change to the pinned tree: made on the home server, which owns the pins (TV-12), and
+    /// in the local copy only while the device is not paired.
+    Pins,
 }
 
 /// Whether `path` is `prefix` or below it.
@@ -253,6 +260,15 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     }
     if path == "/api/events" && get {
         return Route::Events;
+    }
+    // Pins are the home server's (TV-12): read there, or from the copy the last sync round
+    // stored here; changed there.
+    if under(path, "/api/pins") {
+        return if get {
+            Route::ForwardOrLocal
+        } else {
+            Route::Pins
+        };
     }
     if under(path, "/api/notifications")
         || under(path, "/api/devices")
@@ -1014,7 +1030,15 @@ mod tests {
             Route::Restore { id: id.to_owned() }
         );
         assert_eq!(route(&get, &format!("/api/notes/{id}")), Route::Local);
-        assert_eq!(route(&get, "/api/pins"), Route::Local);
+        // Pins are the home server's (TV-12).
+        assert_eq!(route(&get, "/api/pins"), Route::ForwardOrLocal);
+        assert_eq!(route(&Method::PUT, &format!("/api/pins/{id}")), Route::Pins);
+        assert_eq!(
+            route(&Method::DELETE, &format!("/api/pins/{id}")),
+            Route::Pins
+        );
+        assert_eq!(route(&post, "/api/pins/folders"), Route::Pins);
+        assert_eq!(route(&post, "/api/pins/move"), Route::Pins);
         assert_eq!(route(&get, "/api/trash"), Route::Local);
         assert_eq!(
             route(&post, &format!("/api/trash/{id}/restore")),
