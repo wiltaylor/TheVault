@@ -4,6 +4,7 @@ import { A } from "@solidjs/router";
 import { For, Show } from "solid-js";
 import type { NoteDoc, Row, Template } from "../api";
 import { FieldRefs } from "../components/fieldRefs";
+import { EventCardResponse } from "../components/EventResponse";
 import { refText } from "../components/refText";
 import { BlockView, Blocks, ColumnsView, FieldValue } from "../components/Render";
 import { slotOfBlock } from "../blocks/columns";
@@ -86,6 +87,9 @@ export function TemplateBody(props: { row: Row; template: Template | undefined; 
   };
   return (
     <ControlBindingContext.Provider value={controls}>
+    <Show when={!props.tabTitles && props.row.type === "event"}>
+      <EventCardResponse id={props.row.id} response={(props.doc?.fields ?? props.row.fields).my_response} />
+    </Show>
     <Show when={cover()}>
       {(block) => (
         <FieldRefs.Provider value={refs}>

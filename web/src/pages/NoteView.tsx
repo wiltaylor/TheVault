@@ -5,6 +5,7 @@ import { clearActiveNote, setActiveNote } from "../archive";
 import { type Autosave, type SaveState, createAutosave } from "../autosave";
 import { CanvasSurface } from "../canvas/CanvasSurface";
 import { AssetInput } from "../components/AssetField";
+import { EventResponse } from "../components/EventResponse";
 import { ConflictView } from "../components/ConflictView";
 import { type ControlBinding, ControlBindingContext } from "../controls/binding";
 import { FieldInput, type RelatedFields, hasInput } from "../components/FieldInput";
@@ -915,6 +916,12 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                   {status()}
                 </span>
                 <Show when={!props.newType && !preview() && !conflict()}>
+                  <Show when={n().type === "event"}>
+                    <EventResponse response={doc().fields.my_response} disabled={busy()} onAnswer={(response) => {
+                      setFields({ my_response: response });
+                      flush();
+                    }} />
+                  </Show>
                   <NoteOutboxActions
                     id={n().id}
                     type={n().type}

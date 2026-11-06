@@ -266,6 +266,7 @@ fn note_as_snapshot(note: &Value) -> Value {
         ),
         "attendees": attendees.join("\n"),
         "organiser": s(&f["organiser"]),
+        "my_response": s(&f["my_response"]),
         "status": s(&f["status"]),
         "meet_url": s(&f["meet_url"]),
         "converter": "2",
@@ -296,6 +297,44 @@ fn standup() -> Value {
         "attendees": [{ "email": "ann@example.com" }],
         "organizer": { "email": "me@example.com" },
     })
+}
+
+#[test]
+fn invitations_pull_and_answer_only_self_with_notifications_and_merge_on_412() {
+    let api = Api::start();
+    let other = json!({ "email": "ann@example.com", "responseStatus": "accepted", "optional": true });
+    let me = json!({ "email": "me@example.com", "self": true, "responseStatus": "needsAction" });
+    let mut event = standup();
+    event["attendees"] = json!([other.clone(), me.clone()]);
+    api.google.put_event("primary", event);
+    api.sync();
+    let id = api.event_id("standup");
+    assert_eq!(api.note(&id)["note"]["fields"]["my_response"], "needs_action");
+    assert!(api.writes().is_empty());
+
+    for response in ["accepted", "tentative", "declined"] {
+        // An unrelated concurrent Google edit forces the existing field merge.
+        if response == "tentative" {
+            api.google.change_event("primary", "standup", json!({
+                "location": "Room 2", "updated": "2026-03-01T07:00:00.000Z"
+            }));
+        }
+        api.google.clear_requests();
+        api.edit(&id, json!({ "my_response": response }));
+        let writes = api.writes();
+        assert_eq!(writes.len(), if response == "tentative" { 2 } else { 1 });
+        let mut answered = me.clone();
+        answered["responseStatus"] = json!(response);
+        for patch in writes {
+            assert!(patch.path.contains("sendUpdates=all"), "{patch:?}");
+            assert_eq!(patch.json(), json!({ "attendees": [other.clone(), answered.clone()] }));
+        }
+        assert_eq!(api.note(&id)["note"]["fields"]["my_response"], response);
+        assert_in_step(&api, &api.note(&id), "primary");
+        api.google.clear_requests();
+        api.sync();
+        assert!(api.writes().is_empty());
+    }
 }
 
 #[test]
