@@ -31,8 +31,9 @@ use regex
 // field `send_updates = "all"`. The insert or PATCH then carries `sendUpdates=all`, so Google
 // emails the attendees, and the write-back clears the field and records the send on the Outbox
 // items sending this event, which then leave the Outbox (outbox X14), or marks them `failed` with
-// Google's message. A direct edit leaves the field unset,
-// so Google emails no one.
+// Google's message. A direct edit leaves the field unset and emails no one, except an
+// invitation answer: accepted, tentative or declined patches only the self attendee's
+// responseStatus, preserving other entries, with sendUpdates=all.
 //
 // The settings are the JSON object in the `google_settings` secret: `default_calendar`, and the
 // `endpoints` test seam (google-sync D21). The handler reads it and writes nothing but notes.
@@ -282,16 +283,34 @@ fn gone(reply: Value) -> bool {
 
 // The snapshot keys, grouped as they merge: `start` and `end` settle together.
 fn groups() -> List[List[string]] {
-    [["title"], ["start", "end"], ["location"], ["description"], ["attendees"], ["organiser"], ["status"], ["meet_url"]]
+    [["title"], ["start", "end"], ["location"], ["description"], ["attendees"], ["organiser"], ["status"], ["meet_url"], ["my_response"]]
 }
 
 // The groups Google lets a client set: `organizer` and `hangoutLink` are Google's own.
 fn writable() -> List[List[string]] {
-    [["title"], ["start", "end"], ["location"], ["description"], ["attendees"], ["status"]]
+    [["title"], ["start", "end"], ["location"], ["description"], ["attendees"], ["status"], ["my_response"]]
 }
 
 fn snapshot_keys() -> List[string] {
-    ["title", "start", "end", "location", "description", "attendees", "organiser", "status", "meet_url"]
+    ["title", "start", "end", "location", "description", "attendees", "organiser", "status", "meet_url", "my_response"]
+}
+
+// Only an invited attendee answers. Organisers and calendar-only copies have no RSVP.
+fn my_response(item: Value) -> string {
+    let organiser = item.get("organizer").unwrap_or(Value::Null)
+    if organiser.get("self").unwrap_or(Value::Null) == Value::Bool(true) {
+        return ""
+    }
+    match list_of(item, "attendees").find(|a| a.get("self").unwrap_or(Value::Null) == Value::Bool(true)) {
+        Some(a) => {
+            if a.get("organizer").unwrap_or(Value::Null) == Value::Bool(true) {
+                return ""
+            }
+            let response = text_of(a, "responseStatus")
+            if response == "needsAction" { "needs_action" } else { response }
+        },
+        None => "",
+    }
 }
 
 // Text as a description holds it: lines without their line-ending spaces, blank lines dropped.
@@ -326,6 +345,7 @@ fn synced(item: Value) -> Map[string, string] {
         "location": text_of(item, "location"),
         "description": description_html(text_of(item, "description")),
         "attendees": attendees.join("\n"),
+        "my_response": my_response(item),
         "organiser": organiser,
         "status": if status == "" { "confirmed" } else { status },
         "meet_url": text_of(item, "hangoutLink"),
@@ -381,6 +401,23 @@ fn to_google(values: Map[string, string], which: List[List[string]], held: List[
             if status != "" {
                 out["status"] = Value::String(status)
             }
+        }
+    }
+    if which.any(|g| g[0] == "my_response") {
+        let response = value(values, "my_response")
+        if ["accepted", "tentative", "declined"].any(|r| r == response) {
+            let entries = if out.contains_key("attendees") { list_of(Value::Map(out), "attendees") } else { held }
+            out["attendees"] = Value::List(entries.map(|a| {
+                if a.get("self").unwrap_or(Value::Null) == Value::Bool(true) && a.get("organizer").unwrap_or(Value::Null) != Value::Bool(true) {
+                    match a {
+                        Value::Map(m) => {
+                            m["responseStatus"] = Value::String(response)
+                            Value::Map(m)
+                        },
+                        _ => a,
+                    }
+                } else { a }
+            }))
         }
     }
     out
@@ -480,6 +517,7 @@ fn note_values(fields: Value, blocks: List[Value]) -> Map[string, string] {
         "location": text_of(fields, "location"),
         "description": content_text(blocks, "description"),
         "attendees": strings(list_of(fields, "attendees_raw")).join("\n"),
+        "my_response": text_of(fields, "my_response"),
         "organiser": text_of(fields, "organiser"),
         "status": text_of(fields, "status"),
         "meet_url": text_of(fields, "meet_url"),
@@ -559,6 +597,7 @@ fn body_for(ctx: Ctx, fields: Map[string, Value], blocks: List[Value], values: M
     }
     put(fields, "location", value(values, "location"))
     put(fields, "organiser", value(values, "organiser"))
+    put(fields, "my_response", value(values, "my_response"))
     put(fields, "status", value(values, "status"))
     put(fields, "meet_url", value(values, "meet_url"))
     let addresses = value(values, "attendees").split("\n").filter(|a| a != "")
@@ -682,6 +721,15 @@ fn updates_query(fields: Value) -> string {
     if send == "" { "" } else { "?sendUpdates=" + encode(send) }
 }
 
+fn answer_updates(fields: Value, changed: List[List[string]]) -> string {
+    if changed.any(|g| g[0] == "my_response") { "?sendUpdates=all" } else { updates_query(fields) }
+}
+
+fn can_answer(event: Value) -> bool {
+    event.get("organizer").unwrap_or(Value::Null).get("self").unwrap_or(Value::Null) != Value::Bool(true) &&
+        list_of(event, "attendees").any(|a| a.get("self").unwrap_or(Value::Null) == Value::Bool(true) && a.get("organizer").unwrap_or(Value::Null) != Value::Bool(true))
+}
+
 // Insert note `id` as a new event, and record its new `google_ref`. Answers "", as every
 // function below does once Google took the change, or why nothing was sent.
 fn insert(ctx: Ctx, id: string, fields: Value, mine: Map[string, string]) -> Result[string, string] {
@@ -711,10 +759,10 @@ fn gone_reason(google_ref: string) -> string {
 fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], snapshot: Map[string, string], changed: List[List[string]]) -> Result[string, string] {
     let google_ref = text_of(fields, "google_ref")
     let url = event_url(ctx, calendar_of(ctx, fields), google_ref)
-    let updates = updates_query(fields)
+    let updates = answer_updates(fields, changed)
     // A new attendee list replaces Google's whole, so read the entries Google holds to keep them.
     let held: List[Value] = []
-    if changed.any(|g| g[0] == "attendees") {
+    if changed.any(|g| g[0] == "attendees" || g[0] == "my_response") {
         let current = call(ctx, "GET", url, "", Value::Null)?
         if gone(current) {
             return Ok(gone_reason(google_ref))
@@ -722,7 +770,11 @@ fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], 
         if status_of(current) != 200 {
             return Err(failure("events.get of " + google_ref, current))
         }
-        held = list_of(body_of(current), "attendees")
+        let event = body_of(current)
+        if changed.any(|g| g[0] == "my_response") && !can_answer(event) {
+            return Err("Only an invited attendee who is not the organiser can answer this event.")
+        }
+        held = list_of(event, "attendees")
     }
     let reply = call(ctx, "PATCH", url + updates, text_of(fields, "etag"), Value::Map(to_google(mine, changed, held)))?
     let status = status_of(reply)
@@ -749,8 +801,11 @@ fn send_changes(ctx: Ctx, id: string, fields: Value, mine: Map[string, string], 
     let google_newer = secs_of(text_of(event, "updated")) >= secs_of(text_of(fields, "updated"))
     let merged = merge(google, snapshot, mine, google_newer)
     let send = differing(merged, google, writable())
+    if send.any(|g| g[0] == "my_response") && !can_answer(event) {
+        return Err("Only an invited attendee who is not the organiser can answer this event.")
+    }
     if !send.is_empty() {
-        let again = call(ctx, "PATCH", url + updates, text_of(event, "etag"), Value::Map(to_google(merged, send, list_of(event, "attendees"))))?
+        let again = call(ctx, "PATCH", url + answer_updates(fields, send), text_of(event, "etag"), Value::Map(to_google(merged, send, list_of(event, "attendees"))))?
         if status_of(again) != 200 {
             return Err(failure("events.patch of " + google_ref + " after a merge", again))
         }
@@ -797,6 +852,10 @@ fn push(id: string, created: bool) -> Result[string, string] {
     }
 
     let changed = differing(mine, snapshot, writable())
+    if changed.any(|g| g[0] == "my_response") &&
+        (value(snapshot, "my_response") == "" || !["accepted", "tentative", "declined"].any(|r| r == value(mine, "my_response"))) {
+        return Err("Invitation answer ignored: only an invited attendee can choose accepted, tentative or declined.")
+    }
     let unchanged = "The event already is as the change asks, so Google had nothing to send."
     if created {
         // The task made this note from Google just now: it holds what Google sent.

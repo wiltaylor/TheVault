@@ -106,6 +106,23 @@ Each sync also keeps its progress, such as Gmail's history id and each calendar'
 
 A vault from 0.1.7 had a **Google sync** settings note instead. The first start of a newer server moves its settings and progress into these secrets and deletes the note and its type. That needs the vault's secret key; a server started without it keeps the note and moves it on a later start that has the key.
 
+## Answering calendar invitations
+
+An invited event shows **Accept**, **Maybe**, and **Decline** on its page and card.
+After answering, **Change response** lets you choose again. Organisers and people
+who are not attendees do not see these controls. Each answer notifies the
+organiser through Google Calendar (`sendUpdates=all`).
+
+The answer is a normal note edit, so apps can save it offline. The home server
+sends it when the edit syncs. Other attendees and their responses are preserved.
+Concurrent changes use the existing field-by-field calendar merge.
+
+For recurring invitations, answer on an occurrence's event page or card. This
+answers only that occurrence. Whole-series RSVP is not supported, and series
+notes have no response controls. Invalid hand-edits (including organiser or
+non-attendee answers, or setting `needs_action`) send nothing and appear as
+failed Google event handler runs with an explanation.
+
 ## The permissions TheVault asks for
 
 | Scope | Why |

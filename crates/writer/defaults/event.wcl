@@ -58,6 +58,14 @@ field status {
   options = ["confirmed", "tentative", "cancelled"]
 }
 
+field my_response {
+  kind        = "select"
+  label       = "Your response"
+  options     = ["needs_action", "accepted", "tentative", "declined"]
+  description = "Your answer to a Google Calendar invitation. Empty for organisers and non-attendees."
+  hidden      = true
+}
+
 field meet_url {
   kind  = "url"
   label = "Meet link"

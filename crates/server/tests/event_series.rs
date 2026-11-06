@@ -258,7 +258,10 @@ fn standup() -> Value {
 #[test]
 fn a_recurring_master_becomes_a_series_note_with_its_occurrences_linked() {
     let api = Api::start();
-    let stored = api.google.put_event("primary", standup());
+    let mut invited = standup();
+    invited["attendees"] =
+        json!([{ "email": "guest@example.com", "self": true, "responseStatus": "needsAction" }]);
+    let stored = api.google.put_event("primary", invited);
     api.sync();
 
     let series = api.series();
@@ -267,6 +270,10 @@ fn a_recurring_master_becomes_a_series_note_with_its_occurrences_linked() {
     let note = api.note(&id);
     let f = &note["note"]["fields"];
     assert_eq!(f["title"], "Standup");
+    assert!(
+        f.get("my_response").is_none(),
+        "series notes have no RSVP field"
+    );
     assert_eq!(f["rule"], json!(["RRULE:FREQ=WEEKLY;COUNT=5"]));
     assert_eq!(
         f["starts"],
@@ -334,6 +341,7 @@ fn occurrences_from_before_series_notes_are_linked_and_their_master_fetched() {
     api.google.put_event("primary", standup());
     // An older vault: occurrence notes as the sync made them before series notes, and a sync
     // token that lists nothing new, so the master must be fetched to make its series note.
+    // RSVP migration has already run, otherwise it forces a full listing of the master.
     let script = r#"use vault
 
 fn run() -> Result[string, string] {
@@ -406,7 +414,7 @@ fn run() -> Result[string, string] {
     assert!(api.series().is_empty());
     api.put_secret(
         "google_calendar_state",
-        &json!({ "sync_tokens": { "primary": "sync_1_1" }, "window_end": "2027-03-01", "converter": "2" })
+        &json!({ "sync_tokens": { "primary": "sync_1_1" }, "window_end": "2027-03-01", "converter": "2", "rsvp": "1" })
             .to_string(),
     );
     api.google.clear_requests();

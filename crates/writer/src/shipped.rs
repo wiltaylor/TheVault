@@ -138,6 +138,8 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
             "a83e6b61ee1f2434128911c404f27e310c7d35037f02e00dd1f40c95f2838f1e",
             "62b1b398df176b3d1c1d160274f9eec71e5ec9bce1628cfb4e338ead2fe6c350",
             "141d28f31e85fdd1fdc53dcb8b8f4fc4f4e4f2f42fa1b6716b03cab0aa565fd0",
+            "a0c60ab7567034967d238eba8dd45c7783fb71107d7ef1e6cae168755cae1db1",
+            "54c5b6fb03f926e16ef935dc2f7cd5a493470d5f187faafa96d0f0afa8f09ad3",
         ],
     },
     ShippedFile {
@@ -183,6 +185,8 @@ pub const SHIPPED_FILES: [ShippedFile; 25] = [
             "955b983dc5f14f0ac3aec3ec746102038561e7d4cf438f5e6e1d0a29446cf596",
             "dd0d74cd76603d183216d207fb24db3bbf18197ab6bd148f28c04d4697d9aedb",
             "182bb9d27f1cf2d545a1386bc7e52e91348abae7e4a1e50721d89ad25e09f237",
+            "5be2897cde964dfe62213b22db49856e2dff6cc4a6d35f9057ceebd09a2284b8",
+            "1fdc331fcbcefb5df07233a2eb2b2075784824d41c1d31f27375860053877680",
         ],
     },
     // The Google Calendar write-back of event series, named by the shipped `event_series` type's
