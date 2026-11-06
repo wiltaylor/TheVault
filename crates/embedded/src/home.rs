@@ -74,8 +74,7 @@ pub const SKILL_NEEDS_SERVER_MESSAGE: &str =
 
 /// The message of a pin change while the home server cannot be reached: pins are the home
 /// server's (TV-12).
-pub const PINS_NEED_SERVER_MESSAGE: &str =
-    "Changing pins needs the home server, which is not reachable. Your pins show as they were last synced.";
+pub const PINS_NEED_SERVER_MESSAGE: &str = "Changing pins needs the home server, which is not reachable. Your pins show as they were last synced.";
 
 /// How long a poll of a turn's events waits for one before answering with none.
 const POLL_WAIT: Duration = Duration::from_secs(2);
@@ -1034,7 +1033,10 @@ mod tests {
         // Pins are the home server's (TV-12).
         assert_eq!(route(&get, "/api/pins"), Route::ForwardOrLocal);
         assert_eq!(route(&Method::PUT, &format!("/api/pins/{id}")), Route::Pins);
-        assert_eq!(route(&Method::DELETE, &format!("/api/pins/{id}")), Route::Pins);
+        assert_eq!(
+            route(&Method::DELETE, &format!("/api/pins/{id}")),
+            Route::Pins
+        );
         assert_eq!(route(&post, "/api/pins/folders"), Route::Pins);
         assert_eq!(route(&post, "/api/pins/move"), Route::Pins);
         assert_eq!(route(&get, "/api/trash"), Route::Local);

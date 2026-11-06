@@ -1360,10 +1360,16 @@ fn pins_are_the_servers_offline_reads_keep_the_last_tree_and_offline_writes_fail
     // A pin made on the paired phone is made on the server, and the phone reads it there.
     phone.call("PUT", &format!("/api/pins/{first}"), None, 200);
     assert_eq!(pin_ids(&admin.get("/api/pins", 200)), [first.clone()]);
-    assert_eq!(pin_ids(&phone.call("GET", "/api/pins", None, 200)), [first.clone()]);
+    assert_eq!(
+        pin_ids(&phone.call("GET", "/api/pins", None, 200)),
+        [first.clone()]
+    );
     // The round stores the server's tree on the phone.
     phone.sync();
-    assert_eq!(phone.embedded.writer().state().pins().unwrap(), [first.clone()]);
+    assert_eq!(
+        phone.embedded.writer().state().pins().unwrap(),
+        [first.clone()]
+    );
     assert!(phone.embedded.sync_status()["pins"].as_u64().unwrap() > 0);
 
     // Offline, the phone shows the tree it last took, and a change says it needs the server.
@@ -1371,7 +1377,10 @@ fn pins_are_the_servers_offline_reads_keep_the_last_tree_and_offline_writes_fail
         url: "http://127.0.0.1:1".to_owned(),
         ..phone.remote.clone()
     }));
-    assert_eq!(pin_ids(&phone.call("GET", "/api/pins", None, 200)), [first.clone()]);
+    assert_eq!(
+        pin_ids(&phone.call("GET", "/api/pins", None, 200)),
+        [first.clone()]
+    );
     let refused = phone.call("PUT", &format!("/api/pins/{second}"), None, 503);
     assert!(
         refused["message"]
@@ -1385,7 +1394,9 @@ fn pins_are_the_servers_offline_reads_keep_the_last_tree_and_offline_writes_fail
     // Back online, a pin removed on the server leaves the phone with the next round.
     phone.embedded.set_remote(Some(phone.remote.clone()));
     admin.send(
-        admin.client.delete(server.url(&format!("/api/pins/{first}"))),
+        admin
+            .client
+            .delete(server.url(&format!("/api/pins/{first}"))),
         204,
     );
     phone.sync();
