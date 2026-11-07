@@ -157,6 +157,59 @@ describe("script proposals", () => {
     expect(outcomesNow()[0]).toMatch(/^\[Failed to apply: change to script stamp: /);
   });
 
+  it("shows that a phone script runs on the phone, on which devices with their switches, and what is new that it can do", async () => {
+    const PHONE = {
+      ...CHANGE,
+      id: "toolu_p",
+      name: "device_messages",
+      runs_as: [{ kind: "device", name: "android", file: "devices/android.wcl", event: "command send_sms", allow_domains: [], secrets: [], read_paths: [], write_paths: [], schedule: null, timezone: null, paused: false }],
+      warnings: [],
+      device: {
+        note: "Runs on your phone at its next sync, with no further prompt there.",
+        platforms: ["android"],
+        devices: [
+          { id: "d1", name: "Pixel", platform: "android", sms_send: true, contacts_write: false },
+          { id: "d2", name: "Tablet", platform: "android", sms_send: false, contacts_write: true },
+        ],
+        can: [
+          { key: "sms_send", label: "Send SMS", new: false },
+          { key: "sms_read", label: "Read all SMS, including the codes and people that capture skips", new: true },
+        ],
+      },
+    };
+    aiApply.mockResolvedValue({ op: "script_change", script_name: "device_messages" });
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    propose(PHONE);
+    const card = await m.findByRole("region", { name: "Proposed change to script device_messages" });
+    expect(within(card).getByRole("note")).toHaveTextContent("Runs on your phone at its next sync, with no further prompt there.");
+    const on = within(card).getByLabelText("Runs on");
+    expect(on).toHaveTextContent("Pixel android: SMS send on, contacts write off");
+    expect(on).toHaveTextContent("Tablet android: SMS send off, contacts write on");
+    const can = within(card).getByLabelText("This code can");
+    const items = within(can).getAllByRole("listitem");
+    expect(items.map((i) => i.textContent)).toEqual(["Send SMS", "New: Read all SMS, including the codes and people that capture skips"]);
+    expect(items[1]).toHaveClass("ai-new");
+    expect(items[0]).not.toHaveClass("ai-new");
+    expect(within(card).getByLabelText("Runs as")).toHaveTextContent("Device file android: command send_sms");
+    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(within(card).getByText(/Applied\./)).toBeInTheDocument());
+    expect(aiApply).toHaveBeenCalledWith(PHONE);
+  });
+
+  it("says when no device of the platform is paired, and shows no phone block for other scripts", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    propose({ ...CHANGE, id: "toolu_n", name: "device_calls", device: { note: "Runs on your phone at its next sync, with no further prompt there.", platforms: ["android"], devices: [], can: [] } });
+    const card = await m.findByRole("region", { name: "Proposed change to script device_calls" });
+    expect(card).toHaveTextContent("No android device is paired yet.");
+    expect(card).toHaveTextContent("None of: send SMS, read SMS, read calls, add or delete contacts, show notifications, write notes.");
+    propose({ ...CHANGE, id: "toolu_o" });
+    const other = await m.findByRole("region", { name: "Proposed change to script stamp" });
+    expect(within(other).queryByLabelText("Runs on")).toBeNull();
+    expect(other).not.toHaveTextContent("Runs on your phone");
+  });
+
   it("discards without writing", async () => {
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await ask(m);
