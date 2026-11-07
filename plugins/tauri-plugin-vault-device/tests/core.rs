@@ -1284,10 +1284,14 @@ fn send_this_devices_notes_queues_the_local_notes_the_server_lacks_once() {
     // was.
     assert!(has_note(&core, &only_here));
 
-    let (_, again) = app_call(&core, "POST", "/api/app/sync/adopt");
-    assert_eq!(again["queued"], 0, "{again}");
+    // Wait for that round: sync_now takes the round lock after it. An adopt while the round is
+    // between pushing the note and the server listing it can queue the note once more, which the
+    // next round settles with no change (id_taken, then a clean merge), so the test does not ask
+    // again before the round has ended (TV-60).
     core.sync_now().unwrap();
     assert!(queue.pending().unwrap().is_empty());
+    let (_, again) = app_call(&core, "POST", "/api/app/sync/adopt");
+    assert_eq!(again["queued"], 0, "{again}");
     admin.send("GET", &format!("/api/notes/{only_here}"), None);
     let (_, after) = app_call(&core, "POST", "/api/app/sync/adopt");
     assert_eq!(after["queued"], 0, "{after}");
