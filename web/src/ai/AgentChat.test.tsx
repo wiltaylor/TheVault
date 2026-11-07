@@ -198,6 +198,18 @@ describe("the chat", () => {
     expect(list.getAllByRole("option").map((o: HTMLElement) => o.textContent)).toEqual([expect.stringContaining("New chat"), expect.stringContaining("Groceries")]);
   });
 
+  it("shows the agent's turn limit when a reply in a sent thread is refused (TV-80, TV-77 R3)", async () => {
+    const { ApiError } = await import("../api");
+    agentThread.mockResolvedValue(thread({ id: "01JSENT", title: "Roof: tidy", origin: "dispatch" }));
+    turns.aiTurnStart.mockRejectedValueOnce(new ApiError(429, { error: "too_many_turns", message: "4 chat turns of triage are running already; stop one or wait for it" }));
+    render(() => <AgentChat agent="triage" label="Triage" thread="01JSENT" />);
+    const convo = within(await screen.findByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
+    fireEvent.input(screen.getByLabelText("Ask AI"), { target: { value: "The left folder." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await convo.findByText("4 chat turns of triage are running already; stop one or wait for it")).toBeTruthy();
+  });
+
   it("searches the chats by title, and Enter opens the one highlighted", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     await waitFor(() => expect(agentThreads).toHaveBeenCalled());
