@@ -367,7 +367,8 @@ fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
 /// A helper agent, and a boss that may grant it run saved scripts, with its agents switch off
 /// (TV-84).
 const HELPER: &str = "label = \"Helper\"\n";
-const HELPER_GRANT: &str = "label = \"Helper\"\n\npermissions {\n  scripts {\n    run_saved = true\n  }\n}\n";
+const HELPER_GRANT: &str =
+    "label = \"Helper\"\n\npermissions {\n  scripts {\n    run_saved = true\n  }\n}\n";
 const BOSS: &str = "label = \"Boss\"\n\npermissions {\n  confirm {\n    agents = false\n  }\n\n  scripts {\n    run_saved = true\n  }\n}\n\ntrigger opened {\n  on     = [\"create\"]\n  type   = \"memo\"\n  prompt = \"Look after the memo.\"\n}\n";
 
 #[test]
@@ -413,7 +414,10 @@ fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it()
         "{runs}"
     );
     let helper = api.get("/api/agents/helper");
-    assert_ne!(helper["permissions"]["scripts"]["run_saved"], true, "{helper}");
+    assert_ne!(
+        helper["permissions"]["scripts"]["run_saved"], true,
+        "{helper}"
+    );
 
     // A chat with the same agent still gets the grant as a pending proposal.
     fake.push(AnthropicMessage::new().tool_use(
