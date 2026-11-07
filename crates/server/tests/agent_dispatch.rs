@@ -35,6 +35,13 @@ const LOG: &str = r#"label = "Log"
 field body {
   kind = "content"
 }
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "body"
+  }
+}
 "#;
 
 const CLERK: &str = r#"label = "Clerk"
