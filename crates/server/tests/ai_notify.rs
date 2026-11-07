@@ -470,7 +470,11 @@ fn notify_user_caps_all_agents_together_a_day() {
         assert!(error.contains("60 a day"), "{error:?}");
         assert_eq!(r["limited"], true, "{r}");
     }
-    assert_eq!(api.notifications().len(), 60, "a refused call stores nothing");
+    assert_eq!(
+        api.notifications().len(),
+        60,
+        "a refused call stores nothing"
+    );
 
     // A day after the first, the cap has room again.
     api.advance("PT23H");
