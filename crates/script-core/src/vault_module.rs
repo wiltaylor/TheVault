@@ -304,6 +304,17 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
                             .into(),
                     );
                 }
+                // An agent's run may read or write notes, but it may not put a command on a
+                // phone: that would send a text the user never reviewed. An agent sends SMS
+                // through an Outbox draft instead.
+                if crate::current_job(|j| matches!(j.author, Some(vocab::Author::Agent(_))))
+                    .unwrap_or(false)
+                {
+                    return Err(
+                        "vault::device_command is not available in a run an agent started: an agent sends an SMS through an Outbox draft (draft_sms), which waits for your review"
+                            .into(),
+                    );
+                }
                 vv.device_command(&notify_source(), &device, &name, convert::from_dyn(payload))
                     .map(convert::to_dyn)
             }))
