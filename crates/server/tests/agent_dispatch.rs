@@ -761,7 +761,11 @@ fn two_questions_in_one_round_are_kept_together_and_the_bell_says_both() {
     fake.push(
         AnthropicMessage::new()
             .tool_use("toolu_a", "ask_user", json!({ "question": "Which roof?" }))
-            .tool_use("toolu_b", "ask_user", json!({ "question": "Which gutters?" })),
+            .tool_use(
+                "toolu_b",
+                "ask_user",
+                json!({ "question": "Which gutters?" }),
+            ),
     );
     let (status, v) = api.dispatch_as(
         &api.admin(),
@@ -992,7 +996,11 @@ fn a_turn_that_runs_reads_as_active_until_it_ends() {
     );
     // The section that explains ask_user is added to the agent's own system prompt too (TV-77 F8).
     assert!(tools_in(&fake, 0).contains(&"ask_user".to_owned()));
-    assert!(system_in(&fake, 0).contains(ASKS), "{}", system_in(&fake, 0));
+    assert!(
+        system_in(&fake, 0).contains(ASKS),
+        "{}",
+        system_in(&fake, 0)
+    );
 }
 
 /// 2 runs at once and 50 waiting, the scheduler's `MAX_RUNNING` and `MAX_QUEUED`.
