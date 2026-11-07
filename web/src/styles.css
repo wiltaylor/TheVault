@@ -5684,6 +5684,29 @@ h1.note-title {
   display: none;
 }
 
+/* A note's save status keeps its room beside the actions (TV-90): "Unsaved changes" or "Saved"
+   showing must not widen the actions and narrow the title, which then wraps and moves the page
+   down by a line. */
+.note-actions .save-status,
+.note-actions .save-status:empty {
+  display: block;
+  min-width: 8rem;
+  text-align: right;
+}
+
+/* In a narrow pane the actions sit under the title on their own line: no room to keep. */
+@container pane (max-width: 600px) {
+  .note-actions .save-status,
+  .note-actions .save-status:empty {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .note-actions .save-status:empty {
+    display: none;
+  }
+}
+
 .property .field-value > input:not([type="checkbox"]),
 .property .field-value > select {
   width: auto;
