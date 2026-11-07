@@ -36,6 +36,15 @@ impl State {
         Ok(changed == 1)
     }
 
+    /// Forgets call `call`, so the next save of its note asks again. Answers false when no such
+    /// call is recorded. Used when a call's run is refused after its thread was opened (TV-86 F2).
+    pub fn forget_agent_call(&self, call: &str) -> Result<bool> {
+        let changed = self
+            .conn()
+            .execute("DELETE FROM agent_calls WHERE call = ?1", [call])?;
+        Ok(changed == 1)
+    }
+
     /// The call recorded as `call`, if it is.
     pub fn agent_call(&self, call: &str) -> Result<Option<AgentCall>> {
         Ok(self
@@ -83,5 +92,20 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(s.agent_call("01NOPE").unwrap().unwrap().thread, None);
+    }
+
+    #[test]
+    fn a_forgotten_call_is_recorded_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        assert!(!s.forget_agent_call("01CALL").unwrap());
+        s.record_agent_call("01CALL", "clerk", "01NOTE", Some("01THREAD"))
+            .unwrap();
+        assert!(s.forget_agent_call("01CALL").unwrap());
+        assert_eq!(s.agent_call("01CALL").unwrap(), None);
+        assert!(
+            s.record_agent_call("01CALL", "clerk", "01NOTE", Some("01THREAD2"))
+                .unwrap()
+        );
     }
 }

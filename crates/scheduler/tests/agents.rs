@@ -885,3 +885,82 @@ fn a_dispatch_past_the_queue_or_the_hourly_limit_is_refused_and_opens_no_thread(
         scheduler::MAX_PER_HOUR
     );
 }
+
+#[test]
+fn a_full_queue_keeps_its_dispatch_runs_when_a_trigger_run_comes() {
+    let r = Rig::new();
+    r.agent("any", ANY);
+    r.fake.hold.store(true, Ordering::SeqCst);
+    let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
+    let mut sent = Vec::new();
+    for i in 0..room {
+        sent.push(
+            r.scheduler
+                .dispatch("any", &[], &format!("Run {i}"), "Go.")
+                .unwrap(),
+        );
+    }
+    // A trigger run finds the queue full of runs with threads: it is dropped, and no thread opens.
+    r.create("memo", "Roof", "open", &user());
+    r.advance(31);
+    assert_eq!(r.fake.threads.lock().unwrap().len(), room);
+    r.fake.hold.store(false, Ordering::SeqCst);
+    r.fake.wait_turns(room);
+    let mut ran: Vec<String> = r.fake.turns().into_iter().map(|t| t.1).collect();
+    ran.sort();
+    sent.sort();
+    assert_eq!(ran, sent, "every dispatch run ran");
+}
+
+#[test]
+fn a_dispatch_takes_the_place_of_a_trigger_run_waiting_in_a_full_queue() {
+    let r = Rig::new();
+    r.agent("any", ANY);
+    r.fake.hold.store(true, Ordering::SeqCst);
+    let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
+    for i in 0..room {
+        r.create("memo", &format!("Memo {i}"), "open", &user());
+    }
+    // Two runs start and fifty wait: the queue is full, with no thread in it.
+    r.advance(31);
+    let sent = r
+        .scheduler
+        .dispatch("any", &[], "Sent", "Go.")
+        .expect("a trigger run gives way to a dispatch");
+    r.fake.hold.store(false, Ordering::SeqCst);
+    r.fake.wait_turns(room);
+    // One trigger run was dropped, so the turns are the room's count, the dispatch among them.
+    assert_eq!(r.fake.turns().len(), room);
+    assert!(r.fake.turns().iter().any(|t| t.1 == sent), "{sent} ran");
+}
+
+#[test]
+fn a_call_refused_by_a_full_queue_is_not_recorded_and_the_next_save_asks_again() {
+    let r = Rig::new();
+    r.agent("clerk", CLERK);
+    r.fake.hold.store(true, Ordering::SeqCst);
+    let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
+    for i in 0..room {
+        r.scheduler
+            .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+            .unwrap();
+    }
+    let text = format!(
+        "Gutters: {} today.",
+        call("@Clerk check the gutters", "clerk", CALL)
+    );
+    let id = r.note("memo", "Roof", &[&text], &user());
+    r.advance(1);
+    // No thread opened for it, and nothing recorded: the call is not answered.
+    assert_eq!(r.fake.threads.lock().unwrap().len(), room);
+    assert!(r.writer.state().agent_call(CALL).unwrap().is_none());
+
+    r.fake.hold.store(false, Ordering::SeqCst);
+    r.fake.wait_turns(room);
+    r.save(&id, "Roof", &[&text, "More."], &user());
+    r.advance(1);
+    let recorded = r.writer.state().agent_call(CALL).unwrap().unwrap();
+    assert!(recorded.thread.is_some(), "{recorded:?}");
+    r.fake.wait_turns(room + 1);
+    assert!(r.fake.turns()[room].2.starts_with("check the gutters\n"));
+}
