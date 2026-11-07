@@ -343,6 +343,11 @@ pub fn proposal_what(event: &str, d: &Value) -> String {
             _ => format!("new agent {}", s("name")),
         },
         "skill_proposal" => skill_what(d, false),
+        "script_proposal" => match d["op"].as_str() {
+            Some("delete") => format!("delete of script {}", s("name")),
+            _ if d["exists"] == true => format!("change to script {}", s("name")),
+            _ => format!("new script {}", s("name")),
+        },
         "agent_memory_proposal" => match d["op"].as_str() {
             Some("delete") => format!(
                 "forgetting memory {} of agent {}",
@@ -405,6 +410,11 @@ fn proposal_done(event: &str, d: &Value, done: &Value) -> String {
             _ => format!("created agent {}", s(d, "name")),
         },
         "skill_proposal" => skill_what(d, true),
+        "script_proposal" => match d["op"].as_str() {
+            Some("delete") => format!("deleted script {}", s(d, "name")),
+            _ if d["exists"] == true => format!("changed script {}", s(d, "name")),
+            _ => format!("created script {}", s(d, "name")),
+        },
         "agent_memory_proposal" => match d["op"].as_str() {
             Some("delete") => format!(
                 "forgot memory {} of agent {}: moved to the trash",

@@ -996,3 +996,14 @@
   align-items: center;
   gap: 0.5rem;
 }
+
+/* The "Runs as" list of a script or tool proposal (TV-70). */
+.ai-runs-as {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+.ai-runs-as ul {
+  margin: 0;
+  padding-left: 1rem;
+}
