@@ -33,6 +33,7 @@ axum = "0.8"
 base64 = "0.22"
 p256 = { version = "0.13", default-features = false, features = ["ecdh"] }
 push = { path = "../../crates/push" }
+socket2 = "0.6"
 tempfile = "3"
 testkit = { path = "../../crates/testkit" }
 tokio = { version = "1", features = ["rt"] }
