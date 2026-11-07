@@ -1,10 +1,14 @@
 # Agents working on TheVault
 
-Read `CLAUDE.md` for everything else: the source of truth, the dev container, the code layout and the test rules. This file states how a card is validated (operator decision P13, 2026-11-06).
+Read `CLAUDE.md` for everything else: the source of truth, the dev container, the code layout and the test rules. This file states how a card is validated (operator decisions P13, 2026-11-06, and H1-H5, 2026-11-07).
 
 ## Validation of a card
 
-Each card is validated on a clean checkout of its pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then check out the branch at the pushed commit. Do not run `git -C /src/<agent> checkout <commit>` after the repo checkout: the target does not allow it.
+The flow is in_progress, review, merge_queue, accepted. There is no validating column and no `terrarium card validate` for card work.
+
+Before you move a card to review, push the branch and run the recipes below yourself on thevault-dev against the pushed commit. Put the command, the commit and the pass count in the move comment. The lead's merge queue then merges the reviewed cards in one batch and runs the full suite on the result.
+
+Run them on a clean checkout of the pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then check out the branch at the pushed commit. Do not run `git -C /src/<agent> checkout <commit>` after the repo checkout: the target does not allow it.
 
 GitHub CI runs only on pushes to `main` (the release train: desktop build, Android APK and smoke, images). It runs no tests on branches. So the recipes below cover more than CI.
 
@@ -15,11 +19,11 @@ thevault-dev is the dev container itself. Run the recipes there without `./dev`,
 | `just validate` | thevault-dev | every card | `just check`: formatting, clippy with warnings denied, every Rust test, the web typecheck and vitest, the release scripts' tests |
 | `just validate-android` | thevault-dev | cards that touch `apps/android`, `crates/embedded`, `crates/sync` or `crates/push`, or carry the label `android`, after `just validate` | `just android-check` (the Android lint of the embedded crates), then `just android-test` (the app's Rust tests and the Robolectric tests) |
 
-A card passes when each recipe it needs exits 0.
+A card is ready for review when each recipe it needs exits 0.
 
-## Slots
+## Merge queue
 
-At most N = 2 validation runs at once. More runs queue first in, first out.
+Only the lead merges. One merge job takes every card in the merge_queue column (`terrarium card merge A B C`), merges them onto `next` in order, runs `just check` once on the result, and pushes `next` when it is green. A card that conflicts goes back to ready. A red batch is split until the failing card is found. When a batch holds a card that needs `just validate-android`, the lead also runs that recipe on the merged `next`.
 
 ## Emulators on a shared machine
 
