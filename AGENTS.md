@@ -4,7 +4,7 @@ Read `CLAUDE.md` for everything else: the source of truth, the dev container, th
 
 ## Validation of a card
 
-Each card is validated on a clean checkout of its pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then the commit.
+Each card is validated on a clean checkout of its pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then check out the branch at the pushed commit. Do not run `git -C /src/<agent> checkout <commit>` after the repo checkout: the target does not allow it.
 
 GitHub CI runs only on pushes to `main` (the release train: desktop build, Android APK and smoke, images). It runs no tests on branches. So the recipes below cover more than CI.
 
@@ -31,3 +31,5 @@ These do not run per card. They run on `release/<X.Y.Z>`:
 
 - `just android-emulator-checks` and `just android-release-smoke` on thevault-android (about 1 hour, a shared box).
 - The full end-to-end suite, `pnpm -C web e2e`.
+
+thevault-android has no `just` and no `pnpm`, and takes no `terrarium repo checkout` (MEM-51). The release Android checks reach it this way: build the APK on thevault-dev, copy the APK to thevault-android with `terrarium cp`, and run the emulator checks there with `EMULATOR_PORT` and `THEVAULT_APK` set to the copied APK. The emulator recipe still runs `just web-build` and `cargo build` when `THEVAULT_APK` is set, so the checks need `just` and `cargo` on that target, and thevault-android has no `just`.
