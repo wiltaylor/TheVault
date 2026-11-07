@@ -338,8 +338,8 @@ pub(crate) fn sms_send_refused(name: &str, before: Option<&str>, after: &str) ->
 
 /// Where and what the new source of script `name` can do on a phone, when a device file runs it
 /// (TV-98, TV-72 U2-U4), or `None`: the line for the card, the device platforms, each paired
-/// device of them with its SMS send and contacts write switches, and what the code can do, each
-/// item marked `new` when the current source cannot do it.
+/// device of them by name with its SMS send and contacts write switches, and what the code can
+/// do, each item marked `new` when the current source cannot do it.
 pub(crate) fn on_phone(
     w: &Writer,
     uses: &[ScriptUse],
@@ -356,11 +356,15 @@ pub(crate) fn on_phone(
     if platforms.is_empty() {
         return Ok(None);
     }
-    let devices: Vec<Value> = w
+    let mut paired: Vec<state::Device> = w
         .state()
         .list_devices()?
         .into_iter()
         .filter(|d| platforms.contains(&d.platform.as_str()))
+        .collect();
+    paired.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
+    let devices: Vec<Value> = paired
+        .into_iter()
         .map(|d| {
             let settings: Value = serde_json::from_str(&d.settings).unwrap_or(Value::Null);
             json!({
