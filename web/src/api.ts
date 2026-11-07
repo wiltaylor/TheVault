@@ -2014,6 +2014,13 @@ export const api = {
     request<AgentMemory>("PATCH", `/api/agents/${enc(name)}/memories/${enc(id)}`, change),
   /** Move a memory to the trash. */
   deleteAgentMemory: (name: string, id: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}/memories/${enc(id)}`),
+  /**
+   * Send notes to agent `name` with an instruction (TV-77 D1, TV-78): one thread for all of them,
+   * run by the scheduler. Needs `write`. 400 for an empty request or a note the agent may not
+   * have, 404 for a missing or disabled agent, 429 `too_many_runs`, 503 `no_agent_runs`.
+   */
+  dispatch: (name: string, notes: string[], instruction: string) =>
+    request<{ thread: AgentThreadSummary & { agent: string } }>("POST", `/api/agents/${enc(name)}/dispatch`, { notes, request: instruction }),
   /** Move a thread to the trash. */
   deleteAgentThread: (name: string, id: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}/threads/${enc(id)}`),
   taskRuns: async (name: string, limit = 50) =>
