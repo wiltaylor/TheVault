@@ -47,6 +47,7 @@ import { TypeProposalCard } from "./TypeProposalCard";
 import { outboxItemHref } from "../outbox/model";
 import { SkillProposalCard, skillHref } from "./SkillProposalCard";
 import { ToolProposalCard, toolHref } from "./ToolProposalCard";
+import { ScriptProposalCard } from "./ScriptProposalCard";
 import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged, viewThread } from "./running";
 import {
   type Applied,
@@ -74,6 +75,7 @@ import {
   setAgent,
   skillWhat,
   subagentOf,
+  scriptWhat,
   toolWhat,
   useChatSession,
 } from "./store";
@@ -206,6 +208,12 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked tool ${s("name")}`;
     case "propose_tool_delete":
       return `Checked a delete of tool ${s("name")}`;
+    case "get_script":
+      return `Read script ${s("name")}`;
+    case "propose_script_change":
+      return `Checked script ${s("name")}`;
+    case "propose_script_delete":
+      return `Checked a delete of script ${s("name")}`;
     case "start_subagent":
       return s("agent") ? `Delegated to ${s("agent")}` : "Started a sub agent";
     default:
@@ -338,6 +346,11 @@ export function activeLabel(name: string, input: Json): string {
     case "propose_tool_change":
     case "propose_tool_delete":
       return "Checking a tool change";
+    case "get_script":
+      return "Reading a saved script";
+    case "propose_script_change":
+    case "propose_script_delete":
+      return "Checking a script change";
     case "start_subagent":
       return "Waiting for sub agents";
     default:
@@ -394,6 +407,10 @@ const TYPE_TOOLS = new Set([
   "get_tool",
   "propose_tool_change",
   "propose_tool_delete",
+  // And the saved script tools (TV-70).
+  "get_script",
+  "propose_script_change",
+  "propose_script_delete",
 ]);
 
 /** What a script step says once done (script-tools T6): its outcome and how long it took. */
@@ -1430,6 +1447,8 @@ export function proposalLine(p: Part): string {
       return `Proposed ${skillWhat(p.proposal)}`;
     case "tool_proposal":
       return `Proposed ${toolWhat(p.proposal)}`;
+    case "script_proposal":
+      return `Proposed ${scriptWhat(p.proposal)}`;
     default:
       return "Proposed a change";
   }
@@ -1482,6 +1501,7 @@ function PartView(props: { part: Part; parts: readonly Part[]; turn: number; ind
         <Match when={props.part.kind === "memory_proposal" && props.part}>{(p) => <MemoryProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "skill_proposal" && props.part}>{(p) => <SkillProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "tool_proposal" && props.part}>{(p) => <ToolProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "script_proposal" && props.part}>{(p) => <ScriptProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "applied" && props.part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
         <Match when={props.part.kind === "download" && props.part}>{(p) => <DownloadCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "notice" && props.part}>{(p) => <Notice part={p()} />}</Match>

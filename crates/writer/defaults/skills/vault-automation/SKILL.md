@@ -29,6 +29,12 @@ Each comes from a switch on your Permissions tab, so you may have none of them:
   code).
 - `list_tools`, `get_tool`, `propose_tool_change` and `propose_tool_delete`: read and propose
   script tools. A proposal waits for the user unless **Ask before changing script tools** is off.
+- `get_script`, `propose_script_change` and `propose_script_delete`: read a saved script with
+  what runs it, and propose a new or changed script, or a delete. The proposal always waits for
+  the user's Apply, whatever your switches say, so a trigger's run is not offered them. A change
+  must compile in every way the script runs; a delete is refused while a handler, task, device
+  file or tool names the script. Changing a shared script changes every one of them, with their
+  hosts and secrets: the user sees that list on the card.
 - `start_subagent`: hand a self-contained part of the task to another agent, which works in its
   own thread and answers you. From **Sub agents**.
 - `notify_user`: send the user a notification now: a title, an optional body and an optional
@@ -36,8 +42,9 @@ Each comes from a switch on your Permissions tab, so you may have none of them:
   proposal, also in an unattended run. At most 3 per turn, 10 per hour and 30 per day. Every
   agent has it unless its tools list leaves it out.
 
-There is no tool to write a scheduled task, a saved script or a device file. For those, write
-the file's text in your answer for the user to save, or say what they need to set up.
+There is no tool to write a scheduled task or a device file. For those, write the file's text in
+your answer for the user to save, or say what they need to set up. A task's script can be
+proposed with `propose_script_change`.
 
 ## A scheduled task
 
@@ -154,8 +161,8 @@ A tool is offered to agents only when it is valid; `get_tool` shows why one is n
 
 ## Choosing
 
-- Something should happen on a schedule: a scheduled task. Write its file and script for the
-  user.
+- Something should happen on a schedule: a scheduled task. Write its file for the user, and
+  propose its script with `propose_script_change`, or write that too when you lack the tool.
 - Something should happen whenever a note of a type changes: a handler, through
   `propose_type_change`. To have an agent act instead, the user adds a trigger to that agent.
 - The agents keep needing the same lookup or web call: a script tool.

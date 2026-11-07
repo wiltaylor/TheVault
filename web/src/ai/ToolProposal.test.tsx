@@ -85,7 +85,7 @@ async function ask(m: ReturnType<typeof render>) {
   await waitFor(() => expect(live).not.toBeNull());
 }
 
-function propose(proposal: { id: string; name: string; op: string }) {
+function propose(proposal: { id: string; name: string; op: string; [key: string]: unknown }) {
   const tool = proposal.op === "delete" ? "propose_tool_delete" : "propose_tool_change";
   live!.onEvent({ event: "tool", data: { id: proposal.id, name: tool, input: { name: proposal.name } } });
   live!.onEvent({ event: "tool_proposal", data: proposal });
@@ -145,6 +145,28 @@ describe("tool proposals", () => {
     expect(card).toHaveTextContent("Its script scripts/count_tagged.ws is deleted too");
     fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(outcomesNow()).toEqual(["[Applied by the user: deleted tool count_tagged and its script count_tagged]"]));
+  });
+
+  it("lists what else runs the tool's script, with the any-host warnings", async () => {
+    const task = { kind: "task", name: "nightly", file: "tasks/nightly.wcl", event: null, allow_domains: [], secrets: ["api_key"], read_paths: [], write_paths: [], schedule: "0 3 * * *", timezone: null, paused: false };
+    const warning = "The tool count_tagged may reach any host (allow_domains = [\"*\"]), including your local network and this server.";
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    propose({ ...CHANGE, runs_as: [task], warnings: [warning] });
+    const card = await m.findByRole("region", { name: "Proposed change to tool count_tagged" });
+    expect(card).toHaveTextContent("scripts/count_tagged.ws also runs as these");
+    const runs = within(card).getByLabelText("Runs as");
+    expect(runs).toHaveTextContent("Task nightly");
+    expect(runs).toHaveTextContent("Secrets: api_key");
+    expect(within(card).getByLabelText("Warnings")).toHaveTextContent(warning);
+  });
+
+  it("shows no Runs as list when nothing else runs the script", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    propose(CREATE);
+    const card = await m.findByRole("region", { name: "Proposed new tool count_tagged" });
+    expect(within(card).queryByLabelText("Runs as")).toBeNull();
   });
 
   it("does not apply a tool that changed since the proposal, and says so", async () => {
