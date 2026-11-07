@@ -4804,7 +4804,7 @@ mod tests {
         let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
         let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
         let names = |drop: Option<Direct>| -> Vec<String> {
-            turn_tools(ai::Web::default(), false, None, drop, false, false)
+            turn_tools(ai::Web::default(), false, None, drop, false, false, false)
                 .into_iter()
                 .map(|t| t.name)
                 .collect()
