@@ -1,0 +1,15 @@
+{
+  "name": "thevault-android-emulator-harness",
+  "private": true,
+  "description": "Node packages of the Android emulator harness (checks.mjs). Not a workspace member of web/.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "pngjs": "7.0.0"
+  }
+}

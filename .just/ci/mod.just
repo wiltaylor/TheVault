@@ -70,10 +70,15 @@ web-typecheck: web-deps-install
 web-test: web-deps-install
 	pnpm -C web test
 
-# Test the Android emulator harness's helpers that need no device (TV-92)
+# Install the Android emulator harness's node packages from its lockfile (TV-67)
+[private]
+emulator-harness-deps: (require-tool "npm")
+	npm ci --prefix apps/android/emulator --ignore-scripts --no-audit --no-fund
+
+# Test the Android emulator harness's helpers that need no device (TV-92, TV-66, TV-67)
 [group('ci')]
-emulator-harness-test: (require-tool "node")
-	node --test apps/android/emulator/gesture.test.mjs apps/android/emulator/logcat.test.mjs
+emulator-harness-test: emulator-harness-deps (require-tool "node")
+	node --test apps/android/emulator/gesture.test.mjs apps/android/emulator/logcat.test.mjs apps/android/emulator/qr.test.mjs
 
 # Test the release train's scripts: the version calculation, the Android versionCode, how dpkg, rpm and pacman sort the package versions, the image tags and stamping (docs/releasing.md)
 [group('ci')]
