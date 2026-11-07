@@ -117,7 +117,7 @@ describe("the send bar", () => {
     expect(screen.getByRole("heading")).toHaveTextContent("Send 3 notes to an agent");
     expect(screen.getAllByRole("checkbox", { name: /^Select Note/ }).some((b) => (b as HTMLInputElement).checked)).toBe(false);
     expect(sendButton()).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByText("Close", { selector: "button" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     r.unmount();
   });

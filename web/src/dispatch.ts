@@ -6,7 +6,7 @@
 // stream. A list (Inbox, Search) watches all of its rows at once with one read per page
 // (TV-79), and groups the threads by note.
 
-import { type Accessor, type Setter, createEffect, createRoot, createSignal, on, onCleanup } from "solid-js";
+import { type Accessor, type Setter, createEffect, createMemo, createRoot, createSignal, on, onCleanup } from "solid-js";
 import { RUNNING_POLL_MS, turnsChanged } from "./ai/running";
 import { type DispatchedThread, api } from "./api";
 
@@ -169,9 +169,11 @@ export function watchListThreads(ids: Accessor<readonly string[]>): Accessor<Rea
     clearTimeout(e.timer);
     lists.delete(e);
   });
+  // Read only when the notes shown change, not each time the list is computed again.
+  const key = createMemo(() => ids().join(","));
   createEffect(
     on(
-      () => ids().join(","),
+      key,
       (key) => {
         e.ids = key ? key.split(",") : [];
         void readList(e);

@@ -5,22 +5,20 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSummary, DispatchedThread, Row } from "../api";
-import { SOURCES, type Item } from "../inbox/sources";
+import type { Item } from "../inbox/sources";
 
-const dispatched = vi.fn();
-const dispatch = vi.fn();
-const agents = vi.fn();
+const { dispatched, dispatch, agents, loadInbox } = vi.hoisted(() => ({ dispatched: vi.fn(), dispatch: vi.fn(), agents: vi.fn(), loadInbox: vi.fn() }));
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
   return { ...real, api: { ...real.api, dispatched, dispatch, agents, app: vi.fn().mockResolvedValue(null), note: vi.fn().mockRejectedValue(new Error("no")) } };
 });
-const loadInbox = vi.fn();
 vi.mock("../inbox/load", () => ({ loadInbox, countInbox: vi.fn().mockResolvedValue(0) }));
 vi.mock("@solidjs/router", () => ({ useNavigate: () => vi.fn() }));
 
 const { Inbox } = await import("./Inbox");
 const { refreshAgents } = await import("../agents");
 const { resetDispatched } = await import("../dispatch");
+const { SOURCES } = await import("../inbox/sources");
 
 const MAIL = SOURCES.find((s) => s.key === "mail")!;
 const row = (id: string, title: string): Row => ({ id, type: "email", title, fields: { from_raw: "a@b.c" } });
