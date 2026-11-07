@@ -54,7 +54,7 @@ pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, 
 pub use jobs::{HandlerJob, JobStatus};
 pub use notifications::{
     MAX_BODY, MAX_NOTIFICATIONS, MAX_TITLE, NewNotification, Notification, NotificationPage,
-    READ_RETENTION_MS, SourceLimit, is_app_path,
+    READ_RETENTION_MS, SourceLimit, SourceMatch, is_app_path,
 };
 pub use pins::{PinEntry, PinKind, PinNode};
 pub use runs::{RunId, RunOutcome, TaskRun};

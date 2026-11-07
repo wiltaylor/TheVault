@@ -2,7 +2,8 @@
 //! notification under the bell at once, from `agent:<name>`, opening a note the agent may read;
 //! it refuses a bad title or body, a missing note or one of a type the agent may not read, and a
 //! caller without `write`, sending nothing; it sends at most 3 per turn, 10 per hour and 30 per
-//! day per agent, and a refused call says which limit; it follows the tools list; and an
+//! day per agent and 60 a day for all agents together, and a refused call says which limit; it
+//! follows the tools list; and an
 //! unattended trigger run is offered it and uses it.
 
 use std::ffi::OsStr;
@@ -38,6 +39,10 @@ const MEMOS_ONLY: &str = r#"label = "Memos only"
 permissions {
   types = ["memo"]
 }
+"#;
+
+/// An agent with no permissions of its own, for the vault-wide cap.
+const THIRD: &str = r#"label = "Third"
 "#;
 
 /// An agent whose tools list leaves notify_user out.
@@ -425,6 +430,53 @@ fn notify_user_keeps_to_its_turn_hour_and_day_limits() {
     api.advance("PT22H");
     api.notify(&fake, None, &[hello("again")]);
     last_result(&fake, false);
+}
+
+#[test]
+fn notify_user_caps_all_agents_together_a_day() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("memos_only", MEMOS_ONLY);
+    api.agent("third", THIRD);
+    let agents = [None, Some("memos_only"), Some("third")];
+
+    // Each of three agents sends its hour limit of 10 in each of two hours: 60 in all, and no
+    // agent is past its own limits.
+    let send_ten = |agent: Option<&str>| {
+        for size in [3, 3, 3, 1] {
+            let inputs: Vec<Value> = (0..size).map(|i| hello(&format!("n{i}"))).collect();
+            api.notify(&fake, agent, &inputs);
+            assert!(last_results(&fake).iter().all(|(e, _)| !e));
+        }
+    };
+    for hour in 0..2 {
+        if hour > 0 {
+            api.advance("PT61M");
+        }
+        for agent in agents {
+            send_ten(agent);
+        }
+    }
+    assert_eq!(api.notifications().len(), 60);
+
+    // The hour has passed for every agent, and each has 20 of its 30 for the day: the vault-wide
+    // cap of 60 refuses the next call from any of them.
+    api.advance("PT61M");
+    for agent in agents {
+        api.notify(&fake, agent, &[hello("61")]);
+        let r = last_result(&fake, true);
+        let error = r["error"].as_str().unwrap();
+        assert!(error.contains("all agents together"), "{error:?}");
+        assert!(error.contains("60 a day"), "{error:?}");
+        assert_eq!(r["limited"], true, "{r}");
+    }
+    assert_eq!(api.notifications().len(), 60, "a refused call stores nothing");
+
+    // A day after the first, the cap has room again.
+    api.advance("PT23H");
+    api.notify(&fake, Some("third"), &[hello("again")]);
+    last_result(&fake, false);
+    assert_eq!(api.notifications().len(), 61);
 }
 
 #[test]

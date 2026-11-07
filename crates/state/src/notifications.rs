@@ -40,12 +40,24 @@ pub struct NewNotification {
     pub source: String,
 }
 
-/// A cap on how many notifications one source may make: at most `max` in the last `window_ms`
-/// milliseconds. See [`State::add_notification_within`].
+/// A cap on how many notifications may be made: at most `max` in the last `window_ms`
+/// milliseconds, counted over the notifications that `sources` selects. See
+/// [`State::add_notification_within`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceLimit {
     pub window_ms: i64,
     pub max: usize,
+    pub sources: SourceMatch,
+}
+
+/// Which notifications a [`SourceLimit`] counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceMatch {
+    /// Only the notifications from the source of the new one.
+    Own,
+    /// Every notification whose source starts with this prefix, such as `agent:` for all agents
+    /// together. The error of such a limit names the prefix.
+    Prefix(&'static str),
 }
 
 /// One stored notification.
@@ -184,9 +196,10 @@ impl State {
         self.add_notification_within(n, &[])
     }
 
-    /// Store a notification like [`State::add_notification`], unless its source has already made
-    /// `max` notifications in a window of `window_ms` for one of `limits`. Then nothing is stored
-    /// and the error is [`Error::NotificationLimit`] for the first limit reached.
+    /// Store a notification like [`State::add_notification`], unless one of `limits` that covers
+    /// it is full: its selected notifications already number `max` in a window of `window_ms`.
+    /// Then nothing is stored and the error is [`Error::NotificationLimit`] for the first limit
+    /// reached.
     ///
     /// The count and the insert run in one transaction under the connection lock, so callers
     /// that race on one source cannot both pass a limit that one of them fills.
@@ -210,11 +223,26 @@ impl State {
             [MAX_NOTIFICATIONS as i64 - 1],
         )?;
         for limit in limits {
-            let count = count_from(&tx, &n.source, now.saturating_sub(limit.window_ms))?;
+            // A prefix limit covers only the notifications whose source starts with its prefix.
+            if let SourceMatch::Prefix(prefix) = limit.sources
+                && !n.source.starts_with(prefix)
+            {
+                continue;
+            }
+            let count = count_from(
+                &tx,
+                limit.sources,
+                &n.source,
+                now.saturating_sub(limit.window_ms),
+            )?;
             if count >= limit.max {
                 // Dropping `tx` rolls back the pruning above too.
+                let by = match limit.sources {
+                    SourceMatch::Own => n.source.clone(),
+                    SourceMatch::Prefix(prefix) => prefix.to_owned(),
+                };
                 return Err(Error::NotificationLimit {
-                    by: n.source.clone(),
+                    by,
                     window_ms: limit.window_ms,
                     count,
                     max: limit.max,
@@ -334,7 +362,7 @@ impl State {
     /// milliseconds, read or not. Rate limits count with it, such as the agents' `notify_user`.
     pub fn notifications_from(&self, source: &str, window_ms: i64) -> Result<usize> {
         let since = self.now().saturating_sub(window_ms);
-        count_from(&self.conn(), source, since)
+        count_from(&self.conn(), SourceMatch::Own, source, since)
     }
 
     /// Mark one notification read. Marking a read one again keeps when it was first read, and
@@ -403,11 +431,20 @@ impl State {
     }
 }
 
-/// How many notifications from `source` were made after `since`, read or not.
-fn count_from(conn: &rusqlite::Connection, source: &str, since: i64) -> Result<usize> {
+/// How many notifications `sources` selects for `source` were made after `since`, read or not.
+fn count_from(
+    conn: &rusqlite::Connection,
+    sources: SourceMatch,
+    source: &str,
+    since: i64,
+) -> Result<usize> {
+    let (selects, key) = match sources {
+        SourceMatch::Own => ("source = ?1", source),
+        SourceMatch::Prefix(prefix) => ("substr(source, 1, length(?1)) = ?1", prefix),
+    };
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM notifications WHERE source = ?1 AND created_ms > ?2",
-        params![source, since],
+        &format!("SELECT COUNT(*) FROM notifications WHERE {selects} AND created_ms > ?2"),
+        params![key, since],
         |r| r.get(0),
     )?;
     Ok(usize::try_from(n).unwrap_or(0))
