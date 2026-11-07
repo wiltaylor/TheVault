@@ -25,7 +25,9 @@ The host has no Rust or Node toolchain for this project. Run every build, test, 
 - Every test server, fixture HTTP server and Playwright target binds port 0 and reads back the port it got. Never hard-code a port.
 - Every test vault lives in a fresh temporary directory. Never write into the repository or `$HOME` from a test.
 
-`./dev just check` is the full gate: formatting, clippy with warnings denied, every Rust test, and the web typecheck and tests. Run it before every commit. Ticket 01 creates the `justfile`.
+`./dev just check` is the full gate: formatting, clippy with warnings denied, every Rust test, and the web typecheck and tests. Run it before every commit.
+
+Card validation is not run through `./dev`: it runs on thevault-dev without `./dev`, and AGENTS.md says how.
 
 Builds share one disk, and a workspace test build is heavy, so:
 
