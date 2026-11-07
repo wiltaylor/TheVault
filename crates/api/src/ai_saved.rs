@@ -381,7 +381,10 @@ mod tests {
                     .lines()
                     .any(|l| l.trim_start().starts_with("script") && l.contains(&quoted))
             });
-            assert!(named, "{name} is neither handler-only nor a shipped task's script");
+            assert!(
+                named,
+                "{name} is neither handler-only nor a shipped task's script"
+            );
         }
     }
 }
