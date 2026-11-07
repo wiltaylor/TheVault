@@ -195,7 +195,7 @@ describe("the chat", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /^Chat session: Roof: tidy/ })).toBeTruthy());
     const list = await sessions();
     await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(2));
-    expect(list.getAllByRole("option").map((o) => o.textContent)).toEqual([expect.stringContaining("New chat"), expect.stringContaining("Groceries")]);
+    expect(list.getAllByRole("option").map((o: HTMLElement) => o.textContent)).toEqual([expect.stringContaining("New chat"), expect.stringContaining("Groceries")]);
   });
 
   it("searches the chats by title, and Enter opens the one highlighted", async () => {
