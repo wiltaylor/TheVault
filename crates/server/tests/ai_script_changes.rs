@@ -120,7 +120,11 @@ impl Api {
             .account(TestAccount::anthropic(fake).model(MODEL))
             .secrets()
         {
-            api.ok("PUT", &format!("/api/secrets/{name}"), json!({ "value": value }));
+            api.ok(
+                "PUT",
+                &format!("/api/secrets/{name}"),
+                json!({ "value": value }),
+            );
         }
         api
     }
@@ -146,7 +150,13 @@ impl Api {
         .unwrap()
     }
 
-    fn call(&self, method: &str, path: &str, token: &str, body: Option<Value>) -> (StatusCode, Value) {
+    fn call(
+        &self,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
         let res = self.send(method, path, token, body);
         let status = res.status();
         (status, res.json().unwrap_or(Value::Null))
@@ -322,8 +332,15 @@ fn a_script_change_waits_for_apply_with_every_switch_off_and_shows_what_runs_it(
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.seed_users();
-    api.ok("PUT", "/api/integrations/ai/settings", json!({ "confirm": all_off() }));
-    let changed = STAMP.replace("Ok(())\n}\n\nfn after", "let x = 1\n    Ok(())\n}\n\nfn after");
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({ "confirm": all_off() }),
+    );
+    let changed = STAMP.replace(
+        "Ok(())\n}\n\nfn after",
+        "let x = 1\n    Ok(())\n}\n\nfn after",
+    );
 
     // get_script reads the source and what runs it.
     api.one(&fake, "get_script", json!({ "name": "stamp" }));
@@ -333,7 +350,11 @@ fn a_script_change_waits_for_apply_with_every_switch_off_and_shows_what_runs_it(
     assert_eq!(got["problems"], json!([]));
     assert_eq!(
         users(&got["runs_as"]),
-        [pair("handler", "item"), pair("task", "nightly"), pair("tool", "echo")]
+        [
+            pair("handler", "item"),
+            pair("task", "nightly"),
+            pair("tool", "echo")
+        ]
     );
 
     // A proposal, never made at once, with its diff, its users and their grants.
@@ -354,7 +375,11 @@ fn a_script_change_waits_for_apply_with_every_switch_off_and_shows_what_runs_it(
     assert_eq!(p["proposer"], "assistant");
     assert_eq!(
         users(&p["runs_as"]),
-        [pair("handler", "item"), pair("task", "nightly"), pair("tool", "echo")]
+        [
+            pair("handler", "item"),
+            pair("task", "nightly"),
+            pair("tool", "echo")
+        ]
     );
     let handler = &p["runs_as"][0];
     assert_eq!(handler["event"], "after_update");
@@ -366,12 +391,18 @@ fn a_script_change_waits_for_apply_with_every_switch_off_and_shows_what_runs_it(
     assert_eq!(task["secrets"], json!(["api_key"]));
     assert_eq!(task["allow_domains"], json!(["api.example.com"]));
     assert_eq!(task["paused"], true);
-    assert_eq!(p["runs_as"][2]["allow_domains"], json!(["echo.example.com"]));
+    assert_eq!(
+        p["runs_as"][2]["allow_domains"],
+        json!(["echo.example.com"])
+    );
     // Any host is allowed, with a warning (TV-32 Q4).
     let warnings = p["warnings"].as_array().unwrap();
     assert_eq!(warnings.len(), 1, "{p}");
     let w = warnings[0].as_str().unwrap();
-    assert!(w.starts_with("The after_update handler of type item may reach any host"), "{w}");
+    assert!(
+        w.starts_with("The after_update handler of type item may reach any host"),
+        "{w}"
+    );
     assert!(w.contains("local network"), "{w}");
     let (err, said) = last_result(&fake);
     assert!(!err && said["proposed"] == true, "{said}");
@@ -385,14 +416,22 @@ fn a_script_change_waits_for_apply_with_every_switch_off_and_shows_what_runs_it(
     assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
     let (status, body) = api.apply_as(&api.token(), &p);
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body, json!({ "op": "script_change", "script_name": "stamp" }));
+    assert_eq!(
+        body,
+        json!({ "op": "script_change", "script_name": "stamp" })
+    );
     assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
     // The script changed since: stale, nothing written.
     let (status, body) = api.apply_as(&api.token(), &p);
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale");
     let activity = api.get("/api/activity?kind=ai.applied");
-    assert!(activity.to_string().contains("Applied: change script stamp"), "{activity}");
+    assert!(
+        activity
+            .to_string()
+            .contains("Applied: change script stamp"),
+        "{activity}"
+    );
 
     // The same source: nothing to apply.
     let events = api.one(
@@ -445,12 +484,18 @@ fn a_script_change_waits_for_apply_with_every_switch_off_and_shows_what_runs_it(
     assert_eq!(api.script("fresh").as_deref(), Some(fresh));
     let (status, body) = api.apply_as(&api.token(), &p);
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body, json!({ "op": "script_delete", "script_name": "fresh" }));
+    assert_eq!(
+        body,
+        json!({ "op": "script_delete", "script_name": "fresh" })
+    );
     assert_eq!(api.script("fresh"), None);
     // A missing script names those there are.
     api.one(&fake, "propose_script_delete", json!({ "name": "fresh" }));
     let (err, said) = last_result(&fake);
-    assert!(err && said["error"].as_str().unwrap().contains("stamp"), "{said}");
+    assert!(
+        err && said["error"].as_str().unwrap().contains("stamp"),
+        "{said}"
+    );
 }
 
 #[test]
@@ -479,8 +524,14 @@ fn a_tool_proposal_shows_what_else_runs_its_script() {
         .map(|w| w.as_str().unwrap())
         .collect();
     assert_eq!(warnings.len(), 2, "{p}");
-    assert!(warnings[0].starts_with("The tool echo may reach any host"), "{warnings:?}");
-    assert!(warnings[1].starts_with("The after_update handler of type item"), "{warnings:?}");
+    assert!(
+        warnings[0].starts_with("The tool echo may reach any host"),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings[1].starts_with("The after_update handler of type item"),
+        "{warnings:?}"
+    );
     // A delete that keeps the script lists what keeps it.
     let events = api.one(&fake, "propose_tool_delete", json!({ "name": "echo" }));
     let p = find(&events, "tool_proposal").unwrap().clone();
@@ -505,7 +556,11 @@ fn a_call_from_a_note_leaves_a_script_proposal_that_a_phone_applies_or_discards_
     api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
     api.advance("PT1S");
     let first = fake.message_requests()[0].json();
-    assert!(first["tools"].to_string().contains("\"propose_script_change\""));
+    assert!(
+        first["tools"]
+            .to_string()
+            .contains("\"propose_script_change\"")
+    );
 
     // Every switch is off, yet the change waits in the thread.
     assert_eq!(api.script("stamp").as_deref(), Some(STAMP));

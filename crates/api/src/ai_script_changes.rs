@@ -310,7 +310,10 @@ mod tests {
             event: Some("before_update".into()),
             ..ScriptUse::default()
         };
-        assert_eq!(use_label(&handler), "the before_update handler of type task");
+        assert_eq!(
+            use_label(&handler),
+            "the before_update handler of type task"
+        );
         let device = ScriptUse {
             kind: "device",
             name: "android".into(),
