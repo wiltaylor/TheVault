@@ -992,8 +992,6 @@ function eventPart(event: string, d: Record<string, unknown>): Part | null {
           script_before: typeof d.script_before === "string" ? d.script_before : null,
           script_after: typeof d.script_after === "string" ? d.script_after : null,
           problems: Array.isArray(d.problems) ? (d.problems as unknown[]).map(String) : [],
-          runs_as: Array.isArray(d.runs_as) ? (d.runs_as as ScriptUse[]) : [],
-          warnings: Array.isArray(d.warnings) ? (d.warnings as unknown[]).map(String) : [],
         },
         state: "open",
       };
