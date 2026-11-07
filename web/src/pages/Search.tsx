@@ -1,17 +1,21 @@
 // The Search page: full text, type, date and property filters, and sorting, over one paged
 // query (PRD Appendix B). The whole search lives in the page's URL, so it survives a reload, sits
-// in the pane's history and opens in a split or a new tab as it is.
+// in the pane's history and opens in a split or a new tab as it is. The loaded results can be
+// selected and sent to an agent together, and each shows the robots of its agent threads (TV-79).
 
 import { A, useLocation, useNavigate } from "@solidjs/router";
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
-import { type ArchivedFilter, type FieldDef, type Row, type TypeDef, api, isArchived } from "../api";
+import { type ArchivedFilter, type DispatchedThread, type FieldDef, type Row, type TypeDef, api, isArchived } from "../api";
 import { copyText } from "../clipboard";
 import { optionText } from "../options";
+import { AgentRobots } from "../components/AgentRobot";
 import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
 import { FieldInput, termOptions } from "../components/FieldInput";
 import { SearchIcon, TypeIcon } from "../components/Icon";
 import { createPagedRows } from "../components/pagedRows";
+import { type Selection, SelectBox, SendNotesBar, createSelection } from "../components/SendNotesBar";
 import { VirtualList } from "../components/VirtualList";
+import { watchListThreads } from "../dispatch";
 import { knowArchived, knowTitle, noteTitle } from "../editor/titles";
 import {
   ARCHIVED_CHOICES,
@@ -128,6 +132,11 @@ export function Search() {
     queryText,
     PAGE_SIZE,
   );
+
+  // "This page" is the results loaded so far: a page of PAGE_SIZE, more as the list scrolls.
+  const ids = createMemo(() => rows().map((r) => r.id));
+  const selection = createSelection(ids);
+  const threads = watchListThreads(ids);
 
   const [copied, setCopied] = createSignal<string | null>(null);
   let copiedTimer: ReturnType<typeof setTimeout> | undefined;
@@ -297,6 +306,9 @@ export function Search() {
           {error()}
         </p>
       </Show>
+      <Show when={(total() ?? 0) > 0}>
+        <SendNotesBar selection={selection} page={ids} />
+      </Show>
       <div class="search-results">
         <Show when={total() !== 0} fallback={<p class="muted search-empty">No notes match.</p>}>
           <VirtualList
@@ -310,7 +322,9 @@ export function Search() {
           >
             {(i) => (
               <Show when={rows()[i]} fallback={<span class="note-row placeholder">…</span>}>
-                {(row) => <ResultRow row={row()} find={committed().text} />}
+                {(row) => (
+                  <ResultRow row={row()} find={committed().text} selection={selection} threads={threads().get(row().id) ?? []} />
+                )}
               </Show>
             )}
           </VirtualList>
@@ -321,7 +335,7 @@ export function Search() {
 }
 
 /** One result. With search text, the note opens with it, so a toggle holding a hit opens too. */
-function ResultRow(props: { row: Row; find: string }) {
+function ResultRow(props: { row: Row; find: string; selection: Selection; threads: DispatchedThread[] }) {
   const t = () => typeDef(props.row.type);
   const updated = () => props.row.fields.updated;
   const href = () => {
@@ -329,23 +343,27 @@ function ResultRow(props: { row: Row; find: string }) {
     return find ? `/notes/${props.row.id}?find=${encodeURIComponent(find)}` : `/notes/${props.row.id}`;
   };
   return (
-    <A class="note-row search-row" href={href()} data-testid="note-row">
-      <span class="search-row-icon">
-        <TypeIcon name={t()?.icon} size={16} />
-      </span>
-      <span class="note-title">{props.row.title || "Untitled"}</span>
-      <Show when={isArchived(props.row.fields)}>
-        <span class="archived-chip" title="Archived">
-          Archived
+    <div class="search-row-line">
+      <SelectBox selection={props.selection} id={props.row.id} title={props.row.title} />
+      <A class="note-row search-row" href={href()} data-testid="note-row">
+        <span class="search-row-icon">
+          <TypeIcon name={t()?.icon} size={16} />
         </span>
-      </Show>
-      <span class="search-row-meta">
-        <span class="note-type">{t()?.label ?? props.row.type}</span>
-        <time class="note-date" datetime={typeof updated() === "string" ? (updated() as string) : undefined}>
-          {formatDate(updated())}
-        </time>
-      </span>
-    </A>
+        <span class="note-title">{props.row.title || "Untitled"}</span>
+        <Show when={isArchived(props.row.fields)}>
+          <span class="archived-chip" title="Archived">
+            Archived
+          </span>
+        </Show>
+        <span class="search-row-meta">
+          <span class="note-type">{t()?.label ?? props.row.type}</span>
+          <time class="note-date" datetime={typeof updated() === "string" ? (updated() as string) : undefined}>
+            {formatDate(updated())}
+          </time>
+        </span>
+      </A>
+      <AgentRobots threads={props.threads} />
+    </div>
   );
 }
 

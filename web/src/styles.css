@@ -11146,6 +11146,60 @@ hr.divider-block {
   gap: 0.5rem;
 }
 
+/* Send notes from a list (TV-79): the selection bar of the Inbox and Search, and each row's
+   checkbox and robots. */
+.send-notes-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+}
+
+.send-notes-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.send-notes-count {
+  font-weight: 600;
+}
+
+.send-notes-send {
+  margin-left: auto;
+}
+
+.select-note {
+  flex: none;
+  margin: 0;
+}
+
+.inbox-title-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.search-row-line {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 100%;
+  padding-left: 1rem;
+}
+
+.search-row-line .search-row {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0.5rem;
+}
+
+.search-row-line .agent-robots {
+  padding-right: 0.5rem;
+}
+
 /* The robots of the threads about a note (TV-78): moving while active, a "!" while the agent
    needs the user, still with a dot when done and not opened yet. */
 .agent-robots {

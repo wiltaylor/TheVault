@@ -1,16 +1,20 @@
 // The inbox: what waits to be processed, newest first by each item's own time: fleeting notes,
 // incoming mail, incoming messages and missed calls (src/inbox/sources.ts). Filter chips narrow
 // it to one source. Every row can be opened or marked done. A fleeting note can also be converted
-// into a note of another type; every row but an email can be moved to the trash.
+// into a note of another type; every row but an email can be moved to the trash. Rows can be
+// selected and sent to an agent together, and each shows the robots of its agent threads (TV-79).
 
 import { useNavigate } from "@solidjs/router";
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
-import { type Note, type Row, api, assetUrl } from "../api";
+import { type DispatchedThread, type Note, type Row, api, assetUrl } from "../api";
 import { FLEETING, PROCESSED, assetIds, blocksText, captureFields, convertDoc } from "../capture/model";
 import { openCapture, refreshInboxCount } from "../capture/store";
 import { changes } from "../changes";
+import { AgentRobots } from "../components/AgentRobot";
 import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
+import { type Selection, SelectBox, SendNotesBar, createSelection } from "../components/SendNotesBar";
 import { showToast } from "../components/Toasts";
+import { watchListThreads } from "../dispatch";
 import { knowTitle } from "../editor/titles";
 import { appInfo } from "../inApp";
 import { CatchUpDialog } from "../inbox/CatchUpDialog";
@@ -63,6 +67,9 @@ export function Inbox() {
   );
   const items = createMemo(() => (page.latest?.items ?? []).filter((i) => !gone().has(i.row.id)));
   const hide = (id: string) => setGone((s) => new Set(s).add(id));
+  const ids = createMemo(() => items().map((i) => i.row.id));
+  const selection = createSelection(ids);
+  const threads = watchListThreads(ids);
 
   async function run(id: string, act: () => Promise<void>) {
     setError(null);
@@ -183,11 +190,14 @@ export function Inbox() {
             </p>
           }
         >
+          <SendNotesBar selection={selection} page={ids} />
           <ul class="inbox-list" aria-label="Inbox">
             <For each={items()}>
               {(i) => (
                 <InboxItem
                   item={i}
+                  selection={selection}
+                  threads={threads().get(i.row.id) ?? []}
                   onDone={(v) => void done(i.row, v)}
                   onDelete={() => void remove(i.row)}
                   onConvert={(t) => void convert(i.row, t)}
@@ -206,7 +216,14 @@ export function Inbox() {
   );
 }
 
-function InboxItem(props: { item: Item; onDone: (value: boolean) => void; onDelete: () => void; onConvert: (type: string) => void }) {
+function InboxItem(props: {
+  item: Item;
+  selection: Selection;
+  threads: DispatchedThread[];
+  onDone: (value: boolean) => void;
+  onDelete: () => void;
+  onConvert: (type: string) => void;
+}) {
   const row = () => props.item.row;
   const capture = () => props.item.source.key === "captures";
   // Only a capture's preview needs the whole note: its body is a content block.
@@ -251,9 +268,13 @@ function InboxItem(props: { item: Item; onDone: (value: boolean) => void; onDele
         </a>
       </Show>
       <div class="inbox-main">
-        <a href={href()} class="inbox-title">
-          {row().title || "Untitled"}
-        </a>
+        <div class="inbox-title-line">
+          <SelectBox selection={props.selection} id={row().id} title={row().title} />
+          <a href={href()} class="inbox-title">
+            {row().title || "Untitled"}
+          </a>
+          <AgentRobots threads={props.threads} />
+        </div>
         <Show when={preview() || snippet()}>
           <p class="inbox-preview">{preview() || snippet()}</p>
         </Show>
