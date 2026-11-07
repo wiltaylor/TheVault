@@ -4,7 +4,8 @@
 //!   `running`, how many turns run on its threads now (agents G17), and `tools`, the name of
 //!   every tool `permissions.tools` may name, for the agent screen.
 //! - `GET /api/agents/{name}`: the parsed agent and its WCL, or the WCL alone when `Accept` asks
-//!   for text.
+//!   for text. Both answers carry `warnings`, what the saved file says that will not work (a
+//!   skills list with a tools list that lacks `use_skill`).
 //! - `PUT /api/agents/{name}` (admin): the agent file as WCL text, JSON `{ "wcl": "..." }`, or the
 //!   JSON form `GET` answers (without `wcl`), which is written as canonical WCL. Every problem is
 //!   a 400 `invalid` with its issues; disabling the built-in agent is a 400 `built_in`.
@@ -259,8 +260,9 @@ pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
     Ok(Json(json!({ "agents": agents, "tools": tools })))
 }
 
-/// The response to a read or a write: the agent with its WCL, and the name of the account it
-/// names, a legacy provider resolved to the account made for it (accounts A6).
+/// The response to a read or a write: the agent with its WCL, the name of the account it
+/// names, a legacy provider resolved to the account made for it (accounts A6), and `warnings`,
+/// what the file says that will not do what it says ([`Agent::warnings`]).
 fn agent_response(
     headers: &HeaderMap,
     agent: &Agent,
@@ -270,6 +272,8 @@ fn agent_response(
     let mut out = agent_json(agent);
     out["account"] = json!(account);
     out["wcl"] = json!(wcl);
+    let warnings: Vec<Value> = agent.warnings().iter().map(crate::error::issue_json).collect();
+    out["warnings"] = json!(warnings);
     text_or_json(headers, wcl, out)
 }
 

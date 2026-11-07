@@ -391,6 +391,15 @@ function SettingsTab(p: AgentTabProps) {
 export const OUTBOX_WARNING =
   "Emails, SMS messages and calendar invites this agent drafts are sent at once, in your name, without you seeing them first.";
 
+/** What the Permissions tab warns of with skills listed and a tools list without use_skill (skills S6). */
+export const SKILLS_WITHOUT_USE_SKILL_WARNING =
+  "The agent lists skills, but its tools do not include use_skill, so it is offered no skill. Tick use_skill under the tools, or turn the tools list off.";
+
+/** Whether the agent lists skills while its tools list leaves out use_skill: the server's rule (`Agent::warnings`). */
+export function skillsWithoutUseSkill(p: { skills?: string[] | null; tools?: string[] | null }): boolean {
+  return (p.skills ?? []).length > 0 && p.tools != null && !p.tools.includes("use_skill");
+}
+
 /** What the Permissions tab warns of with Run wscript code on (script-tools T7). */
 export const RUN_CODE_WARNING =
   "It can read and change anything in the vault, call any web host and read script secrets.";
@@ -722,6 +731,11 @@ function PermissionsTab(p: AgentTabProps) {
           </Show>
           <Show when={skillRows().length > 0 && perms().skills!.length === 0}>
             <p class="muted">With no skill ticked, the agent is offered none.</p>
+          </Show>
+          <Show when={skillsWithoutUseSkill(perms())}>
+            <p class="agent-perm-note" role="note">
+              {SKILLS_WITHOUT_USE_SKILL_WARNING}
+            </p>
           </Show>
         </Show>
         <h2>Note types</h2>
