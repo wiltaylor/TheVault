@@ -1,9 +1,11 @@
 //! Agent threads (agents G7, G8): each conversation with an agent is a note of the built-in type
 //! `agent_thread`.
 //!
-//! A thread note holds `title`, `agent` (the agent's name), `origin` (`user`, or
-//! `trigger:<name>`), `last_activity`, the hidden `pending` (how many proposals wait for the
-//! user, for the Chat tab's badge) and the hidden `transcript`, the JSON of [`Transcript`]: the
+//! A thread note holds `title`, `agent` (the agent's name), `origin` (`user`, `trigger:<name>`,
+//! `mention` or `dispatch`), `last_activity`, the hidden `notes` (the notes a `dispatch` thread
+//! was sent, or the note whose call opened a `mention` thread) and `question` (what the agent
+//! waits for the user to answer, TV-77 D4), the hidden `pending` (how many proposals wait for
+//! the user, for the Chat tab's badge) and the hidden `transcript`, the JSON of [`Transcript`]: the
 //! D10 messages with their `provider_state`, so the thread resumes exactly, each tool step's
 //! summary, and every proposal the agent made with its outcome. The content block `body` holds
 //! the conversation as readable text, rewritten with each write, so threads are searchable.
@@ -18,7 +20,8 @@
 //! - `POST /api/agents/{name}/threads` (read) takes `{title?}` and creates a thread, 201 with the
 //!   thread.
 //! - `GET /api/agents/{name}/threads/{id}` (read): the thread with its `messages`, `steps` and
-//!   `proposals`, and `running`, `turn` and `started_ms` as the list has them.
+//!   `proposals`, and `running`, `turn` and `started_ms` as the list has them, its `notes`, its
+//!   `question` (null when none) and its `state` ([`state_of`]).
 //! - `PATCH /api/agents/{name}/threads/{id}` (write) takes `{title}`: a rename, authored by the
 //!   caller.
 //! - `DELETE /api/agents/{name}/threads/{id}` (write): the note goes to the trash.
@@ -499,6 +502,11 @@ pub struct Thread {
     pub last_activity: Option<String>,
     /// Whether the thread note is archived (agents G15).
     pub archived: bool,
+    /// The notes the thread is about (TV-77 D4): the notes sent to the agent, or the note whose
+    /// call opened it.
+    pub notes: Vec<String>,
+    /// What the agent asked the user and waits for (TV-77 D4), empty when it waits for nothing.
+    pub question: String,
     pub transcript: Transcript,
     /// The whole note in its JSON form, so a write keeps what it does not set.
     doc: Value,
@@ -538,6 +546,8 @@ impl Thread {
             origin: s("origin"),
             last_activity: f["last_activity"].as_str().map(str::to_owned),
             archived: writer::is_archived(&n.doc),
+            notes: strings(&f["notes"]),
+            question: s("question"),
             transcript: Transcript::parse(f["transcript"].as_str().unwrap_or_default()),
             doc,
         })
@@ -554,17 +564,21 @@ impl Thread {
 
     /// The thread as the list answers it.
     pub fn summary(&self) -> Value {
+        let pending = self.transcript.pending();
         let mut v = json!({
             "id": self.id,
             "title": self.title,
             "agent": self.agent,
             "origin": self.origin,
             "last_activity": self.last_activity,
-            "pending": self.transcript.pending(),
+            "pending": pending,
             "archived": self.archived,
             "version": self.version,
+            "notes": self.notes,
+            "question": question_json(&self.question),
         });
         put_running(&mut v, &self.id);
+        v["state"] = json!(state_of(running(&self.id).is_some(), &self.question, pending));
         v
     }
 
@@ -598,6 +612,13 @@ impl Thread {
         f["origin"] = json!(self.origin);
         f["last_activity"] = json!(now());
         f["pending"] = json!(self.transcript.pending());
+        // Written only when set, so a thread from before TV-77 is not rewritten with empty fields.
+        if !self.notes.is_empty() || f.get("notes").is_some() {
+            f["notes"] = json!(self.notes);
+        }
+        if !self.question.is_empty() || f.get("question").is_some() {
+            f["question"] = json!(self.question);
+        }
         f["transcript"] =
             json!(serde_json::to_string(&self.transcript).unwrap_or_else(|_| "{}".to_owned()));
         let body = render_body(&self.transcript, label);
@@ -616,6 +637,33 @@ impl Thread {
     }
 }
 
+/// The strings of a JSON list, skipping anything else.
+fn strings(v: &Value) -> Vec<String> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// A thread's `question` as the routes answer it: null when it waits for nothing.
+fn question_json(q: &str) -> Value {
+    if q.is_empty() { Value::Null } else { json!(q) }
+}
+
+/// Where a thread stands (TV-77 D4), worked out when it is read so a server stopped in the middle
+/// of a run never leaves a stale value: `active` while a turn runs on it, `needs_you` while the
+/// agent waits for an answer to its question or a proposal waits for Apply, else `done`.
+pub fn state_of(running: bool, question: &str, pending: usize) -> &'static str {
+    if running {
+        "active"
+    } else if !question.is_empty() || pending > 0 {
+        "needs_you"
+    } else {
+        "done"
+    }
+}
+
 /// Create a thread of agent `agent`, authored by the agent.
 pub fn create(
     w: &Writer,
@@ -623,11 +671,22 @@ pub fn create(
     title: Option<&str>,
     origin: &str,
 ) -> Result<Thread, ApiError> {
+    create_with(w, agent, title, origin, &[])
+}
+
+/// Create a thread of agent `agent` about `notes` (TV-77 D4), authored by the agent.
+pub fn create_with(
+    w: &Writer,
+    agent: &str,
+    title: Option<&str>,
+    origin: &str,
+    notes: &[String],
+) -> Result<Thread, ApiError> {
     let title = title
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .unwrap_or(DEFAULT_TITLE);
-    let doc = json!({
+    let mut doc = json!({
         "fields": {
             "title": title,
             "agent": agent,
@@ -637,6 +696,9 @@ pub fn create(
             "transcript": serde_json::to_string(&Transcript::default()).unwrap_or_default(),
         },
     });
+    if !notes.is_empty() {
+        doc["fields"]["notes"] = json!(notes);
+    }
     let saved = w.create(
         THREAD_TYPE,
         &Input::Json(doc),

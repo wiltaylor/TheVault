@@ -51,6 +51,9 @@ pub const MENTION_ORIGIN: &str = "mention";
 /// thread as proposals (TV-77 D2).
 pub const DISPATCH_ORIGIN: &str = "dispatch";
 
+/// The trigger name a run of notes sent to an agent is recorded under in `agent_runs` (TV-77 D1).
+pub const DISPATCH_TRIGGER: &str = "dispatch";
+
 /// How much of the request a called agent's thread title holds, in characters.
 const MENTION_TITLE_CHARS: usize = 40;
 
@@ -83,8 +86,15 @@ pub struct TurnReport {
 /// Runs agent turns with no one present, for the triggers. The server's API installs one; with
 /// none, no trigger fires.
 pub trait AgentRunner: Send + Sync {
-    /// Create a thread of `agent` with `origin` and `title`, and return its note id.
-    fn open_thread(&self, agent: &Agent, origin: &str, title: &str) -> Result<String, String>;
+    /// Create a thread of `agent` with `origin` and `title` about `notes` (the note that called
+    /// it, or the notes sent to it; TV-77 D4), and return its note id.
+    fn open_thread(
+        &self,
+        agent: &Agent,
+        origin: &str,
+        title: &str,
+        notes: &[String],
+    ) -> Result<String, String>;
 
     /// Run one turn of `agent` on thread `thread` whose user message is `prompt`.
     fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str) -> TurnReport;
@@ -97,8 +107,26 @@ pub struct AgentJob {
     pub trigger: String,
     pub prompt: String,
     pub title: String,
-    /// The thread opened for the run already, for a call from a note; `None` opens one.
+    /// The thread opened for the run already, for a call from a note or notes sent to the agent;
+    /// `None` opens one.
     pub thread: Option<String>,
+    /// The origin of the thread opened already: [`MENTION_ORIGIN`] or [`DISPATCH_ORIGIN`].
+    pub origin: Option<&'static str>,
+}
+
+/// Why notes sent to an agent were not run (TV-77 D1). Nothing was queued and no thread stays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchRefused {
+    /// This scheduler runs no agents: only the home server does.
+    NoRunner,
+    /// The agent is disabled, or has no file that parses.
+    NoAgent,
+    /// The agent started [`MAX_PER_HOUR`] runs in the last hour.
+    OverLimit,
+    /// [`MAX_QUEUED`] runs of the agent wait already.
+    QueueFull,
+    /// The thread could not be opened, with why.
+    Thread(String),
 }
 
 /// A note change as the hooks heard it, before it is matched against the triggers.
@@ -228,6 +256,7 @@ impl AgentPlan {
                 prompt: t.prompt.clone(),
                 title: run_title(trigger, now, Some(&schedule.timezone)),
                 thread: None,
+                origin: None,
             });
         }
         for h in std::mem::take(&mut self.heard) {
@@ -318,6 +347,19 @@ impl AgentPlan {
                 (!is_agent_type(type_name) || named).then(|| (a.clone(), t))
             })
             .collect()
+    }
+
+    /// Whether a run asked for by a person may be admitted for `agent` now: under the hourly
+    /// limit, and with room in its queue when its slots are taken (TV-77 D1).
+    fn room(&mut self, agent: &str, now: i64) -> Result<(), DispatchRefused> {
+        if self.over_limit(agent, now) {
+            return Err(DispatchRefused::OverLimit);
+        }
+        let lane = self.lanes.entry(agent.to_owned()).or_default();
+        if lane.running >= MAX_RUNNING && lane.queue.len() >= MAX_QUEUED {
+            return Err(DispatchRefused::QueueFull);
+        }
+        Ok(())
     }
 
     /// Whether `agent` has started its [`MAX_PER_HOUR`] runs in the last hour.
@@ -580,6 +622,7 @@ impl Scheduler {
                 ),
                 title: run_title(&e.trigger.name, now, None),
                 thread: None,
+                origin: None,
             });
         }
         let mut starts = Vec::new();
@@ -684,6 +727,7 @@ impl Scheduler {
                     mentions::first_chars(&request, MENTION_TITLE_CHARS)
                 ),
                 thread: None,
+                origin: Some(MENTION_ORIGIN),
             };
             if self.plan().agents.over_limit(&agent.name, now) {
                 let admitted = self.plan().agents.admit(job.clone(), now);
@@ -694,7 +738,12 @@ impl Scheduler {
                 record(None);
                 continue;
             }
-            let thread = match runner.open_thread(agent, MENTION_ORIGIN, &job.title) {
+            let thread = match runner.open_thread(
+                agent,
+                MENTION_ORIGIN,
+                &job.title,
+                std::slice::from_ref(&note.id),
+            ) {
                 Ok(t) => t,
                 Err(e) => {
                     // Not recorded: the next save tries again.
@@ -719,6 +768,85 @@ impl Scheduler {
             jobs.push(job);
         }
         jobs
+    }
+
+    /// Run notes sent to `agent` (TV-77 D1): open a thread of origin [`DISPATCH_ORIGIN`] about
+    /// `notes` titled `title`, and start a run on it whose first message is `prompt`, now or once
+    /// one of the agent's slots is free. The hourly limit and the queue are checked first, so a
+    /// dispatch is refused rather than skipped or dropped, and no thread stays for a refused one.
+    /// Answers the thread's id.
+    pub fn dispatch(
+        self: &Arc<Self>,
+        agent: &str,
+        notes: &[String],
+        title: &str,
+        prompt: &str,
+    ) -> Result<String, DispatchRefused> {
+        let runner = self.runner.get().ok_or(DispatchRefused::NoRunner)?.clone();
+        let now = self.clock.now_ms();
+        let a = {
+            let mut plan = self.plan();
+            let a = plan
+                .agents
+                .agents
+                .get(agent)
+                .cloned()
+                .ok_or(DispatchRefused::NoAgent)?;
+            plan.agents.room(agent, now)?;
+            a
+        };
+        // Not under the plan's lock: the write that opens the thread runs the hooks, which read
+        // the plan.
+        let thread = runner
+            .open_thread(&a, DISPATCH_ORIGIN, title, notes)
+            .map_err(DispatchRefused::Thread)?;
+        let job = AgentJob {
+            agent: a.name.clone(),
+            trigger: DISPATCH_TRIGGER.to_owned(),
+            prompt: prompt.to_owned(),
+            title: title.to_owned(),
+            thread: Some(thread.clone()),
+            origin: Some(DISPATCH_ORIGIN),
+        };
+        let admitted = {
+            let mut plan = self.plan();
+            plan.agents
+                .room(agent, now)
+                .map(|()| plan.agents.admit(job, now))
+        };
+        let refused = match admitted {
+            Ok(Admitted::Start(job)) => {
+                let s = self.clone();
+                thread::Builder::new()
+                    .name("agent-dispatch".into())
+                    .spawn(move || s.agent_work(job))
+                    .err()
+                    .map(|e| {
+                        // The slot taken for it is free again.
+                        if let Some(lane) = self.plan().agents.lanes.get_mut(agent) {
+                            lane.running = lane.running.saturating_sub(1);
+                        }
+                        DispatchRefused::Thread(format!("no thread to run it on: {e}"))
+                    })
+            }
+            Ok(Admitted::Queued) => None,
+            // `room` was checked under the same lock, so `admit` does not skip it.
+            Ok(Admitted::Skipped(_)) => Some(DispatchRefused::OverLimit),
+            Err(e) => Some(e),
+        };
+        if let Some(e) = refused {
+            self.drop_thread(&a.name, &thread);
+            return Err(e);
+        }
+        Ok(thread)
+    }
+
+    /// Delete the thread opened for a run that does not go ahead.
+    fn drop_thread(&self, agent: &str, thread: &str) {
+        let by = Author::Agent(agent.to_owned());
+        if let Err(e) = self.writer.delete(thread, None, &by) {
+            eprintln!("agent {agent:?}: the unused thread {thread} stays: {e}");
+        }
     }
 
     /// Run `job`, then whatever waits behind it for the same agent, until none does.
@@ -755,7 +883,7 @@ impl Scheduler {
         let origin = format!("trigger:{}", job.trigger);
         let opened = match &job.thread {
             Some(t) => Ok(t.clone()),
-            None => runner.open_thread(&agent, &origin, &job.title),
+            None => runner.open_thread(&agent, &origin, &job.title, &[]),
         };
         let (outcome, log, thread) = match opened {
             Ok(thread) => {
@@ -800,7 +928,7 @@ impl Scheduler {
             "trigger": job.trigger,
             "run": id,
             "thread": thread,
-            "origin": if job.thread.is_some() { MENTION_ORIGIN.to_owned() } else { origin.clone() },
+            "origin": job.origin.map_or_else(|| origin.clone(), str::to_owned),
             "outcome": word,
             "error": message.map(|m| state::one_line(m, 300)),
         }));

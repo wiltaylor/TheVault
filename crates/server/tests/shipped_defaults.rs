@@ -434,3 +434,55 @@ fn a_users_own_event_type_is_left_alone_can_be_deleted_and_then_becomes_the_buil
         .unwrap();
     assert_eq!(res.status(), StatusCode::CONFLICT);
 }
+
+const OLD_THREAD_ID: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZD";
+
+const OLD_THREAD: &str = r#"title   = "Roof: check the gutters"
+agent   = "assistant"
+origin  = "mention"
+pending = 0
+created = "2026-10-01T00:00:00Z"
+updated = "2026-10-01T00:00:00Z"
+"#;
+
+/// The `agent_thread` type as it was before `notes` and `question` (TV-77 D4).
+fn thread_type_before_notes() -> String {
+    let shipped = writer::DEFAULT_AGENT_THREAD_TYPE;
+    let start = shipped.find("field notes {").unwrap();
+    let end = shipped.find("field transcript {").unwrap();
+    format!("{}{}", &shipped[..start], &shipped[end..])
+}
+
+#[test]
+fn a_vault_from_before_thread_notes_gains_notes_and_question_and_keeps_its_threads() {
+    let old = thread_type_before_notes();
+    assert!(!old.contains("field notes"), "{old}");
+    let server = TestServer::start_seeded(|vault| {
+        std::fs::create_dir_all(vault.join("types")).unwrap();
+        std::fs::write(vault.join("types/agent_thread.wcl"), &old).unwrap();
+        std::fs::create_dir_all(vault.join("notes/agent_thread")).unwrap();
+        std::fs::write(
+            vault.join(format!("notes/agent_thread/{OLD_THREAD_ID}.wcl")),
+            OLD_THREAD,
+        )
+        .unwrap();
+    });
+    let fields = field_names(&server, "agent_thread");
+    for f in ["notes", "question", "transcript", "pending"] {
+        assert!(
+            fields.iter().any(|n| n == f),
+            "agent_thread lacks {f}: {fields:?}"
+        );
+    }
+    // No thread is rewritten for the new fields.
+    assert_eq!(
+        read(&server, &format!("notes/agent_thread/{OLD_THREAD_ID}.wcl")),
+        OLD_THREAD
+    );
+    let listed = get(&server, "/api/dispatched");
+    assert_eq!(listed["threads"][0]["id"], OLD_THREAD_ID, "{listed}");
+    assert_eq!(listed["threads"][0]["notes"], serde_json::json!([]));
+    assert_eq!(listed["threads"][0]["state"], "done");
+    // The fields are kinds every reader knows, so the format stays the same.
+    assert_eq!(get(&server, "/api/sync/info")["format_version"], 9);
+}

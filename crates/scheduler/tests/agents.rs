@@ -63,16 +63,27 @@ struct Fake {
     most: AtomicUsize,
     /// Run once, the next time a thread is opened.
     on_open: Mutex<Option<OnOpen>>,
+    /// The notes each thread was opened about, in order.
+    notes: Mutex<Vec<Vec<String>>>,
+    /// While set, every turn waits.
+    hold: AtomicBool,
 }
 
 type OnOpen = Box<dyn FnOnce() + Send>;
 
 impl AgentRunner for Fake {
-    fn open_thread(&self, agent: &Agent, origin: &str, title: &str) -> Result<String, String> {
+    fn open_thread(
+        &self,
+        agent: &Agent,
+        origin: &str,
+        title: &str,
+        notes: &[String],
+    ) -> Result<String, String> {
         let hook = self.on_open.lock().unwrap().take();
         if let Some(f) = hook {
             f();
         }
+        self.notes.lock().unwrap().push(notes.to_vec());
         let mut t = self.threads.lock().unwrap();
         t.push((agent.name.clone(), origin.to_owned(), title.to_owned()));
         Ok(format!("thread{}", t.len()))
@@ -82,6 +93,9 @@ impl AgentRunner for Fake {
         let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
         self.most.fetch_max(now, Ordering::SeqCst);
         std::thread::sleep(*self.delay.lock().unwrap());
+        while self.hold.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         self.turns
             .lock()
             .unwrap()
@@ -100,6 +114,19 @@ impl AgentRunner for Fake {
 impl Fake {
     fn turns(&self) -> Vec<(String, String, String)> {
         self.turns.lock().unwrap().clone()
+    }
+
+    /// Wait, at most ten seconds, until `n` turns have ended.
+    fn wait_turns(&self, n: usize) {
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        while self.turns.lock().unwrap().len() < n {
+            assert!(
+                std::time::Instant::now() < until,
+                "{} turns",
+                self.turns().len()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 
@@ -773,5 +800,84 @@ fn the_scheduler_dropped_during_a_delete_with_a_run_waiting_to_write_lets_both_f
             let n = w.read(id).unwrap();
             w.delete(id, Some(&n.version), &user()).is_ok()
         },
+    );
+}
+
+const PLAIN: &str = r#"label = "Clerk"
+"#;
+
+#[test]
+fn notes_sent_to_an_agent_run_once_on_a_dispatch_thread_about_them() {
+    let r = Rig::new();
+    r.agent("clerk", PLAIN);
+    let notes = vec!["01JB8Z4K2MQ7V3X9T5R6W8Y2ZB".to_owned()];
+    let thread = r
+        .scheduler
+        .dispatch("clerk", &notes, "Tidy: Roof", "Tidy them.")
+        .unwrap();
+    r.fake.wait_turns(1);
+    assert_eq!(
+        r.fake.threads.lock().unwrap().clone(),
+        vec![(
+            "clerk".to_owned(),
+            "dispatch".to_owned(),
+            "Tidy: Roof".to_owned()
+        )]
+    );
+    assert_eq!(r.fake.notes.lock().unwrap().clone(), vec![notes]);
+    assert_eq!(
+        r.fake.turns(),
+        vec![("clerk".to_owned(), thread, "Tidy them.".to_owned())]
+    );
+    // Recorded under the dispatch trigger, once it ends.
+    let until = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let runs = r.writer.state().agent_runs("clerk", "dispatch", 20).unwrap();
+        if runs.first().is_some_and(|run| run.ended_ms.is_some()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < until, "{runs:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // An agent the scheduler does not run is refused, with no thread opened.
+    assert_eq!(
+        r.scheduler.dispatch("nobody", &[], "t", "p"),
+        Err(scheduler::DispatchRefused::NoAgent)
+    );
+    assert_eq!(r.fake.threads.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_dispatch_past_the_queue_or_the_hourly_limit_is_refused_and_opens_no_thread() {
+    let r = Rig::new();
+    r.agent("clerk", PLAIN);
+    r.fake.hold.store(true, Ordering::SeqCst);
+    let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
+    for i in 0..room {
+        r.scheduler
+            .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+            .unwrap();
+    }
+    assert_eq!(
+        r.scheduler.dispatch("clerk", &[], "One more", "Go."),
+        Err(scheduler::DispatchRefused::QueueFull)
+    );
+    assert_eq!(r.fake.threads.lock().unwrap().len(), room);
+    r.fake.hold.store(false, Ordering::SeqCst);
+    r.fake.wait_turns(room);
+    // Nothing queued was dropped; now the hour's runs run out.
+    for i in room..scheduler::MAX_PER_HOUR {
+        r.scheduler
+            .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+            .unwrap();
+    }
+    assert_eq!(
+        r.scheduler.dispatch("clerk", &[], "Over", "Go."),
+        Err(scheduler::DispatchRefused::OverLimit)
+    );
+    r.fake.wait_turns(scheduler::MAX_PER_HOUR);
+    assert_eq!(
+        r.fake.threads.lock().unwrap().len(),
+        scheduler::MAX_PER_HOUR
     );
 }
