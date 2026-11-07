@@ -32,4 +32,9 @@ These do not run per card. They run on `release/<X.Y.Z>`:
 - `just android-emulator-checks` and `just android-release-smoke` on thevault-android (about 1 hour, a shared box).
 - The full end-to-end suite, `pnpm -C web e2e`.
 
-thevault-android has no `just` and no `pnpm`, and takes no `terrarium repo checkout` (MEM-51). The release Android checks reach it this way: build the APK on thevault-dev, copy the APK to thevault-android with `terrarium cp`, and run the emulator checks there with `EMULATOR_PORT` and `THEVAULT_APK` set to the copied APK. The emulator recipe still runs `just web-build` and `cargo build` when `THEVAULT_APK` is set, so the checks need `just` and `cargo` on that target, and thevault-android has no `just`.
+thevault-android has no `just` and no `pnpm`, and takes no `terrarium repo checkout` (MEM-51). The release Android checks run in two places:
+
+- On thevault-dev, build the x86_64 debug APK, `vault` and `vault-server`, `web/dist`, `fake-messages.apk`, and for check 49 the update APKs (`THEVAULT_UPDATE_APK`, `THEVAULT_UPDATE_APK2`). Copy them to thevault-android with `terrarium cp`.
+- On thevault-android, run `node apps/android/emulator/checks.mjs` directly, with `THEVAULT_CHECKS` for a subset. Use your own AVD (`THEVAULT_AVD`, `ANDROID_AVD_HOME`), your own `EMULATOR_PORT`, and `ANDROID_SERIAL=emulator-<port>`.
+
+`emulator-5554` and the AVD `thevault` belong to herdr: never touch them. Record `adb devices` and its qemu pid before and after the run, and kill only your own serial.
