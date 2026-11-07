@@ -5,7 +5,8 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { refreshAgents } from "../agents";
-import { OPENED_KEY, bumpTurns, markOpened, resetRunning, viewThread } from "../ai/running";
+import { OPENED_KEY, resetOpened } from "../ai/opened";
+import { bumpTurns, resetRunning, viewThread } from "../ai/running";
 import { type AgentSummary, type DispatchedThread, api } from "../api";
 import { resetDispatched, watchNoteThreads } from "../dispatch";
 import { AgentRobot, AgentRobots } from "./AgentRobot";
@@ -33,6 +34,8 @@ function t(over: Partial<DispatchedThread> = {}): DispatchedThread {
 
 beforeEach(async () => {
   resetRunning();
+  // Every thread below is newer than the map: none counts as opened yet.
+  resetOpened(0);
   resetDispatched();
   vi.spyOn(api, "agents").mockResolvedValue({ agents: AGENTS, tools: [] });
   await refreshAgents();
@@ -70,7 +73,7 @@ describe("the robot", () => {
     fireEvent.click(robot);
     expect(robot).toHaveAttribute("data-state", "done");
     expect(robot.querySelector(".agent-robot-dot")).toBeNull();
-    expect(JSON.parse(localStorage.getItem(OPENED_KEY) ?? "{}")).toHaveProperty("01THREAD");
+    expect(JSON.parse(localStorage.getItem(OPENED_KEY) ?? "{}").at).toHaveProperty("01THREAD");
     r.unmount();
     // A later reply, after the opening, brings the dot back.
     const later = t({ last_activity: new Date(Date.now() + 60_000).toISOString() });
@@ -88,9 +91,12 @@ describe("the robot", () => {
   });
 
   it("trusts the server's last activity over a clock that is behind", () => {
-    markOpened("01THREAD", "2999-01-01T00:00:00Z");
-    const r = render(() => <AgentRobot thread={t({ last_activity: "2999-01-01T00:00:00Z" })} />);
-    expect(r.getByTestId("agent-robot")).toHaveAttribute("data-state", "done");
+    const ahead = t({ last_activity: "2999-01-01T00:00:00Z" });
+    const r = render(() => <AgentRobot thread={ahead} />);
+    const robot = r.getByTestId("agent-robot");
+    expect(robot).toHaveAttribute("data-state", "done_new");
+    fireEvent.click(robot);
+    expect(robot).toHaveAttribute("data-state", "done");
     r.unmount();
   });
 });
