@@ -1393,9 +1393,20 @@ fn a_server_that_answers_late_is_not_unreachable_and_the_round_goes_on() {
     let err = core.sync_now().unwrap_err();
     let took = t0.elapsed();
     assert!(!err.to_string().contains("cannot reach"), "{err:#}");
-    assert!(took >= Duration::from_secs(30), "the settings call returned after {took:?}");
+    assert!(
+        took >= Duration::from_secs(30),
+        "the settings call returned after {took:?}"
+    );
     let out = core.server().sync_status();
     assert_ne!(out["phase"], "offline", "{out}");
-    let routes: Vec<_> = slow.requests().iter().map(|r| r.route().to_owned()).collect();
-    assert!(routes.len() > 2, "the round did not go on: {routes:?}");
+    // The settings call timed out, then the round asked the server for its sync info.
+    let routes: Vec<_> = slow
+        .requests()
+        .iter()
+        .map(|r| r.route().to_owned())
+        .collect();
+    assert!(
+        routes.iter().any(|r| r == "/api/sync/info"),
+        "the round did not go on: {routes:?}"
+    );
 }
