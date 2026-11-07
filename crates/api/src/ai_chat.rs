@@ -37,7 +37,9 @@
 //! `start_subagent` on a thread (`crate::ai_subagents`, subagents U1 to U8): each runs as a turn
 //! of its own on a session thread, the calls of one round at once, and the call's result is its
 //! answer; its proposals and changes come out in this turn's stream with `subagent`, the call id,
-//! and `sub_thread`, its session.
+//! and `sub_thread`, its session. `notify_user` raises a notification under the bell at once,
+//! with no proposal and in unattended runs too, within per-turn, hourly and daily limits
+//! (`crate::ai_notify`, TV-32 S1).
 //! Events:
 //!
 //! | Event | Data |
@@ -1641,6 +1643,8 @@ impl Turn {
         }
         // The images read_asset has sent this turn (ai D19).
         let mut images_sent = 0usize;
+        // The notifications notify_user has sent this turn (TV-32 S1).
+        let mut notified = 0usize;
         for round in 1..=MAX_ROUNDS {
             if self.out.gone() {
                 return;
@@ -2014,6 +2018,38 @@ impl Turn {
                         content: cut(&got.content, RESULT_LIMIT),
                         is_error: got.is_error,
                         parts: got.parts,
+                    });
+                    continue;
+                }
+                // notify_user (TV-32 S1): sent at once, within the agent's limits, also unattended.
+                if c.name == crate::ai_notify::TOOL && c.error.is_none() {
+                    let w = self.writer.clone();
+                    let limits = setup.limits.clone();
+                    let agent = setup.agent.clone();
+                    let input = c.input.clone();
+                    let sent = notified;
+                    let got = tokio::task::spawn_blocking(move || {
+                        crate::ai_notify::notify(&w, scope, &agent, &limits, sent, &input)
+                    })
+                    .await
+                    .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                    if !got.is_error {
+                        notified += 1;
+                    }
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::ToolResult {
+                        id: c.id,
+                        content: cut(&got.content, RESULT_LIMIT),
+                        is_error: got.is_error,
+                        parts: Vec::new(),
                     });
                     continue;
                 }
@@ -3097,6 +3133,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
     .chain(crate::ai_outbox::tool_specs())
+    .chain([crate::ai_notify::tool_spec()])
     .chain(crate::ai_web::tool_specs())
     .collect()
 }

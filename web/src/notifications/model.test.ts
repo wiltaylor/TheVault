@@ -74,6 +74,7 @@ describe("sourceLabel", () => {
     expect(sourceLabel("task:digest")).toBe("digest");
     expect(sourceLabel("handler:invoice.after_create")).toBe("invoice handler");
     expect(sourceLabel("token:claude")).toBe("claude");
+    expect(sourceLabel("agent:scout")).toBe("scout agent");
     expect(sourceLabel("api")).toBe("API");
     expect(sourceLabel("system")).toBe("TheVault");
     expect(sourceLabel("other")).toBe("other");

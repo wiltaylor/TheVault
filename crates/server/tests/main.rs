@@ -17,6 +17,7 @@ mod agents;
 mod ai_agents;
 mod ai_browser;
 mod ai_chat;
+mod ai_notify;
 mod ai_outbox;
 mod ai_settings;
 mod ai_skill_changes;

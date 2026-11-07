@@ -89,6 +89,22 @@ On the Outbox page and the item's page an agent's draft carries an **AI** chip b
 
 Drafting is not a change the chat asks you to apply, since the Outbox is where you check a draft, so the tools have no confirmation switch and unattended runs are offered them. They need a caller with `write`: a read-only token's chat gets an error. The chat shows each draft as a compact card, such as "Drafted an email to Ann Lee", linking to the item.
 
+## Notifying you
+
+An agent sends you a notification with the `notify_user` tool. It takes a `title` (1 to 200 characters), a `body` (at most 2000 characters, or empty) and a `note_id` (a note the notification opens, or empty). The note must exist and be of a type the agent may read. An agent cannot give any other link.
+
+The notification appears under the bell at once, from the agent: its source is `agent:<name>`, and the bell labels it "<name> agent". It is also pushed to your paired phones. There is no proposal and no confirmation switch, so unattended runs are offered the tool, and it is how a trigger run tells you what it found. It is an ordinary tool name: an agent with no tools list has it, and a tools list that leaves it out takes it away. On the Permissions tab it is the "Notifications" group. It needs a caller with `write`.
+
+Because every notification reaches your phones, each agent has limits:
+
+| Limit | Value |
+|---|---|
+| Notifications in one turn or run | 3 |
+| Notifications from one agent in an hour | 10 |
+| Notifications from one agent in 24 hours | 30 |
+
+A call over a limit sends nothing, and the agent is told which limit it reached. The hour and day counts are the notifications stored with the agent's source, so they hold across turns and server restarts. A failed run's notification has the same source and counts too. Deleting notifications from the bell lowers the count.
+
 ## Driving the browser box
 
 With the browser box set up ([Browser box](install.md#browser-box)), an agent with **Browser automation** on can run commands in the box and drive its browser with playwright-cli while you watch the desktop. The switch is on the agent screen's Permissions tab, with the line "Lets this agent run commands in the browser box and drive a browser as you watch. Web pages can try to instruct it." It is off for every agent unless you turn it on, the Assistant included.
@@ -130,7 +146,7 @@ The vault ships five skills, which every agent with no `skills` list is offered,
 - `vault-queries`: how to write a query, with the rules that differ from SQL and worked examples for tasks, people, mail, messages, captures, events and links. Every example in it is checked against the parser.
 - `vault-notes`: how to write notes and types: the JSON form, a note with every common field kind, every content block, computed fields, reference, inverse and taxonomy fields, and which query views need which items. Its type files and notes are checked against the writer.
 - `vault-comms`: the email, message, call, conversation and email thread types, the inbox and when to mark an item `processed` (and what to leave for you), reading a message's attachments and its conversation, finding mail and messages, and drafting into the Outbox. Its queries are checked against the parser and its JSON examples parse.
-- `vault-automation`: scheduled tasks, handlers and script tools, which of the agent's tools come from which permission switch, and what no tool can do (write a task or a saved script, send a notification). Its WCL examples parse and its wscript compiles.
+- `vault-automation`: scheduled tasks, handlers and script tools, which of the agent's tools come from which permission switch, and what no tool can do (write a task or a saved script). It names `notify_user` for telling you something now. Its WCL examples parse and its wscript compiles.
 
 A shipped skill the user has not changed is replaced by the newer version when the app updates; one the user changed stays, and the bell says a newer one exists. The model also has `query_format`, the whole query language, and `value_format`, how each field value is written, both from the vault format.
 
@@ -370,6 +386,7 @@ Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the 
 | Runs waiting for one agent | 50 | The oldest waiting run is dropped, and the server log says so |
 | Trigger runs one agent starts in an hour | 60 | Further runs are skipped and logged, with one notification an hour |
 | Model calls in one run | 12 | The run stops, as a chat turn does |
+| Notifications one agent sends | 3 a turn, 10 an hour, 30 a day | `notify_user` is refused and sends nothing ([Notifying you](#notifying-you)) |
 | Quiet time before a note event run | 30 seconds | Changes to the same note coalesce |
 
 ## Runs and notifications
