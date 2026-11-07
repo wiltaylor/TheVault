@@ -15,6 +15,9 @@ import { dispatchedHref } from "./AgentRobot";
 /** The longest instruction the dialog takes, in characters. */
 export const INSTRUCTION_MAX = 4_000;
 
+/** The most notes one send takes: the server refuses more with 400 `too_many_notes` (TV-77 A2). */
+export const MAX_NOTES = 100;
+
 /** What a refused send says, by what the server answered. */
 export function sendErrorText(e: unknown): string {
   if (e instanceof ApiError) {
