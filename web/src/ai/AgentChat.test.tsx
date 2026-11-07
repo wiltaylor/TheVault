@@ -181,6 +181,23 @@ describe("the chat", () => {
     expect(within(items[2]!).queryByLabelText(/wait for you|waits for you/)).toBeNull();
   });
 
+  it("leaves out the threads of sent notes and @ calls, which a link still opens (TV-80)", async () => {
+    agentThreads.mockResolvedValue({
+      threads: [
+        { id: "01JSENT", title: "Roof: tidy", origin: "dispatch", pending: 1 },
+        { id: "01JCALL", title: "Bills", origin: "mention", pending: 0 },
+        { id: "01JTHREAD", title: "Groceries", origin: "user", pending: 1 },
+      ],
+    });
+    agentThread.mockResolvedValue(thread({ id: "01JSENT", title: "Roof: tidy", origin: "dispatch" }));
+    render(() => <AgentChat agent="triage" label="Triage" thread="01JSENT" />);
+    await waitFor(() => expect(agentThread).toHaveBeenCalledWith("triage", "01JSENT"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Chat session: Roof: tidy/ })).toBeTruthy());
+    const list = await sessions();
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(2));
+    expect(list.getAllByRole("option").map((o) => o.textContent)).toEqual([expect.stringContaining("New chat"), expect.stringContaining("Groceries")]);
+  });
+
   it("searches the chats by title, and Enter opens the one highlighted", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     await waitFor(() => expect(agentThreads).toHaveBeenCalled());
