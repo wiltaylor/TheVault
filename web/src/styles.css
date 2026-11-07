@@ -11125,3 +11125,104 @@ hr.divider-block {
 .original-dialog .original-remote + .capture-x {
   margin-left: 0.5rem;
 }
+
+/* Send to agent (TV-78): the dialog's fields, one above the other. */
+.send-agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.send-agent-field select,
+.send-agent-field textarea {
+  font-weight: 400;
+}
+
+.send-agent-dialog .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* The robots of the threads about a note (TV-78): moving while active, a "!" while the agent
+   needs the user, still with a dot when done and not opened yet. */
+.agent-robots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.agent-robot {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.4rem;
+  color: var(--muted);
+}
+
+.agent-robot:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.agent-robot[data-state="active"] {
+  color: var(--accent);
+}
+
+.agent-robot[data-state="active"] .robot-glyph {
+  animation: agent-robot-work 0.9s ease-in-out infinite alternate;
+}
+
+.agent-robot[data-state="needs_you"] {
+  color: var(--ink);
+}
+
+.agent-robot-badge,
+.agent-robot-dot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-radius: 50%;
+}
+
+.agent-robot-badge {
+  min-width: 0.8rem;
+  height: 0.8rem;
+  background: var(--danger, #c53030);
+  color: #ffffff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 0.8rem;
+  text-align: center;
+}
+
+.agent-robot-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  background: var(--accent, #6b46c1);
+}
+
+@keyframes agent-robot-work {
+  from {
+    transform: translateY(1px) rotate(-6deg);
+  }
+  to {
+    transform: translateY(-1px) rotate(6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-robot[data-state="active"] .robot-glyph {
+    animation: none;
+  }
+
+  .agent-robot[data-state="active"] {
+    outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    outline-offset: -2px;
+  }
+}

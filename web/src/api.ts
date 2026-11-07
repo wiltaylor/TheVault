@@ -519,8 +519,9 @@ export interface AgentThreadSummary {
   id: string;
   title: string;
   /**
-   * `user`, `trigger:<name>` for a thread a trigger started, or `subagent:<thread>` for a sub
-   * agent's session, which the list leaves out (subagents U5).
+   * `user`, `trigger:<name>` for a thread a trigger started, `subagent:<thread>` for a sub
+   * agent's session, which the list leaves out (subagents U5), or `dispatch` and `mention` for
+   * notes sent to the agent and @ calls, which the chat lists leave to the Dispatched page (TV-80).
    */
   origin?: string | null;
   last_activity?: string | null;
@@ -598,6 +599,36 @@ export interface SubSession {
 /** Whether a thread of `origin` is a sub agent's session, listed only under its parent (subagents U5). */
 export function isSubSession(origin: string | null | undefined): boolean {
   return typeof origin === "string" && origin.startsWith("subagent:");
+}
+
+/** Where a sent or called thread stands (TV-77 D4): a turn runs, it waits for the user, or it is done. */
+export type DispatchState = "active" | "needs_you" | "done";
+
+/**
+ * Whether a thread of `origin` was started by sending notes to the agent (`dispatch`) or by an @
+ * call in a note (`mention`). The Dispatched page lists these; the chat lists leave them out (TV-80).
+ */
+export function isCallThread(origin: string | null | undefined): boolean {
+  return origin === "dispatch" || origin === "mention";
+}
+
+/** One line of `GET /api/dispatched` (TV-77 D4): a sent or called thread of any agent. */
+export interface DispatchedThread {
+  id: string;
+  agent: string;
+  title: string;
+  origin: "dispatch" | "mention";
+  /** The notes the thread is about: those sent, or the note that called the agent. */
+  notes: string[];
+  state: DispatchState;
+  /** How many proposals wait for the user. */
+  pending: number;
+  /** The agent's open question to the user, or null. */
+  question: string | null;
+  last_activity: string | null;
+  running: boolean;
+  turn: string | null;
+  started_ms: number | null;
 }
 
 /** One line of `GET /api/agents` (agents G2). An agent whose file does not check has `error`. */
@@ -1948,6 +1979,14 @@ export const api = {
   agentThreadStart: (name: string, title?: string) =>
     request<AgentThread>("POST", `/api/agents/${enc(name)}/threads`, title ? { title } : {}),
   /** One thread with its transcript, its tool steps and its proposals (agents G8). */
+  /** The sent and called threads of every agent, newest first, by note ids and state (TV-77 D4). */
+  dispatched: (filter: { notes?: string[]; state?: DispatchState } = {}) => {
+    const q = new URLSearchParams();
+    if (filter.notes?.length) q.set("notes", filter.notes.join(","));
+    if (filter.state) q.set("state", filter.state);
+    const qs = q.toString();
+    return request<{ threads: DispatchedThread[] }>("GET", `/api/dispatched${qs ? `?${qs}` : ""}`);
+  },
   agentThread: (name: string, id: string) => request<AgentThread>("GET", `/api/agents/${enc(name)}/threads/${enc(id)}`),
   /** Cut a thread back to its first `at` messages, dropping the question at `at` and all after it. */
   agentThreadTruncate: (name: string, id: string, at: number) =>
@@ -1975,6 +2014,13 @@ export const api = {
     request<AgentMemory>("PATCH", `/api/agents/${enc(name)}/memories/${enc(id)}`, change),
   /** Move a memory to the trash. */
   deleteAgentMemory: (name: string, id: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}/memories/${enc(id)}`),
+  /**
+   * Send notes to agent `name` with an instruction (TV-77 D1, TV-78): one thread for all of them,
+   * run by the scheduler. Needs `write`. 400 for an empty request or a note the agent may not
+   * have, 404 for a missing or disabled agent, 429 `too_many_runs`, 503 `no_agent_runs`.
+   */
+  dispatch: (name: string, notes: string[], instruction: string) =>
+    request<{ thread: AgentThreadSummary & { agent: string } }>("POST", `/api/agents/${enc(name)}/dispatch`, { notes, request: instruction }),
   /** Move a thread to the trash. */
   deleteAgentThread: (name: string, id: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}/threads/${enc(id)}`),
   taskRuns: async (name: string, limit = 50) =>
