@@ -40,6 +40,8 @@ import { ArchiveIcon, CaptureIcon, GearIcon, SearchIcon, ThemeGlyph, TrashIcon }
 import { MainNavLinks } from "./MainNav";
 import { refreshOutboxCount } from "../outbox/store";
 import { NotificationsBell, NotificationsLive } from "../notifications/NotificationsPanel";
+import { followAppOpen } from "../notifications/appOpen";
+import { openPanel } from "../notifications/store";
 import { PinnedTree } from "./PinnedTree";
 import { SyncStatusButton } from "./SyncStatus";
 import { Toasts } from "./Toasts";
@@ -343,6 +345,13 @@ export function Shell() {
     };
     document.addEventListener("keydown", onAiKey);
     onCleanup(() => document.removeEventListener("keydown", onAiKey));
+    // A tap on the Android app's summary of its notifications opens the bell panel (TV-94).
+    onCleanup(
+      followAppOpen(() => {
+        closeDrawers();
+        openPanel();
+      }),
+    );
     // Ctrl/Cmd+K opens the command palette from anywhere, and closes it again.
     const onPaletteKey = (e: KeyboardEvent) => {
       if (!isPaletteKey(e) || e.defaultPrevented || captureOpen()) return;

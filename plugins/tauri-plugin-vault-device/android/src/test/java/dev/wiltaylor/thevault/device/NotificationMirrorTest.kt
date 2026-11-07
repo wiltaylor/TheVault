@@ -80,8 +80,12 @@ class NotificationMirrorTest {
         service.onMessage(PushMessage(json.toByteArray(Charsets.UTF_8), true), "default")
     }
 
+    /** The mirrored rows in the shade, by server id, without the group summary. */
     private fun showing(): Map<String, StatusBarNotification> =
-        manager.activeNotifications.associateBy { it.tag }
+        manager.activeNotifications.filter { it.tag != NotificationMirror.SUMMARY_TAG }.associateBy { it.tag }
+
+    private fun summary(): StatusBarNotification? =
+        manager.activeNotifications.singleOrNull { it.tag == NotificationMirror.SUMMARY_TAG }
 
     /** Runs the work queued under [name] as if its network constraint were met. */
     private fun meetConstraints(name: String) {
@@ -167,6 +171,76 @@ class NotificationMirrorTest {
         }
         meetConstraints(MarkReadWorker.uniqueName("01NOTIFTAP0000000000000000"))
         assertTrue(home.requests.contains("POST /api/notifications/01NOTIFTAP0000000000000000/read"))
+    }
+
+    /**
+     * TV-94: the rows are one group under this app's own summary, so Android does not build its
+     * own, which cancelled the rows on a tap while they stayed unread. A tap on ours cancels
+     * nothing and marks nothing read; the summary goes with the last row.
+     */
+    @Test
+    fun theRowsAreOneGroupUnderASummaryWhoseTapKeepsThem() {
+        val ids = (1..3).map { "01NOTIFGROUP${it}00000000000000" }
+        for (id in ids) home.notify(id, "Grouped $id")
+        for (id in ids) push("""{"event":"notification.created","id":"$id"}""")
+
+        assertEquals(ids.toSet(), showing().keys)
+        assertEquals(ids.toSet(), NotificationMirror.shown(context))
+        for (row in showing().values) {
+            assertEquals(NotificationMirror.GROUP, row.notification.group)
+            assertEquals(0, row.notification.flags and Notification.FLAG_GROUP_SUMMARY)
+        }
+        val s = summary()
+        assertNotNull(s)
+        val n = s!!.notification
+        assertEquals(NotificationMirror.SUMMARY_ID, s.id)
+        assertEquals(NotificationMirror.GROUP, n.group)
+        assertEquals(NotificationMirror.CHANNEL, n.channelId)
+        assertTrue(n.flags and Notification.FLAG_GROUP_SUMMARY != 0)
+        // Android cancels a tapped notification, and a summary's group with it, only with auto-cancel.
+        assertEquals(0, n.flags and Notification.FLAG_AUTO_CANCEL)
+        assertEquals(Notification.GROUP_ALERT_CHILDREN, n.groupAlertBehavior)
+        assertEquals("3 unread notifications", n.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+
+        // A tap on the summary opens the app with the bell panel open, once, and marks nothing
+        // read: the rows stay. A row's tap does not open the panel.
+        val tap = shadowOf(n.contentIntent).savedIntent
+        assertEquals(null, tap.getStringExtra(NotificationMirror.EXTRA_ID))
+        assertTrue(tap.getBooleanExtra(NotificationMirror.EXTRA_PANEL, false))
+        Robolectric.buildActivity(Activity::class.java).setup().use { controller ->
+            val plugin = VaultDevicePlugin(controller.get())
+            plugin.onNewIntent(Intent(tap))
+            assertTrue(plugin.panel.take())
+            assertFalse(plugin.panel.take())
+        }
+        val rowTap = shadowOf(showing().getValue(ids[0]).notification.contentIntent).savedIntent
+        assertFalse(rowTap.getBooleanExtra(NotificationMirror.EXTRA_PANEL, false))
+        for (id in ids) {
+            val work = WorkManager.getInstance(context).getWorkInfosForUniqueWork(MarkReadWorker.uniqueName(id)).get()
+            assertTrue(work.isEmpty())
+        }
+        assertEquals(ids.toSet(), showing().keys)
+
+        // Read elsewhere: the summary counts down, then goes with the last row, swiped.
+        push("""{"event":"notification.read","id":"${ids[0]}"}""")
+        assertEquals("2 unread notifications", summary()!!.notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        push("""{"event":"notification.dismissed","id":"${ids[1]}"}""")
+        assertNotNull(summary())
+        val last = showing().getValue(ids[2])
+        manager.cancel(last.tag, last.id)
+        NotificationDismissReceiver().onReceive(context, shadowOf(last.notification.deleteIntent).savedIntent)
+        assertTrue(showing().isEmpty())
+        assertEquals(null, summary())
+
+        // The fallback check posts the summary with the rows it brings back, and clears it.
+        home.notify("01NOTIFGROUP400000000000000", "After the swipe")
+        assertTrue(runFallback() is ListenableWorker.Result.Success)
+        assertEquals(setOf("01NOTIFGROUP400000000000000"), showing().keys)
+        assertNotNull(summary())
+        home.read("01NOTIFGROUP400000000000000")
+        assertTrue(runFallback() is ListenableWorker.Result.Success)
+        assertTrue(showing().isEmpty())
+        assertEquals(null, summary())
     }
 
     @Test
