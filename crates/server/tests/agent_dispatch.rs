@@ -554,7 +554,11 @@ fn a_question_ends_the_run_needs_you_and_the_answer_clears_it() {
     // The question and a lookup in one round: the lookup still runs, and no further call is made.
     fake.push(
         AnthropicMessage::new()
-            .tool_use("toolu_q", "ask_user", json!({ "question": format!("  {question}\n") }))
+            .tool_use(
+                "toolu_q",
+                "ask_user",
+                json!({ "question": format!("  {question}\n") }),
+            )
             .tool_use("toolu_n", "get_note", json!({ "id": roof })),
     );
     let (status, v) = api.dispatch_as(
@@ -593,7 +597,10 @@ fn a_question_ends_the_run_needs_you_and_the_answer_clears_it() {
         .filter(|n| n["title"].as_str().unwrap_or("").contains("needs you"))
         .collect();
     assert_eq!(told.len(), 1, "{told:?}");
-    assert_eq!(told[0]["title"], "Keeper needs you: Roof: Clear the gutters.");
+    assert_eq!(
+        told[0]["title"],
+        "Keeper needs you: Roof: Clear the gutters."
+    );
     assert_eq!(told[0]["body"], question);
 
     // The answer clears the question and runs as a turn on the thread, which may ask again.
@@ -615,7 +622,10 @@ fn a_question_ends_the_run_needs_you_and_the_answer_clears_it() {
     assert!(tools_in(&fake, 1).contains(&"ask_user".to_owned()));
     assert!(system_in(&fake, 1).contains(ASKS));
     let sent = fake.message_requests()[1].json()["messages"].to_string();
-    assert!(sent.contains("toolu_q") && sent.contains("The back one."), "{sent}");
+    assert!(
+        sent.contains("toolu_q") && sent.contains("The back one."),
+        "{sent}"
+    );
     let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
     assert_eq!(read["question"], Value::Null, "{read}");
     assert_eq!(read["state"], "done");

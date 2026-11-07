@@ -29,8 +29,7 @@ pub const TOOL: &str = "ask_user";
 pub const MAX_QUESTION: usize = state::MAX_BODY;
 
 /// The tool result the model reads.
-pub const RESULT: &str =
-    "Asked the user. This run ends; their answer comes as the next message.";
+pub const RESULT: &str = "Asked the user. This run ends; their answer comes as the next message.";
 
 /// Whether a turn on a thread of origin `origin` offers the tool: a call from a note or notes
 /// sent to the agent, never a plain chat, a trigger's run or a sub agent's session.
