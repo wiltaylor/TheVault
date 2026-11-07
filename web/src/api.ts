@@ -550,7 +550,7 @@ export interface AgentMemory {
 
 /** A proposal of a thread and where it stands (agents G8). */
 export interface StoredProposal {
-  /** `proposal`, `type_proposal`, `taxonomy_proposal`, `agent_proposal`, `agent_memory_proposal`, `skill_proposal`, `tool_proposal`, `script_proposal`, or `applied` for a change the agent made. */
+  /** `proposal`, `type_proposal`, `taxonomy_proposal`, `agent_proposal`, `agent_memory_proposal`, `skill_proposal`, `tool_proposal`, `script_proposal`, `task_proposal`, or `applied` for a change the agent made. */
   event: string;
   data: Record<string, unknown>;
   status: "pending" | "applied" | "discarded" | "failed" | "stale" | "made";

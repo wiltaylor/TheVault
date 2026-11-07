@@ -88,7 +88,12 @@ pub(crate) fn any_host_warning(what: &str) -> String {
 /// What runs script `name`, leaving out tool `except`, as JSON, and the warnings for it: one for
 /// each user that may reach any host. One helper for every proposal card that shows a script.
 pub(crate) fn runs_as(w: &Writer, name: &str, except: Option<&str>) -> (Value, Vec<String>) {
-    let uses = w.script_runs_as(name, except).unwrap_or_default();
+    described(&w.script_runs_as(name, except).unwrap_or_default())
+}
+
+/// The users of a script as JSON, and a warning for each that may reach any host. The task
+/// proposal card uses it with the task itself left out (TV-71).
+pub(crate) fn described(uses: &[ScriptUse]) -> (Value, Vec<String>) {
     let warnings = uses
         .iter()
         .filter(|u| u.allow_domains.iter().any(|d| d == "*"))

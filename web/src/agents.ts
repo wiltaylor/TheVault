@@ -320,6 +320,9 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["get_script", "Read a saved script"],
       ["propose_script_change", "Create and change saved scripts (always asks)"],
       ["propose_script_delete", "Delete saved scripts (always asks)"],
+      ["get_task", "Read a scheduled task"],
+      ["propose_task_change", "Create and change scheduled tasks (always asks)"],
+      ["propose_task_delete", "Delete scheduled tasks (always asks)"],
     ],
   },
   {

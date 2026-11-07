@@ -24,6 +24,7 @@ mod ai_script_changes;
 mod ai_settings;
 mod ai_skill_changes;
 mod ai_skills;
+mod ai_task_changes;
 mod ai_taxonomies;
 mod ai_web;
 mod archive;

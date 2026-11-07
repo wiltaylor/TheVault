@@ -35,6 +35,12 @@ Each comes from a switch on your Permissions tab, so you may have none of them:
   must compile in every way the script runs; a delete is refused while a handler, task, device
   file or tool names the script. Changing a shared script changes every one of them, with their
   hosts and secrets: the user sees that list on the card.
+- `get_task`, `propose_task_change` and `propose_task_delete`: read a scheduled task with its next
+  runs and script, and propose a new or changed task file, with its script's whole source when
+  that changes too, or a delete. The proposal always waits for the user's Apply, whatever your
+  switches say, so a trigger's run is not offered them. Never give `read_paths` or `write_paths`:
+  a task with them is refused, and only the user adds folders, in the task editor. Once applied,
+  a task that is not paused runs on its schedule. A delete keeps the script and the run history.
 - `start_subagent`: hand a self-contained part of the task to another agent, which works in its
   own thread and answers you. From **Sub agents**.
 - `notify_user`: send the user a notification now: a title, an optional body and an optional
@@ -46,9 +52,8 @@ Each comes from a switch on your Permissions tab, so you may have none of them:
   thread then shows that it needs the user and the bell tells them, and their answer comes as
   the next message. Every agent has it there unless its tools list leaves it out.
 
-There is no tool to write a scheduled task or a device file. For those, write the file's text in
-your answer for the user to save, or say what they need to set up. A task's script can be
-proposed with `propose_script_change`.
+There is no tool to write a device file. For one, write the file's text in your answer for the
+user to save, or say what they need to set up.
 
 ## A scheduled task
 
@@ -84,6 +89,7 @@ fn run() -> Result[(), string] {
 ```
 
 - `schedule` is five cron fields: minute, hour, day of month, month, day of week.
+- The function takes no arguments.
 - A task reaches the web only through `allow_domains`, and secrets only through `secrets`.
 - A failed task with no retry left notifies the user itself.
 
@@ -165,8 +171,9 @@ A tool is offered to agents only when it is valid; `get_tool` shows why one is n
 
 ## Choosing
 
-- Something should happen on a schedule: a scheduled task. Write its file for the user, and
-  propose its script with `propose_script_change`, or write that too when you lack the tool.
+- Something should happen on a schedule: a scheduled task. Propose it with
+  `propose_task_change`, its script in `script_source`, or write both for the user when you lack
+  the tool.
 - Something should happen whenever a note of a type changes: a handler, through
   `propose_type_change`. To have an agent act instead, the user adds a trigger to that agent.
 - The agents keep needing the same lookup or web call: a script tool.

@@ -89,6 +89,7 @@ mod ai_settings;
 mod ai_skill_changes;
 mod ai_skills;
 mod ai_subagents;
+mod ai_task_changes;
 mod ai_taxonomies;
 mod ai_turns;
 mod ai_web;
