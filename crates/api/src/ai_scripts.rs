@@ -13,7 +13,9 @@
 //!   of the thread. Both run as `crate::script_tools` describes, writing as the agent.
 //! - `list_tools` and `get_tool` read; `propose_tool_change` and `propose_tool_delete` check a
 //!   change and hand it to the user as a `tool_proposal` (the `tools` confirmation switch, admin
-//!   scope), which `POST /api/ai/apply` applies through [`apply_tool`].
+//!   scope), which `POST /api/ai/apply` applies through [`apply_tool`]. The proposal carries the
+//!   "Runs as" list of the script the tool names, the tool left out, with a warning for each run
+//!   that reaches any host, the tool's own first (`crate::ai_script_changes::runs_as`, TV-70).
 //!
 //! A script's changes are made at once, so a turn whose scope cannot write notes (a `read`
 //! caller's, `crate::ai_chat`'s `change_scope`) is offered none of these script tools.
@@ -520,11 +522,22 @@ pub(crate) fn propose_change(
         script_after.or(script_before.as_deref()),
     );
     let exists = before.is_some();
+    // What else runs the script, and a warning for each run that reaches any host, the tool's own
+    // first (TV-32 Q4, Q7).
+    let (runs_as, mut warnings) = crate::ai_script_changes::runs_as(w, &tool.script, Some(name));
+    if tool.allow_domains.iter().any(|d| d == "*") {
+        warnings.insert(
+            0,
+            crate::ai_script_changes::any_host_warning(&format!("The tool {name}")),
+        );
+    }
     let content = json!({
         "proposed": true,
         "name": name,
         "exists": exists,
         "problems": checked.problems,
+        "runs_as": runs_as,
+        "warnings": warnings,
         "message": format!(
             "The tool is valid WCL and is shown to the user as a proposal. It has not been written: it awaits the user, who applies or discards it.{}",
             if checked.problems.is_empty() {
@@ -548,6 +561,8 @@ pub(crate) fn propose_change(
         "script_after": script_after,
         "script_delete": false,
         "problems": checked.problems,
+        "runs_as": runs_as,
+        "warnings": warnings,
         "proposer": by.name,
     });
     Ok(out(content, vec![json!(name)], Some(proposal)))
@@ -569,6 +584,11 @@ pub(crate) fn propose_delete(
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let script = ScriptTool::parse(name, &before).ok().map(|t| t.script);
     let script_before = takes.as_deref().and_then(|s| w.read_script(s).ok());
+    let runs_as = script
+        .as_deref()
+        .filter(|_| takes.is_none())
+        .map(|s| crate::ai_script_changes::runs_as(w, s, Some(name)).0)
+        .unwrap_or_else(|| json!([]));
     let proposal = json!({
         "id": call_id,
         "kind": "tool",
@@ -583,6 +603,8 @@ pub(crate) fn propose_delete(
         "script_after": null,
         "script_delete": takes.is_some(),
         "problems": [],
+        "runs_as": runs_as,
+        "warnings": [],
         "proposer": by.name,
     });
     let script_line = match &takes {

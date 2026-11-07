@@ -123,7 +123,7 @@ pub use shipped::{
 pub use skills::{
     MAX_SKILL_ZIP, RESERVED_SKILL_NAMES, Skill, SkillFileInfo, skill_dir, skill_media_type,
 };
-pub use tools::{TOOLS_DIR, ToolSnapshot, tool_path};
+pub use tools::{ScriptUse, TOOLS_DIR, ToolSnapshot, tool_path};
 pub use types::{Flagged, Migration, PlannedNote, TypeChange, TypePlan};
 
 /// What [`Writer::check_type`] found: the type file as the write would store it.
