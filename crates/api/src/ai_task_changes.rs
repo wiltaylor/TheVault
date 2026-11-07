@@ -545,7 +545,10 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             )));
         }
         if others(w, &def.script, name).0 != p["runs_as"] {
-            return Err(stale(&format!("what runs the script {} changed", def.script)));
+            return Err(stale(&format!(
+                "what runs the script {} changed",
+                def.script
+            )));
         }
         script = def.script;
         Ok(changes)
