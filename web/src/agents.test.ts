@@ -44,6 +44,25 @@ describe("scriptsBlock", () => {
     expect(groups.map((g) => g.group)).toEqual(["Outbox", "Notifications"]);
     expect(groups[1]!.tools).toEqual([{ name: "notify_user", label: "Notify the user (bell and phones)" }]);
   });
+
+  it("lists ask_user in Notifications after notify_user, with its label", () => {
+    const groups = toolGroups(["ask_user", "notify_user"]);
+    expect(groups).toEqual([
+      {
+        group: "Notifications",
+        tools: [
+          { name: "notify_user", label: "Notify the user (bell and phones)" },
+          { name: "ask_user", label: "Ask the user a question (calls and sent notes)" },
+        ],
+      },
+    ]);
+  });
+
+  it("shows ask_user alone, not under Other", () => {
+    const groups = toolGroups(["ask_user"]);
+    expect(groups).toEqual([{ group: "Notifications", tools: [{ name: "ask_user", label: "Ask the user a question (calls and sent notes)" }] }]);
+    expect(groups.some((g) => g.group === "Other")).toBe(false);
+  });
 });
 
 describe("the palette's agent actions", () => {

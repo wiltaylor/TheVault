@@ -293,6 +293,28 @@ fn a_change_tool_whose_switch_is_on_is_left_out_of_a_trigger_run() {
 }
 
 #[test]
+fn a_trigger_run_is_sent_no_ask_user_and_no_section_about_it() {
+    // A trigger's run has no one to answer it: the request to the model offers no ask_user, and
+    // the system text says nothing about asking (TV-77 D3, Q13).
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "reader",
+        "label = \"Reader\"\n\ntrigger any {\n  on = [\"create\"]\n  prompt = \"Read it.\"\n}\n",
+    );
+    fake.push(AnthropicMessage::text("Read."));
+    api.memo("Roof", "open");
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 1);
+    let tools = tool_names(&fake, 0);
+    assert!(tools.contains(&"get_note".to_owned()), "{tools:?}");
+    assert!(!tools.contains(&"ask_user".to_owned()), "{tools:?}");
+    let system = fake.message_requests()[0].json()["system"].to_string();
+    assert!(system.contains("This run is unattended"), "{system}");
+    assert!(!system.contains("Asking the user"), "{system}");
+}
+
+#[test]
 fn a_failed_run_is_recorded_and_notified_once() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
