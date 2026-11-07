@@ -1,5 +1,5 @@
-//! The chat's `ask_user` tool (TV-77 D3): in a run the user is not watching, a call from a note
-//! or notes sent to the agent, the agent asks the user a question and the run ends.
+//! The chat's `ask_user` tool (TV-77 D3): on a thread that a call from a note or notes sent to the
+//! agent opened, the agent asks the user a question and the run ends.
 //!
 //! It is offered only in turns on a thread of origin `mention` or `dispatch` ([`asks_on`]), the
 //! user's reply turns on it included, never in a plain chat (TV-77 Q13), where the agent asks in
@@ -42,11 +42,11 @@ pub(crate) fn tool_spec() -> ToolSpec {
         TOOL,
         &format!(
             "Ask the user a question you need answered before you can go on, and end this run. \
-             Offered only when no one watches the run: a call from a note or notes sent to you. \
+             Offered on a thread that a call from a note or notes sent to you opened. \
              Finish what you can first, and ask once, with everything you need in one question. \
-             The thread then shows that it needs the user, and the bell tells them; their answer \
-             comes as the next message in this thread. Any other calls in the same round still \
-             run. At most {MAX_QUESTION} characters."
+             The thread then shows that it needs the user, and the bell tells them when no one \
+             watches the run; their answer comes as the next message in this thread. Any other \
+             calls in the same round still run. At most {MAX_QUESTION} characters."
         ),
         json!({
             "question": { "type": "string", "description": "The question, as plain text the user can answer without reading the rest of the thread." },
@@ -69,11 +69,23 @@ pub(crate) fn question(input: &Value) -> Result<String, ToolOut> {
     Ok(q.to_owned())
 }
 
+/// The text a round keeps when its calls ask more than one question: `before`, a blank line and
+/// `next`. `None` when the two together are longer than [`MAX_QUESTION`], so the thread's field
+/// and the bell hold the same text (TV-88 M2).
+pub(crate) fn join(before: Option<&str>, next: &str) -> Option<String> {
+    let joined = match before {
+        Some(b) => format!("{b}\n\n{next}"),
+        None => next.to_owned(),
+    };
+    (joined.chars().count() <= MAX_QUESTION).then_some(joined)
+}
+
 /// The section of the system text of a turn that offers the tool.
 pub(crate) fn prompt_section() -> &'static str {
-    "\n## Asking the user\n\nNo one watches this run. When you cannot go on without the user's \
-     answer, such as a choice only they can make or a fact the notes do not give, do what you \
-     can first, then call ask_user with one question that holds all you need. The run ends after \
+    "\n## Asking the user\n\nThis thread opened from a call from a note or from notes sent to you. \
+     When you cannot go on without the user's answer, such as a choice only they can make or a \
+     fact the notes do not give, do what you can first, then call ask_user with one question that \
+     holds all you need. The run ends after \
      that round, and their answer comes as the next message in this thread. Do not ask about \
      what you can find out with your tools, and do not ask only to confirm a change: propose it \
      instead.\n"
@@ -104,5 +116,20 @@ mod tests {
         assert!(question(&json!({ "question": long })).is_err());
         let fits = "a".repeat(MAX_QUESTION);
         assert!(question(&json!({ "question": fits })).is_ok());
+    }
+
+    #[test]
+    fn two_questions_in_a_round_keep_one_text_that_fits_the_bell() {
+        assert_eq!(join(None, "Which roof?").as_deref(), Some("Which roof?"));
+        assert_eq!(
+            join(Some("Which roof?"), "Which gutters?").as_deref(),
+            Some("Which roof?\n\nWhich gutters?")
+        );
+        // The blank line counts: the two together may fill the cap exactly, and no more.
+        let first = "a".repeat(1000);
+        let fits = "b".repeat(MAX_QUESTION - first.len() - 2);
+        let joined = join(Some(&first), &fits).unwrap();
+        assert_eq!(joined.chars().count(), MAX_QUESTION);
+        assert!(join(Some(&first), &"b".repeat(MAX_QUESTION - first.len() - 1)).is_none());
     }
 }

@@ -675,6 +675,14 @@ fn a_question_asked_in_a_reply_streams_and_a_truncate_clears_it() {
     let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
     assert_eq!(read["question"], "Is the tall ladder free on Sunday?");
     assert_eq!(read["state"], "needs_you");
+    // The user is watching the reply, so the ask sends no bell (A1): only an unattended run does.
+    assert!(
+        !api.notifications()
+            .iter()
+            .any(|n| n["title"].as_str().unwrap_or("").contains("needs you")),
+        "{:?}",
+        api.notifications()
+    );
 
     // A call with no question is an error the run goes on from.
     fake.push(AnthropicMessage::new().tool_use("toolu_e", "ask_user", json!({ "question": " " })));
@@ -734,6 +742,127 @@ fn a_question_asked_in_a_reply_streams_and_a_truncate_clears_it() {
     };
     assert_eq!(cut["question"], Value::Null, "{cut}");
     assert_eq!(cut["state"], "done");
+}
+
+/// The `needs you` notifications, by title.
+fn needs_you_bells(api: &Api) -> Vec<Value> {
+    api.notifications()
+        .into_iter()
+        .filter(|n| n["title"].as_str().unwrap_or("").contains("needs you"))
+        .collect()
+}
+
+#[test]
+fn two_questions_in_one_round_are_kept_together_and_the_bell_says_both() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use("toolu_a", "ask_user", json!({ "question": "Which roof?" }))
+            .tool_use(
+                "toolu_b",
+                "ask_user",
+                json!({ "question": "Which gutters?" }),
+            ),
+    );
+    let (status, v) = api.dispatch_as(
+        &api.admin(),
+        "keeper",
+        json!({ "notes": [roof], "request": "Plan it." }),
+    );
+    assert_eq!(status, 202, "{v}");
+    let thread = v["thread"]["id"].as_str().unwrap().to_owned();
+    api.wait_run(&thread);
+
+    let joined = "Which roof?\n\nWhich gutters?";
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert_eq!(read["question"], joined, "{read}");
+    assert_eq!(read["state"], "needs_you");
+    let told = needs_you_bells(&api);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0]["body"], joined);
+}
+
+#[test]
+fn a_second_question_that_overflows_the_cap_is_refused_and_the_first_kept() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    // Each question fits alone, but with the blank line between them: 11 + 2 + 1990 > 2000.
+    let long = "b".repeat(1990);
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use("toolu_a", "ask_user", json!({ "question": "Which roof?" }))
+            .tool_use("toolu_b", "ask_user", json!({ "question": long })),
+    );
+    let (status, v) = api.dispatch_as(
+        &api.admin(),
+        "keeper",
+        json!({ "notes": [roof], "request": "Plan it." }),
+    );
+    assert_eq!(status, 202, "{v}");
+    let thread = v["thread"]["id"].as_str().unwrap().to_owned();
+    let run = api.wait_run(&thread);
+    assert_eq!(run["detail"]["outcome"], "succeeded", "{run}");
+
+    // The stored question is the first one, and the bell says the same; the refused call is
+    // answered with the error, so the transcript says why it was not asked.
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert_eq!(read["question"], "Which roof?", "{read}");
+    assert!(
+        read["messages"]
+            .to_string()
+            .contains("Not asked: with the question this round already asks"),
+        "{read}"
+    );
+    let told = needs_you_bells(&api);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0]["body"], "Which roof?");
+}
+
+#[test]
+fn a_question_and_a_proposal_in_one_round_both_wait_and_the_bell_asks_the_question() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    // No switches: the change waits for the user's Apply.
+    api.agent("keeper", KEEPER);
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    let version = api.version(&roof);
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use(
+                "toolu_p",
+                "propose_fields",
+                json!({
+                    "id": roof,
+                    "base_version": version,
+                    "fields": json!({ "title": "Roof, tidied" }).to_string(),
+                }),
+            )
+            .tool_use("toolu_q", "ask_user", json!({ "question": "Which roof?" })),
+    );
+    let (status, v) = api.dispatch_as(
+        &api.admin(),
+        "keeper",
+        json!({ "notes": [roof], "request": "Tidy it." }),
+    );
+    assert_eq!(status, 202, "{v}");
+    let thread = v["thread"]["id"].as_str().unwrap().to_owned();
+    api.wait_run(&thread);
+
+    let listed = api.dispatched(&format!("?notes={roof}"));
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["state"], "needs_you");
+    assert_eq!(listed[0]["question"], "Which roof?");
+    assert_eq!(listed[0]["pending"], 1);
+    // The note is as the user saved it, and one bell tells of the question.
+    assert_eq!(api.version(&roof), version);
+    let told = needs_you_bells(&api);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(told[0]["body"], "Which roof?");
 }
 
 #[test]
@@ -864,6 +993,13 @@ fn a_turn_that_runs_reads_as_active_until_it_ends() {
         ),
         "{:?}",
         first_messages(&fake)
+    );
+    // The section that explains ask_user is added to the agent's own system prompt too (TV-77 F8).
+    assert!(tools_in(&fake, 0).contains(&"ask_user".to_owned()));
+    assert!(
+        system_in(&fake, 0).contains(ASKS),
+        "{}",
+        system_in(&fake, 0)
     );
 }
 

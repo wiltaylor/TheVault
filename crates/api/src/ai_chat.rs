@@ -2155,26 +2155,30 @@ impl Turn {
                 // this round's other calls are answered.
                 if c.name == crate::ai_ask::TOOL && c.error.is_none() {
                     let got = match crate::ai_ask::question(&c.input) {
-                        Ok(q) => {
-                            if !self
-                                .out
-                                .send("question", json!({ "id": c.id, "text": q }))
-                                .await
-                            {
-                                return;
+                        Ok(q) => match crate::ai_ask::join(asked.as_deref(), &q) {
+                            // Two questions in one round are asked together, as one text that
+                            // fits the thread's field and the bell (TV-88 M2).
+                            Some(joined) => {
+                                if !self
+                                    .out
+                                    .send("question", json!({ "id": c.id, "text": q }))
+                                    .await
+                                {
+                                    return;
+                                }
+                                asked = Some(joined);
+                                ToolOut {
+                                    content: crate::ai_ask::RESULT.to_owned(),
+                                    is_error: false,
+                                    summary: json!({ "notes": [] }),
+                                    proposal: None,
+                                }
                             }
-                            // Two questions in one round are asked together.
-                            asked = Some(match asked.take() {
-                                Some(before) => format!("{before}\n\n{q}"),
-                                None => q,
-                            });
-                            ToolOut {
-                                content: crate::ai_ask::RESULT.to_owned(),
-                                is_error: false,
-                                summary: json!({ "notes": [] }),
-                                proposal: None,
-                            }
-                        }
+                            None => ToolOut::error(format!(
+                                "Not asked: with the question this round already asks, it is longer than {} characters. Ask one shorter question.",
+                                crate::ai_ask::MAX_QUESTION
+                            )),
+                        },
                         Err(out) => out,
                     };
                     if !self
