@@ -293,7 +293,8 @@ impl Writer {
     /// Every way script `name` runs, with the grants each gives it (TV-70, the "Runs as" list of
     /// the script and tool proposal cards): type handlers, tasks, device files and tools, in that
     /// order, leaving out tool `except`. The files [`Writer::script_users`] names, read in full.
-    /// A task or tool file that does not parse is listed with no grants.
+    /// A task file that does not parse is left out; a tool file that does not parse is listed
+    /// with no grants.
     pub fn script_runs_as(&self, name: &str, except: Option<&str>) -> Result<Vec<ScriptUse>> {
         let schema = self.schema();
         let mut uses: Vec<ScriptUse> = schema

@@ -347,6 +347,57 @@ export interface ScriptProposal {
   proposer?: string;
 }
 
+/** A scheduled task as a task proposal shows it (TV-71): the task as the scheduler reads it. */
+export interface ProposedTask {
+  label: string;
+  description?: string | null;
+  schedule: string;
+  /** The schedule in words with its time zone: "Every day at 03:00 (Europe/London)". */
+  schedule_text: string;
+  timezone: string;
+  script: string;
+  function: string;
+  allow_domains: string[];
+  secrets: string[];
+  read_paths: string[];
+  write_paths: string[];
+  retries: number;
+  retry_delay_ms: number;
+  timeout_ms: number;
+  paused: boolean;
+}
+
+/**
+ * A scheduled task change the model proposed (TV-71): a new or changed `tasks/<name>.wcl`, with
+ * the script it names when the proposal writes that too, or its delete. It always waits for the
+ * user's Apply, and never holds `read_paths` or `write_paths`.
+ */
+export interface TaskProposal {
+  id: string;
+  kind: "task";
+  op: "create" | "change" | "delete";
+  name: string;
+  exists?: boolean;
+  /** The task file before and after; null when there is none. */
+  before: string | null;
+  after: string | null;
+  script?: string | null;
+  script_exists?: boolean;
+  script_before?: string | null;
+  /** The script's new source, written with the task; null to leave it. */
+  script_after?: string | null;
+  task: ProposedTask | null;
+  /** The next runs in milliseconds; none while paused or for a delete. */
+  next_runs: number[];
+  /** What else runs the script, the task left out. */
+  runs_as: ScriptUse[];
+  warnings: string[];
+  proposer?: string;
+}
+
+/** What the card says when the task changed after the proposal (TV-71). */
+export const TASK_CHANGED = "This task or its script changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
+
 /** What the card says when the script changed after the proposal (TV-70). */
 export const SCRIPT_CHANGED = "This script changed since the proposal, so it was not applied. Ask again for a fresh proposal.";
 
@@ -477,6 +528,7 @@ export type Part =
   | { kind: "skill_proposal"; proposal: SkillProposal; state: ProposalState; error?: string }
   | { kind: "tool_proposal"; proposal: ToolProposal; state: ProposalState; error?: string }
   | { kind: "script_proposal"; proposal: ScriptProposal; state: ProposalState; error?: string }
+  | { kind: "task_proposal"; proposal: TaskProposal; state: ProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null }
   /** Where the thread was compacted: the model reads `summary` in place of what came before. */
   | { kind: "compaction"; summary: string; reason: string };
@@ -728,6 +780,18 @@ export function scriptDone(p: ScriptProposal): string {
   return p.op === "create" ? `created script ${p.name}` : `changed script ${p.name}`;
 }
 
+/** What a task proposal is, for an outcome line (TV-71). */
+export function taskWhat(p: TaskProposal): string {
+  if (p.op === "delete") return `delete of task ${p.name}`;
+  return p.op === "create" ? `new task ${p.name}` : `change to task ${p.name}`;
+}
+
+/** What an applied task proposal did, for an outcome line. */
+export function taskDone(p: TaskProposal): string {
+  if (p.op === "delete") return `deleted task ${p.name}`;
+  return p.op === "create" ? `created task ${p.name}` : `changed task ${p.name}`;
+}
+
 /** The notices the server put in the turn's new messages, such as a round limit or a cut-off. */
 function noticesOf(data: { messages?: unknown }): Part[] {
   if (!Array.isArray(data.messages)) return [];
@@ -865,7 +929,7 @@ export const NOTE_GONE = "This note is no longer there, so nothing was applied."
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
   return (
-    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "skill_proposal" || p.kind === "tool_proposal" || p.kind === "script_proposal" || p.kind === "download") &&
+    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "skill_proposal" || p.kind === "tool_proposal" || p.kind === "script_proposal" || p.kind === "task_proposal" || p.kind === "download") &&
     (p.state === "open" || p.state === "failed")
   );
 }
@@ -1002,6 +1066,22 @@ function eventPart(event: string, d: Record<string, unknown>): Part | null {
           ...(d as unknown as ScriptProposal),
           before: typeof d.before === "string" ? d.before : null,
           after: typeof d.after === "string" ? d.after : null,
+          runs_as: Array.isArray(d.runs_as) ? (d.runs_as as ScriptUse[]) : [],
+          warnings: Array.isArray(d.warnings) ? (d.warnings as unknown[]).map(String) : [],
+        },
+        state: "open",
+      };
+    case "task_proposal":
+      return {
+        kind: "task_proposal",
+        proposal: {
+          ...(d as unknown as TaskProposal),
+          before: typeof d.before === "string" ? d.before : null,
+          after: typeof d.after === "string" ? d.after : null,
+          script_before: typeof d.script_before === "string" ? d.script_before : null,
+          script_after: typeof d.script_after === "string" ? d.script_after : null,
+          task: d.task && typeof d.task === "object" ? (d.task as ProposedTask) : null,
+          next_runs: Array.isArray(d.next_runs) ? (d.next_runs as unknown[]).filter((n): n is number => typeof n === "number") : [],
           runs_as: Array.isArray(d.runs_as) ? (d.runs_as as ScriptUse[]) : [],
           warnings: Array.isArray(d.warnings) ? (d.warnings as unknown[]).map(String) : [],
         },
@@ -1303,7 +1383,8 @@ function createConversation(agent: string, id: string | null) {
       case "agent_memory_proposal":
       case "skill_proposal":
       case "tool_proposal":
-      case "script_proposal": {
+      case "script_proposal":
+      case "task_proposal": {
         // A re-read turn's proposal, applied or discarded meanwhile, shows as it stands.
         const stored = replay.get(String(d.id));
         push((stored && storedPart(stored)) || eventPart(e.event, d)!);
@@ -1791,6 +1872,7 @@ function createConversation(agent: string, id: string | null) {
       else if (p.kind === "skill_proposal") await applySkillProposal(turn, i);
       else if (p.kind === "tool_proposal") await applyToolProposal(turn, i);
       else if (p.kind === "script_proposal") await applyScriptProposal(turn, i);
+      else if (p.kind === "task_proposal") await applyTaskProposal(turn, i);
       else await applyTypeProposal(turn, i);
       const after = chat.turns[turn]?.parts[i];
       if (!after || !("state" in after) || after.state !== "applied") return;
@@ -2081,6 +2163,51 @@ function createConversation(agent: string, id: string | null) {
     discarded(p.proposal);
   }
 
+  function setTaskProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "task_proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+      }),
+    );
+  }
+
+  /**
+   * Apply a scheduled task proposal with POST /api/ai/apply (TV-71). The server writes the task,
+   * and the script when the proposal holds it, through the scheduler, and writes nothing when the
+   * task or its script changed since the proposal (a 409 `stale`). It needs admin, or the copy
+   * waiting in the thread.
+   */
+  async function applyTaskProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "task_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    setTaskProposal(turn, part, { state: "applying" });
+    try {
+      await api.aiApply(p.proposal);
+      setTaskProposal(turn, part, { state: "applied" });
+      record(p.proposal.id, `[Applied by the user: ${taskDone(p.proposal)}]`);
+      notify();
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
+      const error = stale ? TASK_CHANGED : e instanceof Error ? e.message : String(e);
+      setTaskProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${taskWhat(p.proposal)}: ${error}]`);
+    }
+  }
+
+  function discardTaskProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "task_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setTaskProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${taskWhat(p.proposal)}]`);
+    discarded(p.proposal);
+  }
+
   function setSkillProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
     setChat(
       "turns",
@@ -2223,6 +2350,8 @@ function createConversation(agent: string, id: string | null) {
       discardToolProposal,
       applyScriptProposal,
       discardScriptProposal,
+      applyTaskProposal,
+      discardTaskProposal,
     };
     return self;
   });
@@ -2450,6 +2579,8 @@ export function createChatSession(options: ChatOptions = {}) {
       discardToolProposal: (turn: number, part: number) => current().discardToolProposal(turn, part),
       applyScriptProposal: (turn: number, part: number) => current().applyScriptProposal(turn, part),
       discardScriptProposal: (turn: number, part: number) => current().discardScriptProposal(turn, part),
+      applyTaskProposal: (turn: number, part: number) => current().applyTaskProposal(turn, part),
+      discardTaskProposal: (turn: number, part: number) => current().discardTaskProposal(turn, part),
     };
   });
 }
@@ -2493,6 +2624,8 @@ export const applyToolProposal = panel.applyToolProposal;
 export const discardToolProposal = panel.discardToolProposal;
 export const applyScriptProposal = panel.applyScriptProposal;
 export const discardScriptProposal = panel.discardScriptProposal;
+export const applyTaskProposal = panel.applyTaskProposal;
+export const discardTaskProposal = panel.discardTaskProposal;
 
 /** The conversation the cards below act on: the panel's, unless the agent screen provides its own. */
 export const ChatContext = createContext<ChatSession>(panel);
