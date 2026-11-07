@@ -3267,6 +3267,7 @@ fn rows_out(rows: Vec<Value>, extra: Value) -> ToolOut {
 /// Outbox tools draft at once, as the agent, with a caller that has `write` (outbox X9). A
 /// proposal that is not made here is refused in a trigger's run ([`Held::Drop`]): no one would
 /// apply it, so it must not wait (TV-84).
+#[allow(clippy::too_many_arguments)]
 fn run_tool(
     w: &Writer,
     author: &Author,
