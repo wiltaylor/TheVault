@@ -455,6 +455,13 @@ fn host(w: &Writer) -> Option<Arc<Host>> {
     host_for(w)
 }
 
+/// A refusal of a tool proposal, with the reason as the model reads it.
+fn refused(why: String) -> ToolOut {
+    let mut o = ToolOut::error(why.clone());
+    o.content = json!({ "error": why, "message": "The tool was not proposed." }).to_string();
+    o
+}
+
 /// `list_tools`.
 pub(crate) fn list(w: &Writer) -> Result<ToolOut, ToolOut> {
     let h = host(w);
@@ -513,6 +520,13 @@ pub(crate) fn propose_change(
             vec![json!(name)],
             None,
         ));
+    }
+    // A new script source is refused while a run of the script has folders (TV-89, TV-87, TV-32
+    // Q3): the agent's code would reach them. A tool has no folders of its own, so none is left out.
+    if script_after.is_some()
+        && let Some(why) = crate::ai_script_changes::shared_paths_refused(w, &tool.script, None)
+    {
+        return Err(refused(why));
     }
     let checked = check_vault(
         w,
@@ -677,6 +691,12 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             && w.read_script(s).ok().as_deref() != p["script_before"].as_str()
         {
             return Err(stale(format!("the tool {name} or its script")));
+        }
+        // A new script source is refused while a run of the script has folders (TV-89, TV-87).
+        if let (Some(_), Some(s)) = (script_after, script)
+            && let Some(why) = crate::ai_script_changes::shared_paths_refused(w, s, None)
+        {
+            return Err(ApplyError::Refused(why));
         }
         // The compile check again, as the card showed it.
         let checked = check_vault(w, h.as_deref(), name, after, script_after);
