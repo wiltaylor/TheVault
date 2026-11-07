@@ -103,7 +103,7 @@ Because every notification reaches your phones, each agent has limits:
 | Notifications from one agent in an hour | 10 |
 | Notifications from one agent in 24 hours | 30 |
 
-A call over a limit sends nothing, and the agent is told which limit it reached. The hour and day counts are the notifications stored with the agent's source, so they hold across turns and server restarts. A failed run's notification has the same source and counts too. Deleting notifications from the bell lowers the count.
+A turn's sub agents share its count, so the turn and the sub agents it starts send 3 together. A call over a limit sends nothing, and the agent is told which limit it reached. The hour and day counts are the notifications stored with the agent's source, so they hold across turns and server restarts. A failed run's notification has the same source and counts too. Deleting notifications from the bell lowers the count.
 
 ## Driving the browser box
 

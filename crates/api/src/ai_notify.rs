@@ -9,14 +9,18 @@
 //!
 //! Each notification is also pushed to the paired phones, so an agent may send at most
 //! [`MAX_PER_TURN`] in one turn, [`MAX_PER_HOUR`] in an hour and [`MAX_PER_DAY`] in a day. The
-//! hour and day counts read the notifications stored with the agent's source, so they hold
-//! across turns and restarts. A refused call tells the model which limit it reached and writes
-//! nothing. The tool needs a caller with `write`, as `POST /api/notifications` does.
+//! turn count is shared by the turn and the sub agent turns it starts ([`NotifyCount`]). The
+//! hour and day counts are checked in the same transaction that stores the notification
+//! (`State::add_notification_within`), so concurrent calls of one agent cannot pass them
+//! together. A refused call tells the model which limit it reached and writes nothing. The tool
+//! needs a caller with `write`, as `POST /api/notifications` does.
+
+use std::sync::{Mutex, MutexGuard};
 
 use ai::ToolSpec;
 use schema::Agent;
 use serde_json::{Value, json};
-use state::{NewNotification, Scope};
+use state::{NewNotification, Scope, SourceLimit};
 use writer::Writer;
 
 use crate::ai_chat::{Limits, ToolOut, tool};
@@ -35,6 +39,44 @@ pub const MAX_PER_DAY: usize = 30;
 
 const HOUR_MS: i64 = 60 * 60 * 1000;
 const DAY_MS: i64 = 24 * HOUR_MS;
+
+/// The hour and day limits, counted over the notifications stored with the agent's source.
+const LIMITS: [SourceLimit; 2] = [
+    SourceLimit {
+        window_ms: HOUR_MS,
+        max: MAX_PER_HOUR,
+    },
+    SourceLimit {
+        window_ms: DAY_MS,
+        max: MAX_PER_DAY,
+    },
+];
+
+/// The notifications one turn has sent. A turn and each sub agent turn it starts share one, so
+/// the turn and its sub agents together send at most [`MAX_PER_TURN`] (TV-74).
+#[derive(Debug, Default)]
+pub(crate) struct NotifyCount(Mutex<usize>);
+
+impl NotifyCount {
+    fn count(&self) -> MutexGuard<'_, usize> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Take one of the turn's places, or `false` when it has none left.
+    fn take(&self) -> bool {
+        let mut sent = self.count();
+        if *sent >= MAX_PER_TURN {
+            return false;
+        }
+        *sent += 1;
+        true
+    }
+
+    /// Give back a place taken for a call that stored nothing.
+    fn give_back(&self) {
+        *self.count() -= 1;
+    }
+}
 
 /// The tool's spec.
 pub(crate) fn tool_spec() -> ToolSpec {
@@ -65,14 +107,13 @@ fn text<'a>(input: &'a Value, name: &str) -> &'a str {
     input[name].as_str().map_or("", str::trim)
 }
 
-/// Run `notify_user` for `agent`, with the caller's `scope`, after `sent` notifications this
-/// turn.
+/// Run `notify_user` for `agent`, with the caller's `scope`, counting its sends in `sent`.
 pub(crate) fn notify(
     w: &Writer,
     scope: Scope,
     agent: &Agent,
     limits: &Limits,
-    sent: usize,
+    sent: &NotifyCount,
     input: &Value,
 ) -> ToolOut {
     if !scope.allows(Scope::Write) {
@@ -81,32 +122,6 @@ pub(crate) fn notify(
         );
     }
     let source = source(agent);
-    if sent >= MAX_PER_TURN {
-        return refused(&format!(
-            "this turn already sent {MAX_PER_TURN} notifications, the most one turn may send"
-        ));
-    }
-    let counted = |window| w.state().notifications_from(&source, window);
-    match counted(HOUR_MS) {
-        Ok(n) if n >= MAX_PER_HOUR => {
-            return refused(&format!(
-                "this agent sent {n} notifications in the last hour, and the limit is \
-                 {MAX_PER_HOUR} an hour"
-            ));
-        }
-        Ok(_) => {}
-        Err(e) => return ToolOut::error(e.to_string()),
-    }
-    match counted(DAY_MS) {
-        Ok(n) if n >= MAX_PER_DAY => {
-            return refused(&format!(
-                "this agent sent {n} notifications in the last 24 hours, and the limit is \
-                 {MAX_PER_DAY} a day"
-            ));
-        }
-        Ok(_) => {}
-        Err(e) => return ToolOut::error(e.to_string()),
-    }
     let note_id = text(input, "note_id");
     let mut note_title = None;
     if !note_id.is_empty() {
@@ -125,6 +140,11 @@ pub(crate) fn notify(
             .as_str()
             .map(str::to_owned);
     }
+    if !sent.take() {
+        return refused(&format!(
+            "this turn already sent {MAX_PER_TURN} notifications, the most one turn may send"
+        ));
+    }
     let body = text(input, "body");
     let n = NewNotification {
         title: text(input, "title").to_owned(),
@@ -133,9 +153,29 @@ pub(crate) fn notify(
         url: None,
         source,
     };
-    let stored = match w.notify(&n) {
+    let stored = match w.notify_within(&n, &LIMITS) {
         Ok(s) => s,
+        Err(writer::Error::State(state::Error::NotificationLimit {
+            window_ms,
+            count,
+            max,
+            ..
+        })) => {
+            sent.give_back();
+            return refused(&if window_ms == HOUR_MS {
+                format!(
+                    "this agent sent {count} notifications in the last hour, and the limit is \
+                     {max} an hour"
+                )
+            } else {
+                format!(
+                    "this agent sent {count} notifications in the last 24 hours, and the limit \
+                     is {max} a day"
+                )
+            });
+        }
         Err(e) => {
+            sent.give_back();
             let message = e.to_string();
             let mut out = ToolOut::error(message.clone());
             out.content = json!({
