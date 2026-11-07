@@ -784,17 +784,12 @@ impl Scheduler {
     ) -> Result<String, DispatchRefused> {
         let runner = self.runner.get().ok_or(DispatchRefused::NoRunner)?.clone();
         let now = self.clock.now_ms();
-        let a = {
-            let mut plan = self.plan();
-            let a = plan
-                .agents
-                .agents
-                .get(agent)
-                .cloned()
-                .ok_or(DispatchRefused::NoAgent)?;
-            plan.agents.room(agent, now)?;
-            a
+        // The agent as its file says now, as a run reads it, not as the plan last loaded it.
+        let a = match self.writer.agent(agent) {
+            Ok(a) if a.enabled => a,
+            _ => return Err(DispatchRefused::NoAgent),
         };
+        self.plan().agents.room(agent, now)?;
         // Not under the plan's lock: the write that opens the thread runs the hooks, which read
         // the plan.
         let thread = runner
