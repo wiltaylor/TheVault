@@ -206,7 +206,7 @@ async function startNtfy() {
 
 /** Removes the real Google Messages from the system image, once per AVD, so the stand-in can take its name. */
 async function replaceGoogleMessages() {
-  root();
+  await root();
   const path = shellTry(`pm path ${MESSAGES}`);
   if (path.includes("/product/priv-app/PrebuiltBugle")) {
     console.log("removing the system image's Google Messages (needs -writable-system)");
@@ -216,14 +216,14 @@ async function replaceGoogleMessages() {
       if (!shellTry("touch /product/priv-app/.thevault-rw && rm /product/priv-app/.thevault-rw && echo WRITABLE_OK").includes("WRITABLE_OK")) {
         if (i >= 3) throw new Error("could not remount /product writable; is the emulator running with -writable-system?");
         await reboot();
-        root();
+        await root();
         continue;
       }
       break;
     }
     shell("rm -rf /product/priv-app/PrebuiltBugle");
     await reboot();
-    root();
+    await root();
   } else if (path.includes("package:") && !path.includes("/data/app/")) {
     throw new Error(`unexpected ${MESSAGES}: ${path}`);
   }
@@ -235,16 +235,16 @@ async function replaceGoogleMessages() {
   if (holder !== MESSAGES) throw new Error(`the SMS role is held by "${holder}"`);
 }
 
-function root() {
+async function root() {
   adbTry("root");
-  adbTry("wait-for-device");
+  await L.waitForDevice("adb root");
   for (let i = 0; i < 20 && !shellTry("id").includes("uid=0"); i++) execFileSync("sleep", ["0.5"]);
 }
 
 async function reboot() {
   adbTry("reboot");
   await sleep(5_000);
-  adbTry("wait-for-device");
+  await L.waitForDevice("adb reboot");
   await until("boot", () => shellTry("getprop sys.boot_completed").trim() === "1", { timeout: 300_000, every: 1_000 });
   shellTry("input keyevent KEYCODE_WAKEUP");
   shellTry("wm dismiss-keyguard");
@@ -1395,7 +1395,7 @@ async function main() {
     };
     const before = await refs();
     await reboot();
-    root();
+    await root();
     wakeAndUnlock();
     openApp();
     await sleep(30_000);
