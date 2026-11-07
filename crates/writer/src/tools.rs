@@ -178,33 +178,52 @@ impl Writer {
         script: Option<&str>,
         check: impl FnOnce(&ScriptTool) -> Vec<Issue>,
     ) -> Result<(String, ScriptTool)> {
+        let (text, tool, changes) = self.put_tool_changes(name, source, script, check)?;
+        self.commit_checked(|_| Ok::<_, Error>(changes))?;
+        Ok((text, tool))
+    }
+
+    /// The changes [`Writer::put_tool`] writes, for [`Writer::commit_checked`]: the tool file, and
+    /// `script` when given. Also the canonical text and the tool.
+    pub fn put_tool_changes(
+        &self,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+        check: impl FnOnce(&ScriptTool) -> Vec<Issue>,
+    ) -> Result<(String, ScriptTool, Vec<Change>)> {
         let (text, tool) = self.check_tool(name, source, check)?;
-        let _w = self.write_lock();
-        let mut inner = self.lock();
         let mut changes = Vec::new();
         if let Some(s) = script {
             changes.push(Change::write(script_path(&tool.script), s.as_bytes()));
         }
         changes.push(Change::write(tool_path(name), text.as_bytes()));
-        let generation = self.commit(changes)?;
-        inner.index.advance(generation)?;
-        Ok((text, tool))
+        Ok((text, tool, changes))
     }
 
     /// Delete `tools/<name>.wcl`, and the script it names when nothing else names it: no type's
     /// handler, task, device file or other tool. Returns the script deleted with it, if any.
     pub fn delete_tool(&self, name: &str) -> Result<Option<String>> {
-        let _w = self.write_lock();
-        let mut inner = self.lock();
+        let mut deleted = None;
+        self.commit_checked(|w| -> Result<Vec<Change>> {
+            let (changes, script) = w.delete_tool_changes(name)?;
+            deleted = script;
+            Ok(changes)
+        })?;
+        Ok(deleted)
+    }
+
+    /// The changes [`Writer::delete_tool`] makes, for [`Writer::commit_checked`], and the script
+    /// they delete with the tool, if any.
+    pub fn delete_tool_changes(&self, name: &str) -> Result<(Vec<Change>, Option<String>)> {
         let text = self.read_tool(name)?;
-        let script = self.tool_script_to_delete(&inner.schema, name, &text)?;
+        let schema = self.schema();
+        let script = self.tool_script_to_delete(&schema, name, &text)?;
         let mut changes = vec![Change::delete(tool_path(name))];
         if let Some(s) = &script {
             changes.push(Change::delete(script_path(s)));
         }
-        let generation = self.commit(changes)?;
-        inner.index.advance(generation)?;
-        Ok(script)
+        Ok((changes, script))
     }
 
     /// The script deleting tool `name` (whose file is `text`) also deletes: the one it names, when

@@ -554,12 +554,29 @@ impl Writer {
 
     /// Create or replace `scripts/<name>.ws`, stored as sent.
     pub fn put_script(&self, name: &str, source: &str) -> Result<String> {
-        let _w = self.write_lock();
-        let mut inner = self.lock();
-        check_name("script", name)?;
-        let generation = self.commit(vec![Change::write(script_path(name), source.as_bytes())])?;
-        inner.index.advance(generation)?;
+        self.commit_checked(|w| w.script_changes(name, Some(source)))?;
         Ok(source.to_owned())
+    }
+
+    /// The changes that write script `name` as `source`, or delete it when `source` is `None`, for
+    /// [`Writer::commit_checked`]. A delete is refused, `script_in_use`, while a type's handler, a
+    /// task, a device file or a tool names the script.
+    pub fn script_changes(&self, name: &str, source: Option<&str>) -> Result<Vec<Change>> {
+        check_name("script", name)?;
+        let Some(source) = source else {
+            self.read_script(name)?;
+            let schema = self.schema();
+            let by = self.script_users(&schema, name, None)?;
+            if !by.is_empty() {
+                return Err(Error::InUse {
+                    code: "script_in_use",
+                    message: format!("script {name:?} cannot be deleted"),
+                    by,
+                });
+            }
+            return Ok(vec![Change::delete(script_path(name))]);
+        };
+        Ok(vec![Change::write(script_path(name), source.as_bytes())])
     }
 
     /// Why `source` would not compile as script `name`, once for each way the vault runs it: as
@@ -623,20 +640,7 @@ impl Writer {
     /// Delete `scripts/<name>.ws`, unless a type's handler, a task, a device file or a tool
     /// names it.
     pub fn delete_script(&self, name: &str) -> Result<()> {
-        let _w = self.write_lock();
-        let mut inner = self.lock();
-        self.read_script(name)?;
-        let by = self.script_users(&inner.schema, name, None)?;
-        if !by.is_empty() {
-            return Err(Error::InUse {
-                code: "script_in_use",
-                message: format!("script {name:?} cannot be deleted"),
-                by,
-            });
-        }
-        let generation = self.commit(vec![Change::delete(script_path(name))])?;
-        inner.index.advance(generation)?;
-        Ok(())
+        self.commit_checked(|w| w.script_changes(name, None))
     }
 
     // ---- tasks ----------------------------------------------------------------------------

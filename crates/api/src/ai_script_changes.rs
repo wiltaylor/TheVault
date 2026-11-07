@@ -273,29 +273,54 @@ pub(crate) fn propose_delete(
     ))
 }
 
-/// Apply a `script_proposal`, when the script is still the proposal's `before`. Answers
-/// `{op, script_name}`, `op` `script_create`, `script_change` or `script_delete`. A delete is
-/// refused, 409 `script_in_use`, when something has started to run the script since.
+/// Apply a `script_proposal`. Answers `{op, script_name}`, `op` `script_create`, `script_change` or
+/// `script_delete`. The source, the compile check and the "Runs as" list are checked again under
+/// the writer's lock, with the write: a script changed since, a change that no longer compiles in
+/// every way it runs, or a list that changed since the card is answered 409 `stale`, and nothing is
+/// written. A delete is refused, 409 `script_in_use`, when something has started to run the script.
 pub(crate) fn apply_script(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| schema::is_name(s))
         .ok_or_else(|| ApplyError::Invalid("the change has no script name".into()))?;
     let before = p["before"].as_str();
-    if w.read_script(name).ok().as_deref() != before {
-        return Err(ApplyError::Stale(format!(
-            "the script {name} changed since the proposal, so nothing was written"
-        )));
-    }
-    if p["op"] == "delete" {
-        w.delete_script(name)?;
-        return Ok(json!({ "op": "script_delete", "script_name": name }));
-    }
-    let after = p["after"]
-        .as_str()
-        .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
-    w.put_script(name, after)?;
-    let op = if before.is_some() {
+    let delete = p["op"] == "delete";
+    let after = if delete {
+        None
+    } else {
+        Some(
+            p["after"]
+                .as_str()
+                .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?,
+        )
+    };
+    let shown = &p["runs_as"];
+    w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+        if w.read_script(name).ok().as_deref() != before {
+            return Err(ApplyError::Stale(format!(
+                "the script {name} changed since the proposal, so nothing was written"
+            )));
+        }
+        // A delete in use is refused first, as `script_in_use`.
+        let changes = w.script_changes(name, after)?;
+        if let Some(source) = after {
+            let problems = w.script_problems(name, source)?;
+            if !problems.is_empty() {
+                return Err(ApplyError::Stale(format!(
+                    "the script {name} does not compile in every way it runs now, so nothing was written: propose it again"
+                )));
+            }
+        }
+        if runs_as(w, name, None).0 != *shown {
+            return Err(ApplyError::Stale(format!(
+                "what runs the script {name} changed since the proposal, so nothing was written"
+            )));
+        }
+        Ok(changes)
+    })?;
+    let op = if delete {
+        "script_delete"
+    } else if before.is_some() {
         "script_change"
     } else {
         "script_create"

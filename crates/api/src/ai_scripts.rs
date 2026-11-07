@@ -626,37 +626,69 @@ pub(crate) fn propose_delete(
     ))
 }
 
-/// Apply a `tool_proposal`, when the tool file and the script are still the proposal's
-/// `before` and `script_before`. Answers `{op, tool_name, script_name}`.
+/// Apply a `tool_proposal`. Answers `{op, tool_name, script_name}`. The tool file, its script, the
+/// compile check and the script's "Runs as" list (the tool left out) are checked again under the
+/// writer's lock, with the write. Any of them changed since the card is 409 `stale`, and nothing is
+/// written: the tool's problems are compared with the card's, since a tool with problems is saved
+/// and not offered.
 pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApplyError::Invalid("the change has no name".into()))?;
-    let stale = || {
+    let stale = |what: String| {
         ApplyError::Stale(format!(
-            "the tool {name} or its script changed since the proposal, so nothing was written"
+            "{what} changed since the proposal, so nothing was written"
         ))
     };
-    if w.read_tool(name).ok().as_deref() != p["before"].as_str() {
-        return Err(stale());
-    }
+    let before = p["before"].as_str();
     let script = p["script"].as_str().filter(|s| schema::is_name(s));
+    let shown_runs = &p["runs_as"];
+    let runs_changed = |w: &Writer| {
+        script.is_some_and(|s| crate::ai_script_changes::runs_as(w, s, Some(name)).0 != *shown_runs)
+    };
+    let runs_stale = || stale(format!("what runs the script of the tool {name}"));
     if p["op"] == "delete" {
-        let deleted = w.delete_tool(name)?;
+        let mut deleted = None;
+        w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+            if w.read_tool(name).ok().as_deref() != before {
+                return Err(stale(format!("the tool {name} or its script")));
+            }
+            let (changes, script_deleted) = w.delete_tool_changes(name)?;
+            if runs_changed(w) {
+                return Err(runs_stale());
+            }
+            deleted = script_deleted;
+            Ok(changes)
+        })?;
         return Ok(json!({ "op": "tool_delete", "tool_name": name, "script_name": deleted }));
     }
     let after = p["after"]
         .as_str()
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
     let script_after = p["script_after"].as_str();
-    if script_after.is_some()
-        && let Some(s) = script
-        && w.read_script(s).ok().as_deref() != p["script_before"].as_str()
-    {
-        return Err(stale());
-    }
-    w.put_tool(name, after, script_after, name_issues)?;
+    let h = host(w);
+    w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+        if w.read_tool(name).ok().as_deref() != before {
+            return Err(stale(format!("the tool {name} or its script")));
+        }
+        if script_after.is_some()
+            && let Some(s) = script
+            && w.read_script(s).ok().as_deref() != p["script_before"].as_str()
+        {
+            return Err(stale(format!("the tool {name} or its script")));
+        }
+        // The compile check again, as the card showed it.
+        let checked = check_vault(w, h.as_deref(), name, after, script_after);
+        if json!(checked.problems) != p["problems"] {
+            return Err(stale(format!("the problems of the tool {name}")));
+        }
+        if runs_changed(w) {
+            return Err(runs_stale());
+        }
+        let (_, _, changes) = w.put_tool_changes(name, after, script_after, name_issues)?;
+        Ok(changes)
+    })?;
     let op = if p["before"].is_string() {
         "tool_change"
     } else {
