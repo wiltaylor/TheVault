@@ -578,7 +578,11 @@ impl Thread {
             "question": question_json(&self.question),
         });
         put_running(&mut v, &self.id);
-        v["state"] = json!(state_of(running(&self.id).is_some(), &self.question, pending));
+        v["state"] = json!(state_of(
+            running(&self.id).is_some(),
+            &self.question,
+            pending
+        ));
         v
     }
 

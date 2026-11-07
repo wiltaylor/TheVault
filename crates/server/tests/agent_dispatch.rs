@@ -290,7 +290,9 @@ fn notes_sent_to_an_agent_run_once_on_one_thread_and_are_left_as_they_were() {
     );
     let read = api.get(&format!("/api/agents/clerk/threads/{thread}"));
     assert!(
-        read["messages"].to_string().contains("Both are house jobs."),
+        read["messages"]
+            .to_string()
+            .contains("Both are house jobs."),
         "{read}"
     );
     assert_eq!(read["state"], "done");
@@ -351,7 +353,10 @@ fn a_dispatch_it_cannot_run_is_refused_and_opens_no_thread() {
     let res = api.request_as(
         &api.admin(),
         "DELETE",
-        &format!("/api/notes/{gone}?base_version={}", version.as_str().unwrap()),
+        &format!(
+            "/api/notes/{gone}?base_version={}",
+            version.as_str().unwrap()
+        ),
         None,
     );
     assert!(res.status().is_success(), "{}", res.text().unwrap());
@@ -366,17 +371,67 @@ fn a_dispatch_it_cannot_run_is_refused_and_opens_no_thread() {
         .map(|i| format!("01JB8Z4K2MQ7V3X9T5R6W8Y{i:03}"))
         .collect();
     for (agent, body, want, code) in [
-        ("clerk", json!({ "notes": [roof], "request": "  " }), 400, "no_request"),
+        (
+            "clerk",
+            json!({ "notes": [roof], "request": "  " }),
+            400,
+            "no_request",
+        ),
         ("clerk", json!({ "notes": [roof] }), 400, "no_request"),
-        ("clerk", json!({ "notes": [], "request": "x" }), 400, "no_notes"),
-        ("clerk", json!({ "notes": many, "request": "x" }), 400, "too_many_notes"),
-        ("clerk", json!({ "notes": [roof, roof], "request": "x" }), 400, "duplicate_note"),
-        ("clerk", json!({ "notes": [CALL], "request": "x" }), 400, "unknown_note"),
-        ("clerk", json!({ "notes": ["nope"], "request": "x" }), 400, "unknown_note"),
-        ("clerk", json!({ "notes": [gone], "request": "x" }), 400, "unknown_note"),
-        ("logger", json!({ "notes": [roof], "request": "x" }), 400, "type_not_permitted"),
-        ("nobody", json!({ "notes": [roof], "request": "x" }), 404, "not_found"),
-        ("sleepy", json!({ "notes": [roof], "request": "x" }), 404, "not_found"),
+        (
+            "clerk",
+            json!({ "notes": [], "request": "x" }),
+            400,
+            "no_notes",
+        ),
+        (
+            "clerk",
+            json!({ "notes": many, "request": "x" }),
+            400,
+            "too_many_notes",
+        ),
+        (
+            "clerk",
+            json!({ "notes": [roof, roof], "request": "x" }),
+            400,
+            "duplicate_note",
+        ),
+        (
+            "clerk",
+            json!({ "notes": [CALL], "request": "x" }),
+            400,
+            "unknown_note",
+        ),
+        (
+            "clerk",
+            json!({ "notes": ["nope"], "request": "x" }),
+            400,
+            "unknown_note",
+        ),
+        (
+            "clerk",
+            json!({ "notes": [gone], "request": "x" }),
+            400,
+            "unknown_note",
+        ),
+        (
+            "logger",
+            json!({ "notes": [roof], "request": "x" }),
+            400,
+            "type_not_permitted",
+        ),
+        (
+            "nobody",
+            json!({ "notes": [roof], "request": "x" }),
+            404,
+            "not_found",
+        ),
+        (
+            "sleepy",
+            json!({ "notes": [roof], "request": "x" }),
+            404,
+            "not_found",
+        ),
     ] {
         let (status, v) = api.dispatch_as(&admin, agent, body.clone());
         assert_eq!(status, want, "{agent} {body}: {v}");
@@ -385,7 +440,11 @@ fn a_dispatch_it_cannot_run_is_refused_and_opens_no_thread() {
     assert!(api.dispatched("").is_empty());
     assert!(fake.message_requests().is_empty());
 
-    for bad in ["?state=asleep", "?notes=nope", "?notes=01jb8z4k2mq7v3x9t5r6w8y2zb"] {
+    for bad in [
+        "?state=asleep",
+        "?notes=nope",
+        "?notes=01jb8z4k2mq7v3x9t5r6w8y2zb",
+    ] {
         let res = api.request_as(&admin, "GET", &format!("/api/dispatched{bad}"), None);
         assert_eq!(res.status().as_u16(), 400, "{bad}");
     }
@@ -428,7 +487,10 @@ fn a_change_left_waiting_needs_you_and_an_app_applies_it_from_the_thread() {
         .filter(|n| n["title"].as_str().unwrap_or("").contains("needs you"))
         .collect();
     assert_eq!(told.len(), 1, "{told:?}");
-    assert_eq!(told[0]["title"], "Keeper needs you: Roof: Rename the memo tab.");
+    assert_eq!(
+        told[0]["title"],
+        "Keeper needs you: Roof: Rename the memo tab."
+    );
     assert_eq!(told[0]["body"], "A change waits for your Apply.");
     assert_eq!(
         told[0]["url"],
@@ -446,9 +508,17 @@ fn a_change_left_waiting_needs_you_and_an_app_applies_it_from_the_thread() {
         .unwrap_or_else(|| panic!("{read}"))
         .clone();
     assert_eq!(proposal["event"], "type_proposal", "{proposal}");
-    let res = api.request_as(&app, "POST", "/api/ai/apply", Some(proposal["data"].clone()));
+    let res = api.request_as(
+        &app,
+        "POST",
+        "/api/ai/apply",
+        Some(proposal["data"].clone()),
+    );
     assert_eq!(res.status().as_u16(), 200, "{}", res.text().unwrap());
-    let wcl = api.get("/api/types/memo")["wcl"].as_str().unwrap().to_owned();
+    let wcl = api.get("/api/types/memo")["wcl"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(wcl.contains("tab \"Details\""), "{wcl}");
     let after = api.dispatched(&format!("?notes={roof}"));
     assert_eq!(after[0]["state"], "done", "{after:?}");

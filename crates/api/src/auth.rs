@@ -597,9 +597,17 @@ mod tests {
             (Method::GET, "/api/daily/2026-10-13", Some(Scope::Read)),
             (Method::POST, "/api/daily/2026-10-13", Some(Scope::Write)),
             // Sending notes to an agent runs it with its own scope (TV-77 D1).
-            (Method::POST, "/api/agents/clerk/dispatch", Some(Scope::Write)),
+            (
+                Method::POST,
+                "/api/agents/clerk/dispatch",
+                Some(Scope::Write),
+            ),
             (Method::GET, "/api/dispatched", Some(Scope::Read)),
-            (Method::POST, "/api/agents/clerk/x/dispatch", Some(Scope::Admin)),
+            (
+                Method::POST,
+                "/api/agents/clerk/x/dispatch",
+                Some(Scope::Admin),
+            ),
             (
                 Method::GET,
                 "/api/planner/week/2026-10-13",

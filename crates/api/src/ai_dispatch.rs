@@ -63,7 +63,11 @@ fn bad(code: &str, message: impl Into<String>) -> ApiError {
 
 /// The first `n` characters of `s`'s first line, with an ellipsis when cut.
 fn first_chars(s: &str, n: usize) -> String {
-    let line = s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let line = s
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
     if line.chars().count() <= n {
         return line.to_owned();
     }
@@ -209,11 +213,14 @@ pub async fn dispatch(
             return Err(refused(DispatchRefused::NoAgent, &name));
         }
         if request.is_empty() {
-            return Err(bad("no_request", "say what the agent is to do with the notes"));
+            return Err(bad(
+                "no_request",
+                "say what the agent is to do with the notes",
+            ));
         }
         let notes = read_notes(w, &agent, &b.notes)?;
-        let scheduler =
-            script_tools::scheduler_for(w).ok_or_else(|| refused(DispatchRefused::NoRunner, &name))?;
+        let scheduler = script_tools::scheduler_for(w)
+            .ok_or_else(|| refused(DispatchRefused::NoRunner, &name))?;
         let ids: Vec<String> = notes.iter().map(|n| n.id.clone()).collect();
         let thread = scheduler
             .dispatch(
@@ -253,7 +260,9 @@ pub async fn list(
         .map(str::to_owned)
         .collect();
     if let Some(bad_id) = notes.iter().find(|id| !schema::is_ulid(id)) {
-        return Err(ApiError::bad_request(format!("{bad_id:?} is not a note id")));
+        return Err(ApiError::bad_request(format!(
+            "{bad_id:?} is not a note id"
+        )));
     }
     if notes.len() > MAX_FILTER_NOTES {
         return Err(ApiError::bad_request(format!(
@@ -341,7 +350,10 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_request_and_every_note() {
-        let notes = [sent("A1", "memo", "Roof"), sent("B2", "task", "Call \"Bo\"")];
+        let notes = [
+            sent("A1", "memo", "Roof"),
+            sent("B2", "task", "Call \"Bo\""),
+        ];
         assert_eq!(
             prompt("  Tidy these.\n", &notes),
             "Tidy these.\nSent with 2 notes; read them with get_note:\n\
@@ -356,7 +368,10 @@ mod tests {
             "Roof: Tidy it"
         );
         assert_eq!(
-            title(&"x".repeat(50), &[sent("A", "memo", ""), sent("B", "memo", "")]),
+            title(
+                &"x".repeat(50),
+                &[sent("A", "memo", ""), sent("B", "memo", "")]
+            ),
             format!("2 notes: {}\u{2026}", "x".repeat(40))
         );
     }

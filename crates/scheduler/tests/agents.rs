@@ -832,7 +832,11 @@ fn notes_sent_to_an_agent_run_once_on_a_dispatch_thread_about_them() {
     // Recorded under the dispatch trigger, once it ends.
     let until = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let runs = r.writer.state().agent_runs("clerk", "dispatch", 20).unwrap();
+        let runs = r
+            .writer
+            .state()
+            .agent_runs("clerk", "dispatch", 20)
+            .unwrap();
         if runs.first().is_some_and(|run| run.ended_ms.is_some()) {
             break;
         }

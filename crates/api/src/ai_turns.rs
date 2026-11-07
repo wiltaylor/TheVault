@@ -322,7 +322,11 @@ pub(crate) fn publish(
             t.notes.clone(),
             agent_threads::state_of(running, &t.question, t.transcript.pending()),
         ),
-        None => (String::new(), Vec::new(), agent_threads::state_of(running, "", 0)),
+        None => (
+            String::new(),
+            Vec::new(),
+            agent_threads::state_of(running, "", 0),
+        ),
     };
     w.state().events().publish(LiveEvent::AiTurn {
         agent: agent.to_owned(),
