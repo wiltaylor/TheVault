@@ -42,6 +42,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
+import { retryGesture } from "./gesture.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -1002,13 +1003,27 @@ async function main() {
     return [dismissed <= 10 && cleared <= 10 ? "pass" : "fail", `Dismissed A: gone ${dismissed.toFixed(1)} s later. Read B and cleared read notifications: gone ${cleared.toFixed(1)} s later.`, []];
   });
 
-  async function swipeAway(title) {
+  /** Opens the shade and waits for notification `title`'s row to stop moving: a gesture sent while the shade opens misses it (TV-92). */
+  async function shadeRow(title) {
     wakeAndUnlock();
     shell("cmd statusbar expand-notifications");
-    const row = await L.waitFor(title, { timeout: 10_000 });
-    shell(`input swipe ${row.x - 300} ${row.y} ${row.x + 700} ${row.y} 250`);
-    await sleep(1_000);
-    shell("cmd statusbar collapse");
+    return L.waitForSteady(title, { timeout: 10_000 });
+  }
+
+  async function swipeAway(title) {
+    try {
+      const tries = await retryGesture(
+        async () => {
+          const row = await shadeRow(title);
+          shell(`input swipe ${row.x - 300} ${row.y} ${row.x + 700} ${row.y} 250`);
+        },
+        () => !shown(title),
+        { fail: `the swipe did not remove the notification "${title}"`, sleep },
+      );
+      if (tries > 1) console.log(`     (the swipe on "${title}" took ${tries} tries)`);
+    } finally {
+      shell("cmd statusbar collapse");
+    }
   }
 
   await check(20, async () => {
@@ -1042,10 +1057,17 @@ async function main() {
     const tapOpen = async (title) => {
       const n = await srv.post("/api/notifications", { title, note: target.id });
       await timeNotification(title, { timeout: 30_000 });
-      wakeAndUnlock();
-      shell("cmd statusbar expand-notifications");
-      await L.tap(title, { timeout: 10_000 });
-      await sleep(4_000);
+      // A tap on the row opens the app and, as the notification cancels itself on a tap, takes it away.
+      const tries = await retryGesture(
+        async () => {
+          const row = await shadeRow(title);
+          shell(`input tap ${row.x} ${row.y}`);
+        },
+        () => !shown(title),
+        { fail: `the tap did not open the notification "${title}"`, sleep },
+      );
+      if (tries > 1) console.log(`     (the tap on "${title}" took ${tries} tries)`);
+      await sleep(3_000);
       const p = await page();
       await until("the note page", () => p.url().includes(target.id), { timeout: 20_000 });
       await until("read on the server", async () => !(await unread()).some((x) => x.id === n.id), { timeout: 20_000 });

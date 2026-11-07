@@ -8,7 +8,7 @@ main:
 
 # Everything a change must pass before it can merge, the release scripts' tests too. Playwright runs separately in test-e2e
 [group('ci')]
-check: rust-tests-declared rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test release-test
+check: rust-tests-declared rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test emulator-harness-test release-test
 
 # Check Rust formatting without changing files
 [group('ci')]
@@ -69,6 +69,11 @@ web-typecheck: web-deps-install
 [group('ci')]
 web-test: web-deps-install
 	pnpm -C web test
+
+# Test the Android emulator harness's helpers that need no device (TV-92)
+[group('ci')]
+emulator-harness-test: (require-tool "node")
+	node --test apps/android/emulator/gesture.test.mjs
 
 # Test the release train's scripts: the version calculation, the Android versionCode, how dpkg, rpm and pacman sort the package versions, the image tags and stamping (docs/releasing.md)
 [group('ci')]
