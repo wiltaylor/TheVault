@@ -380,10 +380,7 @@ pub(crate) fn on_phone(
     let can: Vec<Value> = can(after, true)
         .into_iter()
         .map(|key| {
-            let label = CAPABILITIES
-                .iter()
-                .find(|c| c.0 == key)
-                .map_or("", |c| c.1);
+            let label = CAPABILITIES.iter().find(|c| c.0 == key).map_or("", |c| c.1);
             json!({ "key": key, "label": label, "new": !now.contains(&key) })
         })
         .collect();
@@ -700,7 +697,9 @@ mod tests {
         assert!(sms_send_refused("m", Some(SENDS), SENDS).is_none());
         let moved = SENDS.replace("\"hi\"", "\"hello\"");
         assert!(sms_send_refused("m", Some(SENDS), &moved).is_none());
-        let two = format!("{SENDS}\nfn again() -> Result[Value, string] {{\n    device::sms_send(\"1\", \"x\")\n}}\n");
+        let two = format!(
+            "{SENDS}\nfn again() -> Result[Value, string] {{\n    device::sms_send(\"1\", \"x\")\n}}\n"
+        );
         let why = sms_send_refused("m", Some(SENDS), &two).unwrap();
         assert!(why.contains("calls it 1 times"), "{why}");
         assert!(why.contains("names sms_send 2 times"), "{why}");
@@ -732,7 +731,8 @@ mod tests {
     // call is refused.
     #[test]
     fn a_commented_call_in_the_current_script_does_not_count() {
-        let before = "use device\n// device::sms_send(to, body) once lived here\n/* device::sms_send */\n";
+        let before =
+            "use device\n// device::sms_send(to, body) once lived here\n/* device::sms_send */\n";
         let after = "use device\nfn f() -> Result[Value, string] {\n    device::sms_send(\"1\", \"x\")\n}\n";
         assert!(sms_send_refused("m", Some(before), after).is_some());
         let url = "let u = \"http://x\"\ndevice::sms_send(\"1\", \"x\")\n";

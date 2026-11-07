@@ -811,12 +811,16 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.put_text("/api/device-files/android", ANDROID);
-    let pixel = api.phone("Pixel", json!({ "commands": ["send_sms"], "sms_send": true }));
+    let pixel = api.phone(
+        "Pixel",
+        json!({ "commands": ["send_sms"], "sms_send": true }),
+    );
     api.phone("Tablet", json!({ "contacts_write": true }));
     let current = api.script("device_messages").unwrap();
     // The new code reads an SMS from the phone's store: a new item. It keeps the one send.
-    let changed =
-        format!("{current}\nfn peek() -> Result[Value, string] {{\n    device::sms_get(\"x\")\n}}\n");
+    let changed = format!(
+        "{current}\nfn peek() -> Result[Value, string] {{\n    device::sms_get(\"x\")\n}}\n"
+    );
     let events = api.one(
         &fake,
         "propose_script_change",
@@ -852,13 +856,16 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         assert!(items.contains(&(kept.to_owned(), false)), "{kept}: {d}");
     }
     assert!(items.contains(&("sms_read".to_owned(), true)), "{d}");
-    assert!(!items.iter().any(|(k, _)| k == "calls_read" || k == "contacts_write"), "{d}");
     assert!(
-        d["can"]
-            .as_array()
-            .unwrap()
+        !items
             .iter()
-            .any(|c| c["label"] == "Read all SMS, including the codes and people that capture skips"),
+            .any(|(k, _)| k == "calls_read" || k == "contacts_write"),
+        "{d}"
+    );
+    assert!(
+        d["can"].as_array().unwrap().iter().any(
+            |c| c["label"] == "Read all SMS, including the codes and people that capture skips"
+        ),
         "{d}"
     );
     // The model reads the same.
@@ -867,11 +874,17 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
     assert_eq!(got["device"], *d);
 
     // The Pixel's SMS send is turned off after the card: Apply answers stale, nothing is written.
-    api.set_switches(&pixel, json!({ "commands": ["send_sms"], "sms_send": false }));
+    api.set_switches(
+        &pixel,
+        json!({ "commands": ["send_sms"], "sms_send": false }),
+    );
     let (status, body) = api.apply_as(&api.token(), &p);
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale");
-    assert_eq!(api.script("device_messages").as_deref(), Some(current.as_str()));
+    assert_eq!(
+        api.script("device_messages").as_deref(),
+        Some(current.as_str())
+    );
 
     // Proposed again, the card shows the switch as it is now and applies.
     let events = api.one(
@@ -885,7 +898,10 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
     assert_eq!(p["device"]["devices"][0]["sms_send"], false, "{p}");
     let (status, body) = api.apply_as(&api.token(), &p);
     assert!(status.is_success(), "{status}: {body}");
-    assert_eq!(api.script("device_messages").as_deref(), Some(changed.as_str()));
+    assert_eq!(
+        api.script("device_messages").as_deref(),
+        Some(changed.as_str())
+    );
 }
 
 #[test]
@@ -913,7 +929,10 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.put_text("/api/device-files/android", ANDROID);
-    api.phone("Pixel", json!({ "commands": ["send_sms"], "sms_send": true }));
+    api.phone(
+        "Pixel",
+        json!({ "commands": ["send_sms"], "sms_send": true }),
+    );
     let current = api.script("device_messages").unwrap();
     let forward = format!(
         "{current}\nfn forward() -> Result[Value, string] {{\n    device::sms_send(\"+15550100\", \"x\")\n}}\n"
@@ -937,7 +956,9 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
     assert!(why.contains("names sms_send 2 times"), "{got}");
 
     // Taking the function as a value is a call site too (TV-72 R9).
-    let alias = format!("{current}\nfn later() -> Result[(), string] {{\n    let f = device::sms_send\n    Ok(())\n}}\n");
+    let alias = format!(
+        "{current}\nfn later() -> Result[(), string] {{\n    let f = device::sms_send\n    Ok(())\n}}\n"
+    );
     let events = api.one(
         &fake,
         "propose_script_change",
@@ -970,5 +991,8 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
             .is_some_and(|m| m.contains("device::sms_send")),
         "{body}"
     );
-    assert_eq!(api.script("device_messages").as_deref(), Some(current.as_str()));
+    assert_eq!(
+        api.script("device_messages").as_deref(),
+        Some(current.as_str())
+    );
 }
