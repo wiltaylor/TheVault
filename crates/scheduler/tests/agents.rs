@@ -921,13 +921,23 @@ fn a_dispatch_takes_the_place_of_a_trigger_run_waiting_in_a_full_queue() {
     for i in 0..room {
         r.create("memo", &format!("Memo {i}"), "open", &user());
     }
-    // Two runs start and fifty wait: the queue is full, with no thread in it.
-    r.advance(31);
-    let sent = r
-        .scheduler
-        .dispatch("any", &[], "Sent", "Go.")
-        .expect("a trigger run gives way to a dispatch");
-    r.fake.hold.store(false, Ordering::SeqCst);
+    // A tick waits for the runs it starts, and these are held, so the tick runs on its own
+    // thread. Its runs are all admitted before any starts, so once two are running the queue is
+    // full, with no thread in it.
+    let sent = std::thread::scope(|s| {
+        s.spawn(|| r.advance(31));
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        while r.fake.running.load(Ordering::SeqCst) < scheduler::MAX_RUNNING {
+            assert!(std::time::Instant::now() < until, "no two runs started");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let sent = r
+            .scheduler
+            .dispatch("any", &[], "Sent", "Go.")
+            .expect("a trigger run gives way to a dispatch");
+        r.fake.hold.store(false, Ordering::SeqCst);
+        sent
+    });
     r.fake.wait_turns(room);
     // One trigger run was dropped, so the turns are the room's count, the dispatch among them.
     assert_eq!(r.fake.turns().len(), room);
