@@ -40,6 +40,14 @@ pub struct NewNotification {
     pub source: String,
 }
 
+/// A cap on how many notifications one source may make: at most `max` in the last `window_ms`
+/// milliseconds. See [`State::add_notification_within`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceLimit {
+    pub window_ms: i64,
+    pub max: usize,
+}
+
 /// One stored notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notification {
@@ -173,6 +181,20 @@ fn next_id(tx: &Transaction<'_>, now_ms: i64) -> Result<String> {
 impl State {
     /// Store a notification and return it, removing old ones first (see the module docs).
     pub fn add_notification(&self, n: &NewNotification) -> Result<Notification> {
+        self.add_notification_within(n, &[])
+    }
+
+    /// Store a notification like [`State::add_notification`], unless its source has already made
+    /// `max` notifications in a window of `window_ms` for one of `limits`. Then nothing is stored
+    /// and the error is [`Error::NotificationLimit`] for the first limit reached.
+    ///
+    /// The count and the insert run in one transaction under the connection lock, so callers
+    /// that race on one source cannot both pass a limit that one of them fills.
+    pub fn add_notification_within(
+        &self,
+        n: &NewNotification,
+        limits: &[SourceLimit],
+    ) -> Result<Notification> {
         let n = checked(n)?;
         let now = self.now();
         let mut conn = self.conn();
@@ -187,6 +209,18 @@ impl State {
                 (SELECT id FROM notifications ORDER BY id DESC LIMIT ?1)",
             [MAX_NOTIFICATIONS as i64 - 1],
         )?;
+        for limit in limits {
+            let count = count_from(&tx, &n.source, now.saturating_sub(limit.window_ms))?;
+            if count >= limit.max {
+                // Dropping `tx` rolls back the pruning above too.
+                return Err(Error::NotificationLimit {
+                    source: n.source.clone(),
+                    window_ms: limit.window_ms,
+                    count,
+                    max: limit.max,
+                });
+            }
+        }
         let id = next_id(&tx, now)?;
         tx.execute(
             "INSERT INTO notifications (id, created_ms, title, body, note_id, url, source)
@@ -300,12 +334,7 @@ impl State {
     /// milliseconds, read or not. Rate limits count with it, such as the agents' `notify_user`.
     pub fn notifications_from(&self, source: &str, window_ms: i64) -> Result<usize> {
         let since = self.now().saturating_sub(window_ms);
-        let n: i64 = self.conn().query_row(
-            "SELECT COUNT(*) FROM notifications WHERE source = ?1 AND created_ms > ?2",
-            params![source, since],
-            |r| r.get(0),
-        )?;
-        Ok(usize::try_from(n).unwrap_or(0))
+        count_from(&self.conn(), source, since)
     }
 
     /// Mark one notification read. Marking a read one again keeps when it was first read, and
@@ -372,6 +401,16 @@ impl State {
         }
         Ok(cleared)
     }
+}
+
+/// How many notifications from `source` were made after `since`, read or not.
+fn count_from(conn: &rusqlite::Connection, source: &str, since: i64) -> Result<usize> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM notifications WHERE source = ?1 AND created_ms > ?2",
+        params![source, since],
+        |r| r.get(0),
+    )?;
+    Ok(usize::try_from(n).unwrap_or(0))
 }
 
 /// How many notifications are unread.

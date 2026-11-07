@@ -879,3 +879,62 @@ fn sub_agents_are_granted_like_run_code() {
         json!(["writer"])
     );
 }
+
+/// A lead that may notify the user and start sub agents (TV-74).
+const NOTIFIER: &str = r#"label = "Notifier"
+
+permissions {
+  tools = ["notify_user"]
+
+  subagents {
+    allow = true
+    max   = 2
+  }
+}
+"#;
+
+fn notify_call(id: &str, title: &str) -> (String, &'static str, Value) {
+    (
+        id.to_owned(),
+        "notify_user",
+        json!({ "title": title, "body": "", "note_id": "" }),
+    )
+}
+
+#[test]
+fn a_turn_and_its_sub_agents_share_the_three_notifications_a_turn_may_send() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("notifier", NOTIFIER);
+    let thread = api.thread("notifier");
+    // The turn starts one throwaway sub agent, which sends three notifications; then the turn
+    // tries a fourth.
+    fake.push(calls(&[start("toolu_0", "Notify three")]));
+    fake.push(calls(&[
+        notify_call("toolu_s0", "One"),
+        notify_call("toolu_s1", "Two"),
+        notify_call("toolu_s2", "Three"),
+    ]));
+    fake.push(AnthropicMessage::text("Sent three."));
+    fake.push(calls(&[notify_call("toolu_p0", "Four")]));
+    fake.push(AnthropicMessage::text("Done."));
+    api.chat("notifier", Some(&thread), "Notify the user");
+
+    let requests = fake.message_requests();
+    assert_eq!(requests.len(), 5, "the turn twice, the sub agent twice, the turn again");
+    let sent = results_of(&requests[2].json());
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert!(sent.iter().all(|(error, r)| !error && r["sent"] == true), "{sent:?}");
+    let (error, refused) = &results_of(&requests[4].json())[0];
+    assert!(error, "{refused}");
+    assert_eq!(refused["limited"], true, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("this turn"),
+        "{refused}"
+    );
+    let stored = api.get("/api/notifications?limit=100")["items"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(stored, 3);
+}

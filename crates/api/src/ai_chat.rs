@@ -566,6 +566,7 @@ async fn start_with(
         retry,
         sub: None,
         origin,
+        notified: None,
     };
     Ok(spawn_turn(
         w, prepared, cfg, account, model, note_id, stop, report,
@@ -589,6 +590,9 @@ struct TurnCfg {
     sub: Option<SubMark>,
     /// Where it came from, for the activity log.
     origin: String,
+    /// The notifications sent by the turn that started a sub agent, which it shares; a turn that
+    /// starts none has its own (TV-74).
+    notified: Option<Arc<crate::ai_notify::NotifyCount>>,
 }
 
 /// What a sub agent's turn is (subagents U1).
@@ -638,6 +642,7 @@ fn spawn_turn(
         skills: prepared.skills,
         skills_updated: prepared.skills_updated,
         compact: prepared.compact,
+        notified: cfg.notified.unwrap_or_default(),
     };
     let agent = prepared.agent;
     let history = prepared.history;
@@ -1386,6 +1391,8 @@ struct Turn {
     skills_updated: Option<Value>,
     /// The compaction to make before the first call.
     compact: Option<PendingCompact>,
+    /// The notifications this turn and its sub agent turns have sent (TV-74).
+    notified: Arc<crate::ai_notify::NotifyCount>,
 }
 
 impl Turn {
@@ -1643,8 +1650,6 @@ impl Turn {
         }
         // The images read_asset has sent this turn (ai D19).
         let mut images_sent = 0usize;
-        // The notifications notify_user has sent this turn (TV-32 S1).
-        let mut notified = 0usize;
         for round in 1..=MAX_ROUNDS {
             if self.out.gone() {
                 return;
@@ -2027,15 +2032,12 @@ impl Turn {
                     let limits = setup.limits.clone();
                     let agent = setup.agent.clone();
                     let input = c.input.clone();
-                    let sent = notified;
+                    let sent = self.notified.clone();
                     let got = tokio::task::spawn_blocking(move || {
-                        crate::ai_notify::notify(&w, scope, &agent, &limits, sent, &input)
+                        crate::ai_notify::notify(&w, scope, &agent, &limits, &sent, &input)
                     })
                     .await
                     .unwrap_or_else(|e| ToolOut::error(e.to_string()));
-                    if !got.is_error {
-                        notified += 1;
-                    }
                     if !self
                         .emit(
                             "tool_result",
@@ -2732,6 +2734,7 @@ impl Turn {
                 n,
             }),
             origin,
+            notified: Some(self.notified.clone()),
         };
         let (rx, running) = spawn_turn(
             self.writer.clone(),
