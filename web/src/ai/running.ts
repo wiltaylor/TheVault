@@ -6,6 +6,7 @@
 // browser.
 
 import { createRoot, createSignal } from "solid-js";
+import { markOpened } from "./opened";
 
 export const NEW_REPLIES_KEY = "thevault.ai.new_replies";
 
@@ -55,10 +56,13 @@ const viewing = new Map<string, number>();
 export function viewThread(id: string): () => void {
   viewing.set(id, (viewing.get(id) ?? 0) + 1);
   seen(id);
+  markOpened(id);
   let done = false;
   return () => {
     if (done) return;
     done = true;
+    // What it showed until now is seen: the Dispatched page's dot counts from here (TV-80).
+    markOpened(id);
     const n = (viewing.get(id) ?? 1) - 1;
     if (n > 0) viewing.set(id, n);
     else viewing.delete(id);
