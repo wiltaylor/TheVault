@@ -921,10 +921,17 @@ fn a_turn_and_its_sub_agents_share_the_three_notifications_a_turn_may_send() {
     api.chat("notifier", Some(&thread), "Notify the user");
 
     let requests = fake.message_requests();
-    assert_eq!(requests.len(), 5, "the turn twice, the sub agent twice, the turn again");
+    assert_eq!(
+        requests.len(),
+        5,
+        "the turn twice, the sub agent twice, the turn again"
+    );
     let sent = results_of(&requests[2].json());
     assert_eq!(sent.len(), 3, "{sent:?}");
-    assert!(sent.iter().all(|(error, r)| !error && r["sent"] == true), "{sent:?}");
+    assert!(
+        sent.iter().all(|(error, r)| !error && r["sent"] == true),
+        "{sent:?}"
+    );
     let (error, refused) = &results_of(&requests[4].json())[0];
     assert!(error, "{refused}");
     assert_eq!(refused["limited"], true, "{refused}");

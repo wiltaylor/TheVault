@@ -1006,10 +1006,7 @@ fn concurrent_adds_from_one_source_never_pass_a_limit() {
         .filter(|ok| *ok)
         .count();
     assert_eq!(stored, 10);
-    assert_eq!(
-        state.notifications_from("agent:racer", DAY_MS).unwrap(),
-        10
-    );
+    assert_eq!(state.notifications_from("agent:racer", DAY_MS).unwrap(), 10);
 }
 
 #[test]

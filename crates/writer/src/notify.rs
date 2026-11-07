@@ -15,7 +15,11 @@ impl Writer {
     /// Store notification `n` as [`Writer::notify`] does, unless its source is over one of
     /// `limits`: then [`Error::State`] holds [`state::Error::NotificationLimit`] and nothing is
     /// stored (see [`state::State::add_notification_within`]).
-    pub fn notify_within(&self, n: &NewNotification, limits: &[SourceLimit]) -> Result<Notification> {
+    pub fn notify_within(
+        &self,
+        n: &NewNotification,
+        limits: &[SourceLimit],
+    ) -> Result<Notification> {
         if let Some(id) = n
             .note_id
             .as_deref()
@@ -29,9 +33,11 @@ impl Writer {
                 format!("there is no note {id}")
             }));
         }
-        self.state().add_notification_within(n, limits).map_err(|e| match e {
-            state::Error::InvalidNotification(m) => Error::BadRequest(m),
-            other => Error::State(other),
-        })
+        self.state()
+            .add_notification_within(n, limits)
+            .map_err(|e| match e {
+                state::Error::InvalidNotification(m) => Error::BadRequest(m),
+                other => Error::State(other),
+            })
     }
 }
