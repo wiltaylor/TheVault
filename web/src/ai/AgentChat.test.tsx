@@ -181,6 +181,35 @@ describe("the chat", () => {
     expect(within(items[2]!).queryByLabelText(/wait for you|waits for you/)).toBeNull();
   });
 
+  it("leaves out the threads of sent notes and @ calls, which a link still opens (TV-80)", async () => {
+    agentThreads.mockResolvedValue({
+      threads: [
+        { id: "01JSENT", title: "Roof: tidy", origin: "dispatch", pending: 1 },
+        { id: "01JCALL", title: "Bills", origin: "mention", pending: 0 },
+        { id: "01JTHREAD", title: "Groceries", origin: "user", pending: 1 },
+      ],
+    });
+    agentThread.mockResolvedValue(thread({ id: "01JSENT", title: "Roof: tidy", origin: "dispatch" }));
+    render(() => <AgentChat agent="triage" label="Triage" thread="01JSENT" />);
+    await waitFor(() => expect(agentThread).toHaveBeenCalledWith("triage", "01JSENT"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Chat session: Roof: tidy/ })).toBeTruthy());
+    const list = await sessions();
+    await waitFor(() => expect(list.getAllByRole("option")).toHaveLength(2));
+    expect(list.getAllByRole("option").map((o: HTMLElement) => o.textContent)).toEqual([expect.stringContaining("New chat"), expect.stringContaining("Groceries")]);
+  });
+
+  it("shows the agent's turn limit when a reply in a sent thread is refused (TV-80, TV-77 R3)", async () => {
+    const { ApiError } = await import("../api");
+    agentThread.mockResolvedValue(thread({ id: "01JSENT", title: "Roof: tidy", origin: "dispatch" }));
+    turns.aiTurnStart.mockRejectedValueOnce(new ApiError(429, { error: "too_many_turns", message: "4 chat turns of triage are running already; stop one or wait for it" }));
+    render(() => <AgentChat agent="triage" label="Triage" thread="01JSENT" />);
+    const convo = within(await screen.findByRole("list", { name: "Conversation" }));
+    await waitFor(() => expect(convo.getByText("Tidy my list.")).toBeTruthy());
+    fireEvent.input(screen.getByLabelText("Ask AI"), { target: { value: "The left folder." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await convo.findByText("4 chat turns of triage are running already; stop one or wait for it")).toBeTruthy();
+  });
+
   it("searches the chats by title, and Enter opens the one highlighted", async () => {
     render(() => <AgentChat agent="triage" label="Triage" />);
     await waitFor(() => expect(agentThreads).toHaveBeenCalled());
@@ -911,6 +940,23 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     expect(agentThread).toHaveBeenCalledWith("triage", "01JOLDER");
     expect(hasNewReply("01JOLDER")).toBe(false);
     await waitFor(() => expect(panel.getByRole("button", { name: "Thread: Roof" })).toBeTruthy());
+  });
+
+  it("leaves the threads of sent notes and @ calls out of the panel's thread picker (TV-80)", async () => {
+    await withAgents();
+    agentThreads.mockResolvedValue({
+      threads: [
+        { id: "01JSENT", title: "Sent", origin: "dispatch", pending: 1 },
+        { id: "01JCALL", title: "Called", origin: "mention", pending: 0 },
+        { id: "01JOLDER", title: "Roof", origin: "user", pending: 0 },
+      ],
+    });
+    const { panel } = both();
+    fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+    fireEvent.click(await panel.findByRole("button", { name: "Thread: New thread" }));
+    const menu = within(await panel.findByRole("menu", { name: "Threads" }));
+    await waitFor(() => expect(menu.getAllByRole("menuitemradio")).toHaveLength(1));
+    expect(menu.getByRole("menuitemradio")).toHaveTextContent("Roof");
   });
 
   it("starts a new thread from the picker, and opens the shown one in the agent screen", async () => {

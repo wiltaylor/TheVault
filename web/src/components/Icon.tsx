@@ -167,6 +167,17 @@ export function OutboxIcon() {
   );
 }
 
+/** A robot (Lucide's `bot`), for Dispatched. */
+export function DispatchedIcon() {
+  return (
+    <Glyph>
+      <path d="M12 8V4H8" />
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M2 14h2M20 14h2M15 13v2M9 13v2" />
+    </Glyph>
+  );
+}
+
 /** A scroll with lines of text (Lucide's `scroll-text`), for the Log. */
 export function LogIcon() {
   return (
