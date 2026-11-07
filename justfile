@@ -195,7 +195,7 @@ android-build target='aarch64': (require-tool "cargo-tauri") (require-tool "carg
 
 # Run docs/android-manual-checks.md on a headless Android 15 emulator, and write the results to .scratch/emulator/RESULTS.generated.md; THEVAULT_APK tests another APK, a release APK too (its package id comes from the APK)
 [group('android')]
-android-emulator-checks: (require-tool "emulator") (require-tool "adb") (require-tool "cargo")
+android-emulator-checks: ci::emulator-harness-deps (require-tool "emulator") (require-tool "adb") (require-tool "cargo")
 	#!/usr/bin/env bash
 	set -euo pipefail
 	if [ -z "${THEVAULT_APK:-}" ]; then just android-build x86_64; else just web-build; fi
@@ -246,7 +246,7 @@ android-release: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (requir
 
 # Build the release APK for x86_64 and run it on the headless emulator: it must start, stay up, onboard and pair, and pass checks 1, 2, 3, 7, 8, 11, 17 and 29; builds the aarch64 release too when the release keystore is there (not with THEVAULT_SMOKE_SKIP_AARCH64=1), and records both APKs' sha256 in target/android-release/SMOKE_PASSED, which publish-clients requires (docs/android-release.md)
 [group('android')]
-android-release-smoke: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (require-tool "emulator") (require-tool "adb") (require-tool "jq") (require-tool "cargo") web-build
+android-release-smoke: ci::emulator-harness-deps (require-tool "cargo-tauri") (require-tool "cargo-ndk") (require-tool "emulator") (require-tool "adb") (require-tool "jq") (require-tool "cargo") web-build
 	#!/usr/bin/env bash
 	set -euo pipefail
 	keystore_env="${XDG_CONFIG_HOME:-$HOME/.config}/thevault/android/keystore.env"
