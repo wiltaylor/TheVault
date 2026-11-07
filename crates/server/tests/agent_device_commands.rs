@@ -269,7 +269,10 @@ fn results(fake: &FakeAnthropic) -> Vec<(bool, String)> {
 fn seeded_scripts(api: &Api) {
     api.script("device_messages", DEVICE_MESSAGES);
     api.script("remind", REMIND);
-    api.script("outbox_send", include_str!("../../writer/defaults/outbox_send.ws"));
+    api.script(
+        "outbox_send",
+        include_str!("../../writer/defaults/outbox_send.ws"),
+    );
     api.task(
         "remind",
         "schedule = \"0 7 * * *\"\nscript   = \"remind\"\npaused   = true\n",
