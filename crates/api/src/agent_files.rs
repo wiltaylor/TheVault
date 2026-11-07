@@ -303,8 +303,8 @@ pub async fn read(
     Ok(agent_response(&headers, &agent, wcl, account))
 }
 
-/// The JSON body of `PUT /api/agents/{name}`: `wcl`, or the form `GET` answers. `name`, `kind`
-/// and `built_in` are what `GET` answers and are ignored.
+/// The JSON body of `PUT /api/agents/{name}`: `wcl`, or the form `GET` answers. `name`, `kind`,
+/// `built_in` and `warnings` are what `GET` answers and are ignored.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct AgentBody {
@@ -313,6 +313,9 @@ pub struct AgentBody {
     _name: Option<Value>,
     #[serde(default, rename = "built_in")]
     _built_in: Option<Value>,
+    /// What GET answers (the warnings of the saved file); ignored.
+    #[serde(default, rename = "warnings")]
+    _warnings: Option<Value>,
     label: Option<String>,
     description: Option<String>,
     icon: Option<String>,
