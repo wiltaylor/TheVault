@@ -963,7 +963,7 @@ fn add_notification_within_refuses_past_a_limit_and_stores_nothing() {
     assert!(
         matches!(
             &err,
-            Error::NotificationLimit { source, window_ms: 1_000, count: 2, max: 2 } if source == "agent:a"
+            Error::NotificationLimit { by, window_ms: 1_000, count: 2, max: 2 } if by == "agent:a"
         ),
         "{err:?}"
     );

@@ -214,7 +214,7 @@ impl State {
             if count >= limit.max {
                 // Dropping `tx` rolls back the pruning above too.
                 return Err(Error::NotificationLimit {
-                    source: n.source.clone(),
+                    by: n.source.clone(),
                     window_ms: limit.window_ms,
                     count,
                     max: limit.max,

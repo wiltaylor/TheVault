@@ -119,9 +119,9 @@ pub enum Error {
     #[error("no notification {0}")]
     UnknownNotification(String),
     /// The source already made `count` notifications in the window, and the limit is `max`.
-    #[error("{source} made {count} notifications in the last {window_ms} ms, the limit is {max}")]
+    #[error("{by} made {count} notifications in the last {window_ms} ms, the limit is {max}")]
     NotificationLimit {
-        source: String,
+        by: String,
         window_ms: i64,
         count: usize,
         max: usize,
