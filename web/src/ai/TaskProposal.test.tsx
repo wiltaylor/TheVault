@@ -93,6 +93,7 @@ const CREATE = {
 
 const SCRIPT = "fn run() -> Result[(), string] {\n    Ok(())\n}\n";
 const CHANGE = { ...CREATE, id: "toolu_c", op: "change", exists: true, before: BEFORE, script_before: SCRIPT, script_after: SCRIPT.replace("Ok(())", "let x = 1\n    Ok(())"), warnings: [] };
+const READ_ONLY = { ...CREATE, id: "toolu_r", script_before: SCRIPT };
 const PAUSED = { ...CREATE, id: "toolu_p", task: { ...TASK, paused: true }, next_runs: [] };
 const DELETE = { ...CREATE, id: "toolu_d", op: "delete", exists: true, before: AFTER, after: null, next_runs: [], runs_as: [], warnings: [] };
 
@@ -165,7 +166,7 @@ describe("task proposals", () => {
   it("shows the script a proposal does not write, read-only", async () => {
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await ask(m);
-    propose({ ...CREATE, id: "toolu_r", script_before: SCRIPT });
+    propose(READ_ONLY);
     const card = await m.findByRole("region", { name: "Proposed new task nightly" });
     expect(card).toHaveTextContent("scripts/stamp.ws stays as it is; the task runs it:");
     expect(within(card).getByLabelText("Script")).toHaveTextContent("fn run() -> Result[(), string]");
