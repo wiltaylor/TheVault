@@ -370,7 +370,11 @@ fn notify_user_keeps_to_its_turn_hour_and_day_limits() {
     let api = Api::start(&fake);
 
     // Four in one turn: the fourth is refused.
-    api.notify(&fake, None, &[hello("1"), hello("2"), hello("3"), hello("4")]);
+    api.notify(
+        &fake,
+        None,
+        &[hello("1"), hello("2"), hello("3"), hello("4")],
+    );
     let results = last_results(&fake);
     assert_eq!(results.len(), 4, "{results:?}");
     assert!(results[..3].iter().all(|(e, _)| !e), "{results:?}");
@@ -456,5 +460,8 @@ fn an_unattended_run_is_offered_notify_user_and_uses_it() {
     assert_eq!(items[0]["source"], "agent:watcher");
     assert_eq!(items[0]["note"], memo.as_str());
     let runs = api.get("/api/agents/watcher/runs");
-    assert_eq!(runs["triggers"][0]["runs"][0]["outcome"], "succeeded", "{runs}");
+    assert_eq!(
+        runs["triggers"][0]["runs"][0]["outcome"], "succeeded",
+        "{runs}"
+    );
 }

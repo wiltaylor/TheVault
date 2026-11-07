@@ -119,10 +119,7 @@ pub(crate) fn notify(
             }
         };
         if !limits.allows(&note.type_name) {
-            return ToolOut::error(format!(
-                "This agent may not read {} notes.",
-                note.type_name
-            ));
+            return ToolOut::error(format!("This agent may not read {} notes.", note.type_name));
         }
         note_title = writer::doc_to_json(&note.doc)["fields"]["title"]
             .as_str()
@@ -172,7 +169,9 @@ pub(crate) fn notify(
 
 /// The answer to a call over a limit: why, and that nothing was sent.
 fn refused(why: &str) -> ToolOut {
-    let message = format!("Not sent: {why}. Do not try again now; say in your answer what you would have told the user.");
+    let message = format!(
+        "Not sent: {why}. Do not try again now; say in your answer what you would have told the user."
+    );
     let mut out = ToolOut::error(message.clone());
     out.content = json!({ "error": message, "limited": true }).to_string();
     out
