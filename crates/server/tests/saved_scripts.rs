@@ -713,3 +713,67 @@ fn run_saved_is_never_granted_without_an_admin() {
         true
     );
 }
+
+/// `run_saved_script` refuses the shipped handler-only scripts, whatever the function and the
+/// arguments: an agent cannot send a text or mail through `outbox_send` or a device script with a
+/// made-up item. A user's own script still runs.
+#[test]
+fn run_saved_script_refuses_the_built_in_handler_scripts() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("scripter", SCRIPTER);
+    api.agent("saver", SAVER);
+    api.script("helpers", HELPERS);
+    api.secret("weather_key", "k-123");
+    let made_up = json!([{ "kind": "sms", "fields": { "phone": "+15550100", "body": "hi" } }]);
+    api.calls(
+        &fake,
+        Some("scripter"),
+        &[
+            (
+                "run_saved_script",
+                json!({ "script": "outbox_send", "function": "send_sms", "args": made_up.to_string() }),
+            ),
+            (
+                "run_saved_script",
+                json!({ "script": "outbox_send", "function": "send_email", "args": null }),
+            ),
+            (
+                "run_saved_script",
+                json!({ "script": "device_messages", "function": "send_sms", "args": made_up.to_string() }),
+            ),
+            (
+                "run_saved_script",
+                json!({ "script": "helpers", "function": "key", "args": null }),
+            ),
+        ],
+    );
+    let r = results(&fake);
+    for (i, function) in ["send_sms", "send_email", "send_sms"].iter().enumerate() {
+        assert!(r[i].0, "{function}: {}", r[i].1);
+        assert_eq!(r[i].1["kind"], "not_allowed", "{}", r[i].1);
+        assert!(
+            r[i].1["error"]
+                .as_str()
+                .unwrap()
+                .contains("only the vault's handlers and device commands"),
+            "{}",
+            r[i].1
+        );
+    }
+    // A user's own script is not on the list, so it still runs for this agent.
+    assert!(!r[3].0, "{}", r[3].1);
+    assert_eq!(r[3].1["result"], "k-123", "{}", r[3].1);
+    // The refusal is the same for an agent without run_code.
+    api.calls(
+        &fake,
+        Some("saver"),
+        &[(
+            "run_saved_script",
+            json!({ "script": "outbox_send", "function": "send_sms", "args": made_up.to_string() }),
+        )],
+    );
+    let r = results(&fake);
+    assert!(r[0].0, "{}", r[0].1);
+    assert_eq!(r[0].1["kind"], "not_allowed", "{}", r[0].1);
+}
