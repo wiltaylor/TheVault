@@ -73,8 +73,11 @@
 //! dropped, which closes its connection. The turns form (`crate::ai_turns`, ai D23) runs its
 //! turns through the same [`start`], holding their events itself, so a turn on a thread runs on
 //! with no client reading until it ends or is stopped (agents G17), and `POST /api/ai/apply` applies a proposal with [`apply_change`]. An agent
-//! trigger's run (`crate::agent_runs`, agents G12) is a turn with no client, [`run_unattended`],
-//! offered no change tool whose confirmation switch is on.
+//! trigger's run (`crate::agent_runs`, agents G12) is a turn with no client, [`run_unattended`].
+//! What it does with a change tool whose confirmation switch is on is its [`Held`] mode, from
+//! its thread's origin (TV-77 D2): a trigger's run is offered none, nor any tool of
+//! [`ALWAYS_PROPOSE`]; a call from a note or a dispatch keeps them, and their proposals wait in
+//! the thread for the user's Apply.
 
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -221,9 +224,11 @@ pub async fn chat(
 
 /// Run one unattended turn of agent `agent` on its thread `thread`, whose user message is
 /// `prompt`, and wait for it to end (agents G12). The agent is the caller, with `write` scope,
-/// and `admin` when its permissions allow a type or taxonomy change; the turn is offered no
-/// change tool whose confirmation switch is on, so nothing waits for a user. A model call that
-/// fails with a transient error is made again after each of `waits` (`crate::ai_retry`).
+/// and `admin` when its permissions allow a type or taxonomy change. The thread's origin sets
+/// its [`Held`] mode: a trigger's run is offered no change tool whose confirmation switch is on,
+/// so nothing waits for a user, while a call from a note or a dispatch keeps those changes as
+/// proposals in the thread (TV-77 D2). A model call that fails with a transient error is made
+/// again after each of `waits` (`crate::ai_retry`).
 pub(crate) async fn run_unattended(
     w: Arc<Writer>,
     agent: &Agent,
@@ -331,17 +336,50 @@ fn change_switch(name: &str) -> Option<&'static str> {
     })
 }
 
+/// The change tools that always propose, whatever the agent's switches say: their change waits
+/// for the user's Apply in every run. A trigger's run ([`Held::Drop`]) leaves them out, as no one
+/// would see the proposal; a chat, a call from a note and a dispatch offer them (TV-77 F11). A
+/// new tool of that kind is added here, and [`Direct::covers`] never covers its events.
+const ALWAYS_PROPOSE: &[&str] = &[];
+
+/// What a turn does with a change tool whose change would only be proposed: one whose
+/// confirmation switch is on, or one of [`ALWAYS_PROPOSE`] (agents G12, TV-77 D2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// Offer it: the change waits in the thread as a proposal for the user's Apply. A chat, and
+    /// an unattended run a person asked for: a call from a note or a dispatch.
+    Propose,
+    /// Leave it out, and say which changes are held back ([`withheld_note`]): a trigger's run,
+    /// whose thread no one looks at.
+    Drop,
+}
+
+/// The origins of the unattended runs a person asked for, which keep proposals ([`Held::Propose`]).
+const PROPOSING_ORIGINS: [&str; 2] = [scheduler::MENTION_ORIGIN, scheduler::DISPATCH_ORIGIN];
+
+impl Held {
+    /// The mode of a turn, unattended or not, on a thread of origin `origin`. An unattended run
+    /// of any other origin, a trigger's (`trigger:<name>`) or one not known here, drops them.
+    fn of(unattended: bool, origin: &str) -> Held {
+        if !unattended || PROPOSING_ORIGINS.contains(&origin) {
+            Held::Propose
+        } else {
+            Held::Drop
+        }
+    }
+}
+
 /// The tools a turn offers: those the internet switches leave (ai D28), `web_search` only with a
 /// Brave key (ai D26), only those the agent may use (agents G4), the browser tools with
 /// `browser`, the agent's browser permission and a browser box, whatever its tools list says
 /// (browser B6), the skill tools only when the agent uses skills, with
-/// `install_skill_in_browser` beside the browser tools (skills S6), and, unattended, no change
-/// tool that would only propose (agents G12).
+/// `install_skill_in_browser` beside the browser tools (skills S6), and, when `drop` gives what
+/// the turn makes ([`Held::Drop`]), no change tool that would only propose (agents G12).
 fn turn_tools(
     web: ai::Web,
     brave: bool,
     allowed: Option<&[String]>,
-    unattended: Option<Direct>,
+    drop: Option<Direct>,
     browser: bool,
     skills: bool,
 ) -> Vec<ToolSpec> {
@@ -361,8 +399,11 @@ fn turn_tools(
             tools.push(crate::ai_skills::install_spec());
         }
     }
-    if let Some(direct) = unattended {
-        tools.retain(|t| change_switch(&t.name).is_none_or(|s| direct.makes(s)));
+    if let Some(direct) = drop {
+        tools.retain(|t| {
+            !ALWAYS_PROPOSE.contains(&t.name.as_str())
+                && change_switch(&t.name).is_none_or(|s| direct.makes(s))
+        });
     }
     tools
 }
@@ -409,9 +450,10 @@ const SWITCHES: [(&str, &str, &str); 9] = [
     ),
 ];
 
-/// For an unattended run: the changes `agent` may make with someone present that this run is not
-/// offered, because their switch asks first and no one can apply a proposal (agents G12), as a
-/// section of the system text. `None` when nothing is held back.
+/// For a trigger's run ([`Held::Drop`]): the changes `agent` may make with someone present that
+/// this run is not offered, because their switch asks first or their tool always proposes, and
+/// no one sees a proposal (agents G12), as a section of the system text. `None` when nothing is
+/// held back.
 fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
     let names: std::collections::BTreeSet<String> = tool_specs()
         .into_iter()
@@ -419,7 +461,7 @@ fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
         .chain(crate::ai_browser::tool_specs())
         .map(|t| t.name)
         .collect();
-    let held: Vec<String> = SWITCHES
+    let lines: Vec<String> = SWITCHES
         .iter()
         .filter(|(key, ..)| {
             !direct.makes(key)
@@ -428,21 +470,28 @@ fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
                 })
         })
         .map(|(_, label, what)| format!("- {what}: your \"{label}\" switch is on"))
+        .chain(
+            ALWAYS_PROPOSE
+                .iter()
+                .filter(|n| agent.permissions.allows_tool(n))
+                .map(|n| format!("- {n}: its change always waits for the user's Apply")),
+        )
         .collect();
-    if held.is_empty() {
+    if lines.is_empty() {
         return None;
     }
     Some(format!(
         "\n## This run is unattended\n\nNo one is present to apply a proposal, so this run has \
          no tools for the changes that would only be proposed:\n\n{}\n\nWhen the task needs one \
          of them, do not say you have no tool for it. Say which change you would make, and that \
-         it needs the user: in a chat with you, or with that switch turned off on your \
-         Permissions tab.\n",
-        held.join("\n")
+         it needs the user: in a chat with you or a call from a note, where it waits for their \
+         Apply, or with that switch turned off on your Permissions tab.\n",
+        lines.join("\n")
     ))
 }
 
-/// The tools an unattended run of `agent` is offered, by name (agents G12).
+/// The tools a trigger's run of `agent` is offered, by name (agents G12): [`Held::Drop`]. A call
+/// from a note or a dispatch is offered the change tools that would only propose too.
 pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
     let direct = Direct::of(confirm_of(agent), unattended_scope(agent));
     let brave = crate::brave::Search::load(w.state()).is_some();
@@ -563,6 +612,7 @@ async fn start_with(
         scope,
         agent_name: named.then(|| prepared.agent.name.clone()),
         unattended: report.is_some(),
+        held: Held::of(report.is_some(), &origin),
         retry,
         sub: None,
         origin,
@@ -581,8 +631,11 @@ struct TurnCfg {
     scope: Scope,
     /// The agent its proposals name, so their apply is authored by it.
     agent_name: Option<String>,
-    /// Nobody waits on it to apply anything (agents G12, subagents U8).
+    /// Nobody follows it as it runs: it reports its end and is not listed as a turn (agents
+    /// G12, subagents U8).
     unattended: bool,
+    /// What it does with a change that would only be proposed (TV-77 D2).
+    held: Held,
     /// How an unattended turn retries a model call that failed with a transient error.
     retry: Option<CapacityRetry>,
     /// For a sub agent's turn (subagents U1).
@@ -632,6 +685,7 @@ fn spawn_turn(
         log: prepared.log.map(std::sync::Mutex::new),
         report,
         unattended: cfg.unattended,
+        held: cfg.held,
         retry: cfg.retry,
         sub: cfg.sub,
         activity,
@@ -1210,7 +1264,7 @@ fn setup(
     model: Option<String>,
     note_id: Option<String>,
     skills: Option<&str>,
-    unattended: bool,
+    held: Held,
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let settings = Settings::load(state)?;
@@ -1282,9 +1336,11 @@ fn setup(
         system.push_str(&note);
     }
     let direct = Direct::of(confirm_of(agent), change_scope(scope, agent));
-    // An unattended run is offered no change tool that would only propose (agents G12): say
+    // A trigger's run is offered no change tool that would only propose (agents G12): say
     // which, so the model names the switch rather than saying it has no tool (TV-34).
-    if unattended && let Some(note) = withheld_note(agent, direct) {
+    if held == Held::Drop
+        && let Some(note) = withheld_note(agent, direct)
+    {
         system.push_str(&note);
     }
     // The skills come last, the thread's snapshot, so what comes before stays a stable prefix
@@ -1370,9 +1426,12 @@ struct Turn {
     log: Option<std::sync::Mutex<ThreadLog>>,
     /// For an unattended turn (agents G12): how it ended and its trail lines.
     report: Option<Report>,
-    /// Nobody waits on the turn: it is offered no change tool that would only propose (agents
-    /// G12), as is a sub agent of such a turn (subagents U8).
+    /// Nobody follows the turn as it runs (agents G12), nor a sub agent of such a turn
+    /// (subagents U8).
     unattended: bool,
+    /// What the turn does with a change that would only be proposed, as does a sub agent of it,
+    /// whose proposals wait in this turn's thread (TV-77 D2).
+    held: Held,
     /// How an unattended turn, and a sub agent of one, retries a model call that failed with a
     /// transient error (`crate::ai_retry`).
     retry: Option<CapacityRetry>,
@@ -1572,7 +1631,7 @@ impl Turn {
     ) {
         let w = self.writer.clone();
         let scope = self.scope;
-        let unattended = self.unattended;
+        let held = self.held;
         let skills = self.skills.section().map(str::to_owned);
         let uses_skills = crate::ai_skills::uses_skills(&agent);
         let setup = match tokio::task::spawn_blocking(move || {
@@ -1584,7 +1643,7 @@ impl Turn {
                 model,
                 note_id,
                 skills.as_deref(),
-                unattended,
+                held,
             )
         })
         .await
@@ -1605,7 +1664,7 @@ impl Turn {
             setup.web,
             setup.web_search.is_some(),
             setup.tools.as_deref(),
-            self.unattended.then_some(setup.direct),
+            (self.held == Held::Drop).then_some(setup.direct),
             setup.browser.is_some(),
             uses_skills,
         );
@@ -2726,6 +2785,7 @@ impl Turn {
             scope: self.scope,
             agent_name: Some(agent.clone()),
             unattended: self.unattended,
+            held: self.held,
             retry: self.retry.as_ref().map(|r| r.for_sub(n)),
             sub: Some(SubMark {
                 throwaway: delegated.is_none(),
@@ -4382,6 +4442,21 @@ mod tests {
         assert!(!t.contains("## Type files"));
         assert!(!t.contains("## Event series occurrences"));
         assert!(t.len() < RESULT_LIMIT * 8 / 10, "{} bytes", t.len());
+    }
+
+    #[test]
+    fn only_a_trigger_run_drops_the_changes_that_would_only_be_proposed() {
+        // A chat keeps them, whatever its thread's origin.
+        for origin in ["user", "mention", "trigger:nightly"] {
+            assert_eq!(Held::of(false, origin), Held::Propose, "{origin}");
+        }
+        // Unattended: a call from a note and a dispatch keep them (TV-77 D2), a trigger's run
+        // and any origin not known here drop them.
+        assert_eq!(Held::of(true, "mention"), Held::Propose);
+        assert_eq!(Held::of(true, "dispatch"), Held::Propose);
+        for origin in ["trigger:nightly", "trigger:mention", "subagent:01JB", ""] {
+            assert_eq!(Held::of(true, origin), Held::Drop, "{origin}");
+        }
     }
 
     #[test]

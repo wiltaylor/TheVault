@@ -46,6 +46,11 @@ pub const DEBOUNCE_MS: i64 = 30_000;
 /// The origin of a thread a call from a note opened.
 pub const MENTION_ORIGIN: &str = "mention";
 
+/// The origin of a thread that notes sent to an agent opened (TV-77 D1). Like a call from a
+/// note, a person asked for its run, so its changes behind an "ask before" switch wait in the
+/// thread as proposals (TV-77 D2).
+pub const DISPATCH_ORIGIN: &str = "dispatch";
+
 /// How much of the request a called agent's thread title holds, in characters.
 const MENTION_TITLE_CHARS: usize = 40;
 

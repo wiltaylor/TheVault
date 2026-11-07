@@ -46,8 +46,8 @@ use state::{Clock, RunOutcome, TaskRun};
 use writer::Writer;
 
 pub use agents::{
-    AgentJob, AgentRunner, DEBOUNCE_MS, MAX_PER_HOUR, MAX_QUEUED, MAX_RUNNING, MENTION_ORIGIN,
-    TriggerBinding, TriggerHooks, TurnReport,
+    AgentJob, AgentRunner, DEBOUNCE_MS, DISPATCH_ORIGIN, MAX_PER_HOUR, MAX_QUEUED, MAX_RUNNING,
+    MENTION_ORIGIN, TriggerBinding, TriggerHooks, TurnReport,
 };
 pub use describe::describe;
 pub use task::{MAX_RETRIES, TaskDef, parse_duration, preview, with_paused};
