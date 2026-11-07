@@ -35,10 +35,14 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
     private var setupShown = false
     private var webView: WebView? = null
 
+    /** Asks the page to open the bell panel after a tap on the notifications' summary. */
+    internal val panel = NotificationPanel()
+
     override fun load(webView: WebView) {
         super.load(webView)
         this.webView = webView
         SystemBars(activity, webView).install()
+        webView.addJavascriptInterface(panel, NotificationPanel.JS_NAME)
         if (!openAndSync()) {
             activity.startActivity(Intent(activity, OnboardingActivity::class.java))
         }
@@ -235,14 +239,22 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
 
     /**
      * A tapped notification: mark a server notification read, and show its note or page. The
-     * phone's own notifications, such as [CaptureProblems], carry a page and no server id.
+     * phone's own notifications, such as [CaptureProblems], carry a page and no server id. The
+     * summary of the mirrored ones opens the bell panel on the page that is up.
      */
     private fun opened(intent: Intent?) {
         if (intent == null) return
         val id = intent.getStringExtra(NotificationMirror.EXTRA_ID)
         val path = intent.getStringExtra(NotificationMirror.EXTRA_PATH)
+        val bell = intent.getBooleanExtra(NotificationMirror.EXTRA_PANEL, false)
         intent.removeExtra(NotificationMirror.EXTRA_ID)
         intent.removeExtra(NotificationMirror.EXTRA_PATH)
+        intent.removeExtra(NotificationMirror.EXTRA_PANEL)
+        if (bell) {
+            // A page still starting asks for it itself; a running one is told now.
+            panel.request()
+            webView?.let { view -> view.post { view.evaluateJavascript(NotificationPanel.SCRIPT, null) } }
+        }
         if (id != null) MarkReadWorker.enqueue(activity.applicationContext, id)
         if (path != null && path.startsWith("/") && !path.startsWith("//")) {
             webView?.let { view -> view.post { view.loadUrl(ORIGIN + path) } }

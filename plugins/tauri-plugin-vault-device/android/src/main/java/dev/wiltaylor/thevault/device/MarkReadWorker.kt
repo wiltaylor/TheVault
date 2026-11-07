@@ -54,5 +54,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
         if (intent.action != NotificationMirror.ACTION_DISMISSED) return
         val id = intent.getStringExtra(NotificationMirror.EXTRA_ID) ?: return
         MarkReadWorker.enqueue(context, id)
+        // The last row swiped out of the group takes the summary with it.
+        NotificationMirror.summary(context, NotificationMirror.shown(context) - id)
     }
 }
