@@ -1,7 +1,7 @@
 // Send to agent (TV-78): the dialog offers the enabled agents, needs an instruction, posts every
 // note in one request, links the new thread, and shows what the server refuses.
 
-import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { refreshAgents } from "../agents";
 import { type AgentSummary, ApiError, api } from "../api";
@@ -30,13 +30,13 @@ function thread(agent: string, id: string) {
 describe("the Send to agent dialog", () => {
   it("offers only enabled agents and needs an instruction", async () => {
     const r = render(() => <SendToAgentDialog notes={[NOTE]} onClose={() => {}} />);
-    const options = [...r.getByRole("combobox").querySelectorAll("option")].map((o) => o.textContent);
+    const options = [...screen.getByRole("combobox").querySelectorAll("option")].map((o) => o.textContent);
     expect(options).toEqual(["Assistant", "Clerk"]);
-    const send = r.getByRole("button", { name: "Send" });
+    const send = screen.getByRole("button", { name: "Send" });
     expect(send).toBeDisabled();
-    fireEvent.input(r.getByRole("textbox"), { target: { value: "   " } });
+    fireEvent.input(screen.getByRole("textbox"), { target: { value: "   " } });
     expect(send).toBeDisabled();
-    fireEvent.input(r.getByRole("textbox"), { target: { value: "Summarise it" } });
+    fireEvent.input(screen.getByRole("textbox"), { target: { value: "Summarise it" } });
     expect(send).toBeEnabled();
     r.unmount();
   });
@@ -45,15 +45,15 @@ describe("the Send to agent dialog", () => {
     const dispatch = vi.spyOn(api, "dispatch").mockResolvedValue(thread("clerk", "01THREAD"));
     const onSent = vi.fn();
     const r = render(() => <SendToAgentDialog notes={[NOTE, OTHER]} onClose={() => {}} onSent={onSent} />);
-    expect(r.getByRole("heading")).toHaveTextContent("Send 2 notes to an agent");
-    fireEvent.change(r.getByRole("combobox"), { target: { value: "clerk" } });
-    fireEvent.input(r.getByRole("textbox"), { target: { value: "  File these  " } });
-    fireEvent.click(r.getByRole("button", { name: "Send" }));
-    expect(await r.findByRole("status")).toHaveTextContent("Sent to Clerk.");
+    expect(screen.getByRole("heading")).toHaveTextContent("Send 2 notes to an agent");
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "clerk" } });
+    fireEvent.input(screen.getByRole("textbox"), { target: { value: "  File these  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Sent to Clerk.");
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith("clerk", [NOTE, OTHER], "File these");
     expect(onSent).toHaveBeenCalledWith("clerk", "01THREAD");
-    expect(r.getByRole("link", { name: "Open thread" })).toHaveAttribute("href", "/agents/clerk?thread=01THREAD");
+    expect(screen.getByRole("link", { name: "Open thread" })).toHaveAttribute("href", "/agents/clerk?thread=01THREAD");
     r.unmount();
   });
 
@@ -65,11 +65,11 @@ describe("the Send to agent dialog", () => {
     vi.spyOn(api, "dispatch").mockRejectedValue(new ApiError(status, body));
     const onClose = vi.fn();
     const r = render(() => <SendToAgentDialog notes={[NOTE]} onClose={onClose} />);
-    fireEvent.input(r.getByRole("textbox"), { target: { value: "Do it" } });
-    fireEvent.click(r.getByRole("button", { name: "Send" }));
-    expect(await r.findByRole("alert")).toHaveTextContent(shown);
-    expect(r.getByRole("textbox")).toHaveValue("Do it");
-    expect(r.getByRole("button", { name: "Send" })).toBeEnabled();
+    fireEvent.input(screen.getByRole("textbox"), { target: { value: "Do it" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(shown);
+    expect(screen.getByRole("textbox")).toHaveValue("Do it");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
     expect(onClose).not.toHaveBeenCalled();
     r.unmount();
   });
@@ -77,7 +77,7 @@ describe("the Send to agent dialog", () => {
   it("closes on Escape", () => {
     const onClose = vi.fn();
     const r = render(() => <SendToAgentDialog notes={[NOTE]} onClose={onClose} />);
-    fireEvent.keyDown(r.getByRole("dialog"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
     r.unmount();
   });
@@ -86,10 +86,10 @@ describe("the Send to agent dialog", () => {
 describe("the Send to agent button", () => {
   it("opens the dialog for its notes", async () => {
     const r = render(() => <SendToAgentButton notes={[NOTE]} />);
-    expect(r.queryByRole("dialog")).toBeNull();
-    fireEvent.click(r.getByRole("button", { name: "Send to agent" }));
-    await waitFor(() => expect(r.getByRole("dialog")).toBeInTheDocument());
-    expect(r.getByRole("heading")).toHaveTextContent("Send this note to an agent");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByRole("heading")).toHaveTextContent("Send this note to an agent");
     r.unmount();
   });
 });
