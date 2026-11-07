@@ -363,3 +363,85 @@ fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
         "{runs}"
     );
 }
+
+/// A helper agent, and a boss that may grant it run saved scripts, with its agents switch off
+/// (TV-84).
+const HELPER: &str = "label = \"Helper\"\n";
+const HELPER_GRANT: &str = "label = \"Helper\"\n\npermissions {\n  scripts {\n    run_saved = true\n  }\n}\n";
+const BOSS: &str = "label = \"Boss\"\n\npermissions {\n  confirm {\n    agents = false\n  }\n\n  scripts {\n    run_saved = true\n  }\n}\n\ntrigger opened {\n  on     = [\"create\"]\n  type   = \"memo\"\n  prompt = \"Look after the memo.\"\n}\n";
+
+#[test]
+fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("helper", HELPER);
+    api.agent("boss", BOSS);
+    // The run is offered the agent change tool, and proposes a grant of run saved scripts.
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_g",
+        "propose_agent_change",
+        json!({ "name": "helper", "wcl": HELPER_GRANT }),
+    ));
+    fake.push(AnthropicMessage::text("Needs the user."));
+    api.memo("Roof", "open");
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 2);
+    assert!(
+        tool_names(&fake, 0).contains(&"propose_agent_change".to_owned()),
+        "{:?}",
+        tool_names(&fake, 0)
+    );
+    // The model is told the change was refused, not that it waits.
+    let r = fake.message_requests()[1].json();
+    let result = r["messages"].as_array().unwrap().last().unwrap()["content"][0].clone();
+    assert_eq!(result["is_error"], true, "{result}");
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("the change was not proposed"),
+        "{result}"
+    );
+    // Nothing waits in the thread, and the helper is unchanged.
+    let threads = api.get("/api/agents/boss/threads");
+    let threads = threads["threads"].as_array().unwrap();
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    assert_eq!(threads[0]["pending"], 0, "{threads:?}");
+    let runs = api.runs("boss");
+    assert_eq!(
+        runs["triggers"][0]["runs"][0]["outcome"], "succeeded",
+        "{runs}"
+    );
+    let helper = api.get("/api/agents/helper");
+    assert_ne!(helper["permissions"]["scripts"]["run_saved"], true, "{helper}");
+
+    // A chat with the same agent still gets the grant as a pending proposal.
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_c",
+        "propose_agent_change",
+        json!({ "name": "helper", "wcl": HELPER_GRANT }),
+    ));
+    fake.push(AnthropicMessage::text("Proposed."));
+    let res = api
+        .client
+        .post(api.server.url("/api/ai/chat"))
+        .bearer_auth(api.server.admin_token())
+        .json(&json!({
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Grant it." }] }],
+            "agent": "boss",
+        }))
+        .send()
+        .unwrap();
+    assert!(res.status().is_success());
+    let body = res.text().unwrap();
+    assert!(body.contains("event: agent_proposal"), "{body}");
+    assert!(body.contains("\"grants_run_saved\":true"), "{body}");
+    let threads = api.get("/api/agents/boss/threads");
+    let pending: i64 = threads["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["pending"].as_i64())
+        .sum();
+    assert_eq!(pending, 1, "{threads}");
+}

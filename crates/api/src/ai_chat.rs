@@ -2116,10 +2116,11 @@ impl Turn {
                 let author = self.author.clone();
                 let call = c.clone();
                 let direct = setup.direct;
+                let held = self.held;
                 let limits = setup.limits.clone();
                 let agent = setup.agent.clone();
                 let got = tokio::task::spawn_blocking(move || {
-                    run_tool(&w, &author, scope, direct, &limits, &agent, &call)
+                    run_tool(&w, &author, scope, direct, held, &limits, &agent, &call)
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
@@ -3263,12 +3264,15 @@ fn rows_out(rows: Vec<Value>, extra: Value) -> ToolOut {
 
 /// Run one tool call. A call the model got wrong is answered as an error, not run (ai D5).
 /// A proposal whose confirmation is off is applied here, in place of being sent (ai D22). The
-/// Outbox tools draft at once, as the agent, with a caller that has `write` (outbox X9).
+/// Outbox tools draft at once, as the agent, with a caller that has `write` (outbox X9). A
+/// proposal that is not made here is refused in a trigger's run ([`Held::Drop`]): no one would
+/// apply it, so it must not wait (TV-84).
 fn run_tool(
     w: &Writer,
     author: &Author,
     scope: Scope,
     direct: Direct,
+    held: Held,
     limits: &Limits,
     agent: &Agent,
     call: &ToolCall,
@@ -3293,9 +3297,19 @@ fn run_tool(
             };
             make(w, &author, event, &p, out.summary)
         }
+        Some(_) if held == Held::Drop => ToolOut::error(HELD_REFUSAL),
         _ => out,
     }
 }
+
+/// What a trigger's run is told when a change would wait for an apply (TV-84). Such a change is
+/// refused, not proposed: a trigger's thread has no one to apply it, and the proposal would stay
+/// pending where nobody sees it. A grant of run code, run saved scripts or sub agents is the
+/// case the agent tools reach.
+const HELD_REFUSAL: &str = "This run is unattended, so the change was not proposed: no one is \
+    here to apply a proposal, and a change that turns on run code, run saved scripts or sub \
+    agents needs an admin's Apply in a chat. Say which change you would make, and that it \
+    needs the user.";
 
 /// Whether note proposal `p` creates or changes an Outbox item.
 fn touches_outbox(w: &Writer, event: &str, p: &Value) -> bool {
