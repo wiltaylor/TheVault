@@ -1113,3 +1113,54 @@ fn a_skills_tools_are_offered_after_use_skill_and_run_its_own_scripts() {
     assert_eq!(entry["script"]["skill"], "brand-kit");
     assert_eq!(entry["script"]["hash"], sha(script));
 }
+
+#[test]
+fn a_tool_script_change_is_refused_while_a_task_with_folders_runs_it_at_propose_and_at_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let put = api.tool("greet", GREET, Some(GREET_SCRIPT));
+    assert_eq!(put["valid"], true, "{put}");
+    let changed = GREET_SCRIPT.replace("Hello, ", "Hi, ");
+
+    // Nothing with folders runs the script yet: the new source is proposed.
+    let events = api.one(
+        &fake,
+        None,
+        "propose_tool_change",
+        json!({ "name": "greet", "wcl": GREET, "script_source": changed }),
+    );
+    let p = find(&events, "tool_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    assert_eq!(p["op"], "change");
+    assert_eq!(p["script_after"], changed.as_str());
+
+    // The user gives a task that runs the script folders: a new proposal is refused, naming the
+    // run and its folders, and nothing is written (TV-89, TV-87, TV-32 Q3).
+    let (status, body) = api.put_text(
+        "/api/tasks/nightly",
+        "schedule = \"0 0 1 1 *\"\nscript = \"greet\"\nread_paths = [\"/srv/in\"]\npaused = true\n",
+    );
+    assert!(status.is_success(), "{body}");
+    let events = api.one(
+        &fake,
+        None,
+        "propose_tool_change",
+        json!({ "name": "greet", "wcl": GREET, "script_source": changed }),
+    );
+    assert!(find(&events, "tool_proposal").is_none(), "{events:?}");
+    let (err, got) = last_result(&fake);
+    assert!(err, "{got}");
+    let why = got["error"].as_str().unwrap();
+    assert!(why.contains("may not change script \"greet\""), "{got}");
+    assert!(why.contains("task nightly (reads /srv/in)"), "{got}");
+    assert_eq!(api.get("/api/scripts/greet")["source"], GREET_SCRIPT);
+
+    // The proposal made before the folders were given is refused at Apply with 403, and nothing
+    // is written (the run check would answer 409, so the script check must come first).
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert_eq!(api.get("/api/scripts/greet")["source"], GREET_SCRIPT);
+    assert_eq!(api.get("/api/tools/greet")["valid"], true);
+}

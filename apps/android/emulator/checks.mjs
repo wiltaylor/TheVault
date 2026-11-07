@@ -42,6 +42,9 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
+import { noteIdOf, retryGesture } from "./gesture.mjs";
+import { logcatSinceArgs } from "./logcat.mjs";
+import { qrPng } from "./qr.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -438,7 +441,7 @@ async function updateApk(bump = 1) {
 /** The device's clock, as `logcat -t` takes it. */
 const deviceTime = () => shell("date +'%m-%d %H:%M:%S.000'").trim();
 /** The log lines since `since` (a [deviceTime]). */
-const logSince = (since) => adbTry("logcat", "-d", "-v", "time", "-t", `'${since}'`);
+const logSince = (since) => adbTry(...logcatSinceArgs(since));
 
 /**
  * Makes sure the app has push: when ntfy is gone (checks 22 and 48 uninstall it), installs it
@@ -890,7 +893,7 @@ async function main() {
 
   // 10. A file the phone never showed.
   await check(10, async () => {
-    const png = execFileSync("qrencode", ["-o", "-", "-s", "8", "TheVault check 10"]);
+    const png = await qrPng("TheVault check 10");
     const res = await fetch(`${srv.base}/api/assets?filename=check10.png`, { method: "POST", headers: { cookie: srv.cookie, "content-type": "image/png" }, body: png });
     if (!res.ok) throw new Error(`upload: ${res.status} ${await res.text()}`);
     const asset = (await res.json()).id;
@@ -1002,13 +1005,27 @@ async function main() {
     return [dismissed <= 10 && cleared <= 10 ? "pass" : "fail", `Dismissed A: gone ${dismissed.toFixed(1)} s later. Read B and cleared read notifications: gone ${cleared.toFixed(1)} s later.`, []];
   });
 
-  async function swipeAway(title) {
+  /** Opens the shade and waits for notification `title`'s row to stop moving: a gesture sent while the shade opens misses it (TV-92). */
+  async function shadeRow(title) {
     wakeAndUnlock();
     shell("cmd statusbar expand-notifications");
-    const row = await L.waitFor(title, { timeout: 10_000 });
-    shell(`input swipe ${row.x - 300} ${row.y} ${row.x + 700} ${row.y} 250`);
-    await sleep(1_000);
-    shell("cmd statusbar collapse");
+    return L.waitForSteady(title, { timeout: 10_000 });
+  }
+
+  async function swipeAway(title) {
+    try {
+      const tries = await retryGesture(
+        async () => {
+          const row = await shadeRow(title);
+          shell(`input swipe ${row.x - 300} ${row.y} ${row.x + 700} ${row.y} 250`);
+        },
+        () => !shown(title),
+        { fail: `the swipe did not remove the notification "${title}"`, sleep },
+      );
+      if (tries > 1) console.log(`     (the swipe on "${title}" took ${tries} tries)`);
+    } finally {
+      shell("cmd statusbar collapse");
+    }
   }
 
   await check(20, async () => {
@@ -1036,26 +1053,48 @@ async function main() {
   });
 
   await check(21, async () => {
-    const target = await createNote("note", { title: "Opened from a notification" });
-    await sleep(3_000);
+    // Each tap opens its own note. With one note for both, the warm tap passed the page wait on
+    // the page the cold tap had left open, even when it opened something else (TV-93).
+    const coldNote = await createNote("note", { title: "Opened from a notification" });
+    const warmNote = await createNote("note", { title: "Opened from a notification, warm" });
+    await foreground();
+    for (const n of [coldNote, warmNote]) {
+      await until("the note in the app", async () => (await local("GET", `/api/notes/${n.id}`)).status === 200, { timeout: 60_000 });
+    }
     closeApp();
-    const tapOpen = async (title) => {
+    const tapOpen = async (title, target) => {
       const n = await srv.post("/api/notifications", { title, note: target.id });
       await timeNotification(title, { timeout: 30_000 });
-      wakeAndUnlock();
-      shell("cmd statusbar expand-notifications");
-      await L.tap(title, { timeout: 10_000 });
-      await sleep(4_000);
+      // A tap on the row opens the app and, as the notification cancels itself on a tap, takes it away.
+      const tries = await retryGesture(
+        async () => {
+          const row = await shadeRow(title);
+          shell(`input tap ${row.x} ${row.y}`);
+        },
+        () => !shown(title),
+        { fail: `the tap did not open the notification "${title}"`, sleep },
+      );
+      if (tries > 1) console.log(`     (the tap on "${title}" took ${tries} tries)`);
+      await sleep(3_000);
       const p = await page();
-      await until("the note page", () => p.url().includes(target.id), { timeout: 20_000 });
+      // A tap that hit something else, such as Android's own group summary for the app's
+      // notifications, opens the app without the note and leaves it on the page it had.
+      await until(
+        `the note page of "${title}"`,
+        () => {
+          if (noteIdOf(p.url()) !== target.id) throw new Error(`the app shows ${p.url()}, not /notes/${target.id}`);
+          return true;
+        },
+        { timeout: 20_000 },
+      );
       await until("read on the server", async () => !(await unread()).some((x) => x.id === n.id), { timeout: 20_000 });
       return p.url();
     };
-    const cold = await tapOpen("Check 21 cold");
+    const cold = await tapOpen("Check 21 cold", coldNote);
     const shot = snap("21-opened-note");
     L.home();
     await sleep(1_500);
-    const warm = await tapOpen("Check 21 warm");
+    const warm = await tapOpen("Check 21 warm", warmNote);
     return ["pass", `Tapped with the app closed: opened ${cold}, marked read. Tapped with the app in the background: opened ${warm}, marked read.`, [shot]];
   });
 
