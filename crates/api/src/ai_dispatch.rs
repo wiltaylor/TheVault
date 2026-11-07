@@ -330,6 +330,14 @@ pub async fn list(
                 None => break,
             }
         }
+        // Newest first; threads active in the same second, newest created first.
+        let key = |t: &Value| {
+            (
+                t["last_activity"].as_str().unwrap_or("").to_owned(),
+                t["id"].as_str().unwrap_or("").to_owned(),
+            )
+        };
+        out.sort_by_key(|t| std::cmp::Reverse(key(t)));
         Ok::<_, ApiError>(out)
     })
     .await?;
