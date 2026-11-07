@@ -59,7 +59,7 @@ vi.mock("../api", async (orig) => {
 });
 vi.mock("../inApp", () => ({ appInfo }));
 
-const { AgentScreen, BROWSER_NOTE, OUTBOX_WARNING } = await import("./AgentScreen");
+const { AgentScreen, BROWSER_NOTE, OUTBOX_WARNING, SKILLS_WITHOUT_USE_SKILL_WARNING } = await import("./AgentScreen");
 const { ApiError } = await import("../api");
 const { refreshAgents } = await import("../agents");
 const { reloadDefinitions } = await import("../session");
@@ -673,6 +673,18 @@ describe("the Permissions tab", () => {
     fireEvent.click(p.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(putAgent).toHaveBeenCalled());
     expect("skills" in (sent().permissions as object)).toBe(false);
+  });
+
+  it("warns when skills are listed and the tools leave out use_skill, and not once it is named", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, skills: ["brand"], tools: ["get_note"] } }));
+    await open();
+    let p = await tab("Permissions");
+    expect(p.getByText(SKILLS_WITHOUT_USE_SKILL_WARNING)).toBeTruthy();
+    cleanup();
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, skills: ["brand"], tools: ["get_note", "use_skill"] } }));
+    await open();
+    p = await tab("Permissions");
+    expect(p.queryByText(SKILLS_WITHOUT_USE_SKILL_WARNING)).toBeNull();
   });
 
   it("shows Browser automation off with its warning line, and saves it on", async () => {
