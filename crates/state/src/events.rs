@@ -53,12 +53,16 @@ pub enum LiveEvent {
     /// replaced or removed. `clients` is every build listed now.
     ClientsUpdated { clients: Vec<ClientBuild> },
     /// A chat turn on an agent's thread started or ended (agents G17). `turn` is the turn's id
-    /// in the turns form, `None` for a turn with no id (an agent trigger's run).
+    /// in the turns form, `None` for a turn with no id (an agent trigger's run). `origin`,
+    /// `state` (`active`, `needs_you` or `done`) and `notes` are the thread's (TV-77 D4).
     AiTurn {
         agent: String,
         thread: String,
         turn: Option<String>,
         running: bool,
+        origin: String,
+        state: String,
+        notes: Vec<String>,
     },
     /// An entry was added to the activity log, or a coalesced `note.update` entry counted another
     /// edit, keeping its id (activity Y3).

@@ -219,7 +219,7 @@ Turning sub agents on, or adding an agent to delegate to, is guarded like Run ws
 
 ## Threads
 
-Every conversation with an agent is a note of the built-in type `agent_thread`, holding the agent's name, where it came from (`user`, `trigger:<name>` for a trigger run, or `mention` for a call from a note), when it was last active, the transcript and a readable copy of the conversation. The server writes the thread as each turn streams, so closing a tab loses nothing. Proposals and what became of them are kept in the thread, so a reopened thread shows its pending proposals with Apply and Discard. [Threads](ai.md#threads) describes them in full.
+Every conversation with an agent is a note of the built-in type `agent_thread`, holding the agent's name, where it came from (`user`, `trigger:<name>` for a trigger run, `mention` for a call from a note, or `dispatch` for notes sent to the agent), the notes it is about (the note that called it, or the notes sent), when it was last active, the transcript and a readable copy of the conversation. The server writes the thread as each turn streams, so closing a tab loses nothing. Proposals and what became of them are kept in the thread, so a reopened thread shows its pending proposals with Apply and Discard. [Threads](ai.md#threads) describes them in full.
 
 The note tools leave threads out unless the agent's `permissions.types` names `agent_thread`, so an agent does not read chats back as vault content. Deleting an agent keeps its threads.
 
@@ -364,6 +364,35 @@ A call written by an agent, including the called agent's own changes to the note
 
 Links that earlier versions wrote in place of a call, `[@Clerk](/agents/clerk/chat?thread=<id>)`, stay ordinary links.
 
+### Sending notes to an agent
+
+You can send one note or many to an agent with an instruction, which is required. `POST /api/agents/{name}/dispatch` with `{ notes, request }` sends them:
+
+1. The server checks the request. It needs `write`, because the run makes changes with the agent's own rights. Each note must exist, outside the trash, and be of a type the agent may read. A dispatch sends at most 100 notes, each once.
+2. It opens one thread, with origin `dispatch`, whose hidden `notes` field lists the notes in the order sent. The thread is titled with the note's title, or how many notes were sent, and the start of the request.
+3. It starts one run on the thread through the scheduler, as a call from a note does, and answers 202 with the thread. Its first message is the request, then one line per note:
+
+```text
+Sort these into projects.
+Sent with 2 notes; read them with get_note:
+- 01JB8Z0Q6W4ZK3V9T1M5XH7N2C (type memo, title "Roof")
+- 01JB8Z0Q6W4ZK3V9T1M5XH7N2D (type memo, title "Gutters")
+```
+
+The notes themselves are not changed by the dispatch. The agent reads them with its tools, and its changes follow the rule for runs a person asked for: a change behind an "ask before" switch waits in the thread as a proposal, and a change whose switch is off is made at once (see [What an unattended run may do](#what-an-unattended-run-may-do)). A note's text is written by someone else, so instructions inside it can try to steer the agent. A change that waits for Apply cannot do harm until you look at it, so keep the switches on for agents you send untrusted notes to. The run is recorded under the trigger name `dispatch`, and it counts against the agent's [limits](#limits) as a trigger run does. When the agent has started its hourly runs already, or 50 of its runs are waiting, the dispatch is refused with 429 `too_many_runs`, and no thread is opened.
+
+A call from a note's thread names the calling note in `notes` too. Because `notes` is a list of references, each note shows the threads about it among its backlinks. Deleting a note removes it from the threads' lists.
+
+A thread of origin `dispatch` or `mention` is in one of three states, worked out each time it is read, so a server that stops in the middle of a run never leaves a wrong state behind:
+
+| state | when |
+|---|---|
+| `active` | A turn runs on the thread |
+| `needs_you` | A proposal waits for Apply, or the agent asked a question and waits for your answer (the hidden `question` field) |
+| `done` | Neither |
+
+`GET /api/dispatched` lists these threads for every agent, newest activity first, without archived ones. `?notes=<id>,<id>` keeps those about any of the notes, and `?state=` keeps one state. The `ai_turn` event carries the thread's `origin`, `state` and `notes` as well.
+
 ### Agents that propose saved scripts
 
 A saved script, `scripts/<name>.ws`, is shared: every type handler, task, device file and tool that names it runs the new source, with its own hosts, secrets and paths. So an agent's change to one always waits for your Apply, whatever its confirmation switches say, and there is no switch to turn that off (TV-32 decision Q2).
@@ -418,8 +447,9 @@ Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the 
 | Limit | Value | Past it |
 |---|---|---|
 | Runs of one agent at once | 2 | Further runs wait their turn |
-| Runs waiting for one agent | 50 | The oldest waiting run is dropped, and the server log says so |
-| Trigger runs one agent starts in an hour | 60 | Further runs are skipped and logged, with one notification an hour |
+| Runs waiting for one agent | 50 | The oldest waiting run is dropped, and the server log says so. Notes sent to the agent are refused with 429 `too_many_runs` instead |
+| Trigger runs one agent starts in an hour | 60 | Further runs are skipped and logged, with one notification an hour. Notes sent to the agent are refused with 429 `too_many_runs` instead |
+| Notes in one dispatch | 100 | The dispatch is refused with 400 `too_many_notes` |
 | Model calls in one run | 12 | The run stops, as a chat turn does |
 | Notifications one agent sends | 3 a turn, 10 an hour, 30 a day | `notify_user` is refused and sends nothing ([Notifying you](#notifying-you)) |
 | Quiet time before a note event run | 30 seconds | Changes to the same note coalesce |
@@ -432,7 +462,7 @@ Every trigger run is recorded in `state.db` (`agent_runs`): the agent, the trigg
 agent run 12: agent=triage trigger=new_email thread=01JB8Z1A2B3C4D5E6F7G8H9J0K outcome=succeeded
 ```
 
-The Triggers tab shows each trigger's last 20 runs, with a link to each run's thread and, under **Log**, the run's trail lines and capacity waits. A run that fails, through a provider error, a refusal or a turn that does not end, leaves one bell notification, "<Agent>'s <trigger> run failed", that opens its thread. A run that goes well sends none.
+The Triggers tab shows each trigger's last 20 runs, with a link to each run's thread and, under **Log**, the run's trail lines and capacity waits. A run that fails, through a provider error, a refusal or a turn that does not end, leaves one bell notification, "<Agent>'s <trigger> run failed", that opens its thread. A trigger run that goes well sends none. A call from a note or a dispatch whose run ends with its thread in `needs_you` leaves one notification, "<Agent> needs you: <thread title>", that says how many changes wait for Apply, or gives the agent's question, and opens the thread.
 
 ### When the model is at capacity
 
@@ -468,10 +498,12 @@ Only the call that failed is made again, with the same request. The tools the ru
 | `DELETE /api/agents/{name}` | admin, or a paired device's token | Deletes the agent file; its threads stay |
 | `GET /api/agents/calls/{call}` | read | What became of a call committed in a note: `{ agent, note, thread, running }`, `thread` null for a call that was not run; 404 while the server has not seen the call |
 | `GET /api/agents/{name}/runs` | read | `{ tools, triggers: [{ name, kind, runs }] }`: the tools a trigger run is offered, and each trigger's last 20 runs, newest first, each `{ id, thread, started, ended, outcome, message, log }` with times in milliseconds and `log` the run's trail lines and capacity waits, one per line, which grows while the run waits |
+| `POST /api/agents/{name}/dispatch` | write | Sends notes to the agent from `{ notes, request }`: one thread of origin `dispatch` and one run on it, 202 `{ thread }`. 400 for an empty request, no notes, more than 100, a note sent twice, a note that is missing or in the trash, or one of a type the agent may not read; 404 for a missing or disabled agent; 429 `too_many_runs` past the agent's run limits; 503 `no_agent_runs` on a server that runs no agents |
+| `GET /api/dispatched` | read | The threads of origin `dispatch` and `mention` of every agent, newest activity first: `{ threads: [{ id, agent, title, origin, notes, state, pending, question, last_activity, running, turn, started_ms }] }`, filtered by `?notes=<id>,<id>` and `?state=active\|needs_you\|done` |
 | `GET /api/agents/{name}/threads` | read | The agent's threads, newest activity first, each with `archived`; archived threads only with `?archived=true` |
 | `POST /api/agents/{name}/threads` | read | Starts a thread from `{ title? }` |
 | `GET /api/agents/{name}/threads/{id}` | read | A thread with its messages, steps and proposals |
 | `PATCH /api/agents/{name}/threads/{id}` | write | Renames a thread from `{ title }` |
 | `DELETE /api/agents/{name}/threads/{id}` | write | Moves a thread to the trash |
 
-The chat routes take `agent` and `thread`; see [The chat route](ai.md#the-chat-route). In the apps, the runs, calls and threads routes are answered by the home server.
+The chat routes take `agent` and `thread`; see [The chat route](ai.md#the-chat-route). In the apps, the runs, calls, threads and dispatch routes and `GET /api/dispatched` are answered by the home server.

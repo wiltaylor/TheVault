@@ -22,7 +22,8 @@
 //! note, which holds the whole turn. Turns are held in memory, by id, for the caller that started
 //! them: another caller's turn is a 404. At most [`MAX_TURNS`] run per caller at once, and per
 //! agent, counting its trigger runs; one more is a 429 `too_many_turns`. A turn on a thread
-//! starting and ending is published on `/api/events` as `ai_turn {agent, thread, turn, running}`.
+//! starting and ending is published on `/api/events` as `ai_turn {agent, thread, turn, running,
+//! origin, state, notes}`, `state` the thread's `active`, `needs_you` or `done` (TV-77 D4).
 //! A sub agent's turn (subagents U6) is read and stopped through the same routes, by the caller
 //! of the turn that started it: its id is its session's running `turn`, and stopping it stops
 //! only it, its parent answered that the user stopped it.
@@ -316,7 +317,8 @@ fn too_many(whose: &str) -> ApiError {
     )
 }
 
-/// Tell open clients a turn on `thread` started or ended (agents G17).
+/// Tell open clients a turn on `thread` started or ended (agents G17), with the thread's origin,
+/// notes and state as they stand (TV-77 D4).
 pub(crate) fn publish(
     w: &writer::Writer,
     agent: &str,
@@ -324,11 +326,27 @@ pub(crate) fn publish(
     turn: Option<&str>,
     running: bool,
 ) {
+    let read = agent_threads::Thread::read(w, thread).ok();
+    let (origin, notes, state) = match &read {
+        Some(t) => (
+            t.origin.clone(),
+            t.notes.clone(),
+            agent_threads::state_of(running, &t.question, t.transcript.pending()),
+        ),
+        None => (
+            String::new(),
+            Vec::new(),
+            agent_threads::state_of(running, "", 0),
+        ),
+    };
     w.state().events().publish(LiveEvent::AiTurn {
         agent: agent.to_owned(),
         thread: thread.to_owned(),
         turn: turn.map(str::to_owned),
         running,
+        origin,
+        state: state.to_owned(),
+        notes,
     });
 }
 
