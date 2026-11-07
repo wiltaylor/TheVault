@@ -669,24 +669,67 @@ impl Writer {
         source: &str,
         check: impl FnOnce(&str) -> std::result::Result<(), Invalid>,
     ) -> Result<String> {
-        let mut inner = self.lock();
+        self.put_task_with_script(name, source, None, check)
+    }
+
+    /// The canonical text of `source` as `tasks/<name>.wcl`, checked as
+    /// [`Writer::put_task_with_script`] checks it, without writing anything. The script the task
+    /// names must exist, unless `script` is its new source (TV-71).
+    pub fn check_task(
+        &self,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+        check: impl FnOnce(&str) -> std::result::Result<(), Invalid>,
+    ) -> Result<String> {
         check_name("task", name)?;
         let path = task_path(name);
         let text = store::canonical(source, &path)?;
         check(&text).map_err(Error::Invalid)?;
         let doc = Doc::parse(&text, &path).map_err(Error::Invalid)?;
-        if let Some(script) = doc.field("script").and_then(Value::as_str)
-            && self.read_script(script).is_err()
+        if script.is_none()
+            && let Some(s) = doc.field("script").and_then(Value::as_str)
+            && self.read_script(s).is_err()
         {
             return Err(Error::Invalid(Invalid {
                 file: path,
-                issues: vec![Issue::new(
-                    "script",
-                    format!("there is no script {script:?}"),
-                )],
+                issues: vec![Issue::new("script", format!("there is no script {s:?}"))],
             }));
         }
-        let generation = self.commit(vec![Change::write(path, text.as_bytes())])?;
+        Ok(text)
+    }
+
+    /// Create or replace `tasks/<name>.wcl` in canonical form, checked as
+    /// [`Writer::check_task`] checks it, and with `script` the source of the script it names, in
+    /// one commit (TV-71). Returns the task file's text.
+    pub fn put_task_with_script(
+        &self,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+        check: impl FnOnce(&str) -> std::result::Result<(), Invalid>,
+    ) -> Result<String> {
+        let _w = self.write_lock();
+        let mut inner = self.lock();
+        let text = self.check_task(name, source, script, check)?;
+        let path = task_path(name);
+        let mut changes = Vec::new();
+        if let Some(src) = script {
+            let doc = Doc::parse(&text, &path).map_err(Error::Invalid)?;
+            let Some(s) = doc
+                .field("script")
+                .and_then(Value::as_str)
+                .filter(|s| schema::is_name(s))
+            else {
+                return Err(Error::Invalid(Invalid {
+                    file: path,
+                    issues: vec![Issue::new("script", "names no script to write")],
+                }));
+            };
+            changes.push(Change::write(script_path(s), src.as_bytes()));
+        }
+        changes.push(Change::write(path, text.as_bytes()));
+        let generation = self.commit(changes)?;
         inner.index.advance(generation)?;
         Ok(text)
     }

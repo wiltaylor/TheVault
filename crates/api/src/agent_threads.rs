@@ -348,6 +348,11 @@ pub fn proposal_what(event: &str, d: &Value) -> String {
             _ if d["exists"] == true => format!("change to script {}", s("name")),
             _ => format!("new script {}", s("name")),
         },
+        "task_proposal" => match d["op"].as_str() {
+            Some("delete") => format!("delete of task {}", s("name")),
+            _ if d["exists"] == true => format!("change to task {}", s("name")),
+            _ => format!("new task {}", s("name")),
+        },
         "agent_memory_proposal" => match d["op"].as_str() {
             Some("delete") => format!(
                 "forgetting memory {} of agent {}",
@@ -414,6 +419,11 @@ fn proposal_done(event: &str, d: &Value, done: &Value) -> String {
             Some("delete") => format!("deleted script {}", s(d, "name")),
             _ if d["exists"] == true => format!("changed script {}", s(d, "name")),
             _ => format!("created script {}", s(d, "name")),
+        },
+        "task_proposal" => match d["op"].as_str() {
+            Some("delete") => format!("deleted task {}", s(d, "name")),
+            _ if d["exists"] == true => format!("changed task {}", s(d, "name")),
+            _ => format!("created task {}", s(d, "name")),
         },
         "agent_memory_proposal" => match d["op"].as_str() {
             Some("delete") => format!(

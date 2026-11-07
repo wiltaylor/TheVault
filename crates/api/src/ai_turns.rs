@@ -36,10 +36,12 @@
 //! its `proposer`, needing only `write` since memories are notes), or a `skill_proposal`'s (its
 //! `kind` is `skill`, skills S9, answering 409 `stale` when the skill changed since), or a
 //! `tool_proposal`'s or `script_proposal`'s (its `kind` is `tool` or `script`, TV-70, answering
-//! 409 `stale` when the tool or script changed since), through
+//! 409 `stale` when the tool or script changed since), or a `task_proposal`'s (its `kind` is
+//! `task`, TV-71, written through the scheduler, answering 409 `stale` when the task or its script
+//! changed since), through
 //! [`ai_chat::apply_change`], the code the confirmation switches use (ai D22), as the caller,
 //! version-checked against its `base_version`. It needs `write`, and `admin` for a type,
-//! taxonomy, agent, skill, tool or script change: without it, 403 `needs_admin`, unless the same
+//! taxonomy, agent, skill, tool, script or task change: without it, 403 `needs_admin`, unless the same
 //! proposal waits in its thread, which is then the change applied. It answers `{op, note_id, version}`
 //! for a note, `{op, type_name}` for a type, `{op, taxonomy_name, notes}` for a taxonomy and
 //! `{op, agent_name}` for an agent and `{op, memory_id, memory_agent, version}` for a memory; an
@@ -91,6 +93,9 @@ pub const NEEDS_ADMIN_TOOL_MESSAGE: &str = "Apply script tool changes in the web
 /// Why a caller without `admin` cannot apply a saved script proposal that does not wait in its
 /// thread (TV-70).
 pub const NEEDS_ADMIN_SCRIPT_MESSAGE: &str = "Apply script changes in the web app.";
+/// Why a caller without `admin` cannot apply a scheduled task proposal that does not wait in its
+/// thread (TV-71).
+pub const NEEDS_ADMIN_TASK_MESSAGE: &str = "Apply scheduled task changes in the web app.";
 
 /// Why a caller without `admin` cannot apply an agent change that turns on Run wscript code
 /// (script-tools T1).
@@ -537,6 +542,8 @@ pub async fn apply(
         "tool_proposal"
     } else if change["kind"] == "script" {
         "script_proposal"
+    } else if change["kind"] == "task" {
+        "task_proposal"
     } else if change["kind"] == "agent_memory" {
         "agent_memory_proposal"
     } else if change["kind"] == "type"
@@ -554,6 +561,7 @@ pub async fn apply(
             "skill_proposal" => Some(NEEDS_ADMIN_SKILL_MESSAGE),
             "tool_proposal" => Some(NEEDS_ADMIN_TOOL_MESSAGE),
             "script_proposal" => Some(NEEDS_ADMIN_SCRIPT_MESSAGE),
+            "task_proposal" => Some(NEEDS_ADMIN_TASK_MESSAGE),
             _ => None,
         };
         if let Some(message) = message {

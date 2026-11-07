@@ -268,6 +268,44 @@ impl Scheduler {
         Ok(text)
     }
 
+    /// Check `source` as task `name` as [`Scheduler::put_task_with_script`] would, without
+    /// writing anything: its canonical text and the task. `script`, when given, is the new source
+    /// of the script the task names, so that script need not exist yet (TV-71). The script's
+    /// source is not compiled here.
+    pub fn check_task(
+        &self,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+    ) -> Result<(String, TaskDef)> {
+        let vault = self.writer.vault().root().to_path_buf();
+        let text = self.writer.check_task(name, source, script, |text| {
+            let def = TaskDef::parse(name, text)?;
+            check_paths(&def, &vault)
+        })?;
+        let def = TaskDef::parse(name, &text).map_err(writer::Error::Invalid)?;
+        Ok((text, def))
+    }
+
+    /// Check `source` as task `name`, write it to `tasks/<name>.wcl` with `script`, when given,
+    /// the source of the script it names, in one commit, and reload (TV-71).
+    pub fn put_task_with_script(
+        &self,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+    ) -> Result<String> {
+        let vault = self.writer.vault().root().to_path_buf();
+        let text = self
+            .writer
+            .put_task_with_script(name, source, script, |text| {
+                let def = TaskDef::parse(name, text)?;
+                check_paths(&def, &vault)
+            })?;
+        self.reload()?;
+        Ok(text)
+    }
+
     /// Set task `name`'s `paused` field in its file and reload. Returns `false`, changing nothing,
     /// when there is no such task.
     pub fn set_paused(&self, name: &str, paused: bool) -> Result<bool> {

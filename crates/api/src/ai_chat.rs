@@ -35,6 +35,9 @@
 //! are proposed with `propose_tool_change` and `propose_tool_delete` under the `tools` switch.
 //! `get_script` reads a saved script, and `propose_script_change` and `propose_script_delete`
 //! propose one that always waits for the user's Apply (`crate::ai_script_changes`, TV-70).
+//! `get_task` reads a scheduled task, and `propose_task_change` and `propose_task_delete` propose
+//! one, never with `fs` paths, that always waits for the user's Apply (`crate::ai_task_changes`,
+//! TV-71).
 //! An agent with `permissions.subagents.allow` hands parts of a task to sub agents with
 //! `start_subagent` on a thread (`crate::ai_subagents`, subagents U1 to U8): each runs as a turn
 //! of its own on a session thread, the calls of one round at once, and the call's result is its
@@ -57,6 +60,7 @@
 //! | `skill_proposal` | a skill change for the user to apply (skills S9), `kind` always `skill`: `{id, kind, op, name, path?, exists, before, after, issues, base, proposer, ...}`, `op` `create`, `change`, `file`, `file_delete` or `delete` (`crate::ai_skill_changes`) |
 //! | `tool_proposal` | a script tool change for the user to apply (script-tools T3), `kind` always `tool`: `{id, kind, op, name, exists, before, after, script, script_exists, script_before, script_after, script_delete, problems, proposer}`, `op` `create`, `change` or `delete` (`crate::ai_scripts`); `runs_as` and `warnings` as in `script_proposal`, for the script the tool names, the tool itself left out |
 //! | `script_proposal` | a saved script change for the user to apply (TV-70), `kind` always `script`, never made at once: `{id, kind, op, name, exists, before, after, runs_as, warnings, proposer}`, `op` `create`, `change` or `delete`, `runs_as` each handler, task, device file and tool that runs the script `{kind, name, file, event, allow_domains, secrets, read_paths, write_paths, schedule, timezone, paused}`, and `warnings` a line for each that may reach any host (`crate::ai_script_changes`) |
+//! | `task_proposal` | a scheduled task change for the user to apply (TV-71), `kind` always `task`, never made at once: `{id, kind, op, name, exists, before, after, script, script_exists, script_before, script_after, task, next_runs, runs_as, warnings, proposer}`, `op` `create`, `change` or `delete`, `task` the task as the scheduler reads it `{label, description, schedule, schedule_text, timezone, script, function, allow_domains, secrets, read_paths, write_paths, retries, retry_delay_ms, timeout_ms, paused}`, `next_runs` its next three runs (none while paused or for a delete), `runs_as` what else runs its script as in `script_proposal`, and `warnings` a line for any host, for secrets with hosts, for a secret that does not exist, and, when the script changes, for each other run that may reach any host (`crate::ai_task_changes`) |
 //! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change`, `type_create` and `type_delete`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `subagent` | `{id, call, thread, turn, agent, delegated, task, n, status, rounds, tools, started_ms, ended_ms, tool}`: a sub agent's block as it stands (subagents U6), sent as it starts, at each of its model calls and tool calls, and as it ends; `id` is the `start_subagent` call, `thread` its session, `status` `running`, `done`, `failed` or `stopped`, `turn` its turn in the turn routes (null for a sub agent of an unattended run), and `tool` the tool it runs now |
 //! | `context` | `{used, window}` after each model call: the tokens the call took in and gave back, and the account's context window |
@@ -302,6 +306,7 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     .chain(crate::ai_skill_changes::PROPOSE_TOOLS.iter())
     .chain(crate::ai_scripts::PROPOSE_TOOLS.iter())
     .chain(crate::ai_script_changes::PROPOSE_TOOLS.iter())
+    .chain(crate::ai_task_changes::PROPOSE_TOOLS.iter())
     .any(|t| p.allows_tool(t));
     if admin { Scope::Admin } else { Scope::Write }
 }
@@ -344,7 +349,12 @@ fn change_switch(name: &str) -> Option<&'static str> {
 /// for the user's Apply in every run. A trigger's run ([`Held::Drop`]) leaves them out, as no one
 /// would see the proposal; a chat, a call from a note and a dispatch offer them (TV-77 F11). A
 /// new tool of that kind is added here, and [`Direct::covers`] never covers its events.
-const ALWAYS_PROPOSE: &[&str] = &crate::ai_script_changes::PROPOSE_TOOLS;
+const ALWAYS_PROPOSE: &[&str] = &[
+    crate::ai_script_changes::PROPOSE_TOOLS[0],
+    crate::ai_script_changes::PROPOSE_TOOLS[1],
+    crate::ai_task_changes::PROPOSE_TOOLS[0],
+    crate::ai_task_changes::PROPOSE_TOOLS[1],
+];
 
 /// What a turn does with a change tool whose change would only be proposed: one whose
 /// confirmation switch is on, or one of [`ALWAYS_PROPOSE`] (agents G12, TV-77 D2).
@@ -964,7 +974,7 @@ fn prepare_for(
 }
 
 /// The events of a proposal for the user, or of a change a tool made.
-const PROPOSAL_EVENTS: [&str; 9] = [
+const PROPOSAL_EVENTS: [&str; 10] = [
     "proposal",
     "type_proposal",
     "taxonomy_proposal",
@@ -973,6 +983,7 @@ const PROPOSAL_EVENTS: [&str; 9] = [
     "skill_proposal",
     "tool_proposal",
     "script_proposal",
+    "task_proposal",
     "applied",
 ];
 
@@ -1226,7 +1237,7 @@ impl Direct {
             }
             "tool_proposal" => self.tools,
             // The tools of [`ALWAYS_PROPOSE`]: always the user's Apply (TV-32 Q2 O1).
-            "script_proposal" => false,
+            "script_proposal" | "task_proposal" => false,
             "agent_memory_proposal" => self.memories,
             "skill_proposal" => self.skills,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
@@ -3202,6 +3213,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     .chain(crate::ai_skill_changes::tool_specs())
     .chain(crate::ai_scripts::tool_specs())
     .chain(crate::ai_script_changes::tool_specs())
+    .chain(crate::ai_task_changes::tool_specs())
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
     .chain(crate::ai_outbox::tool_specs())
@@ -3577,6 +3589,9 @@ pub fn apply_change(
     if event == "script_proposal" {
         return crate::ai_script_changes::apply_script(w, p);
     }
+    if event == "task_proposal" {
+        return crate::ai_task_changes::apply_task(w, p);
+    }
     if event != "proposal" {
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
@@ -3736,6 +3751,9 @@ fn propose_or_read(
         "propose_script_delete" => {
             crate::ai_script_changes::propose_delete(w, agent, &call.id, input)
         }
+        "get_task" => crate::ai_task_changes::get(w, input),
+        "propose_task_change" => crate::ai_task_changes::propose_change(w, agent, &call.id, input),
+        "propose_task_delete" => crate::ai_task_changes::propose_delete(w, agent, &call.id, input),
         n if agent_memory::is_cross_tool(n) => {
             agent_memory::run_cross(w, agent, &call.id, n, input)
         }
@@ -4670,6 +4688,48 @@ mod tests {
         assert!(direct.covers("tool_proposal", &json!({})));
         assert!(!direct.covers("script_proposal", &json!({ "op": "change" })));
         assert!(!direct.covers("script_proposal", &json!({ "op": "delete" })));
+        assert!(!direct.covers("task_proposal", &json!({ "op": "create" })));
+        assert!(!direct.covers("task_proposal", &json!({ "op": "delete" })));
+        // The script and the task tools are the whole list (TV-70, TV-71).
+        let mut expected: Vec<&str> = crate::ai_script_changes::PROPOSE_TOOLS
+            .iter()
+            .chain(crate::ai_task_changes::PROPOSE_TOOLS.iter())
+            .copied()
+            .collect();
+        expected.sort_unstable();
+        let mut listed = ALWAYS_PROPOSE.to_vec();
+        listed.sort_unstable();
+        assert_eq!(listed, expected);
+    }
+
+    #[test]
+    fn a_trigger_run_leaves_out_the_task_proposals_and_an_agent_with_them_runs_as_admin() {
+        let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
+        let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
+        let names = |drop: Option<Direct>| -> Vec<String> {
+            turn_tools(ai::Web::default(), false, None, drop, false, false)
+                .into_iter()
+                .map(|t| t.name)
+                .collect()
+        };
+        let chat = names(None);
+        let trigger = names(Some(direct));
+        for n in crate::ai_task_changes::PROPOSE_TOOLS {
+            assert!(chat.iter().any(|m| m == n), "{n} in a chat");
+            assert!(!trigger.iter().any(|m| m == n), "{n} not in a trigger's run");
+        }
+        assert!(trigger.iter().any(|m| m == "get_task"));
+        let text = withheld_note(&agent, direct).unwrap();
+        assert!(
+            text.contains("- propose_task_change: its change always waits for the user's Apply"),
+            "{text}"
+        );
+        let tasks_only = Agent::parse(
+            "t",
+            "label = \"T\"\n\npermissions {\n  tools = [\"get_task\", \"propose_task_delete\"]\n}\n",
+        )
+        .unwrap();
+        assert_eq!(unattended_scope(&tasks_only), Scope::Admin);
     }
 
     #[test]
