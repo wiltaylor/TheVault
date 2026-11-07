@@ -154,6 +154,34 @@ class CaptureTest {
     }
 
     @Test
+    fun aPendingMmsNotificationIsNotCapturedAndItsDownloadIsCapturedOnce() {
+        CaptureObservers.register(context)
+        val looper = shadowOf(Looper.getMainLooper())
+        // The provider holds the push as a NotificationInd (m_type 130): no parts, and no text.
+        phone.mms(10, "+61412345678", listOf(FakePhone.SELF), messageType = 130)
+        phone.notify(Telephony.Mms.CONTENT_URI)
+        looper.idleFor(Duration.ofMillis(CaptureObservers.QUIET_MS))
+        assertTrue("a notification is not an MMS note", sink().events.isEmpty())
+
+        // The download ends: a RetrieveConf row (m_type 132) with a new key and its parts, and the
+        // notification row is removed.
+        phone.db.execSQL("DELETE FROM mms WHERE _id = 10")
+        phone.mms(11, "+61412345678", listOf(FakePhone.SELF))
+        phone.part(50, 11, "text/plain", text = "Downloaded")
+        phone.part(51, 11, "image/png", name = "pic.png", bytes = byteArrayOf(4, 5))
+        phone.notify(Telephony.Mms.CONTENT_URI)
+        looper.idleFor(Duration.ofMillis(CaptureObservers.QUIET_MS))
+
+        val e = sink().events.single()
+        assertEquals("mms_received", e.event)
+        assertEquals("mms:11", e.data.getString("device_ref"))
+        assertEquals("Downloaded", e.data.getString("body"))
+        assertEquals("pic.png", e.data.getJSONArray("attachments").getJSONObject(0).getString("filename"))
+        assertEquals(0, capture.catchUp())
+        assertEquals(listOf("mms:11"), sink().refs())
+    }
+
+    @Test
     fun changesThatKeepComingAreReadWithinTheLongestWait() {
         CaptureObservers.register(context)
         val looper = shadowOf(Looper.getMainLooper())

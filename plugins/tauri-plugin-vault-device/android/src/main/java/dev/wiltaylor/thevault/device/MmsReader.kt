@@ -101,9 +101,12 @@ class MmsReader(
     private val columns = arrayOf(Mms._ID, Mms.THREAD_ID, Mms.DATE, Mms.DATE_SENT, Mms.SUBJECT, Mms.MESSAGE_BOX)
 
     /**
-     * Received MMS with a key above [after], oldest first, at most [limit] of them. With [range],
-     * only those within it (ms). An MMS [known] says already has a note comes as its `device_ref`
-     * alone, marked [Captured.known], so its parts are not read or stored again.
+     * Downloaded received MMS with a key above [after], oldest first, at most [limit] of them. With
+     * [range], only those within it (ms). An MMS [known] says already has a note comes as its
+     * `device_ref` alone, marked [Captured.known], so its parts are not read or stored again.
+     *
+     * A pre-download notification (`m_type` 130) is never a note: it has no parts, and the
+     * provider replaces it with a RetrieveConf row (new key, `m_type` 132) when the download ends.
      */
     fun since(
         after: Long,
@@ -112,7 +115,9 @@ class MmsReader(
         limit: Int = Int.MAX_VALUE,
         known: (String) -> Boolean = { false },
     ): List<Captured> {
-        val where = StringBuilder("${Mms._ID} > ? AND ${Mms._ID} <= ? AND ${Mms.MESSAGE_BOX} = ${Mms.MESSAGE_BOX_INBOX}")
+        val where = StringBuilder(
+            "${Mms._ID} > ? AND ${Mms._ID} <= ? AND ${Mms.MESSAGE_BOX} = ${Mms.MESSAGE_BOX_INBOX} AND $MESSAGE_TYPE = $RETRIEVE_CONF",
+        )
         val args = mutableListOf(after.toString(), atMost.toString())
         if (range != null) {
             // The provider keeps MMS times in seconds.
@@ -219,6 +224,12 @@ class MmsReader(
 
     companion object {
         const val PREFIX = "mms:"
+
+        /** The PDU type column. Not in the SDK's `Telephony.Mms`, so named here. */
+        private const val MESSAGE_TYPE = "m_type"
+
+        /** `MESSAGE_TYPE_RETRIEVE_CONF` (PduHeaders): a downloaded MMS, the only type that is a note. */
+        private const val RETRIEVE_CONF = 132
 
         /** The largest part stored as an asset: 50 MB. */
         const val MAX_ATTACHMENT: Long = 50L * 1024 * 1024
