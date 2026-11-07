@@ -42,7 +42,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
-import { retryGesture } from "./gesture.mjs";
+import { noteIdOf, retryGesture } from "./gesture.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -1051,10 +1051,16 @@ async function main() {
   });
 
   await check(21, async () => {
-    const target = await createNote("note", { title: "Opened from a notification" });
-    await sleep(3_000);
+    // Each tap opens its own note. With one note for both, the warm tap passed the page wait on
+    // the page the cold tap had left open, even when it opened something else (TV-93).
+    const coldNote = await createNote("note", { title: "Opened from a notification" });
+    const warmNote = await createNote("note", { title: "Opened from a notification, warm" });
+    await foreground();
+    for (const n of [coldNote, warmNote]) {
+      await until("the note in the app", async () => (await local("GET", `/api/notes/${n.id}`)).status === 200, { timeout: 60_000 });
+    }
     closeApp();
-    const tapOpen = async (title) => {
+    const tapOpen = async (title, target) => {
       const n = await srv.post("/api/notifications", { title, note: target.id });
       await timeNotification(title, { timeout: 30_000 });
       // A tap on the row opens the app and, as the notification cancels itself on a tap, takes it away.
@@ -1069,15 +1075,24 @@ async function main() {
       if (tries > 1) console.log(`     (the tap on "${title}" took ${tries} tries)`);
       await sleep(3_000);
       const p = await page();
-      await until("the note page", () => p.url().includes(target.id), { timeout: 20_000 });
+      // A tap that hit something else, such as Android's own group summary for the app's
+      // notifications, opens the app without the note and leaves it on the page it had.
+      await until(
+        `the note page of "${title}"`,
+        () => {
+          if (noteIdOf(p.url()) !== target.id) throw new Error(`the app shows ${p.url()}, not /notes/${target.id}`);
+          return true;
+        },
+        { timeout: 20_000 },
+      );
       await until("read on the server", async () => !(await unread()).some((x) => x.id === n.id), { timeout: 20_000 });
       return p.url();
     };
-    const cold = await tapOpen("Check 21 cold");
+    const cold = await tapOpen("Check 21 cold", coldNote);
     const shot = snap("21-opened-note");
     L.home();
     await sleep(1_500);
-    const warm = await tapOpen("Check 21 warm");
+    const warm = await tapOpen("Check 21 warm", warmNote);
     return ["pass", `Tapped with the app closed: opened ${cold}, marked read. Tapped with the app in the background: opened ${warm}, marked read.`, [shot]];
   });
 

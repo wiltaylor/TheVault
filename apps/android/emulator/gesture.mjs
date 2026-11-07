@@ -39,6 +39,22 @@ export async function waitSteady(find, { what = "the node", timeout = 10_000, ev
 }
 
 /**
+ * The note id a web client URL such as `http://vault.localhost/notes/<id>` shows, or null for any
+ * other page. A tap on a notification that opens a note must land on that note's page; a tap that
+ * missed leaves the app on whatever page it had (TV-93).
+ */
+export function noteIdOf(url) {
+  let path;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  const m = /^\/notes\/([^/]+)\/?$/.exec(path);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/**
  * Sends a gesture with `act` until `done` says it worked, at most `tries` times, asking `done`
  * `settle` ms after each gesture. Answers how many gestures it took, or throws `fail` when none
  * worked. `act` finds its target again each time, so a retry aims at where the row is now.

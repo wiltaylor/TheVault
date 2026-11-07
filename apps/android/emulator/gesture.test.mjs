@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { retryGesture, samePlace, waitSteady } from "./gesture.mjs";
+import { noteIdOf, retryGesture, samePlace, waitSteady } from "./gesture.mjs";
 
 /** A fake clock: `sleep` moves it on at once. */
 function clock() {
@@ -105,4 +105,22 @@ test("retryGesture stops after tries and throws fail", async () => {
     /the swipe did not remove the notification \(3 tries\)/,
   );
   assert.equal(sent, 3);
+});
+
+test("noteIdOf answers the note a page shows, and null for other pages", () => {
+  assert.equal(noteIdOf("http://vault.localhost/notes/01M6V61GVNQQNMG854ZT6H19DA"), "01M6V61GVNQQNMG854ZT6H19DA");
+  assert.equal(noteIdOf("http://vault.localhost/notes/01M6V61GVNQQNMG854ZT6H19DA/"), "01M6V61GVNQQNMG854ZT6H19DA");
+  assert.equal(noteIdOf("http://vault.localhost/notes/a%20b?x=1#y"), "a b");
+  assert.equal(noteIdOf("http://vault.localhost/notes/01M6V61GVNQQNMG854ZT6H19DA/history"), null);
+  assert.equal(noteIdOf("http://vault.localhost/planner"), null);
+  assert.equal(noteIdOf("http://vault.localhost/notes/"), null);
+  assert.equal(noteIdOf("not a url"), null);
+});
+
+test("noteIdOf tells two notes apart, so a warm tap cannot pass on the cold tap's page", () => {
+  const cold = "01M6V61GVNQQNMG854ZT6H19DA";
+  const warm = "01M6V61GVNQQNMG854ZT6H19DB";
+  const left = `http://vault.localhost/notes/${cold}`;
+  assert.notEqual(noteIdOf(left), warm);
+  assert.equal(left.includes(cold), true);
 });
