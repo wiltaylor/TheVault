@@ -614,3 +614,104 @@ fn a_call_from_a_note_leaves_a_script_proposal_that_a_phone_applies_or_discards_
     assert_eq!(body["pending"], 0, "{body}");
     assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
 }
+
+const FRESH: &str = "fn run() -> Result[(), string] {\n    Ok(())\n}\n";
+
+#[test]
+fn a_script_applied_after_what_runs_it_changed_is_stale() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.seed_users();
+    let changed = STAMP.replace(
+        "Ok(())\n}\n\nfn after",
+        "let x = 1\n    Ok(())\n}\n\nfn after",
+    );
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "stamp", "source": changed }),
+    );
+    let p = find(&events, "script_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    // The task nightly now reaches another host: what runs the script has changed since the card.
+    api.put_text(
+        "/api/tasks/nightly",
+        &NIGHTLY.replace("api.example.com", "other.example.com"),
+    );
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "stale");
+    assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+}
+
+#[test]
+fn a_delete_applied_after_a_task_started_to_run_the_script_is_refused_in_use() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok("PUT", "/api/scripts/fresh", json!({ "source": FRESH }));
+    let events = api.one(&fake, "propose_script_delete", json!({ "name": "fresh" }));
+    let p = find(&events, "script_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    assert_eq!(p["op"], "delete");
+    // A task starts to run the script after the card.
+    api.put_text(
+        "/api/tasks/fresh_nightly",
+        &NIGHTLY.replace("script = \"stamp\"", "script = \"fresh\""),
+    );
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "script_in_use");
+    assert_eq!(api.script("fresh").as_deref(), Some(FRESH));
+}
+
+#[test]
+fn a_device_file_that_runs_a_script_is_in_its_runs_as_list() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text(
+        "/api/device-files/android",
+        "handler \"sms_received\" {\n  script = \"device_messages\"\n}\n",
+    );
+    let current = api.script("device_messages").unwrap();
+    let changed = format!("{current}\n");
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "device_messages", "source": changed }),
+    );
+    let p = find(&events, "script_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    assert_eq!(users(&p["runs_as"]), [pair("device", "android")], "{p}");
+    assert_eq!(p["runs_as"][0]["event"], "handler sms_received");
+    assert_eq!(p["runs_as"][0]["file"], "devices/android.wcl");
+    assert_eq!(p["warnings"], json!([]));
+}
+
+#[test]
+fn a_tool_applied_after_what_runs_its_script_changed_is_stale() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.seed_users();
+    let open = ECHO.replace("[\"echo.example.com\"]", "[\"*\"]");
+    let events = api.one(
+        &fake,
+        "propose_tool_change",
+        json!({ "name": "echo", "wcl": open, "script_source": null }),
+    );
+    let p = find(&events, "tool_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    // The task nightly now reaches another host: the tool's script has a new "Runs as" list.
+    api.put_text(
+        "/api/tasks/nightly",
+        &NIGHTLY.replace("api.example.com", "other.example.com"),
+    );
+    let before = api.get("/api/tools/echo");
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "stale");
+    assert_eq!(api.get("/api/tools/echo")["wcl"], before["wcl"]);
+}
