@@ -154,6 +154,8 @@ export function stepLabel(name: string, input: Json): string {
       return "Drafted an SMS";
     case "draft_event":
       return "Drafted a calendar invite";
+    case "notify_user":
+      return `Notified the user: “${s("title")}”`;
     case "web_search":
       return `Searched the web for “${s("query")}”`;
     case "fetch_url":
@@ -288,6 +290,8 @@ export function activeLabel(name: string, input: Json): string {
       return "Drafting an SMS";
     case "draft_event":
       return "Drafting a calendar invite";
+    case "notify_user":
+      return "Notifying the user";
     case "web_search":
       return "Searching the web";
     case "fetch_url":

@@ -328,6 +328,10 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
     ],
   },
   {
+    group: "Notifications",
+    tools: [["notify_user", "Notify the user (bell and phones)"]],
+  },
+  {
     group: "Assets",
     tools: [
       ["find_assets", "Find images and files"],

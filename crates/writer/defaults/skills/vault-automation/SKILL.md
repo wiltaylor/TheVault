@@ -31,10 +31,13 @@ Each comes from a switch on your Permissions tab, so you may have none of them:
   script tools. A proposal waits for the user unless **Ask before changing script tools** is off.
 - `start_subagent`: hand a self-contained part of the task to another agent, which works in its
   own thread and answers you. From **Sub agents**.
+- `notify_user`: send the user a notification now: a title, an optional body and an optional
+  note it opens. It shows under the bell as yours and is pushed to the paired phones, with no
+  proposal, also in an unattended run. At most 3 per turn, 10 per hour and 30 per day. Every
+  agent has it unless its tools list leaves it out.
 
-There is no tool to write a scheduled task, a saved script or a device file, and none to send
-a notification. For those, write the file's text in your answer for the user to save, or say what
-they need to set up.
+There is no tool to write a scheduled task, a saved script or a device file. For those, write
+the file's text in your answer for the user to save, or say what they need to set up.
 
 ## A scheduled task
 
@@ -159,4 +162,6 @@ A tool is offered to agents only when it is valid; `get_tool` shows why one is n
 - A one-off change to many notes: `run_script` when you have it, after saying what it will change.
   Without it, propose the changes one note at a time with `propose_fields`, or tell the user.
 - A reminder at a time: a task with a due date or a datetime on a note the user sees, or a
-  scheduled task that notifies. You cannot set a reminder yourself.
+  scheduled task that notifies. You cannot set a reminder for later yourself.
+- Telling the user something now, such as what an unattended run found: `notify_user`. Something
+  to tell them on a schedule, every time: a scheduled task with `vault::notify`.

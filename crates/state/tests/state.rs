@@ -914,6 +914,27 @@ fn notifications_list_newest_first_page_and_count_unread() {
 }
 
 #[test]
+fn notifications_from_counts_one_source_in_a_window() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(1_000_000);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let from = |source: &str| NewNotification {
+        source: source.to_owned(),
+        ..note("hi")
+    };
+    state.add_notification(&from("agent:scout")).unwrap();
+    clock.advance(500);
+    state.add_notification(&from("agent:scout")).unwrap();
+    state.add_notification(&from("agent:other")).unwrap();
+    let read = state.add_notification(&from("agent:scout")).unwrap();
+    state.mark_notification_read(&read.id).unwrap();
+    assert_eq!(state.notifications_from("agent:scout", 10_000).unwrap(), 3);
+    assert_eq!(state.notifications_from("agent:scout", 400).unwrap(), 2);
+    assert_eq!(state.notifications_from("agent:other", 10_000).unwrap(), 1);
+    assert_eq!(state.notifications_from("agent:none", 10_000).unwrap(), 0);
+}
+
+#[test]
 fn notifications_are_checked() {
     let dir = TempDir::new().unwrap();
     let state = open(&dir);

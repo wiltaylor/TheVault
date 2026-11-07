@@ -296,6 +296,18 @@ impl State {
         unread(&self.conn())
     }
 
+    /// How many stored notifications from `source` were made in the last `window_ms`
+    /// milliseconds, read or not. Rate limits count with it, such as the agents' `notify_user`.
+    pub fn notifications_from(&self, source: &str, window_ms: i64) -> Result<usize> {
+        let since = self.now().saturating_sub(window_ms);
+        let n: i64 = self.conn().query_row(
+            "SELECT COUNT(*) FROM notifications WHERE source = ?1 AND created_ms > ?2",
+            params![source, since],
+            |r| r.get(0),
+        )?;
+        Ok(usize::try_from(n).unwrap_or(0))
+    }
+
     /// Mark one notification read. Marking a read one again keeps when it was first read, and
     /// tells no one.
     pub fn mark_notification_read(&self, id: &str) -> Result<Notification> {

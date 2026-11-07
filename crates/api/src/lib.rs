@@ -77,6 +77,7 @@ mod ai_agents;
 mod ai_assets;
 mod ai_browser;
 mod ai_chat;
+mod ai_notify;
 mod ai_outbox;
 mod ai_retry;
 mod ai_saved;

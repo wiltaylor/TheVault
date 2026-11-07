@@ -38,6 +38,12 @@ describe("scriptsBlock", () => {
     const groups = toolGroups(["run_saved_script", "run_task", "list_tasks", "list_scripts"]);
     expect(groups.map((g) => g.group)).toEqual(["Scripts"]);
   });
+
+  it("puts notify_user in its own Notifications group", () => {
+    const groups = toolGroups(["notify_user", "draft_email"]);
+    expect(groups.map((g) => g.group)).toEqual(["Outbox", "Notifications"]);
+    expect(groups[1]!.tools).toEqual([{ name: "notify_user", label: "Notify the user (bell and phones)" }]);
+  });
 });
 
 describe("the palette's agent actions", () => {

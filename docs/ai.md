@@ -221,6 +221,7 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | `propose_agent_delete` | Checks that an agent exists and is not the Assistant or the proposing agent, and shows the delete to you; deletes it only when confirmation is off |
 | `list_skills`, `get_skill` | Every skill with its metadata, validity and issues, or one skill's `SKILL.md`, body and files. See [Agents that manage skills](ai-agents.md#agents-that-manage-skills) |
 | `propose_skill_change`, `propose_skill_file_change`, `propose_skill_file_delete`, `propose_skill_delete` | Check a new or changed `SKILL.md`, a skill file written as text or base64, a file or folder deleted, or a skill deleted, and show it to you; write it only when confirmation is off |
+| `notify_user` | Sends you a notification at once, under the bell and to your paired phones, with a title, a body and a note it opens; no proposal, also in unattended runs. At most 3 a turn, 10 an hour and 30 a day per agent. See [Notifying you](ai-agents.md#notifying-you) |
 | `web_search` | Searches the web with Brave Search, 1 to 10 results; offered only with a Brave Search key. See [Web search](#web-search) |
 | `fetch_url` | Reads a web page or file for the model; never a change. See [Read pages and download files](#read-pages-and-download-files) |
 | `download_asset` | Downloads a file of any size into the vault as an asset; stores it only when [confirmation is off](#changes-the-ai-makes) |

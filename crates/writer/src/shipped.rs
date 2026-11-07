@@ -306,7 +306,10 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
     ShippedFile {
         path: "skills/vault-automation/SKILL.md",
         source: include_str!("../defaults/skills/vault-automation/SKILL.md"),
-        hashes: &["78cf2b3c5414f5aae98dc0c1d172e83e725d6f9ac1a9bc1424f17219500b1c6c"],
+        hashes: &[
+            "78cf2b3c5414f5aae98dc0c1d172e83e725d6f9ac1a9bc1424f17219500b1c6c",
+            "cba4a1cec4b6b2d47702689c0fd3aae283171cd56d60446e851bfcfe6dc46886",
+        ],
     },
 ];
 
