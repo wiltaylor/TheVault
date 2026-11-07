@@ -43,6 +43,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
 import { noteIdOf, retryGesture } from "./gesture.mjs";
+import { logcatSinceArgs } from "./logcat.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -439,7 +440,7 @@ async function updateApk(bump = 1) {
 /** The device's clock, as `logcat -t` takes it. */
 const deviceTime = () => shell("date +'%m-%d %H:%M:%S.000'").trim();
 /** The log lines since `since` (a [deviceTime]). */
-const logSince = (since) => adbTry("logcat", "-d", "-v", "time", "-t", `'${since}'`);
+const logSince = (since) => adbTry(...logcatSinceArgs(since));
 
 /**
  * Makes sure the app has push: when ntfy is gone (checks 22 and 48 uninstall it), installs it

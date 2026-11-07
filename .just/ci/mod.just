@@ -73,7 +73,7 @@ web-test: web-deps-install
 # Test the Android emulator harness's helpers that need no device (TV-92)
 [group('ci')]
 emulator-harness-test: (require-tool "node")
-	node --test apps/android/emulator/gesture.test.mjs
+	node --test apps/android/emulator/gesture.test.mjs apps/android/emulator/logcat.test.mjs
 
 # Test the release train's scripts: the version calculation, the Android versionCode, how dpkg, rpm and pacman sort the package versions, the image tags and stamping (docs/releasing.md)
 [group('ci')]
