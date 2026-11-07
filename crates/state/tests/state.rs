@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use state::{
     Author, Clock, Error, JobStatus, LiveEvent, MAX_NOTIFICATIONS, Missed, NewNotification,
-    PrunePolicy, RunOutcome, Scope, SecretKey, State, Subscription, key_file_path,
+    PrunePolicy, RunOutcome, Scope, SecretKey, SourceLimit, State, Subscription, key_file_path,
 };
 use tempfile::TempDir;
 
@@ -932,6 +932,81 @@ fn notifications_from_counts_one_source_in_a_window() {
     assert_eq!(state.notifications_from("agent:scout", 400).unwrap(), 2);
     assert_eq!(state.notifications_from("agent:other", 10_000).unwrap(), 1);
     assert_eq!(state.notifications_from("agent:none", 10_000).unwrap(), 0);
+}
+
+#[test]
+fn add_notification_within_refuses_past_a_limit_and_stores_nothing() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(1_000_000);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let from = |source: &str| NewNotification {
+        source: source.to_owned(),
+        ..note("hi")
+    };
+    let limits = [SourceLimit {
+        window_ms: 1_000,
+        max: 2,
+    }];
+    state
+        .add_notification_within(&from("agent:a"), &limits)
+        .unwrap();
+    // Another source has its own count.
+    state
+        .add_notification_within(&from("agent:b"), &limits)
+        .unwrap();
+    state
+        .add_notification_within(&from("agent:a"), &limits)
+        .unwrap();
+    let err = state
+        .add_notification_within(&from("agent:a"), &limits)
+        .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            Error::NotificationLimit { by, window_ms: 1_000, count: 2, max: 2 } if by == "agent:a"
+        ),
+        "{err:?}"
+    );
+    assert_eq!(state.notifications_from("agent:a", 10_000).unwrap(), 2);
+    assert_eq!(
+        state.notifications(false, 10, None).unwrap().items.len(),
+        3,
+        "a refused call stores nothing"
+    );
+    // Once the window has passed, the source may notify again.
+    clock.advance(1_000);
+    state
+        .add_notification_within(&from("agent:a"), &limits)
+        .unwrap();
+}
+
+#[test]
+fn concurrent_adds_from_one_source_never_pass_a_limit() {
+    let dir = TempDir::new().unwrap();
+    let state = Arc::new(open(&dir));
+    let limits = [SourceLimit {
+        window_ms: DAY_MS,
+        max: 10,
+    }];
+    let callers: Vec<_> = (0..32)
+        .map(|i| {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let n = NewNotification {
+                    source: "agent:racer".into(),
+                    ..note(&format!("n{i}"))
+                };
+                state.add_notification_within(&n, &limits).is_ok()
+            })
+        })
+        .collect();
+    let stored = callers
+        .into_iter()
+        .map(|c| c.join().unwrap())
+        .filter(|ok| *ok)
+        .count();
+    assert_eq!(stored, 10);
+    assert_eq!(state.notifications_from("agent:racer", DAY_MS).unwrap(), 10);
 }
 
 #[test]
