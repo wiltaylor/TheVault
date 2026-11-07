@@ -476,12 +476,15 @@ fn apply_error(e: scheduler::Error) -> ApplyError {
     }
 }
 
-/// Apply a `task_proposal`, when the task file and the script are still the proposal's `before`
-/// and `script_before`, through the scheduler, which reloads. Answers `{op, task_name,
+/// Apply a `task_proposal` through the scheduler, which reloads. Answers `{op, task_name,
 /// script_name, next_run}`, `op` `task_create`, `task_change` or `task_delete`, `script_name` the
-/// script written with the task, if any. The script is stale-checked whether or not the proposal
-/// writes it, as the card showed it. A task file with `fs` paths is refused, and so is a new
-/// script source that another run with `fs` paths shares (TV-32 Q3, TV-71 review F1).
+/// script written with the task, if any. Every check runs again under the writer's write lock, in
+/// one `Writer::commit_checked` with the write (TV-71 review F2, as TV-85 does for scripts): the
+/// task file and the script must still be the proposal's `before` and `script_before` (the script
+/// whether or not the proposal writes it, as the card showed it), the task must check, its script
+/// must still compile as the task runs it, and what else runs the script must be as the card
+/// showed it. A task file with `fs` paths is refused, and so is a new script source that another
+/// run with `fs` paths shares (TV-32 Q3, TV-71 review F1).
 pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
@@ -490,16 +493,20 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     let s = crate::script_tools::scheduler_for(w).ok_or_else(|| {
         ApplyError::Invalid("scheduled tasks are changed on the home server only".into())
     })?;
-    let stale = || {
+    let stale = |what: &str| {
         ApplyError::Stale(format!(
-            "the task {name} or its script changed since the proposal, so nothing was written"
+            "{what} since the proposal, so nothing was written: propose it again"
         ))
     };
-    if w.read_task(name).ok().as_deref() != p["before"].as_str() {
-        return Err(stale());
-    }
+    let before = p["before"].as_str();
     if p["op"] == "delete" {
-        s.delete_task(name).map_err(apply_error)?;
+        w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+            if w.read_task(name).ok().as_deref() != before {
+                return Err(stale(&format!("the task {name} changed")));
+            }
+            Ok(w.task_delete_changes(name)?)
+        })?;
+        s.reload().map_err(apply_error)?;
         return Ok(
             json!({ "op": "task_delete", "task_name": name, "script_name": null, "next_run": null }),
         );
@@ -508,23 +515,43 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
         .as_str()
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
     let script_after = p["script_after"].as_str();
-    let (_, def) = s
-        .check_task(name, after, script_after)
-        .map_err(apply_error)?;
-    if let Some(why) = paths_refused(&def, false) {
-        return Err(ApplyError::Refused(why));
-    }
-    if w.read_script(&def.script).ok().as_deref() != p["script_before"].as_str() {
-        return Err(stale());
-    }
-    if script_after.is_some()
-        && let Some(why) = shared_paths_refused(w, &def.script, name)
-    {
-        return Err(ApplyError::Refused(why));
-    }
-    s.put_task_with_script(name, after, script_after)
-        .map_err(apply_error)?;
-    let op = if p["before"].is_string() {
+    let mut script = String::new();
+    w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+        if w.read_task(name).ok().as_deref() != before {
+            return Err(stale(&format!("the task {name} changed")));
+        }
+        let (def, changes) = s
+            .task_changes(w, name, after, script_after)
+            .map_err(apply_error)?;
+        if let Some(why) = paths_refused(&def, false) {
+            return Err(ApplyError::Refused(why));
+        }
+        let script_before = w.read_script(&def.script).ok();
+        if script_before.as_deref() != p["script_before"].as_str() {
+            return Err(stale(&format!("the script {} changed", def.script)));
+        }
+        if script_after.is_some()
+            && let Some(why) = shared_paths_refused(w, &def.script, name)
+        {
+            return Err(ApplyError::Refused(why));
+        }
+        let source = script_after
+            .or(script_before.as_deref())
+            .unwrap_or_default();
+        if !script_problems(w, &s, &def, source, script_after.is_some()).is_empty() {
+            return Err(stale(&format!(
+                "the script {} no longer runs as this task",
+                def.script
+            )));
+        }
+        if others(w, &def.script, name).0 != p["runs_as"] {
+            return Err(stale(&format!("what runs the script {} changed", def.script)));
+        }
+        script = def.script;
+        Ok(changes)
+    })?;
+    s.reload().map_err(apply_error)?;
+    let op = if before.is_some() {
         "task_change"
     } else {
         "task_create"
@@ -533,7 +560,7 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     Ok(json!({
         "op": op,
         "task_name": name,
-        "script_name": script_after.map(|_| def.script.clone()),
+        "script_name": script_after.map(|_| script),
         "next_run": next_run,
     }))
 }

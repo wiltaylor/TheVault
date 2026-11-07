@@ -17,6 +17,7 @@ schema.workspace = true
 script.workspace = true
 serde_json.workspace = true
 state.workspace = true
+store.workspace = true
 thiserror.workspace = true
 writer.workspace = true
 

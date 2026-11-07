@@ -598,11 +598,32 @@ fn a_task_with_its_script_is_written_in_one_apply_and_changes_and_deletes_are_ch
     assert_eq!(body["error"], "stale");
     assert_eq!(api.task("digest").unwrap()["schedule"], "0 9 * * 1-5");
 
+    // A proposal made before another task started to run the script: Apply re-checks what runs
+    // it under the write lock, and finds it changed (TV-71 review F2).
+    let early = api.propose(
+        &fake,
+        "digest",
+        "schedule = \"0 10 * * 1-5\"\nscript = \"digest\"\n",
+        None,
+    );
+    assert_eq!(early["runs_as"], json!([]));
+
     // A change of a shared script lists what else runs it.
     api.put_task(
         "other",
         "schedule = \"0 1 * * *\"\nscript = \"digest\"\nallow_domains = [\"*\"]\n",
     );
+    let (status, body) = api.apply_as(&api.token(), &early);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "stale");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("what runs the script digest changed"),
+        "{body}"
+    );
+    assert_eq!(api.task("digest").unwrap()["schedule"], "0 9 * * 1-5");
     let changed = format!("{digest}\nfn extra() -> int {{\n    1\n}}\n");
     let p = api.propose(
         &fake,

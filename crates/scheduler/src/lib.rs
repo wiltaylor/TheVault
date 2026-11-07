@@ -269,7 +269,7 @@ impl Scheduler {
         Ok(text)
     }
 
-    /// Check `source` as task `name` as [`Scheduler::put_task_with_script`] would, without
+    /// Check `source` as task `name` as [`Scheduler::task_changes`] would, without
     /// writing anything: its canonical text and the task. `script`, when given, is the new source
     /// of the script the task names, so that script need not exist yet (TV-71). The script's
     /// source is not compiled here.
@@ -288,23 +288,24 @@ impl Scheduler {
         Ok((text, def))
     }
 
-    /// Check `source` as task `name`, write it to `tasks/<name>.wcl` with `script`, when given,
-    /// the source of the script it names, in one commit, and reload (TV-71).
-    pub fn put_task_with_script(
+    /// The task `source` as task `name` and the changes that write it, with `script`, when given,
+    /// the source of the script it names, checked as [`Scheduler::check_task`] checks it, for
+    /// [`Writer::commit_checked`] on this scheduler's writer `w` (TV-71). Call
+    /// [`Scheduler::reload`] once they are committed.
+    pub fn task_changes(
         &self,
+        w: &Writer,
         name: &str,
         source: &str,
         script: Option<&str>,
-    ) -> Result<String> {
-        let vault = self.writer.vault().root().to_path_buf();
-        let text = self
-            .writer
-            .put_task_with_script(name, source, script, |text| {
-                let def = TaskDef::parse(name, text)?;
-                check_paths(&def, &vault)
-            })?;
-        self.reload()?;
-        Ok(text)
+    ) -> Result<(TaskDef, Vec<store::Change>)> {
+        let vault = w.vault().root().to_path_buf();
+        let (text, changes) = w.task_changes(name, source, script, |text| {
+            let def = TaskDef::parse(name, text)?;
+            check_paths(&def, &vault)
+        })?;
+        let def = TaskDef::parse(name, &text).map_err(writer::Error::Invalid)?;
+        Ok((def, changes))
     }
 
     /// Set task `name`'s `paused` field in its file and reload. Returns `false`, changing nothing,

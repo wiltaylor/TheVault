@@ -713,8 +713,25 @@ impl Writer {
         script: Option<&str>,
         check: impl FnOnce(&str) -> std::result::Result<(), Invalid>,
     ) -> Result<String> {
-        let _w = self.write_lock();
-        let mut inner = self.lock();
+        let mut text = String::new();
+        self.commit_checked(|w| {
+            let (t, changes) = w.task_changes(name, source, script, check)?;
+            text = t;
+            Ok::<_, Error>(changes)
+        })?;
+        Ok(text)
+    }
+
+    /// The canonical text of `source` as `tasks/<name>.wcl`, checked as [`Writer::check_task`]
+    /// checks it, and the changes that write it with `script`, when given, the source of the script
+    /// it names, for [`Writer::commit_checked`] (TV-71).
+    pub fn task_changes(
+        &self,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+        check: impl FnOnce(&str) -> std::result::Result<(), Invalid>,
+    ) -> Result<(String, Vec<Change>)> {
         let text = self.check_task(name, source, script, check)?;
         let path = task_path(name);
         let mut changes = Vec::new();
@@ -733,9 +750,14 @@ impl Writer {
             changes.push(Change::write(script_path(s), src.as_bytes()));
         }
         changes.push(Change::write(path, text.as_bytes()));
-        let generation = self.commit(changes)?;
-        inner.index.advance(generation)?;
-        Ok(text)
+        Ok((text, changes))
+    }
+
+    /// The change that deletes `tasks/<name>.wcl`, for [`Writer::commit_checked`] (TV-71). The
+    /// task must exist.
+    pub fn task_delete_changes(&self, name: &str) -> Result<Vec<Change>> {
+        self.read_task(name)?;
+        Ok(vec![Change::delete(task_path(name))])
     }
 
     /// Delete `tasks/<name>.wcl`.
