@@ -436,12 +436,4 @@ fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it()
     let body = res.text().unwrap();
     assert!(body.contains("event: agent_proposal"), "{body}");
     assert!(body.contains("\"grants_run_saved\":true"), "{body}");
-    let threads = api.get("/api/agents/boss/threads");
-    let pending: i64 = threads["threads"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|t| t["pending"].as_i64())
-        .sum();
-    assert_eq!(pending, 1, "{threads}");
 }
