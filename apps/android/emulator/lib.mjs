@@ -43,18 +43,67 @@ export const NTFY = "io.heckel.ntfy";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Runs `adb args...` and answers its stdout. */
-export function adb(...args) {
-  return execFileSync("adb", args, { encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "pipe"] });
+/** The longest one adb call may take. Without a limit a call such as `adb wait-for-device` can wait for good. */
+export const ADB_TIMEOUT = 300_000;
+
+/** An adb call that did not end within its time limit; adbTry passes it on. */
+export class AdbTimeout extends Error {}
+
+function runAdb(args, timeout) {
+  try {
+    return execFileSync("adb", args, { encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "pipe"], timeout, killSignal: "SIGKILL" });
+  } catch (e) {
+    if (e.code === "ETIMEDOUT") {
+      throw new AdbTimeout(`adb ${args.join(" ")} on ${process.env.ANDROID_SERIAL ?? "the only device"} did not end within ${timeout / 1000} s; it was killed`);
+    }
+    throw e;
+  }
 }
 
-/** `adb args...`, answering stdout, without throwing on a non-zero exit. */
+/** Runs `adb args...` and answers its stdout. Throws AdbTimeout after ADB_TIMEOUT ms. */
+export function adb(...args) {
+  return runAdb(args, ADB_TIMEOUT);
+}
+
+/** `adb args...`, answering stdout, without throwing on a non-zero exit. It still throws AdbTimeout. */
 export function adbTry(...args) {
   try {
     return adb(...args);
   } catch (e) {
+    if (e instanceof AdbTimeout) throw e;
     return `${e.stdout ?? ""}${e.stderr ?? ""}`;
   }
+}
+
+/**
+ * Waits up to `timeout` ms for the device to be back on adb after `why` (`adb root`, a reboot).
+ * `adb wait-for-device` has no limit and waited for good on thevault-android (TV-15), so this polls
+ * `adb get-state`. When half the time has passed it runs `adb reconnect`, which acts on
+ * ANDROID_SERIAL's device only. Throws when the device is not back in time.
+ */
+export async function waitForDevice(why, timeout = 180_000) {
+  const end = Date.now() + timeout;
+  let reconnected = false;
+  let state = "";
+  while (Date.now() < end) {
+    try {
+      state = runAdb(["get-state"], 10_000).trim();
+    } catch (e) {
+      state = `${e.stdout ?? ""}${e.stderr ?? ""}`.trim() || e.message;
+    }
+    if (state === "device") return;
+    if (!reconnected && Date.now() > end - timeout / 2) {
+      console.log(`${process.env.ANDROID_SERIAL ?? "the device"} is not back on adb after ${why} (${state}): adb reconnect`);
+      try {
+        runAdb(["reconnect"], 10_000);
+      } catch {
+        // The next get-state shows whether it helped.
+      }
+      reconnected = true;
+    }
+    await sleep(1_000);
+  }
+  throw new Error(`${process.env.ANDROID_SERIAL ?? "the device"} was not back on adb ${timeout / 1000} s after ${why}, also after adb reconnect (last state: ${state || "none"}). See adb devices and the emulator log`);
 }
 
 export const shell = (cmd) => adb("shell", cmd);
@@ -323,14 +372,32 @@ export function playwrightAndroid() {
   return require("@playwright/test")._android;
 }
 
-/** The app's WebView page, through adb (debuggable builds expose it). */
+/**
+ * The app's WebView page, through adb (debuggable builds expose it), on the device adb uses:
+ * ANDROID_SERIAL's when it is set, as with another emulator on the same machine, else the first.
+ * Playwright opens every device it lists and polls each for WebViews, so the others are closed at
+ * once and left alone.
+ */
 export async function appPage(timeout = 30_000) {
   const android = playwrightAndroid();
-  const [device] = await android.devices();
-  if (!device) throw new Error("Playwright sees no Android device");
-  const webview = await device.webView({ pkg: PKG }, { timeout });
-  const page = await webview.page();
-  return { device, page };
+  const devices = await android.devices();
+  const serial = process.env.ANDROID_SERIAL;
+  const device = serial ? devices.find((d) => d.serial() === serial) : devices[0];
+  await Promise.all(devices.filter((d) => d !== device).map((d) => d.close().catch(() => {})));
+  if (!device) {
+    const seen = devices.map((d) => d.serial()).join(", ") || "none";
+    throw new Error(serial ? `Playwright sees no Android device ${serial} (it sees ${seen})` : "Playwright sees no Android device");
+  }
+  // A device left open keeps polling adb and keeps the run's process alive (TV-51), so one whose
+  // WebView did not come up is closed before the error goes on.
+  try {
+    const webview = await device.webView({ pkg: PKG }, { timeout });
+    const page = await webview.page();
+    return { device, page };
+  } catch (e) {
+    await device.close().catch(() => {});
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

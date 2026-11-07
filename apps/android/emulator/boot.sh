@@ -6,14 +6,36 @@
 #
 #   apps/android/emulator/boot.sh [--wipe] [extra emulator flags...]
 #
-# --wipe starts from a factory-fresh data partition. EMULATOR_PORT (default 5554) picks the
-# console port; adb sees the emulator as emulator-<port>.
+# --wipe starts from a factory-fresh data partition, and refuses to run when an emulator already
+# uses the port, which this run did not start. Without --wipe, one already running is used as it
+# is. EMULATOR_PORT (default 5554) picks the console port; adb sees the emulator as
+# emulator-<port>.
 set -euo pipefail
 
 avd=${THEVAULT_AVD:-thevault-api35}
 image=${THEVAULT_AVD_IMAGE:-"system-images;android-35;google_apis;x86_64"}
 port=${EMULATOR_PORT:-5554}
 out=${THEVAULT_EMULATOR_LOGS:-target/android-emulator}
+serial="emulator-$port"
+
+wipe=()
+if [ "${1:-}" = "--wipe" ]; then
+  wipe=(-wipe-data)
+  shift
+fi
+
+# A run that wipes needs an emulator it starts itself. One already on the port may be someone
+# else's (another user's on a shared machine): never wipe, drive or kill it. Only listed here.
+command -v adb >/dev/null || { echo "adb is missing; run this through ./dev" >&2; exit 1; }
+adb start-server >/dev/null
+running=no
+if adb devices | grep -q "^$serial[[:space:]]"; then
+  running=yes
+fi
+if [ "$running" = yes ] && [ "${#wipe[@]}" -gt 0 ]; then
+  echo "$serial is already running, and --wipe needs an emulator this run starts: it may be another user's. Set EMULATOR_PORT to a free console port (5556, 5558, ...) and run again." >&2
+  exit 1
+fi
 mkdir -p "$out" "${ANDROID_USER_HOME:-$HOME/.android}"
 
 test -e /dev/kvm || { echo "/dev/kvm is missing: the emulator needs KVM; run this through ./dev on a host with KVM" >&2; exit 1; }
@@ -32,15 +54,7 @@ if [ ! -f "${ANDROID_AVD_HOME:-$HOME/.android/avd}/$avd.ini" ]; then
   } >> "$config"
 fi
 
-wipe=()
-if [ "${1:-}" = "--wipe" ]; then
-  wipe=(-wipe-data)
-  shift
-fi
-
-serial="emulator-$port"
-adb start-server >/dev/null
-if adb devices | grep -q "^$serial"; then
+if [ "$running" = yes ]; then
   echo "$serial is already running" >&2
 else
   # A container that died with the emulator running leaves the AVD's lock files behind, and the

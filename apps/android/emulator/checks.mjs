@@ -17,8 +17,11 @@
 //                           process lives 20 s after launch, shows onboarding, and no FATAL EXCEPTION
 //                           of the app is in logcat then or at the end of the run
 //   THEVAULT_PERIODIC_WAIT  minutes to wait for the 15-minute background work (default 17)
-//   THEVAULT_UPDATE_APK     the newer APK check 49 publishes, with THEVAULT_UPDATE_VERSION its version
-//                           (default: built here, the same app one patch version up)
+//   THEVAULT_UPDATE_APK     the newer APK check 49 publishes first, with THEVAULT_UPDATE_VERSION its
+//                           version (default: built here, the same app one patch version up, with
+//                           the versionCode scripts/release/version-code.sh gives that version)
+//   THEVAULT_UPDATE_APK2    the second one, with THEVAULT_UPDATE_VERSION2 (default: built here, two
+//                           patch versions up). Both let a machine without cargo run check 49
 //
 // What the emulator stands in for, and how:
 //   - The home server is a vault-server on a fresh temporary vault, on 127.0.0.1, which the
@@ -69,7 +72,9 @@ const KNOWN_E164 = "+16502530001";
 const UNKNOWN = "6502539999";
 const OUTGOING = "6502530003";
 const OLD = "6502537777"; // before pairing: must never arrive
-const SELF = "15555215554"; // the emulator's own number: an SMS sent to it comes back
+// The emulator's own number, 1555521 and its console port: an SMS sent to it comes back. Another
+// emulator's number would reach that emulator instead.
+const SELF = `1555521${/^emulator-(\d+)$/.exec(process.env.ANDROID_SERIAL ?? "")?.[1] ?? process.env.EMULATOR_PORT ?? "5554"}`;
 
 // ---------------------------------------------------------------------------------------------
 // Results
@@ -201,7 +206,7 @@ async function startNtfy() {
 
 /** Removes the real Google Messages from the system image, once per AVD, so the stand-in can take its name. */
 async function replaceGoogleMessages() {
-  root();
+  await root();
   const path = shellTry(`pm path ${MESSAGES}`);
   if (path.includes("/product/priv-app/PrebuiltBugle")) {
     console.log("removing the system image's Google Messages (needs -writable-system)");
@@ -211,14 +216,14 @@ async function replaceGoogleMessages() {
       if (!shellTry("touch /product/priv-app/.thevault-rw && rm /product/priv-app/.thevault-rw && echo WRITABLE_OK").includes("WRITABLE_OK")) {
         if (i >= 3) throw new Error("could not remount /product writable; is the emulator running with -writable-system?");
         await reboot();
-        root();
+        await root();
         continue;
       }
       break;
     }
     shell("rm -rf /product/priv-app/PrebuiltBugle");
     await reboot();
-    root();
+    await root();
   } else if (path.includes("package:") && !path.includes("/data/app/")) {
     throw new Error(`unexpected ${MESSAGES}: ${path}`);
   }
@@ -230,16 +235,16 @@ async function replaceGoogleMessages() {
   if (holder !== MESSAGES) throw new Error(`the SMS role is held by "${holder}"`);
 }
 
-function root() {
+async function root() {
   adbTry("root");
-  adbTry("wait-for-device");
+  await L.waitForDevice("adb root");
   for (let i = 0; i < 20 && !shellTry("id").includes("uid=0"); i++) execFileSync("sleep", ["0.5"]);
 }
 
 async function reboot() {
   adbTry("reboot");
   await sleep(5_000);
-  adbTry("wait-for-device");
+  await L.waitForDevice("adb reboot");
   await until("boot", () => shellTry("getprop sys.boot_completed").trim() === "1", { timeout: 300_000, every: 1_000 });
   shellTry("input keyevent KEYCODE_WAKEUP");
   shellTry("wm dismiss-keyguard");
@@ -395,15 +400,20 @@ async function openPath(path, title) {
 const webView = () => L.find((n) => n.pkg === PKG && n.cls === "android.webkit.WebView");
 
 /**
- * The newer APK check 49 publishes, and its version: THEVAULT_UPDATE_APK, or the app built again
- * one patch version above apps/android/src-tauri/tauri.conf.json's.
+ * The newer APK check 49 publishes `bump`th, and its version: THEVAULT_UPDATE_APK (the first) or
+ * THEVAULT_UPDATE_APK2 (the second), else the app built again `bump` patch versions above
+ * apps/android/src-tauri/tauri.conf.json's. The build sets the versionCode of that version too:
+ * tauri.conf.json pins the run's own, and Android takes an update only by its versionCode.
  */
 async function updateApk(bump = 1) {
-  if (process.env.THEVAULT_UPDATE_APK && bump === 1) return [process.env.THEVAULT_UPDATE_VERSION, process.env.THEVAULT_UPDATE_APK];
+  const suffix = bump === 1 ? "" : String(bump);
+  const given = process.env[`THEVAULT_UPDATE_APK${suffix}`];
+  if (given) return [process.env[`THEVAULT_UPDATE_VERSION${suffix}`], given];
   const conf = JSON.parse(readFileSync(join(repo, "apps/android/src-tauri/tauri.conf.json"), "utf8"));
   const [major, minor, patch] = conf.version.split(".").map(Number);
   const version = `${major}.${minor}.${patch + bump}`;
-  const built = join(cache, `TheVault_${version}_x86_64-debug.apk`);
+  const versionCode = Number(execFileSync(join(repo, "scripts/release/version-code.sh"), [version], { encoding: "utf8" }).trim());
+  const built = join(cache, `TheVault_${version}_${versionCode}_x86_64-debug.apk`);
   // Built again whenever the run's APK is newer, so the update carries the code under test.
   if (!existsSync(built) || statSync(built).mtimeMs < statSync(apk).mtimeMs) {
     const env = { ...process.env, CARGO_PROFILE_DEV_DEBUG: "0", CARGO_PROFILE_DEV_STRIP: "symbols", GRADLE_OPTS: `${process.env.GRADLE_OPTS ?? ""} -Dorg.gradle.daemon=false` };
@@ -413,7 +423,7 @@ async function updateApk(bump = 1) {
     const kept = join(cache, "current-app.apk");
     if (existsSync(output)) copyFileSync(output, kept);
     try {
-      await L.run("cargo", ["tauri", "android", "build", "--debug", "--apk", "--target", "x86_64", "--config", JSON.stringify({ version })], { cwd: join(repo, "apps/android"), env });
+      await L.run("cargo", ["tauri", "android", "build", "--debug", "--apk", "--target", "x86_64", "--config", JSON.stringify({ version, bundle: { android: { versionCode } } })], { cwd: join(repo, "apps/android"), env });
       copyFileSync(output, built);
     } finally {
       if (existsSync(kept)) copyFileSync(kept, output);
@@ -732,8 +742,7 @@ async function main() {
     await L.tap(/^allow$/i);
     const next = await L.waitFor((n) => n.pkg === PKG && /^(RCS messages|Calls)$/.test(n.text), { timeout: 10_000 });
     const shot = snap("25-next-step");
-    const note = `Allow restricted settings set the appop to "${mode}"; Try again brought the SMS permission dialog; allowing it moved on to "${next.text}".` +
-      (next.text === "RCS messages" ? " The checklist says the Calls step comes next, but the app puts the RCS messages step (notification access, check 27) between them: the checklist is out of date, not the app." : "");
+    const note = `Allow restricted settings set the appop to "${mode}"; Try again brought the SMS permission dialog; allowing it moved on to "${next.text}".`;
     return ["pass", note, [ask, shot]];
   });
 
@@ -1216,8 +1225,12 @@ async function main() {
       const box = section.getByLabel("SMS and MMS messages", { exact: true });
       if (!(await box.isChecked())) await box.click();
       await section.getByRole("button", { name: "Import from phone" }).click();
-      const alert = section.getByText("Android has not given TheVault READ_SMS");
+      // The import's own alert: the capture health card above also says the permission is
+      // missing, in its own words (TV-46).
+      const alert = section.locator(".import-permissions").getByText("Android has not given TheVault READ_SMS");
       await alert.waitFor({ timeout: 20_000 });
+      const said = await alert.innerText();
+      const once = !/READ_SMS, READ_SMS/.test(said);
       const offered = await section.getByRole("button", { name: "Open the permission step" }).isVisible();
       const shot = snap("52-permission-missing");
       await section.getByRole("button", { name: "Check for new messages and calls now" }).click();
@@ -1228,8 +1241,8 @@ async function main() {
       const setupShot = snap("52-permission-step");
       shell("input keyevent KEYCODE_BACK");
       await p.goto("http://vault.localhost/").catch(() => {});
-      const ok = offered && Boolean(setup) && Boolean(checked);
-      return [ok ? "pass" : "fail", `With READ_SMS revoked the import did not start and the page said so; "Open the permission step" ${offered ? "was offered" : "was missing"} and ${setup ? "opened the capture setup" : "did not open the capture setup"}. The check said "${checked}".`, [shot, setupShot]];
+      const ok = once && offered && Boolean(setup) && Boolean(checked);
+      return [ok ? "pass" : "fail", `With READ_SMS revoked the import did not start and the page said "${said}"${once ? "" : ", naming the permission twice"}; "Open the permission step" ${offered ? "was offered" : "was missing"} and ${setup ? "opened the capture setup" : "did not open the capture setup"}. The check said "${checked}".`, [shot, setupShot]];
     } finally {
       shell(`pm grant ${PKG} android.permission.READ_SMS`);
     }
@@ -1382,7 +1395,7 @@ async function main() {
     };
     const before = await refs();
     await reboot();
-    root();
+    await root();
     wakeAndUnlock();
     openApp();
     await sleep(30_000);
@@ -1400,6 +1413,9 @@ async function main() {
     openApp();
     await sleep(8_000);
     const onboarding = L.find("Connect TheVault to your server");
+    // The reinstall ended the old WebView: close its device, which would keep polling adb and keep
+    // this process from exiting (TV-51).
+    await pw?.device.close().catch(() => {});
     pw = null;
     const after = (await local("GET", `/api/query?q=${encodeURIComponent("from note")}`)).body;
     const same = JSON.parse(after).rows.length === JSON.parse(before).rows.length;
@@ -1646,4 +1662,12 @@ try {
   const failed = Object.values(results).filter((r) => r.status === "fail").length;
   console.log(`${Object.keys(results).length} checks recorded, ${failed} failed; see ${join(out, "RESULTS.generated.md")}`);
   if (failed) process.exitCode = 1;
+  // Everything is written and the children are stopped. If a handle still keeps Node alive, such as
+  // a Playwright device left open, say what it is and exit, so a run that waits on the exit code
+  // does not wait forever (TV-51). The timer is unref'd: it does not keep the process alive itself.
+  setTimeout(() => {
+    const open = process._getActiveHandles?.().map((h) => h?.constructor?.name ?? typeof h) ?? [];
+    console.error(`still running 30 s after the report, with open handles: ${open.join(", ") || "unknown"}; exiting`);
+    process.exit(process.exitCode ?? 0);
+  }, 30_000).unref();
 }

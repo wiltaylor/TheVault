@@ -200,11 +200,13 @@ android-emulator-checks: (require-tool "emulator") (require-tool "adb") (require
 	set -euo pipefail
 	if [ -z "${THEVAULT_APK:-}" ]; then just android-build x86_64; else just web-build; fi
 	cargo build -p server -p cli --bins
+	# adb, Playwright and the run use the emulator boot.sh starts, also beside another one.
+	export ANDROID_SERIAL="emulator-${EMULATOR_PORT:-5554}"
 	# A factory-fresh data partition each run; -writable-system lets the run swap Google Messages for its test stand-in.
 	apps/android/emulator/boot.sh --wipe -writable-system
 	status=0
 	node apps/android/emulator/checks.mjs || status=$?
-	adb emu kill >/dev/null 2>&1 || true
+	adb -s "$ANDROID_SERIAL" emu kill >/dev/null 2>&1 || true
 	exit $status
 
 # Lint the crates the Android app embeds, the app and its plugin, for target_os = "android" (tickets 76, 114)
@@ -288,12 +290,13 @@ android-release-smoke: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (
 		echo "no release keystore: testing the x86_64 build alone; no aarch64 APK is vouched for" >&2
 	fi
 	cargo build -p server -p cli --bins
+	export ANDROID_SERIAL="emulator-${EMULATOR_PORT:-5554}"
 	apps/android/emulator/boot.sh --wipe -writable-system
 	out=.scratch/emulator-release
 	status=0
 	THEVAULT_APK="$apk" THEVAULT_SMOKE=1 THEVAULT_CHECKS=1,2,3,7,8,11,17,29 THEVAULT_CHECKS_ONLY=1 THEVAULT_EMULATOR_OUT="$out" \
 		node apps/android/emulator/checks.mjs || status=$?
-	adb emu kill >/dev/null 2>&1 || true
+	adb -s "$ANDROID_SERIAL" emu kill >/dev/null 2>&1 || true
 	if [ "$status" -ne 0 ] || ! jq -e '.status == "pass"' "$out/smoke.json" > /dev/null 2>&1; then
 		echo "android-release-smoke FAILED for $apk; see $out/RESULTS.generated.md and $out/smoke.json. Nothing is recorded, so publish-clients will not publish this release." >&2
 		exit 1

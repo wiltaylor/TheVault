@@ -15,7 +15,7 @@ use tauri_plugin_vault_device::core::{self, Core, Link};
 use tauri_plugin_vault_device::pair::{self, Paired, Secret};
 use tauri_plugin_vault_device::share::{Shared, SharedFile};
 use tempfile::TempDir;
-use testkit::{PASSWORD, TestServer};
+use testkit::{PASSWORD, Reply, StandIn, TestServer};
 
 static TURN: Mutex<()> = Mutex::new(());
 
@@ -1284,11 +1284,133 @@ fn send_this_devices_notes_queues_the_local_notes_the_server_lacks_once() {
     // was.
     assert!(has_note(&core, &only_here));
 
-    let (_, again) = app_call(&core, "POST", "/api/app/sync/adopt");
-    assert_eq!(again["queued"], 0, "{again}");
+    // Wait for that round: sync_now takes the round lock after it. An adopt while the round is
+    // between pushing the note and the server listing it can queue the note once more, which the
+    // next round settles with no change (id_taken, then a clean merge), so the test does not ask
+    // again before the round has ended (TV-60).
     core.sync_now().unwrap();
     assert!(queue.pending().unwrap().is_empty());
+    let (_, again) = app_call(&core, "POST", "/api/app/sync/adopt");
+    assert_eq!(again["queued"], 0, "{again}");
     admin.send("GET", &format!("/api/notes/{only_here}"), None);
     let (_, after) = app_call(&core, "POST", "/api/app/sync/adopt");
     assert_eq!(after["queued"], 0, "{after}");
+}
+
+/// A server address whose connections are never answered, as a host that is down or a network
+/// that drops the packets: a listener with no room in its accept queue, which Linux fills with
+/// the connections made here, so the kernel drops every further SYN. Keep all three alive.
+fn black_hole() -> (String, Vec<std::net::TcpStream>, socket2::Socket) {
+    use socket2::{Domain, Socket, Type};
+    let listener = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+    let any: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+    listener.bind(&any.into()).unwrap();
+    listener.listen(0).unwrap();
+    let addr = listener.local_addr().unwrap().as_socket().unwrap();
+    let fill: Vec<_> = (0..4)
+        .filter_map(|_| {
+            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).ok()
+        })
+        .collect();
+    assert!(!fill.is_empty(), "the accept queue took a connection");
+    assert!(
+        std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_err(),
+        "a further connection waits"
+    );
+    (format!("http://{addr}"), fill, listener)
+}
+
+/// TV-59: a server that cannot be reached ends a round within seconds, in the settings call
+/// before the round lock, so two triggers at once do not wait on each other; once it answers
+/// again, the next round syncs.
+#[test]
+fn a_server_that_cannot_be_reached_ends_the_round_at_once_and_holds_up_no_other() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let admin = Admin::start();
+    let paired = link(&admin.pair("Pixel"), 64);
+    core.set_link(Some(paired.clone())).unwrap();
+    let _runtime = core
+        .device(&paired.device_id, || Arc::new(NoPhone))
+        .unwrap();
+    core.set_capture_health(json!({ "problems": ["sms"] }))
+        .unwrap();
+    core.sync_now().unwrap();
+
+    let (dead, _fill, _listener) = black_hole();
+    core.set_link(Some(Link {
+        server_url: dead,
+        ..paired.clone()
+    }))
+    .unwrap();
+    let t0 = Instant::now();
+    let triggers: Vec<_> = (0..2)
+        .map(|_| {
+            let core = core.clone();
+            std::thread::spawn(move || core.sync_now().map(|_| ()))
+        })
+        .collect();
+    for t in triggers {
+        let err = t.join().unwrap().unwrap_err();
+        assert!(err.to_string().contains("cannot reach"), "{err:#}");
+    }
+    let took = t0.elapsed();
+    assert!(
+        took < Duration::from_secs(15),
+        "two triggers against a dead server took {took:?}"
+    );
+    let out = core.server().sync_status();
+    assert_eq!(out["phase"], "offline", "{out}");
+
+    // The server answers again: the next round syncs.
+    core.set_link(Some(paired)).unwrap();
+    core.sync_now().unwrap();
+    let out = core.server().sync_status();
+    assert_eq!(out["state"], "synced", "{out}");
+}
+
+/// TV-62: a server that accepts the connection and answers late, after the request timeout, is
+/// not unreachable. The settings call fails with its own error, which the round logs, and the
+/// round goes on to the server.
+#[test]
+fn a_server_that_answers_late_is_not_unreachable_and_the_round_goes_on() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let admin = Admin::start();
+    let paired = link(&admin.pair("Pixel"), 64);
+    core.set_link(Some(paired.clone())).unwrap();
+    core.sync_now().unwrap();
+
+    let slow = StandIn::start();
+    slow.route(
+        "/api/devices",
+        Reply::json(200, &json!({ "devices": [] })).delay(Duration::from_secs(31)),
+    );
+    core.set_link(Some(Link {
+        server_url: format!("http://{}", slow.addr()),
+        ..paired
+    }))
+    .unwrap();
+    let t0 = Instant::now();
+    let err = core.sync_now().unwrap_err();
+    let took = t0.elapsed();
+    assert!(!err.to_string().contains("cannot reach"), "{err:#}");
+    assert!(
+        took >= Duration::from_secs(30),
+        "the settings call returned after {took:?}"
+    );
+    let out = core.server().sync_status();
+    assert_ne!(out["phase"], "offline", "{out}");
+    // The settings call timed out, then the round asked the server for its sync info.
+    let routes: Vec<_> = slow
+        .requests()
+        .iter()
+        .map(|r| r.route().to_owned())
+        .collect();
+    assert!(
+        routes.iter().any(|r| r == "/api/sync/info"),
+        "the round did not go on: {routes:?}"
+    );
 }

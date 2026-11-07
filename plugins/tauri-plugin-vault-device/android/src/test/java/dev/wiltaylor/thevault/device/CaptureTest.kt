@@ -22,6 +22,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import java.time.Duration
 
 /**
  * S5: receivers, the Telephony and contacts observers and the content-URI job enqueue
@@ -113,7 +114,7 @@ class CaptureTest {
         phone.part(21, 4, "image/png", name = "a.png", bytes = byteArrayOf(9))
 
         phone.notify(Telephony.Mms.CONTENT_URI)
-        shadowOf(Looper.getMainLooper()).idle()
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(CaptureObservers.QUIET_MS))
 
         val e = sink().events.single()
         assertEquals("mms_received", e.event)
@@ -126,12 +127,55 @@ class CaptureTest {
     }
 
     @Test
+    fun anMmsWhosePartsComeAfterItsRowIsCapturedWhole() {
+        // As the provider writes an MMS: the row first, which notifies at once, then its parts.
+        CaptureObservers.register(context)
+        val looper = shadowOf(Looper.getMainLooper())
+        phone.mms(5, "+61412345678", listOf(FakePhone.SELF))
+        phone.notify(Telephony.Mms.CONTENT_URI)
+        looper.idleFor(Duration.ofMillis(200))
+        phone.part(30, 5, "text/plain", text = "Picture message")
+        phone.notify(Telephony.Mms.CONTENT_URI)
+        looper.idleFor(Duration.ofMillis(200))
+        assertTrue("nothing is read while the provider is still changing", sink().events.isEmpty())
+        phone.part(31, 5, "image/png", name = "photo.png", bytes = byteArrayOf(1, 2, 3))
+        phone.notify(Telephony.Mms.CONTENT_URI)
+
+        looper.idleFor(Duration.ofMillis(CaptureObservers.QUIET_MS))
+
+        val e = sink().events.single()
+        assertEquals("mms:5", e.data.getString("device_ref"))
+        assertEquals("Picture message", e.data.getString("body"))
+        val attachments = e.data.getJSONArray("attachments")
+        assertEquals(1, attachments.length())
+        assertEquals("photo.png", attachments.getJSONObject(0).getString("filename"))
+        assertEquals("image/png", attachments.getJSONObject(0).getString("mime"))
+        assertEquals(1, sink().flushes)
+    }
+
+    @Test
+    fun changesThatKeepComingAreReadWithinTheLongestWait() {
+        CaptureObservers.register(context)
+        val looper = shadowOf(Looper.getMainLooper())
+        phone.mms(6, "+61412345678", listOf(FakePhone.SELF))
+        phone.part(40, 6, "text/plain", text = "busy provider")
+        var waited = 0L
+        while (sink().events.isEmpty() && waited <= CaptureObservers.MAX_WAIT_MS) {
+            phone.notify(Telephony.Mms.CONTENT_URI)
+            looper.idleFor(Duration.ofMillis(500))
+            waited += 500
+        }
+        assertEquals("busy provider", sink().events.single().data.getString("body"))
+        assertTrue("read after $waited ms", waited <= CaptureObservers.MAX_WAIT_MS)
+    }
+
+    @Test
     fun aContactEditIsCapturedByTheContactsObserver() {
         CaptureObservers.register(context)
         phone.contact(3, "Ada King", 5_000, listOf("0412 345 678" to "+61412345678"), listOf("ada@example.com"))
 
         phone.notify(ContactsContract.Contacts.CONTENT_URI)
-        shadowOf(Looper.getMainLooper()).idle()
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(CaptureObservers.QUIET_MS))
 
         val e = sink().events.single()
         assertEquals("contact_changed", e.event)

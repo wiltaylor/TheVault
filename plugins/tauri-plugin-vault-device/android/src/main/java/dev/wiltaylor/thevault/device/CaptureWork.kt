@@ -5,6 +5,7 @@ import android.database.ContentObserver
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.ContactsContract
 import android.provider.Telephony
 import android.util.Log
@@ -236,12 +237,12 @@ object CaptureObservers {
         if (!registered.compareAndSet(false, true)) return
         val app = context.applicationContext
         val resolver = app.contentResolver
-        val telephony = Coalescing { capture ->
+        val telephony = Coalescing(app) { capture ->
             capture.captureSms() + capture.captureMms()
         }
-        val contacts = Coalescing { capture -> capture.captureContacts() }
-        CaptureWork.TELEPHONY.forEach { resolver.registerContentObserver(it, true, telephony.observer(app)) }
-        resolver.registerContentObserver(ContactsContract.Contacts.CONTENT_URI, true, contacts.observer(app))
+        val contacts = Coalescing(app) { capture -> capture.captureContacts() }
+        CaptureWork.TELEPHONY.forEach { resolver.registerContentObserver(it, true, telephony.observer()) }
+        resolver.registerContentObserver(ContactsContract.Contacts.CONTENT_URI, true, contacts.observer())
     }
 
     @VisibleForTesting
@@ -249,22 +250,45 @@ object CaptureObservers {
         registered.set(false)
     }
 
-    /** Runs [read] once for a burst of changes, on the capture executor. */
-    private class Coalescing(private val read: (DeviceCapture) -> Int) {
-        private val queued = AtomicBoolean(false)
+    /**
+     * How long the provider must be quiet after a change before it is read. An MMS is written in
+     * several steps (the message row, then its addresses and parts, or the parts' message id):
+     * the first change comes before the message is whole, and a read then captures it without
+     * its later parts and moves the cursor past it.
+     */
+    const val QUIET_MS = 2_000L
 
-        fun observer(context: Context) = object : ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) {
-                if (!queued.compareAndSet(false, true)) return
-                Device.executor.execute {
-                    queued.set(false)
-                    try {
-                        val capture = Device.capture(context)
-                        if (read(capture) > 0) capture.flush()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "capture after a provider change failed", e)
-                    }
+    /** The longest a read waits behind changes that keep coming. */
+    const val MAX_WAIT_MS = 10_000L
+
+    /**
+     * Runs [read] once for a burst of changes, on the capture executor, when the provider has been
+     * quiet for [QUIET_MS] or [MAX_WAIT_MS] after the burst's first change.
+     */
+    private class Coalescing(private val context: Context, private val read: (DeviceCapture) -> Int) {
+        private val handler = Handler(Looper.getMainLooper())
+
+        /** When the burst waiting to be read began ([SystemClock.uptimeMillis]), or 0. Main thread only. */
+        private var first = 0L
+
+        private val run = Runnable {
+            first = 0L
+            Device.executor.execute {
+                try {
+                    val capture = Device.capture(context)
+                    if (read(capture) > 0) capture.flush()
+                } catch (e: Exception) {
+                    Log.w(TAG, "capture after a provider change failed", e)
                 }
+            }
+        }
+
+        fun observer() = object : ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) {
+                val now = SystemClock.uptimeMillis()
+                if (first == 0L) first = now
+                handler.removeCallbacks(run)
+                handler.postAtTime(run, minOf(now + QUIET_MS, first + MAX_WAIT_MS))
             }
         }
     }
