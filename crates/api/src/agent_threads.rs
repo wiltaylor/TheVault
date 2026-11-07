@@ -33,7 +33,11 @@
 //!
 //! For both, message `at` must be a question the user asked, else 409 `not_a_question`. Steps and
 //! proposals of the messages dropped go with them, a compaction that covered any of them goes too,
-//! and the context reading is forgotten until the next call.
+//! and the context reading is forgotten until the next call. A truncate clears `question`, and a
+//! fork starts without one: the agent's question always ends the thread's last turn.
+//!
+//! `question` is written by the `ask_user` tool's turn with its last round, and cleared by the
+//! user's next message in the same write that adds it (`crate::ai_ask`, TV-77 D3).
 //!
 //! A sub agent's session (subagents U5) is a thread of origin `subagent:<parent thread>` whose
 //! transcript names its `parent`, `{thread, turn, call}`; the parent's transcript lists the
@@ -1230,9 +1234,12 @@ pub async fn truncate(
         let _busy = Busy::take(&thread.id, &name)?;
         let cut = cut(&thread.transcript, b.at)?;
         let label = agent_label(w, &name);
-        // The writer deletes the sub agent sessions of the calls cut (subagents U5).
+        // The writer deletes the sub agent sessions of the calls cut (subagents U5). A question
+        // the agent asked ended the thread's last turn, after every question of the user's, so
+        // the cut always takes it away too (TV-77 D3).
         save(w, &id, &label, Some(&author), move |t| {
-            t.transcript = cut.clone()
+            t.transcript = cut.clone();
+            t.question.clear();
         })
     })
     .await?;

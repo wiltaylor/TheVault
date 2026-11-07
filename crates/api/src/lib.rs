@@ -74,6 +74,7 @@ mod agent_threads;
 mod agents;
 mod ai_activity;
 mod ai_agents;
+mod ai_ask;
 mod ai_assets;
 mod ai_browser;
 mod ai_chat;

@@ -4,7 +4,9 @@
 //! needs `write` and refuses what it cannot run with no thread opened. `GET /api/dispatched`
 //! lists the threads of notes sent and of calls from notes, with their state worked out as read:
 //! a run that leaves a proposal waiting is `needs_you`, says so under the bell, and an app's
-//! `write` token applies the waiting change, a type change too, from the thread.
+//! `write` token applies the waiting change, a type change too, from the thread. `ask_user`
+//! (TV-77 D3) ends the run with a question that makes the thread `needs_you` until the user's
+//! next message, and is offered only on these threads, as the agent's tools list allows.
 
 use std::ffi::OsStr;
 use std::time::{Duration, Instant};
@@ -524,6 +526,284 @@ fn a_change_left_waiting_needs_you_and_an_app_applies_it_from_the_thread() {
     let after = api.dispatched(&format!("?notes={roof}"));
     assert_eq!(after[0]["state"], "done", "{after:?}");
     assert_eq!(after[0]["pending"], 0);
+}
+
+/// The names of the tools request `request` to the model offered.
+fn tools_in(fake: &FakeAnthropic, request: usize) -> Vec<String> {
+    fake.message_requests()[request].json()["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The system text of request `request` to the model, as JSON text.
+fn system_in(fake: &FakeAnthropic, request: usize) -> String {
+    fake.message_requests()[request].json()["system"].to_string()
+}
+
+const ASKS: &str = "Asking the user";
+
+#[test]
+fn a_question_ends_the_run_needs_you_and_the_answer_clears_it() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    let question = "Which roof, the front or the back?";
+    // The question and a lookup in one round: the lookup still runs, and no further call is made.
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use(
+                "toolu_q",
+                "ask_user",
+                json!({ "question": format!("  {question}\n") }),
+            )
+            .tool_use("toolu_n", "get_note", json!({ "id": roof })),
+    );
+    let (status, v) = api.dispatch_as(
+        &api.admin(),
+        "keeper",
+        json!({ "notes": [roof], "request": "Clear the gutters." }),
+    );
+    assert_eq!(status, 202, "{v}");
+    let thread = v["thread"]["id"].as_str().unwrap().to_owned();
+    let run = api.wait_run(&thread);
+    assert_eq!(run["detail"]["outcome"], "succeeded", "{run}");
+    assert_eq!(fake.message_requests().len(), 1);
+    assert!(tools_in(&fake, 0).contains(&"ask_user".to_owned()));
+    assert!(system_in(&fake, 0).contains(ASKS));
+
+    // The thread holds the question, reads needs_you, and its transcript is whole.
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert_eq!(read["question"], question, "{read}");
+    assert_eq!(read["state"], "needs_you");
+    let messages = read["messages"].as_array().unwrap();
+    let results = messages.last().unwrap().to_string();
+    assert!(
+        results.contains("Asked the user. This run ends; their answer comes as the next message."),
+        "{results}"
+    );
+    assert!(results.contains("Gutters."), "{results}");
+    let waiting = api.dispatched("?state=needs_you");
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!(waiting[0]["question"], question);
+    assert_eq!(waiting[0]["pending"], 0);
+
+    // The bell says so once, with the question.
+    let told: Vec<Value> = api
+        .notifications()
+        .into_iter()
+        .filter(|n| n["title"].as_str().unwrap_or("").contains("needs you"))
+        .collect();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        told[0]["title"],
+        "Keeper needs you: Roof: Clear the gutters."
+    );
+    assert_eq!(told[0]["body"], question);
+
+    // The answer clears the question and runs as a turn on the thread, which may ask again.
+    fake.push(AnthropicMessage::text("The back gutters are on the list."));
+    let res = api.request_as(
+        &api.admin(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({
+            "agent": "keeper",
+            "thread": thread,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "The back one." }] }],
+        })),
+    );
+    assert!(res.status().is_success());
+    let events = res.text().unwrap();
+    assert!(events.contains("event: done"), "{events}");
+    assert_eq!(fake.message_requests().len(), 2);
+    assert!(tools_in(&fake, 1).contains(&"ask_user".to_owned()));
+    assert!(system_in(&fake, 1).contains(ASKS));
+    let sent = fake.message_requests()[1].json()["messages"].to_string();
+    assert!(
+        sent.contains("toolu_q") && sent.contains("The back one."),
+        "{sent}"
+    );
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert_eq!(read["question"], Value::Null, "{read}");
+    assert_eq!(read["state"], "done");
+    assert!(api.dispatched("?state=needs_you").is_empty());
+}
+
+#[test]
+fn a_question_asked_in_a_reply_streams_and_a_truncate_clears_it() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    fake.push(AnthropicMessage::text("Which ladder?"));
+    let (_, v) = api.dispatch_as(
+        &api.admin(),
+        "keeper",
+        json!({ "notes": [roof], "request": "Plan the job." }),
+    );
+    let thread = v["thread"]["id"].as_str().unwrap().to_owned();
+    api.wait_run(&thread);
+
+    // In the user's reply turn the agent asks: the stream says so and the turn ends.
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_q",
+        "ask_user",
+        json!({ "question": "Is the tall ladder free on Sunday?" }),
+    ));
+    let res = api.request_as(
+        &api.admin(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({
+            "agent": "keeper",
+            "thread": thread,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Do it this weekend." }] }],
+        })),
+    );
+    let events = res.text().unwrap();
+    assert!(events.contains("event: question"), "{events}");
+    assert!(
+        events.contains(r#""text":"Is the tall ladder free on Sunday?""#),
+        "{events}"
+    );
+    assert!(events.contains("event: done"), "{events}");
+    assert_eq!(fake.message_requests().len(), 2);
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert_eq!(read["question"], "Is the tall ladder free on Sunday?");
+    assert_eq!(read["state"], "needs_you");
+
+    // A call with no question is an error the run goes on from.
+    fake.push(AnthropicMessage::new().tool_use("toolu_e", "ask_user", json!({ "question": " " })));
+    fake.push(AnthropicMessage::text("I will pick one."));
+    let res = api.request_as(
+        &api.admin(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({
+            "agent": "keeper",
+            "thread": thread,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Ask me later." }] }],
+        })),
+    );
+    let events = res.text().unwrap();
+    assert!(!events.contains("event: question"), "{events}");
+    assert_eq!(fake.message_requests().len(), 4);
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert_eq!(read["question"], Value::Null, "{read}");
+
+    // Asked again, then cut back to the user's reply: the question goes with the cut.
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_q2",
+        "ask_user",
+        json!({ "question": "Front or back?" }),
+    ));
+    let res = api.request_as(
+        &api.admin(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({
+            "agent": "keeper",
+            "thread": thread,
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Start now." }] }],
+        })),
+    );
+    res.text().unwrap();
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert_eq!(read["question"], "Front or back?");
+    // The user's message, then the agent's call and its result.
+    let at = read["messages"].as_array().unwrap().len() - 3;
+    let until = Instant::now() + Duration::from_secs(10);
+    let cut: Value = loop {
+        let res = api.request_as(
+            &api.admin(),
+            "POST",
+            &format!("/api/agents/keeper/threads/{thread}/truncate"),
+            Some(json!({ "at": at })),
+        );
+        // The turn that streamed `done` may hold the thread a moment longer.
+        if res.status().as_u16() == 409 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+        assert!(res.status().is_success(), "{}", res.text().unwrap());
+        break res.json().unwrap();
+    };
+    assert_eq!(cut["question"], Value::Null, "{cut}");
+    assert_eq!(cut["state"], "done");
+}
+
+#[test]
+fn ask_user_is_offered_only_on_calls_and_sent_notes_and_follows_the_tools_list() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    api.agent(
+        "lister",
+        "label = \"Lister\"\n\npermissions {\n  tools = [\"get_note\"]\n}\n",
+    );
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+
+    // A plain chat offers no ask_user (TV-77 Q13).
+    fake.push(AnthropicMessage::text("Hi."));
+    let res = api.request_as(
+        &api.admin(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({
+            "agent": "keeper",
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Hello" }] }],
+        })),
+    );
+    res.text().unwrap();
+    assert!(!tools_in(&fake, 0).contains(&"ask_user".to_owned()));
+    assert!(!system_in(&fake, 0).contains(ASKS));
+    // Nor a chat on a thread the user started.
+    let started = api.send("POST", "/api/agents/keeper/threads", json!({}));
+    fake.push(AnthropicMessage::text("Hi again."));
+    let res = api.request_as(
+        &api.admin(),
+        "POST",
+        "/api/ai/chat",
+        Some(json!({
+            "agent": "keeper",
+            "thread": started["id"],
+            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Hello" }] }],
+        })),
+    );
+    res.text().unwrap();
+    assert!(!tools_in(&fake, 1).contains(&"ask_user".to_owned()));
+
+    // A call from a note offers it.
+    let asked = format!("[@Keeper check it.](agent:keeper?call={CALL})");
+    api.note("memo", "Gate", &[&asked]);
+    fake.push(AnthropicMessage::text("Checked."));
+    api.advance("PT1S");
+    assert_eq!(fake.message_requests().len(), 3);
+    assert!(tools_in(&fake, 2).contains(&"ask_user".to_owned()));
+    assert!(system_in(&fake, 2).contains(ASKS));
+
+    // A tools list that leaves it out takes it away, the section too (TV-77 Q10).
+    fake.push(AnthropicMessage::text("Read it."));
+    let (_, v) = api.dispatch_as(
+        &api.admin(),
+        "lister",
+        json!({ "notes": [roof], "request": "Read it." }),
+    );
+    api.wait_run(v["thread"]["id"].as_str().unwrap());
+    let tools = tools_in(&fake, 3);
+    assert!(tools.contains(&"get_note".to_owned()), "{tools:?}");
+    assert!(!tools.contains(&"ask_user".to_owned()), "{tools:?}");
+    assert!(!system_in(&fake, 3).contains(ASKS));
+
+    // A trigger's run is not offered it.
+    let runs = api.get("/api/agents/keeper/runs");
+    let tools = runs["tools"].as_array().unwrap();
+    assert!(!tools.iter().any(|t| t == "ask_user"), "{runs}");
+    assert!(tools.iter().any(|t| t == "notify_user"), "{runs}");
 }
 
 const TIDY: &str = r#"label = "Tidy"

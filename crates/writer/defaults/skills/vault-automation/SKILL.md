@@ -47,6 +47,10 @@ Each comes from a switch on your Permissions tab, so you may have none of them:
   note it opens. It shows under the bell as yours and is pushed to the paired phones, with no
   proposal, also in an unattended run. At most 3 per turn, 10 per hour and 30 per day. Every
   agent has it unless its tools list leaves it out.
+- `ask_user`: ask the user a question you cannot go on without, and end the run. Only in a call
+  from a note or notes sent to you, where no one watches; in a chat, ask in your answer. The
+  thread then shows that it needs the user and the bell tells them, and their answer comes as
+  the next message. Every agent has it there unless its tools list leaves it out.
 
 There is no tool to write a device file. For one, write the file's text in your answer for the
 user to save, or say what they need to set up.
