@@ -50,6 +50,7 @@ const NAMES: [RegExp, string, string?][] = [
   [/^\/skills\/?$/, "Skills", "book-open"],
   [/^\/skills\//, "Skill", "book-open"],
   [/^\/outbox/, "Outbox", "send"],
+  [/^\/dispatched/, "Dispatched", "bot"],
   [/^\/log/, "Log", "scroll-text"],
   [/^\/browser-box/, "Browser", "monitor"],
 ];

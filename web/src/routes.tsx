@@ -30,6 +30,7 @@ const BrowserBox = page(() => import("./pages/BrowserBox"), "BrowserBox");
 const Assets = page(() => import("./pages/Assets"), "Assets");
 const AssetView = page(() => import("./pages/AssetView"), "AssetView");
 const Devices = page(() => import("./pages/Devices"), "Devices");
+const Dispatched = page(() => import("./pages/Dispatched"), "Dispatched");
 const Log = page(() => import("./pages/Log"), "Log");
 const Ai = page(() => import("./pages/Ai"), "Ai");
 const AgentScreen = page(() => import("./pages/AgentScreen"), "AgentScreen");
@@ -104,6 +105,7 @@ export function paneRoutes() {
       <Route path="/search" component={Search} />
       <Route path="/inbox" component={Inbox} />
       <Route path="/outbox" component={Outbox} />
+      <Route path="/dispatched" component={Dispatched} />
       <Route path="/log" component={Log} />
       <Route path="/browser-box" component={BrowserBox} />
       <Route path="*" component={() => <p class="error">There is no page here.</p>} />

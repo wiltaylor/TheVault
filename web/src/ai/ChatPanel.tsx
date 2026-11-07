@@ -28,7 +28,7 @@ import {
 } from "solid-js";
 import { agentLabel, agents } from "../agents";
 import { pastedName } from "../blocks/MediaBlocks";
-import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl, isSubSession } from "../api";
+import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl, isCallThread, isSubSession } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { formatValue } from "../components/Render";
 import { Spinner } from "../components/SyncStatus";
@@ -2128,8 +2128,9 @@ function ThreadPicker() {
       // A thread that stopped running since the last read answered: a new reply, unless open.
       const was = new Set(threads().filter((t) => t.running).map((t) => t.id));
       for (const t of got.threads) if (was.has(t.id) && !t.running) turnEnded(t.id);
-      // Sub agent sessions are listed only under their parent (subagents U5).
-      setThreads(got.threads.filter((t) => !isSubSession(t.origin)));
+      // Sub agent sessions are listed only under their parent (subagents U5), and threads of
+      // notes sent to the agent or of @ calls only on the Dispatched page (TV-80).
+      setThreads(got.threads.filter((t) => !isSubSession(t.origin) && !isCallThread(t.origin)));
       if (got.threads.some((t) => t.running)) poll = setTimeout(() => void refresh(), RUNNING_POLL_MS);
     } catch {
       if (mine === asked) setThreads([]);
