@@ -9,6 +9,7 @@ import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { waitSteady } from "./gesture.mjs";
 
 export const repo = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -180,6 +181,9 @@ export const texts = (nodes = dump()) => nodes.map((n) => n.text).filter(Boolean
 
 /** Waits for a node matching `want`. */
 export const waitFor = (want, opts) => until(`"${want}" on screen`, () => find(want), opts);
+
+/** Waits for a node matching `want` that has stopped moving, such as a row of the shade as it opens (TV-92). */
+export const waitForSteady = (want, { timeout = 10_000 } = {}) => waitSteady(() => find(want), { what: `"${want}"`, timeout, sleep });
 
 /** Waits for a node matching `want`, then taps it. */
 export async function tap(want, opts) {
