@@ -491,7 +491,10 @@ fn fs_paths_are_refused_and_any_host_or_a_missing_secret_warns() {
     let p = api.propose(&fake, "open", &open, None);
     let w = warnings(&p);
     assert_eq!(w.len(), 3, "{w:?}");
-    assert!(w[0].starts_with("The task open may reach any host"), "{w:?}");
+    assert!(
+        w[0].starts_with("The task open may reach any host"),
+        "{w:?}"
+    );
     assert!(w[0].contains("local network"), "{w:?}");
     assert!(w[1].contains("and reach any host"), "{w:?}");
     assert!(w[2].contains("There is no secret missing_key yet"), "{w:?}");
@@ -555,21 +558,33 @@ fn a_task_with_its_script_is_written_in_one_apply_and_changes_and_deletes_are_ch
     assert_eq!(p["op"], "change");
     assert_eq!(p["exists"], true);
     assert!(p["before"].as_str().unwrap().contains("0 7 * * 1-5"));
-    api.put_task("digest", "schedule = \"0 9 * * 1-5\"\nscript = \"digest\"\n");
+    api.put_task(
+        "digest",
+        "schedule = \"0 9 * * 1-5\"\nscript = \"digest\"\n",
+    );
     let (status, body) = api.apply_as(&api.token(), &p);
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale");
     assert_eq!(api.task("digest").unwrap()["schedule"], "0 9 * * 1-5");
 
     // A change of a shared script lists what else runs it.
-    api.put_task("other", "schedule = \"0 1 * * *\"\nscript = \"digest\"\nallow_domains = [\"*\"]\n");
+    api.put_task(
+        "other",
+        "schedule = \"0 1 * * *\"\nscript = \"digest\"\nallow_domains = [\"*\"]\n",
+    );
     let changed = format!("{digest}\nfn extra() -> int {{\n    1\n}}\n");
-    let p = api.propose(&fake, "digest", "schedule = \"0 9 * * 1-5\"\nscript = \"digest\"\n", Some(&changed));
+    let p = api.propose(
+        &fake,
+        "digest",
+        "schedule = \"0 9 * * 1-5\"\nscript = \"digest\"\n",
+        Some(&changed),
+    );
     assert_eq!(p["runs_as"].as_array().unwrap().len(), 1, "{p}");
     assert_eq!(p["runs_as"][0]["name"], "other");
     let w = warnings(&p);
     assert!(
-        w.iter().any(|w| w.starts_with("Task other may reach any host")),
+        w.iter()
+            .any(|w| w.starts_with("Task other may reach any host")),
         "{w:?}"
     );
 

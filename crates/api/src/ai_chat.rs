@@ -4716,7 +4716,10 @@ mod tests {
         let trigger = names(Some(direct));
         for n in crate::ai_task_changes::PROPOSE_TOOLS {
             assert!(chat.iter().any(|m| m == n), "{n} in a chat");
-            assert!(!trigger.iter().any(|m| m == n), "{n} not in a trigger's run");
+            assert!(
+                !trigger.iter().any(|m| m == n),
+                "{n} not in a trigger's run"
+            );
         }
         assert!(trigger.iter().any(|m| m == "get_task"));
         let text = withheld_note(&agent, direct).unwrap();

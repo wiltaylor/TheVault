@@ -89,7 +89,9 @@ fn refused(message: String, mut content: Value) -> ToolOut {
 /// The home server's scheduler, or the error for a server without one.
 fn scheduler(w: &Writer) -> Result<Arc<Scheduler>, ToolOut> {
     crate::script_tools::scheduler_for(w).ok_or_else(|| {
-        ToolOut::error("scheduled tasks are changed on the home server only, and this server runs none")
+        ToolOut::error(
+            "scheduled tasks are changed on the home server only, and this server runs none",
+        )
     })
 }
 
@@ -230,8 +232,7 @@ fn paths_refused(def: &TaskDef, current_has_paths: bool) -> Option<String> {
 
 /// Whether the text of a task file names `fs` paths.
 fn has_paths(name: &str, text: &str) -> bool {
-    TaskDef::parse(name, text)
-        .is_ok_and(|d| !d.read_paths.is_empty() || !d.write_paths.is_empty())
+    TaskDef::parse(name, text).is_ok_and(|d| !d.read_paths.is_empty() || !d.write_paths.is_empty())
 }
 
 /// `get_task`.
@@ -334,14 +335,13 @@ pub(crate) fn propose_change(
             None,
         ));
     }
-    let source = script_after.or(script_before.as_deref()).unwrap_or_default();
+    let source = script_after
+        .or(script_before.as_deref())
+        .unwrap_or_default();
     let problems = script_problems(w, &s, &def, source, script_after.is_some());
     if !problems.is_empty() {
         return Err(refused(
-            format!(
-                "script {:?} would not run as task {name:?}",
-                def.script
-            ),
+            format!("script {:?} would not run as task {name:?}", def.script),
             json!({
                 "problems": problems,
                 "message": "The task was not proposed. Fix the problems and propose it again.",
@@ -457,17 +457,23 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     }
     if p["op"] == "delete" {
         s.delete_task(name).map_err(apply_error)?;
-        return Ok(json!({ "op": "task_delete", "task_name": name, "script_name": null, "next_run": null }));
+        return Ok(
+            json!({ "op": "task_delete", "task_name": name, "script_name": null, "next_run": null }),
+        );
     }
     let after = p["after"]
         .as_str()
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
     let script_after = p["script_after"].as_str();
-    let (_, def) = s.check_task(name, after, script_after).map_err(apply_error)?;
+    let (_, def) = s
+        .check_task(name, after, script_after)
+        .map_err(apply_error)?;
     if let Some(why) = paths_refused(&def, false) {
         return Err(ApplyError::Refused(why));
     }
-    if script_after.is_some() && w.read_script(&def.script).ok().as_deref() != p["script_before"].as_str() {
+    if script_after.is_some()
+        && w.read_script(&def.script).ok().as_deref() != p["script_before"].as_str()
+    {
         return Err(stale());
     }
     s.put_task_with_script(name, after, script_after)
@@ -498,12 +504,18 @@ mod tests {
         assert_eq!(paths_refused(&plain, false), None);
         let reads = TaskDef::parse("nightly", &format!("{TASK}read_paths = [\"/\"]\n")).unwrap();
         let why = paths_refused(&reads, false).unwrap();
-        assert!(why.contains("may not propose read_paths or write_paths"), "{why}");
+        assert!(
+            why.contains("may not propose read_paths or write_paths"),
+            "{why}"
+        );
         let writes =
             TaskDef::parse("nightly", &format!("{TASK}write_paths = [\"/srv/out\"]\n")).unwrap();
         let why = paths_refused(&writes, true).unwrap();
         assert!(why.contains("only the user changes"), "{why}");
-        assert!(has_paths("nightly", &format!("{TASK}write_paths = [\"/srv/out\"]\n")));
+        assert!(has_paths(
+            "nightly",
+            &format!("{TASK}write_paths = [\"/srv/out\"]\n")
+        ));
         assert!(!has_paths("nightly", TASK));
     }
 
