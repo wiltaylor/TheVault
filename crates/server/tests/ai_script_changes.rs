@@ -2,7 +2,8 @@
 //!
 //! `propose_script_change` and `propose_script_delete` always wait for the user's Apply, with
 //! every confirmation switch off too. A change must compile in every way the script runs; a delete
-//! is refused while something runs the script. The proposal carries the "Runs as" list, each
+//! is refused while something runs the script, and a change is refused while a task with folders
+//! runs it. The proposal carries the "Runs as" list, each
 //! handler, task and tool with its grants, and a warning for a run that reaches any host, which
 //! the tool proposal carries too. Apply needs admin, or the copy waiting in the thread of a call
 //! from a note; a script changed since gives 409 stale; a discard writes nothing.
@@ -714,4 +715,51 @@ fn a_tool_applied_after_what_runs_its_script_changed_is_stale() {
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale");
     assert_eq!(api.get("/api/tools/echo")["wcl"], before["wcl"]);
+}
+
+#[test]
+fn a_script_change_is_refused_while_a_task_with_folders_runs_it_at_propose_and_at_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.seed_users();
+    let changed = STAMP.replace(
+        "Ok(())\n}\n\nfn after",
+        "let x = 1\n    Ok(())\n}\n\nfn after",
+    );
+
+    // Nothing with folders runs the script yet: the change is proposed.
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "stamp", "source": changed }),
+    );
+    let p = find(&events, "script_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    assert_eq!(p["op"], "change");
+
+    // The user gives the task nightly folders, and it runs the script: a new proposal is refused,
+    // naming the run and its folders, and nothing is written (TV-87, TV-32 Q3).
+    api.put_text(
+        "/api/tasks/nightly",
+        &format!("{NIGHTLY}read_paths = [\"/srv/in\"]\n"),
+    );
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "stamp", "source": changed }),
+    );
+    assert!(find(&events, "script_proposal").is_none(), "{events:?}");
+    let (err, got) = last_result(&fake);
+    assert!(err, "{got}");
+    let why = got["error"].as_str().unwrap();
+    assert!(why.contains("may not change script \"stamp\""), "{got}");
+    assert!(why.contains("task nightly (reads /srv/in)"), "{got}");
+    assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+
+    // The proposal made before the folders were given is refused at Apply, and nothing is written.
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
 }
