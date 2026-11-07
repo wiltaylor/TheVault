@@ -512,7 +512,9 @@ fn a_call_keeps_a_change_its_switch_asks_for_as_a_proposal_and_makes_the_rest() 
         "propose_archive",
         json!({ "id": id, "archived": true }),
     ));
-    fake.push(AnthropicMessage::text("Retitled; the archive waits for you."));
+    fake.push(AnthropicMessage::text(
+        "Retitled; the archive waits for you.",
+    ));
     api.advance("PT1S");
     assert_eq!(fake.message_requests().len(), 3);
 
@@ -570,7 +572,10 @@ fn a_call_keeps_a_change_its_switch_asks_for_as_a_proposal_and_makes_the_rest() 
     assert_eq!(proposal["op"], "archive", "{proposal}");
     assert_eq!(proposal["thread"], thread.as_str());
     let runs = api.get("/api/agents/keeper/runs");
-    assert_eq!(runs["triggers"][0]["runs"][0]["outcome"], "succeeded", "{runs}");
+    assert_eq!(
+        runs["triggers"][0]["runs"][0]["outcome"], "succeeded",
+        "{runs}"
+    );
 
     // Applied from the thread, the note is archived and nothing waits.
     api.send("POST", "/api/ai/apply", proposal);
