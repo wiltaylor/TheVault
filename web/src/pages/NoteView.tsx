@@ -51,6 +51,9 @@ import { PlaceholdersInert } from "../components/PlaceholderLink";
 import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/Icon";
 import { NoteOutboxActions } from "../outbox/NoteActions";
 import { ViewOriginalButton } from "../components/ViewOriginal";
+import { AgentRobots } from "../components/AgentRobot";
+import { SendToAgentButton } from "../components/SendToAgent";
+import { watchNoteThreads } from "../dispatch";
 import { OutboxChips } from "../outbox/Chips";
 import { OUTBOX } from "../outbox/model";
 import { periodOfType } from "../planner/period";
@@ -939,6 +942,9 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                 <Show when={!props.newType && !preview() && n().type === "email" && typeof doc().fields?.html === "string"}>
                   <ViewOriginalButton id={n().id} />
                 </Show>
+                <Show when={!props.newType && !preview() && !conflict()}>
+                  <NoteAgents id={n().id} disabled={busy()} />
+                </Show>
                 <Show when={props.newType}>
                   <div class="actions">
                       <button type="button" onClick={() => navigate(`/types/${n().type}`)} disabled={busy()}>
@@ -1260,4 +1266,15 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
       </Show>
     );
   }
+}
+
+/** The robots of the threads about note `id`, and its Send to agent button (TV-78). */
+function NoteAgents(props: { id: string; disabled: boolean }) {
+  const threads = watchNoteThreads(() => props.id);
+  return (
+    <>
+      <AgentRobots threads={threads()} />
+      <SendToAgentButton notes={[props.id]} disabled={props.disabled} />
+    </>
+  );
 }

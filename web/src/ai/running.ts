@@ -9,6 +9,16 @@ import { createRoot, createSignal } from "solid-js";
 
 export const NEW_REPLIES_KEY = "thevault.ai.new_replies";
 
+/**
+ * When this browser last opened each thread, in milliseconds since the epoch (TV-77 Q11): a
+ * thread sent notes or called from a note that is done keeps its dot until it is opened after its
+ * last activity. Kept per browser, so the phone and the web are separate.
+ */
+export const OPENED_KEY = "thevault.ai.opened";
+
+/** The most threads the opened map keeps; the oldest openings go first. */
+export const OPENED_MAX = 500;
+
 /** How often a thread list reads again while a thread of it runs (agents G17). */
 export const RUNNING_POLL_MS = 4_000;
 
@@ -29,11 +39,24 @@ function loadNew(): ReadonlySet<string> {
   }
 }
 
+function loadOpened(): Readonly<Record<string, number>> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(OPENED_KEY) ?? "{}") as unknown;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out: Record<string, number> = {};
+    for (const [id, at] of Object.entries(raw)) if (typeof at === "number" && Number.isFinite(at)) out[id] = at;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 const store = createRoot(() => {
   const [changes, setChanges] = createSignal(0);
   const [last, setLast] = createSignal<AiTurnEvent | null>(null);
   const [fresh, setFresh] = createSignal<ReadonlySet<string>>(loadNew());
-  return { changes, setChanges, last, setLast, fresh, setFresh };
+  const [opened, setOpened] = createSignal<Readonly<Record<string, number>>>(loadOpened());
+  return { changes, setChanges, last, setLast, fresh, setFresh, opened, setOpened };
 });
 
 /** Reactive: bumped by every turn starting or ending, as the live stream or this tab saw it. */
@@ -55,6 +78,7 @@ const viewing = new Map<string, number>();
 export function viewThread(id: string): () => void {
   viewing.set(id, (viewing.get(id) ?? 0) + 1);
   seen(id);
+  markOpened(id);
   let done = false;
   return () => {
     if (done) return;
@@ -94,7 +118,12 @@ export function seen(id: string) {
 
 /** The turn on thread `id` ended: unless a conversation shows it, it has a new reply. */
 export function turnEnded(id: string) {
-  if (isViewing(id) || store.fresh().has(id)) return;
+  if (isViewing(id)) {
+    // Watched as it answered: opened after its last activity.
+    markOpened(id);
+    return;
+  }
+  if (store.fresh().has(id)) return;
   saveNew(new Set([...store.fresh(), id]));
 }
 
@@ -107,9 +136,48 @@ export function liveTurn(data: unknown) {
   bumpTurns(event);
 }
 
+/**
+ * Thread `id` was opened now. `lastActivity`, the thread's last activity as the server gave it,
+ * counts as the time when it is later than this browser's clock, so a clock behind the server's
+ * does not bring the dot back.
+ */
+export function markOpened(id: string, lastActivity?: string | null) {
+  const known = lastActivity ? Date.parse(lastActivity) : NaN;
+  const at = Math.max(Date.now(), Number.isFinite(known) ? known : 0);
+  const entries = Object.entries(store.opened()).filter(([k]) => k !== id);
+  entries.push([id, at]);
+  entries.sort((a, b) => a[1] - b[1]);
+  const next = Object.fromEntries(entries.slice(-OPENED_MAX));
+  store.setOpened(next);
+  try {
+    localStorage.setItem(OPENED_KEY, JSON.stringify(next));
+  } catch {
+    // Private browsing: the openings last until the page closes.
+  }
+}
+
+/** Reactive: when this browser last opened thread `id`, or null when it never did. */
+export function openedAt(id: string): number | null {
+  return store.opened()[id] ?? null;
+}
+
+/** Reactive: whether thread `id`, last active at `lastActivity`, has activity this browser has not opened. */
+export function unopened(id: string, lastActivity: string | null | undefined): boolean {
+  const at = openedAt(id);
+  if (at === null) return true;
+  const last = lastActivity ? Date.parse(lastActivity) : NaN;
+  return Number.isFinite(last) && last > at;
+}
+
 /** Test-only: forget every view and new reply. */
 export function resetRunning() {
   viewing.clear();
   saveNew(new Set());
+  store.setOpened({});
+  try {
+    localStorage.removeItem(OPENED_KEY);
+  } catch {
+    // Nothing kept.
+  }
   store.setLast(null);
 }

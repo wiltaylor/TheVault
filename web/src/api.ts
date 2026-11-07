@@ -595,6 +595,28 @@ export interface SubSession {
   ended_ms?: number | null;
 }
 
+/** Where a thread sent notes or called from a note stands (TV-77 D4), worked out as the server reads it. */
+export type DispatchState = "active" | "needs_you" | "done";
+
+/** One line of `GET /api/dispatched` (TV-77): a thread of origin `dispatch` or `mention`. */
+export interface DispatchedThread {
+  id: string;
+  agent: string;
+  title: string;
+  /** `dispatch` for notes sent to the agent, `mention` for an @ call. */
+  origin: string;
+  /** The notes the thread is about, in the order sent. */
+  notes: string[];
+  state: DispatchState;
+  pending: number;
+  /** The question the agent asked, while it waits for the answer. */
+  question: string | null;
+  last_activity: string | null;
+  running: boolean;
+  turn: string | null;
+  started_ms: number | null;
+}
+
 /** Whether a thread of `origin` is a sub agent's session, listed only under its parent (subagents U5). */
 export function isSubSession(origin: string | null | undefined): boolean {
   return typeof origin === "string" && origin.startsWith("subagent:");
@@ -1944,6 +1966,25 @@ export const api = {
   /** The agent's threads, newest activity first (agents G7); archived ones only with `archived` (agents G15). */
   agentThreads: (name: string, archived = false) =>
     request<{ threads: AgentThreadSummary[] }>("GET", `/api/agents/${enc(name)}/threads${archived ? "?archived=true" : ""}`),
+  /**
+   * Send notes to agent `name` with an instruction (TV-77 D1): one thread for all of them, run by
+   * the scheduler. Needs `write`. 400 for an empty request or a note the agent may not have, 404
+   * for a missing or disabled agent, 429 `too_many_runs`, 503 `no_agent_runs`.
+   */
+  dispatch: (name: string, notes: string[], instruction: string) =>
+    request<{ thread: AgentThreadSummary & { agent: string; state?: DispatchState; notes?: string[] } }>(
+      "POST",
+      `/api/agents/${enc(name)}/dispatch`,
+      { notes, request: instruction },
+    ),
+  /** The threads notes were sent to or called agents from, newest first (TV-77 D4); `notes` keeps those about any of them. */
+  dispatched: (filter: { notes?: string[]; state?: DispatchState } = {}) => {
+    const q = new URLSearchParams();
+    if (filter.notes?.length) q.set("notes", filter.notes.join(","));
+    if (filter.state) q.set("state", filter.state);
+    const s = q.toString();
+    return request<{ threads: DispatchedThread[] }>("GET", `/api/dispatched${s ? `?${s}` : ""}`);
+  },
   /** Start a thread with the agent. */
   agentThreadStart: (name: string, title?: string) =>
     request<AgentThread>("POST", `/api/agents/${enc(name)}/threads`, title ? { title } : {}),
