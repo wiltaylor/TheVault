@@ -930,6 +930,23 @@ describe("the AI panel as a view of agent threads (agents G18)", () => {
     await waitFor(() => expect(panel.getByRole("button", { name: "Thread: Roof" })).toBeTruthy());
   });
 
+  it("leaves the threads of sent notes and @ calls out of the panel's thread picker (TV-80)", async () => {
+    await withAgents();
+    agentThreads.mockResolvedValue({
+      threads: [
+        { id: "01JSENT", title: "Sent", origin: "dispatch", pending: 1 },
+        { id: "01JCALL", title: "Called", origin: "mention", pending: 0 },
+        { id: "01JOLDER", title: "Roof", origin: "user", pending: 0 },
+      ],
+    });
+    const { panel } = both();
+    fireEvent.change(panel.getByLabelText("Agent"), { target: { value: "triage" } });
+    fireEvent.click(await panel.findByRole("button", { name: "Thread: New thread" }));
+    const menu = within(await panel.findByRole("menu", { name: "Threads" }));
+    await waitFor(() => expect(menu.getAllByRole("menuitemradio")).toHaveLength(1));
+    expect(menu.getByRole("menuitemradio")).toHaveTextContent("Roof");
+  });
+
   it("starts a new thread from the picker, and opens the shown one in the agent screen", async () => {
     await withAgents();
     const { panel } = both();
