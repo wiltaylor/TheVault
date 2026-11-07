@@ -612,6 +612,16 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "The agent's trigger runs: {tools, triggers: [{name, kind, runs}]}, the last 20 runs of each trigger and the tools a trigger run is offered",
     ),
     (
+        "POST",
+        "/api/agents/{name}/dispatch",
+        "Send notes to the agent from {notes, request}: one thread of origin dispatch about the notes and one run on it, 202 {thread}; 429 too_many_runs over the agent's run limits",
+    ),
+    (
+        "GET",
+        "/api/dispatched",
+        "The threads of notes sent to agents and calls from notes, of every agent, newest first: {threads: [{id, agent, title, origin, notes, state, pending, question, last_activity, running, turn, started_ms}]}, filtered by ?notes=<id,id> and ?state=active|needs_you|done",
+    ),
+    (
         "GET",
         "/api/agents/{name}/threads",
         "The agent's threads, newest activity first, leaving archived threads out unless ?archived=true: {threads: [{id, title, origin, last_activity, pending, archived}]}",

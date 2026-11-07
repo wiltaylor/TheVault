@@ -1,0 +1,526 @@
+//! S1 with the fake Anthropic: sending notes to an agent (TV-77 D1, D4). `POST
+//! /api/agents/{name}/dispatch` opens one thread of origin `dispatch` about the notes, runs the
+//! agent once on it with the request and a line per note, and leaves the notes as they were; it
+//! needs `write` and refuses what it cannot run with no thread opened. `GET /api/dispatched`
+//! lists the threads of notes sent and of calls from notes, with their state worked out as read:
+//! a run that leaves a proposal waiting is `needs_you`, says so under the bell, and an app's
+//! `write` token applies the waiting change, a type change too, from the thread.
+
+use std::ffi::OsStr;
+use std::time::{Duration, Instant};
+
+use reqwest::blocking::{Client, Response};
+use serde_json::{Value, json};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount, TestServer};
+
+/// Monday 2026-01-05, half past midnight UTC.
+const START: &str = "2026-01-05T00:30:00Z";
+
+const MEMO: &str = r#"label = "Memo"
+
+field body {
+  kind = "content"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "body"
+  }
+}
+"#;
+
+const LOG: &str = r#"label = "Log"
+
+field body {
+  kind = "content"
+}
+
+template default {
+  tab "Main" {
+    slot "title"
+    slot "body"
+  }
+}
+"#;
+
+const CLERK: &str = r#"label = "Clerk"
+
+permissions {
+  confirm {
+    notes = false
+  }
+}
+"#;
+
+const KEEPER: &str = r#"label = "Keeper"
+"#;
+
+const LOGGER: &str = r#"label = "Logger"
+
+permissions {
+  types = ["log"]
+}
+"#;
+
+const CALL: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
+
+struct Api {
+    server: TestServer,
+    client: Client,
+}
+
+impl Api {
+    fn start(fake: &FakeAnthropic) -> Api {
+        let server = TestServer::start_with_args(
+            |vault| {
+                std::fs::create_dir_all(vault.join("types")).unwrap();
+                std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
+                std::fs::write(vault.join("types/log.wcl"), LOG).unwrap();
+            },
+            &[OsStr::new("--test-clock"), OsStr::new(START)],
+        );
+        let client = Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap();
+        let api = Api { server, client };
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model("claude-opus-5"))
+            .secrets()
+        {
+            api.send(
+                "PUT",
+                &format!("/api/secrets/{name}"),
+                json!({ "value": value }),
+            );
+        }
+        api
+    }
+
+    fn admin(&self) -> String {
+        self.server.admin_token().to_owned()
+    }
+
+    fn token_of(&self, name: &str, scope: &str) -> String {
+        let v = self.send(
+            "POST",
+            "/api/tokens",
+            json!({ "name": name, "scope": scope }),
+        );
+        v["secret"].as_str().unwrap().to_owned()
+    }
+
+    fn request_as(&self, token: &str, method: &str, path: &str, body: Option<Value>) -> Response {
+        let url = self.server.url(path);
+        let req = match method {
+            "GET" => self.client.get(url),
+            "POST" => self.client.post(url),
+            "PUT" => self.client.put(url),
+            "DELETE" => self.client.delete(url),
+            m => panic!("{m}"),
+        }
+        .bearer_auth(token);
+        match body {
+            Some(b) => req.json(&b),
+            None => req,
+        }
+        .send()
+        .unwrap()
+    }
+
+    fn send(&self, method: &str, path: &str, body: Value) -> Value {
+        let res = self.request_as(&self.admin(), method, path, Some(body));
+        assert!(
+            res.status().is_success(),
+            "{method} {path}: {}",
+            res.text().unwrap()
+        );
+        res.json().unwrap_or(Value::Null)
+    }
+
+    fn get(&self, path: &str) -> Value {
+        let res = self.request_as(&self.admin(), "GET", path, None);
+        assert!(
+            res.status().is_success(),
+            "GET {path}: {}",
+            res.text().unwrap()
+        );
+        res.json().unwrap()
+    }
+
+    fn agent(&self, name: &str, wcl: &str) {
+        let res = self
+            .client
+            .put(self.server.url(&format!("/api/agents/{name}")))
+            .bearer_auth(self.server.admin_token())
+            .header("content-type", "text/plain")
+            .body(wcl.to_owned())
+            .send()
+            .unwrap();
+        assert!(res.status().is_success(), "{}", res.text().unwrap());
+    }
+
+    fn note(&self, type_name: &str, title: &str, paragraphs: &[&str]) -> String {
+        let v = self.send(
+            "POST",
+            &format!("/api/notes?type={type_name}"),
+            json!({ "note": note_json(title, paragraphs) }),
+        );
+        v["id"].as_str().unwrap().to_owned()
+    }
+
+    fn version(&self, id: &str) -> Value {
+        self.get(&format!("/api/notes/{id}"))["version"].clone()
+    }
+
+    /// `POST /api/agents/{agent}/dispatch` as `token`: the status and the answer.
+    fn dispatch_as(&self, token: &str, agent: &str, body: Value) -> (u16, Value) {
+        let res = self.request_as(
+            token,
+            "POST",
+            &format!("/api/agents/{agent}/dispatch"),
+            Some(body),
+        );
+        let status = res.status().as_u16();
+        (status, res.json().unwrap_or(Value::Null))
+    }
+
+    fn dispatched(&self, query: &str) -> Vec<Value> {
+        self.get(&format!("/api/dispatched{query}"))["threads"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    /// The `agent.run` activity entry of the run on `thread`, once the run has ended.
+    fn run_entry(&self, thread: &str) -> Option<Value> {
+        self.get("/api/activity?limit=200&category=automation")["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == "agent.run" && e["subject"] == thread)
+            .cloned()
+    }
+
+    /// Wait, at most 30 seconds, for the run on `thread` to end, and answer its activity entry.
+    fn wait_run(&self, thread: &str) -> Value {
+        let until = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(e) = self.run_entry(thread) {
+                return e;
+            }
+            assert!(Instant::now() < until, "the run on {thread} never ended");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn notifications(&self) -> Vec<Value> {
+        self.get("/api/notifications")["items"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    /// Move the test clock on, which runs whatever is due and waits for it.
+    fn advance(&self, by: &str) {
+        self.send("POST", "/api/test/clock", json!({ "advance": by }));
+    }
+}
+
+fn note_json(title: &str, paragraphs: &[&str]) -> Value {
+    let blocks: Vec<Value> = paragraphs
+        .iter()
+        .map(|p| json!({ "kind": "paragraph", "fields": { "text": p } }))
+        .collect();
+    json!({
+        "fields": { "title": title },
+        "blocks": [{ "kind": "content", "labels": ["body"], "blocks": blocks }],
+    })
+}
+
+/// The text of the first user message of each request sent to the model.
+fn first_messages(fake: &FakeAnthropic) -> Vec<String> {
+    fake.message_requests()
+        .iter()
+        .map(|r| {
+            r.json()["messages"][0]["content"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|c| c["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect()
+}
+
+#[test]
+fn notes_sent_to_an_agent_run_once_on_one_thread_and_are_left_as_they_were() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    let roof = api.note("memo", "Roof", &["Gutters are full."]);
+    let shed = api.note("memo", "Shed", &["Door sticks."]);
+    let versions = (api.version(&roof), api.version(&shed));
+    fake.push(AnthropicMessage::text("Both are house jobs."));
+
+    let (status, v) = api.dispatch_as(
+        &api.admin(),
+        "clerk",
+        json!({ "notes": [shed, roof], "request": "  Sort these into projects.\n" }),
+    );
+    assert_eq!(status, 202, "{v}");
+    let thread = v["thread"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(v["thread"]["origin"], "dispatch");
+    assert_eq!(v["thread"]["agent"], "clerk");
+    assert_eq!(v["thread"]["notes"], json!([shed, roof]));
+    assert_eq!(v["thread"]["title"], "2 notes: Sort these into projects.");
+
+    let run = api.wait_run(&thread);
+    assert_eq!(run["detail"]["trigger"], "dispatch", "{run}");
+    assert_eq!(run["detail"]["origin"], "dispatch", "{run}");
+    assert_eq!(run["detail"]["outcome"], "succeeded", "{run}");
+    assert_eq!(
+        first_messages(&fake),
+        [format!(
+            "Sort these into projects.\nSent with 2 notes; read them with get_note:\n\
+             - {shed} (type memo, title \"Shed\")\n- {roof} (type memo, title \"Roof\")"
+        )]
+    );
+    let read = api.get(&format!("/api/agents/clerk/threads/{thread}"));
+    assert!(
+        read["messages"]
+            .to_string()
+            .contains("Both are house jobs."),
+        "{read}"
+    );
+    assert_eq!(read["state"], "done");
+    // The notes are as the user saved them.
+    assert_eq!((api.version(&roof), api.version(&shed)), versions);
+
+    // Listed by either note, done, with nothing waiting and nothing to tell under the bell.
+    let listed = api.dispatched(&format!("?notes={roof}"));
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    let t = &listed[0];
+    assert_eq!(t["id"], thread.as_str());
+    assert_eq!(t["agent"], "clerk");
+    assert_eq!(t["origin"], "dispatch");
+    assert_eq!(t["notes"], json!([shed, roof]));
+    assert_eq!(t["state"], "done");
+    assert_eq!(t["pending"], 0);
+    assert_eq!(t["question"], Value::Null);
+    assert_eq!(t["running"], false);
+    assert!(api.dispatched("?state=needs_you").is_empty());
+    assert!(api.dispatched("?state=active").is_empty());
+    assert_eq!(api.dispatched("?state=done").len(), 1);
+    assert!(
+        !api.notifications()
+            .iter()
+            .any(|n| n["title"].as_str().unwrap_or("").contains("needs you")),
+        "{:?}",
+        api.notifications()
+    );
+
+    // A call from a note names its note on its thread, and is listed too, newest first.
+    let asked = format!("[@Clerk check it.](agent:clerk?call={CALL})");
+    let gate = api.note("memo", "Gate", &[&asked]);
+    fake.push(AnthropicMessage::text("Checked."));
+    api.advance("PT1S");
+    let called = api.dispatched(&format!("?notes={gate}"));
+    assert_eq!(called.len(), 1, "{called:?}");
+    assert_eq!(called[0]["origin"], "mention");
+    assert_eq!(called[0]["notes"], json!([gate]));
+    let all = api.dispatched("");
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_eq!(all[0]["id"], called[0]["id"]);
+    assert_eq!(api.dispatched(&format!("?notes={roof},{gate}")).len(), 2);
+    // A thread the user started is not listed.
+    api.send("POST", "/api/agents/clerk/threads", json!({}));
+    assert_eq!(api.dispatched("").len(), 2);
+}
+
+#[test]
+fn a_dispatch_it_cannot_run_is_refused_and_opens_no_thread() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    api.agent("logger", LOGGER);
+    api.agent("sleepy", "label = \"Sleepy\"\nenabled = false\n");
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    let gone = api.note("memo", "Gone", &["Old."]);
+    let version = api.version(&gone);
+    let res = api.request_as(
+        &api.admin(),
+        "DELETE",
+        &format!(
+            "/api/notes/{gone}?base_version={}",
+            version.as_str().unwrap()
+        ),
+        None,
+    );
+    assert!(res.status().is_success(), "{}", res.text().unwrap());
+    let admin = api.admin();
+
+    // The run acts with the agent's own scope, so a read token may not start it.
+    let read = api.token_of("reader", "read");
+    let (status, v) = api.dispatch_as(&read, "clerk", json!({ "notes": [roof], "request": "x" }));
+    assert_eq!(status, 403, "{v}");
+
+    let many: Vec<String> = (0..101)
+        .map(|i| format!("01JB8Z4K2MQ7V3X9T5R6W8Y{i:03}"))
+        .collect();
+    for (agent, body, want, code) in [
+        (
+            "clerk",
+            json!({ "notes": [roof], "request": "  " }),
+            400,
+            "no_request",
+        ),
+        ("clerk", json!({ "notes": [roof] }), 400, "no_request"),
+        (
+            "clerk",
+            json!({ "notes": [], "request": "x" }),
+            400,
+            "no_notes",
+        ),
+        (
+            "clerk",
+            json!({ "notes": many, "request": "x" }),
+            400,
+            "too_many_notes",
+        ),
+        (
+            "clerk",
+            json!({ "notes": [roof, roof], "request": "x" }),
+            400,
+            "duplicate_note",
+        ),
+        (
+            "clerk",
+            json!({ "notes": [CALL], "request": "x" }),
+            400,
+            "unknown_note",
+        ),
+        (
+            "clerk",
+            json!({ "notes": ["nope"], "request": "x" }),
+            400,
+            "unknown_note",
+        ),
+        (
+            "clerk",
+            json!({ "notes": [gone], "request": "x" }),
+            400,
+            "unknown_note",
+        ),
+        (
+            "logger",
+            json!({ "notes": [roof], "request": "x" }),
+            400,
+            "type_not_permitted",
+        ),
+        (
+            "nobody",
+            json!({ "notes": [roof], "request": "x" }),
+            404,
+            "not_found",
+        ),
+        (
+            "sleepy",
+            json!({ "notes": [roof], "request": "x" }),
+            404,
+            "not_found",
+        ),
+    ] {
+        let (status, v) = api.dispatch_as(&admin, agent, body.clone());
+        assert_eq!(status, want, "{agent} {body}: {v}");
+        assert_eq!(v["error"], code, "{agent} {body}: {v}");
+    }
+    assert!(api.dispatched("").is_empty());
+    assert!(fake.message_requests().is_empty());
+
+    for bad in [
+        "?state=asleep",
+        "?notes=nope",
+        "?notes=01jb8z4k2mq7v3x9t5r6w8y2zb",
+    ] {
+        let res = api.request_as(&admin, "GET", &format!("/api/dispatched{bad}"), None);
+        assert_eq!(res.status().as_u16(), 400, "{bad}");
+    }
+}
+
+#[test]
+fn a_change_left_waiting_needs_you_and_an_app_applies_it_from_the_thread() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    // An app's token has `write`, never `admin`.
+    let app = api.token_of("phone", "write");
+    let changed = MEMO.replace("tab \"Main\"", "tab \"Details\"");
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_t",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": changed }),
+    ));
+    fake.push(AnthropicMessage::text("The tab change waits for you."));
+    let (status, v) = api.dispatch_as(
+        &app,
+        "keeper",
+        json!({ "notes": [roof], "request": "Rename the memo tab." }),
+    );
+    assert_eq!(status, 202, "{v}");
+    let thread = v["thread"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(v["thread"]["title"], "Roof: Rename the memo tab.");
+    let run = api.wait_run(&thread);
+    assert_eq!(run["detail"]["outcome"], "succeeded", "{run}");
+
+    // Waiting for Apply, the thread needs the user, and the bell says so once.
+    let waiting = api.dispatched("?state=needs_you");
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!(waiting[0]["id"], thread.as_str());
+    assert_eq!(waiting[0]["pending"], 1);
+    let told: Vec<Value> = api
+        .notifications()
+        .into_iter()
+        .filter(|n| n["title"].as_str().unwrap_or("").contains("needs you"))
+        .collect();
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        told[0]["title"],
+        "Keeper needs you: Roof: Rename the memo tab."
+    );
+    assert_eq!(told[0]["body"], "A change waits for your Apply.");
+    assert_eq!(
+        told[0]["url"],
+        format!("/agents/keeper/chat?thread={thread}")
+    );
+
+    // The app applies the type change the thread holds with its `write` token.
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert_eq!(read["state"], "needs_you");
+    let proposal = read["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["status"] == "pending")
+        .unwrap_or_else(|| panic!("{read}"))
+        .clone();
+    assert_eq!(proposal["event"], "type_proposal", "{proposal}");
+    let res = api.request_as(
+        &app,
+        "POST",
+        "/api/ai/apply",
+        Some(proposal["data"].clone()),
+    );
+    assert_eq!(res.status().as_u16(), 200, "{}", res.text().unwrap());
+    let wcl = api.get("/api/types/memo")["wcl"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(wcl.contains("tab \"Details\""), "{wcl}");
+    let after = api.dispatched(&format!("?notes={roof}"));
+    assert_eq!(after[0]["state"], "done", "{after:?}");
+    assert_eq!(after[0]["pending"], 0);
+}

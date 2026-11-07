@@ -160,6 +160,15 @@ fn is_agent_threads(path: &str) -> bool {
         })
 }
 
+/// `/api/agents/{name}/dispatch`: notes sent to an agent, whose run the home server starts
+/// (TV-77 D1).
+fn is_agent_dispatch(path: &str) -> bool {
+    path.strip_prefix("/api/agents/")
+        .and_then(|rest| rest.strip_suffix("/dispatch"))
+        .and_then(segment)
+        .is_some()
+}
+
 /// Where `method` on `path` is answered.
 pub(crate) fn route(method: &Method, path: &str) -> Route {
     let get = *method == Method::GET || *method == Method::HEAD;
@@ -205,6 +214,10 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
         || path == "/api/ai/apply"
         || path == "/api/ai/discard"
         || is_agent_threads(path)
+        // Notes sent to an agent run on the home server, and so do the threads they open
+        // (TV-77 D1, D4).
+        || is_agent_dispatch(path)
+        || path == "/api/dispatched"
     {
         return Route::Ai;
     }
@@ -961,6 +974,9 @@ mod tests {
             route(&Method::DELETE, "/api/agents/triage/threads/01J"),
             Route::Ai
         );
+        assert_eq!(route(&post, "/api/agents/triage/dispatch"), Route::Ai);
+        assert_eq!(route(&get, "/api/dispatched"), Route::Ai);
+        assert_eq!(route(&get, "/api/agents/a/b/dispatch"), Route::Local);
         assert_eq!(route(&get, "/api/ai/other"), Route::NeedsWebApp);
         assert_eq!(
             route(&get, "/api/app/ai/turns/t"),

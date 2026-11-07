@@ -72,6 +72,15 @@ fn agent_threads_path(path: &str) -> Option<bool> {
     }
 }
 
+/// Whether `path` is `/api/agents/{name}/dispatch`, sending notes to an agent (TV-77 D1): its
+/// run makes changes with the agent's own scope, so it needs `write`, as a note's save that
+/// calls an agent does.
+fn agent_dispatch_path(path: &str) -> bool {
+    path.strip_prefix("/api/agents/")
+        .and_then(|rest| rest.strip_suffix("/dispatch"))
+        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+}
+
 /// Whether `path` is an agent's memories, `/api/agents/{name}/memories` or one memory under it,
 /// whose changes are note writes (agents G21).
 fn agent_memories_path(path: &str) -> bool {
@@ -309,6 +318,7 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
         || agent_threads_path(path) == Some(true)
         // An agent's memories are notes (agents G21).
         || agent_memories_path(path)
+        || (method == Method::POST && agent_dispatch_path(path))
         || (method == Method::PUT && is_device_own(path))
         || (method == Method::POST && is_device_command_result(path))
         || (method == Method::POST && is_device_commands(path))
@@ -586,6 +596,18 @@ mod tests {
             (Method::DELETE, "/api/trash/x", Some(Scope::Write)),
             (Method::GET, "/api/daily/2026-10-13", Some(Scope::Read)),
             (Method::POST, "/api/daily/2026-10-13", Some(Scope::Write)),
+            // Sending notes to an agent runs it with its own scope (TV-77 D1).
+            (
+                Method::POST,
+                "/api/agents/clerk/dispatch",
+                Some(Scope::Write),
+            ),
+            (Method::GET, "/api/dispatched", Some(Scope::Read)),
+            (
+                Method::POST,
+                "/api/agents/clerk/x/dispatch",
+                Some(Scope::Admin),
+            ),
             (
                 Method::GET,
                 "/api/planner/week/2026-10-13",
