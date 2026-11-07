@@ -102,8 +102,9 @@ Because every notification reaches your phones, each agent has limits:
 | Notifications in one turn or run | 3 |
 | Notifications from one agent in an hour | 10 |
 | Notifications from one agent in 24 hours | 30 |
+| Notifications from all agents together in 24 hours | 60 |
 
-A turn's sub agents share its count, so the turn and the sub agents it starts send 3 together. A call over a limit sends nothing, and the agent is told which limit it reached. The hour and day counts are the notifications stored with the agent's source, so they hold across turns and server restarts. A failed run's notification has the same source and counts too. Deleting notifications from the bell lowers the count.
+A turn's sub agents share its count, so the turn and the sub agents it starts send 3 together. A call over a limit sends nothing, and the agent is told which limit it reached. The 60 a day cap is over all agents' notifications together, so it can refuse a call from an agent that is under its own limits. The hour and day counts are the notifications stored with the agent's source, so they hold across turns and server restarts. A failed run's notification has the same source and counts too. Deleting notifications from the bell lowers the count.
 
 ## Driving the browser box
 
@@ -464,6 +465,7 @@ Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the 
 | Notes in one dispatch | 100 | The dispatch is refused with 400 `too_many_notes` |
 | Model calls in one run | 12 | The run stops, as a chat turn does |
 | Notifications one agent sends | 3 a turn, 10 an hour, 30 a day | `notify_user` is refused and sends nothing ([Notifying you](#notifying-you)) |
+| Notifications all agents send together | 60 a day | `notify_user` is refused and sends nothing, for every agent ([Notifying you](#notifying-you)) |
 | Quiet time before a note event run | 30 seconds | Changes to the same note coalesce |
 
 ## Runs and notifications
