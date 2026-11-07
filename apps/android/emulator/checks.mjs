@@ -742,8 +742,7 @@ async function main() {
     await L.tap(/^allow$/i);
     const next = await L.waitFor((n) => n.pkg === PKG && /^(RCS messages|Calls)$/.test(n.text), { timeout: 10_000 });
     const shot = snap("25-next-step");
-    const note = `Allow restricted settings set the appop to "${mode}"; Try again brought the SMS permission dialog; allowing it moved on to "${next.text}".` +
-      (next.text === "RCS messages" ? " The checklist says the Calls step comes next, but the app puts the RCS messages step (notification access, check 27) between them: the checklist is out of date, not the app." : "");
+    const note = `Allow restricted settings set the appop to "${mode}"; Try again brought the SMS permission dialog; allowing it moved on to "${next.text}".`;
     return ["pass", note, [ask, shot]];
   });
 
@@ -1414,6 +1413,9 @@ async function main() {
     openApp();
     await sleep(8_000);
     const onboarding = L.find("Connect TheVault to your server");
+    // The reinstall ended the old WebView: close its device, which would keep polling adb and keep
+    // this process from exiting (TV-51).
+    await pw?.device.close().catch(() => {});
     pw = null;
     const after = (await local("GET", `/api/query?q=${encodeURIComponent("from note")}`)).body;
     const same = JSON.parse(after).rows.length === JSON.parse(before).rows.length;
@@ -1660,4 +1662,12 @@ try {
   const failed = Object.values(results).filter((r) => r.status === "fail").length;
   console.log(`${Object.keys(results).length} checks recorded, ${failed} failed; see ${join(out, "RESULTS.generated.md")}`);
   if (failed) process.exitCode = 1;
+  // Everything is written and the children are stopped. If a handle still keeps Node alive, such as
+  // a Playwright device left open, say what it is and exit, so a run that waits on the exit code
+  // does not wait forever (TV-51). The timer is unref'd: it does not keep the process alive itself.
+  setTimeout(() => {
+    const open = process._getActiveHandles?.().map((h) => h?.constructor?.name ?? typeof h) ?? [];
+    console.error(`still running 30 s after the report, with open handles: ${open.join(", ") || "unknown"}; exiting`);
+    process.exit(process.exitCode ?? 0);
+  }, 30_000).unref();
 }
