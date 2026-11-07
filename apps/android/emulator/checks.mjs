@@ -17,8 +17,11 @@
 //                           process lives 20 s after launch, shows onboarding, and no FATAL EXCEPTION
 //                           of the app is in logcat then or at the end of the run
 //   THEVAULT_PERIODIC_WAIT  minutes to wait for the 15-minute background work (default 17)
-//   THEVAULT_UPDATE_APK     the newer APK check 49 publishes, with THEVAULT_UPDATE_VERSION its version
-//                           (default: built here, the same app one patch version up)
+//   THEVAULT_UPDATE_APK     the newer APK check 49 publishes first, with THEVAULT_UPDATE_VERSION its
+//                           version (default: built here, the same app one patch version up, with
+//                           the versionCode scripts/release/version-code.sh gives that version)
+//   THEVAULT_UPDATE_APK2    the second one, with THEVAULT_UPDATE_VERSION2 (default: built here, two
+//                           patch versions up). Both let a machine without cargo run check 49
 //
 // What the emulator stands in for, and how:
 //   - The home server is a vault-server on a fresh temporary vault, on 127.0.0.1, which the
@@ -203,7 +206,7 @@ async function startNtfy() {
 
 /** Removes the real Google Messages from the system image, once per AVD, so the stand-in can take its name. */
 async function replaceGoogleMessages() {
-  root();
+  await root();
   const path = shellTry(`pm path ${MESSAGES}`);
   if (path.includes("/product/priv-app/PrebuiltBugle")) {
     console.log("removing the system image's Google Messages (needs -writable-system)");
@@ -213,14 +216,14 @@ async function replaceGoogleMessages() {
       if (!shellTry("touch /product/priv-app/.thevault-rw && rm /product/priv-app/.thevault-rw && echo WRITABLE_OK").includes("WRITABLE_OK")) {
         if (i >= 3) throw new Error("could not remount /product writable; is the emulator running with -writable-system?");
         await reboot();
-        root();
+        await root();
         continue;
       }
       break;
     }
     shell("rm -rf /product/priv-app/PrebuiltBugle");
     await reboot();
-    root();
+    await root();
   } else if (path.includes("package:") && !path.includes("/data/app/")) {
     throw new Error(`unexpected ${MESSAGES}: ${path}`);
   }
@@ -232,16 +235,16 @@ async function replaceGoogleMessages() {
   if (holder !== MESSAGES) throw new Error(`the SMS role is held by "${holder}"`);
 }
 
-function root() {
+async function root() {
   adbTry("root");
-  adbTry("wait-for-device");
+  await L.waitForDevice("adb root");
   for (let i = 0; i < 20 && !shellTry("id").includes("uid=0"); i++) execFileSync("sleep", ["0.5"]);
 }
 
 async function reboot() {
   adbTry("reboot");
   await sleep(5_000);
-  adbTry("wait-for-device");
+  await L.waitForDevice("adb reboot");
   await until("boot", () => shellTry("getprop sys.boot_completed").trim() === "1", { timeout: 300_000, every: 1_000 });
   shellTry("input keyevent KEYCODE_WAKEUP");
   shellTry("wm dismiss-keyguard");
@@ -397,15 +400,20 @@ async function openPath(path, title) {
 const webView = () => L.find((n) => n.pkg === PKG && n.cls === "android.webkit.WebView");
 
 /**
- * The newer APK check 49 publishes, and its version: THEVAULT_UPDATE_APK, or the app built again
- * one patch version above apps/android/src-tauri/tauri.conf.json's.
+ * The newer APK check 49 publishes `bump`th, and its version: THEVAULT_UPDATE_APK (the first) or
+ * THEVAULT_UPDATE_APK2 (the second), else the app built again `bump` patch versions above
+ * apps/android/src-tauri/tauri.conf.json's. The build sets the versionCode of that version too:
+ * tauri.conf.json pins the run's own, and Android takes an update only by its versionCode.
  */
 async function updateApk(bump = 1) {
-  if (process.env.THEVAULT_UPDATE_APK && bump === 1) return [process.env.THEVAULT_UPDATE_VERSION, process.env.THEVAULT_UPDATE_APK];
+  const suffix = bump === 1 ? "" : String(bump);
+  const given = process.env[`THEVAULT_UPDATE_APK${suffix}`];
+  if (given) return [process.env[`THEVAULT_UPDATE_VERSION${suffix}`], given];
   const conf = JSON.parse(readFileSync(join(repo, "apps/android/src-tauri/tauri.conf.json"), "utf8"));
   const [major, minor, patch] = conf.version.split(".").map(Number);
   const version = `${major}.${minor}.${patch + bump}`;
-  const built = join(cache, `TheVault_${version}_x86_64-debug.apk`);
+  const versionCode = Number(execFileSync(join(repo, "scripts/release/version-code.sh"), [version], { encoding: "utf8" }).trim());
+  const built = join(cache, `TheVault_${version}_${versionCode}_x86_64-debug.apk`);
   // Built again whenever the run's APK is newer, so the update carries the code under test.
   if (!existsSync(built) || statSync(built).mtimeMs < statSync(apk).mtimeMs) {
     const env = { ...process.env, CARGO_PROFILE_DEV_DEBUG: "0", CARGO_PROFILE_DEV_STRIP: "symbols", GRADLE_OPTS: `${process.env.GRADLE_OPTS ?? ""} -Dorg.gradle.daemon=false` };
@@ -415,7 +423,7 @@ async function updateApk(bump = 1) {
     const kept = join(cache, "current-app.apk");
     if (existsSync(output)) copyFileSync(output, kept);
     try {
-      await L.run("cargo", ["tauri", "android", "build", "--debug", "--apk", "--target", "x86_64", "--config", JSON.stringify({ version })], { cwd: join(repo, "apps/android"), env });
+      await L.run("cargo", ["tauri", "android", "build", "--debug", "--apk", "--target", "x86_64", "--config", JSON.stringify({ version, bundle: { android: { versionCode } } })], { cwd: join(repo, "apps/android"), env });
       copyFileSync(output, built);
     } finally {
       if (existsSync(kept)) copyFileSync(kept, output);
@@ -1387,7 +1395,7 @@ async function main() {
     };
     const before = await refs();
     await reboot();
-    root();
+    await root();
     wakeAndUnlock();
     openApp();
     await sleep(30_000);
