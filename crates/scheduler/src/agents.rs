@@ -15,10 +15,13 @@
 //!
 //! A run asks the [`AgentRunner`] for a new thread (`origin = "trigger:<name>"`) and runs one turn
 //! on it whose first user message is the trigger's prompt, with an `Event:` line for a note event.
-//! Each agent runs at most [`MAX_RUNNING`] runs at once; the rest queue, the oldest dropped past
-//! [`MAX_QUEUED`]. At most [`MAX_PER_HOUR`] runs start per agent per hour; further ones are
-//! skipped, with one notification an hour. Every run is recorded in `agent_runs` with its trail
-//! lines, and a failed run leaves one notification linking to its thread (agents G12).
+//! Each agent runs at most [`MAX_RUNNING`] runs at once; the rest queue. Past [`MAX_QUEUED`] the
+//! newest queued trigger run, one with no thread, is dropped. A run with a thread (a call from a
+//! note, or notes sent to the agent) is never dropped from the queue: a new one that finds no room
+//! is refused, and a new trigger run is dropped instead. At most [`MAX_PER_HOUR`] runs start per
+//! agent per hour; further ones are skipped, with one notification an hour. Every run is recorded
+//! in `agent_runs` with its trail lines, and a failed run leaves one notification linking to its
+//! thread (agents G12).
 //!
 //! A mention trigger (agents G16), an agent's own or the implicit one, answers calls committed in
 //! a note (agents G19): links `[@<Label> <request>](agent:<name>?call=<id>)`, each whole in the
@@ -27,7 +30,8 @@
 //! opens a thread (`origin = "mention"`) and the run starts, its first message the trigger's
 //! prompt, the request, the text around the call and a `Called from note` line. A call to an agent
 //! that may not be called from the note, or is disabled or missing, or is over its hourly limit,
-//! is recorded with no thread and never answered. The note is never rewritten for a call.
+//! is recorded with no thread and never answered. A call that finds the agent's queue full is not
+//! recorded at all, so the next save of its note asks again. The note is never rewritten for a call.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, OnceLock, Weak};
@@ -123,7 +127,8 @@ pub enum DispatchRefused {
     NoAgent,
     /// The agent started [`MAX_PER_HOUR`] runs in the last hour.
     OverLimit,
-    /// [`MAX_QUEUED`] runs of the agent wait already.
+    /// [`MAX_QUEUED`] runs of the agent wait already, all with a thread, so none can be dropped
+    /// to make room.
     QueueFull,
     /// The thread could not be opened, with why.
     Thread(String),
@@ -198,6 +203,11 @@ enum Admitted {
     Queued,
     /// Over the hourly limit; `true` when the user is to be told.
     Skipped(bool),
+    /// The queue is full and the run has no thread: it is dropped.
+    Dropped,
+    /// The queue is full of runs with threads and this run has one: it is refused, and the
+    /// thread it came with is to be deleted.
+    Refused,
 }
 
 impl AgentPlan {
@@ -350,13 +360,15 @@ impl AgentPlan {
     }
 
     /// Whether a run asked for by a person may be admitted for `agent` now: under the hourly
-    /// limit, and with room in its queue when its slots are taken (TV-77 D1).
+    /// limit, and with room in its queue when its slots are taken (TV-77 D1). A full queue has
+    /// room while one of its runs has no thread: [`AgentPlan::admit`] drops that run for it.
     fn room(&mut self, agent: &str, now: i64) -> Result<(), DispatchRefused> {
         if self.over_limit(agent, now) {
             return Err(DispatchRefused::OverLimit);
         }
         let lane = self.lanes.entry(agent.to_owned()).or_default();
-        if lane.running >= MAX_RUNNING && lane.queue.len() >= MAX_QUEUED {
+        let full = lane.running >= MAX_RUNNING && lane.queue.len() >= MAX_QUEUED;
+        if full && lane.queue.iter().all(|j| j.thread.is_some()) {
             return Err(DispatchRefused::QueueFull);
         }
         Ok(())
@@ -372,7 +384,8 @@ impl AgentPlan {
     }
 
     /// Start `job` now, queue it behind its agent's running runs, or skip it over the hourly
-    /// limit.
+    /// limit. With the queue full, a run with no thread is dropped, and a run with a thread makes
+    /// room by dropping the newest run with no thread, or is refused when there is none.
     fn admit(&mut self, job: AgentJob, now: i64) -> Admitted {
         let lane = self.lanes.entry(job.agent.clone()).or_default();
         while lane.started.front().is_some_and(|t| *t <= now - HOUR_MS) {
@@ -389,20 +402,32 @@ impl AgentPlan {
             }
             return Admitted::Skipped(tell);
         }
-        lane.started.push_back(now);
         if lane.running < MAX_RUNNING {
+            lane.started.push_back(now);
             lane.running += 1;
             return Admitted::Start(job);
         }
-        lane.queue.push_back(job);
-        if lane.queue.len() > MAX_QUEUED
-            && let Some(dropped) = lane.queue.pop_front()
-        {
-            eprintln!(
-                "agent {:?}: {MAX_QUEUED} runs are waiting, so the oldest, of trigger {:?}, was dropped",
-                dropped.agent, dropped.trigger
-            );
+        if lane.queue.len() >= MAX_QUEUED {
+            // A run with a thread is someone's request: only a run with none makes room.
+            if job.thread.is_none() {
+                eprintln!(
+                    "agent {:?}: {MAX_QUEUED} runs are waiting, so trigger {:?} was dropped",
+                    job.agent, job.trigger
+                );
+                return Admitted::Dropped;
+            }
+            let Some(i) = lane.queue.iter().rposition(|j| j.thread.is_none()) else {
+                return Admitted::Refused;
+            };
+            if let Some(dropped) = lane.queue.remove(i) {
+                eprintln!(
+                    "agent {:?}: {MAX_QUEUED} runs are waiting, so the newest run with no thread, of trigger {:?}, was dropped",
+                    dropped.agent, dropped.trigger
+                );
+            }
         }
+        lane.started.push_back(now);
+        lane.queue.push_back(job);
         Admitted::Queued
     }
 
@@ -598,8 +623,10 @@ impl Scheduler {
         let (mut jobs, events) = self.plan().agents.take_due(now);
         let called = self.plan().agents.take_mentions();
         let mut tell = Vec::new();
+        // The runs of calls are admitted as they are recorded, under the same lock as their room.
+        let mut called_runs = Vec::new();
         for id in called {
-            jobs.extend(self.mention_jobs(&id, now, &mut tell));
+            called_runs.extend(self.mention_jobs(&id, now, &mut tell));
         }
         for e in events {
             let title = match e.op {
@@ -625,7 +652,13 @@ impl Scheduler {
                 origin: None,
             });
         }
-        let mut starts = Vec::new();
+        let mut starts: Vec<AgentJob> = called_runs
+            .into_iter()
+            .filter_map(|a| match a {
+                Admitted::Start(j) => Some(j),
+                _ => None,
+            })
+            .collect();
         let mut skipped = Vec::new();
         {
             let mut plan = self.plan();
@@ -638,6 +671,8 @@ impl Scheduler {
                         tell.push(job);
                     }
                     Admitted::Skipped(false) => skipped.push(job),
+                    // A trigger run has no thread, so it is dropped and never refused.
+                    Admitted::Dropped | Admitted::Refused => {}
                 }
             }
         }
@@ -654,8 +689,10 @@ impl Scheduler {
     /// the first time recorded in `agent_calls` with the thread opened for its run. A call that is
     /// not run (the agent may not be called from the note, is disabled or missing, or is over its
     /// hourly limit) is recorded with no thread; an agent over its limit is added to `tell` when
-    /// the user is to hear of it. The note is left as it is.
-    fn mention_jobs(&self, id: &str, now: i64, tell: &mut Vec<AgentJob>) -> Vec<AgentJob> {
+    /// the user is to hear of it. A call whose queue is full is refused and not recorded, so the
+    /// next save of the note asks again. The note is left as it is. Answers the admitted runs,
+    /// each [`Admitted::Start`] or [`Admitted::Queued`].
+    fn mention_jobs(&self, id: &str, now: i64, tell: &mut Vec<AgentJob>) -> Vec<Admitted> {
         let Some(runner) = self.runner.get() else {
             return Vec::new();
         };
@@ -674,7 +711,7 @@ impl Scheduler {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
-        let mut jobs = Vec::new();
+        let mut admits = Vec::new();
         for f in found {
             let call = &f.call;
             match state.agent_call(&call.call) {
@@ -738,6 +775,14 @@ impl Scheduler {
                 record(None);
                 continue;
             }
+            // Full queue: no thread is opened, and the call is not recorded (TV-86 F2).
+            if self.plan().agents.room(&agent.name, now).is_err() {
+                eprintln!(
+                    "agent {:?}: call {} in note {id} is not run: its queue is full; the next save of the note asks again",
+                    agent.name, call.call
+                );
+                continue;
+            }
             let thread = match runner.open_thread(
                 agent,
                 MENTION_ORIGIN,
@@ -764,10 +809,30 @@ impl Scheduler {
                 }
                 continue;
             }
-            job.thread = Some(thread);
-            jobs.push(job);
+            job.thread = Some(thread.clone());
+            // Room is checked and the run admitted under one lock. Refused, the call is forgotten
+            // and its thread goes, so the next save of the note asks again (TV-86 F2).
+            let admitted = {
+                let mut plan = self.plan();
+                plan.agents
+                    .room(&agent.name, now)
+                    .map(|()| plan.agents.admit(job, now))
+            };
+            match admitted {
+                Ok(a @ (Admitted::Start(_) | Admitted::Queued)) => admits.push(a),
+                _ => {
+                    eprintln!(
+                        "agent {:?}: call {} in note {id} is not run: its queue is full; the next save of the note asks again",
+                        agent.name, call.call
+                    );
+                    self.drop_thread(&agent.name, &thread);
+                    if let Err(e) = state.forget_agent_call(&call.call) {
+                        eprintln!("call {} in note {id}: forgetting it: {e}", call.call);
+                    }
+                }
+            }
         }
-        jobs
+        admits
     }
 
     /// Run notes sent to `agent` (TV-77 D1): open a thread of origin [`DISPATCH_ORIGIN`] about
@@ -825,8 +890,9 @@ impl Scheduler {
                     })
             }
             Ok(Admitted::Queued) => None,
-            // `room` was checked under the same lock, so `admit` does not skip it.
+            // `room` was checked under the same lock, so `admit` does not skip or refuse it.
             Ok(Admitted::Skipped(_)) => Some(DispatchRefused::OverLimit),
+            Ok(Admitted::Dropped | Admitted::Refused) => Some(DispatchRefused::QueueFull),
             Err(e) => Some(e),
         };
         if let Some(e) = refused {
