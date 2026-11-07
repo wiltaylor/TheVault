@@ -734,8 +734,7 @@ async function main() {
     await L.tap(/^allow$/i);
     const next = await L.waitFor((n) => n.pkg === PKG && /^(RCS messages|Calls)$/.test(n.text), { timeout: 10_000 });
     const shot = snap("25-next-step");
-    const note = `Allow restricted settings set the appop to "${mode}"; Try again brought the SMS permission dialog; allowing it moved on to "${next.text}".` +
-      (next.text === "RCS messages" ? " The checklist says the Calls step comes next, but the app puts the RCS messages step (notification access, check 27) between them: the checklist is out of date, not the app." : "");
+    const note = `Allow restricted settings set the appop to "${mode}"; Try again brought the SMS permission dialog; allowing it moved on to "${next.text}".`;
     return ["pass", note, [ask, shot]];
   });
 
