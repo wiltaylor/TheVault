@@ -15,7 +15,7 @@ use tauri_plugin_vault_device::core::{self, Core, Link};
 use tauri_plugin_vault_device::pair::{self, Paired, Secret};
 use tauri_plugin_vault_device::share::{Shared, SharedFile};
 use tempfile::TempDir;
-use testkit::{PASSWORD, TestServer};
+use testkit::{PASSWORD, Reply, StandIn, TestServer};
 
 static TURN: Mutex<()> = Mutex::new(());
 
@@ -1368,4 +1368,49 @@ fn a_server_that_cannot_be_reached_ends_the_round_at_once_and_holds_up_no_other(
     core.sync_now().unwrap();
     let out = core.server().sync_status();
     assert_eq!(out["state"], "synced", "{out}");
+}
+
+/// TV-62: a server that accepts the connection and answers late, after the request timeout, is
+/// not unreachable. The settings call fails with its own error, which the round logs, and the
+/// round goes on to the server.
+#[test]
+fn a_server_that_answers_late_is_not_unreachable_and_the_round_goes_on() {
+    let _turn = turn();
+    let dir = TempDir::new().unwrap();
+    let core = open(&dir);
+    let admin = Admin::start();
+    let paired = link(&admin.pair("Pixel"), 64);
+    core.set_link(Some(paired.clone())).unwrap();
+    core.sync_now().unwrap();
+
+    let slow = StandIn::start();
+    slow.route(
+        "/api/devices",
+        Reply::json(200, &json!({ "devices": [] })).delay(Duration::from_secs(31)),
+    );
+    core.set_link(Some(Link {
+        server_url: format!("http://{}", slow.addr()),
+        ..paired
+    }))
+    .unwrap();
+    let t0 = Instant::now();
+    let err = core.sync_now().unwrap_err();
+    let took = t0.elapsed();
+    assert!(!err.to_string().contains("cannot reach"), "{err:#}");
+    assert!(
+        took >= Duration::from_secs(30),
+        "the settings call returned after {took:?}"
+    );
+    let out = core.server().sync_status();
+    assert_ne!(out["phase"], "offline", "{out}");
+    // The settings call timed out, then the round asked the server for its sync info.
+    let routes: Vec<_> = slow
+        .requests()
+        .iter()
+        .map(|r| r.route().to_owned())
+        .collect();
+    assert!(
+        routes.iter().any(|r| r == "/api/sync/info"),
+        "the round did not go on: {routes:?}"
+    );
 }

@@ -20,11 +20,15 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long opening a connection to the server may take. A server that cannot be reached (the
 /// phone off its network, the server down) fails here, not after [`TIMEOUT`], so a round knows at
-/// once (TV-59).
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// once (TV-59). 10 s, not 5: a server reachable only after 5 to 15 s (a weak signal, a VPN
+/// waking, a broken IPv6 with an A fallback) must not skip the round (TV-62). Every call through
+/// [`client`] takes it, the settings call included.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A request that did not reach the server, or got no answer: no connection, a timeout, a broken
-/// connection. An answer the server refused is not one.
+/// A request that never reached the server: the connection failed or timed out while opening
+/// (DNS, refused, connect timeout, TLS). A server that accepted the connection and then answered
+/// late or broke off is not one: that is an error of its own, and the round goes on (TV-62).
+/// An answer the server refused is not one either.
 #[derive(Debug)]
 pub struct Unreachable(pub String);
 
@@ -62,10 +66,16 @@ pub(crate) fn client() -> anyhow::Result<Client> {
         .build()?)
 }
 
+/// Send one request. Only a failure to connect is [`Unreachable`]; a timeout after the connection
+/// opened or a broken answer is returned as it is, so a caller that logs it lets the round go on.
 pub(crate) fn send(link: &Link, rb: RequestBuilder) -> anyhow::Result<Response> {
-    rb.bearer_auth(&link.token)
-        .send()
-        .map_err(|e| Unreachable(format!("cannot reach {}: {e}", link.server_url)).into())
+    rb.bearer_auth(&link.token).send().map_err(|e| {
+        if e.is_connect() {
+            Unreachable(format!("cannot reach {}: {e}", link.server_url)).into()
+        } else {
+            anyhow::Error::from(e)
+        }
+    })
 }
 
 /// The error for an answer that is not a success: the server's message, else its status.
