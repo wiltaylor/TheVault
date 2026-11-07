@@ -76,7 +76,7 @@ async function ask(m: ReturnType<typeof render>) {
   await waitFor(() => expect(live).not.toBeNull());
 }
 
-function propose(proposal: { id: string; name: string; op: string }) {
+function propose(proposal: { id: string; name: string; op: string; device?: unknown }) {
   const tool = proposal.op === "delete" ? "propose_script_delete" : "propose_script_change";
   live!.onEvent({ event: "tool", data: { id: proposal.id, name: tool, input: { name: proposal.name } } });
   live!.onEvent({ event: "script_proposal", data: proposal });
