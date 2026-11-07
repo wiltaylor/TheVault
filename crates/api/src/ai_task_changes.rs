@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 use writer::Writer;
 
 use crate::ai_chat::{ApplyError, ToolOut, str_arg, tool};
-use crate::ai_script_changes::{any_host_warning, described};
+use crate::ai_script_changes::{any_host_warning, described, shared_paths_refused};
 
 /// The tools that change a scheduled task. Their change always waits for the user's Apply.
 pub const PROPOSE_TOOLS: [&str; 2] = ["propose_task_change", "propose_task_delete"];
@@ -233,36 +233,6 @@ fn paths_refused(def: &TaskDef, current_has_paths: bool) -> Option<String> {
     })
 }
 
-/// The refusal of a new source for script `script` when another run of it has `fs` paths (TV-71
-/// review F1, TV-32 Q3): the agent's code would run with those folders. Task `name` itself is left
-/// out, as its proposed file has no paths. Only tasks have `fs` paths; the refusal names each.
-fn shared_paths_refused(w: &Writer, script: &str, name: &str) -> Option<String> {
-    let with_paths: Vec<String> = w
-        .script_runs_as(script, None)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|u| !(u.kind == "task" && u.name == name))
-        .filter(|u| !u.read_paths.is_empty() || !u.write_paths.is_empty())
-        .map(|u| {
-            let mut paths = Vec::new();
-            if !u.read_paths.is_empty() {
-                paths.push(format!("reads {}", listed(&u.read_paths)));
-            }
-            if !u.write_paths.is_empty() {
-                paths.push(format!("writes {}", listed(&u.write_paths)));
-            }
-            format!("{} {} ({})", u.kind, u.name, paths.join(", "))
-        })
-        .collect();
-    if with_paths.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "an agent may not change script {script:?}: {} runs it with read_paths or write_paths, so the new code would reach those folders. Leave script_source out, or tell the user the change to make",
-        with_paths.join(", ")
-    ))
-}
-
 /// Whether the text of a task file names `fs` paths.
 fn has_paths(name: &str, text: &str) -> bool {
     TaskDef::parse(name, text).is_ok_and(|d| !d.read_paths.is_empty() || !d.write_paths.is_empty())
@@ -369,7 +339,7 @@ pub(crate) fn propose_change(
         ));
     }
     if script_after.is_some()
-        && let Some(why) = shared_paths_refused(w, &def.script, name)
+        && let Some(why) = shared_paths_refused(w, &def.script, Some(name))
     {
         return Err(refused(
             why,
@@ -531,7 +501,7 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(stale(&format!("the script {} changed", def.script)));
         }
         if script_after.is_some()
-            && let Some(why) = shared_paths_refused(w, &def.script, name)
+            && let Some(why) = shared_paths_refused(w, &def.script, Some(name))
         {
             return Err(ApplyError::Refused(why));
         }

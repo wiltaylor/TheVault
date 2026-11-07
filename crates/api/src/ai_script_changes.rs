@@ -10,6 +10,9 @@
 //!   tools are in `crate::ai_chat`'s `ALWAYS_PROPOSE`, so a trigger's run is not offered them and
 //!   `Direct::covers` never covers a `script_proposal` (TV-32 Q2 O1). `POST /api/ai/apply` applies
 //!   it through [`apply_script`], with `admin` or as the copy that waits in the thread.
+//! - A change is refused, at the proposal and again at Apply, while any run of the script has
+//!   `read_paths` or `write_paths`: the agent's code would reach those folders (TV-32 Q3, TV-87).
+//!   [`shared_paths_refused`] names each such run. A delete is not affected.
 //!
 //! The "Runs as" list ([`runs_as`]) names each handler, task, device file and tool that runs the
 //! script, with the hosts, secrets, `fs` paths and schedule each gives it (TV-32 Q7, R5). A change
@@ -108,6 +111,48 @@ pub(crate) fn described(uses: &[ScriptUse]) -> (Value, Vec<String>) {
     (uses.iter().map(use_json).collect(), warnings)
 }
 
+/// The refusal of a new source for script `script` when a run of it has `fs` paths (TV-71 review
+/// F1, TV-87, TV-32 Q3): the agent's code would run with those folders. Task `except_task` is left
+/// out: a task's proposed file has no paths, and its current one is not what runs. Only tasks have
+/// `fs` paths; the refusal names each run with its folders.
+pub(crate) fn shared_paths_refused(
+    w: &Writer,
+    script: &str,
+    except_task: Option<&str>,
+) -> Option<String> {
+    let with_paths: Vec<String> = w
+        .script_runs_as(script, None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|u| !(u.kind == "task" && Some(u.name.as_str()) == except_task))
+        .filter(|u| !u.read_paths.is_empty() || !u.write_paths.is_empty())
+        .map(|u| {
+            let mut paths = Vec::new();
+            if !u.read_paths.is_empty() {
+                paths.push(format!("reads {}", u.read_paths.join(", ")));
+            }
+            if !u.write_paths.is_empty() {
+                paths.push(format!("writes {}", u.write_paths.join(", ")));
+            }
+            format!("{} {} ({})", u.kind, u.name, paths.join(", "))
+        })
+        .collect();
+    if with_paths.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "an agent may not change script {script:?}: {} runs it with read_paths or write_paths, so the new code would reach those folders. Tell the user the change to make in the editor",
+        with_paths.join(", ")
+    ))
+}
+
+/// A refusal of a proposal, with the reason as the model reads it.
+fn refused(why: String) -> ToolOut {
+    let mut o = ToolOut::error(why.clone());
+    o.content = json!({ "error": why, "message": "The script was not proposed." }).to_string();
+    o
+}
+
 fn out(content: Value, proposal: Option<Value>) -> ToolOut {
     ToolOut {
         content: content.to_string(),
@@ -184,6 +229,9 @@ pub(crate) fn propose_change(
             }),
             None,
         ));
+    }
+    if let Some(why) = shared_paths_refused(w, name, None) {
+        return Err(refused(why));
     }
     let problems = w
         .script_problems(name, after)
@@ -278,6 +326,8 @@ pub(crate) fn propose_delete(
 /// the writer's lock, with the write: a script changed since, a change that no longer compiles in
 /// every way it runs, or a list that changed since the card is answered 409 `stale`, and nothing is
 /// written. A delete is refused, 409 `script_in_use`, when something has started to run the script.
+/// A change is refused, 403 `not_permitted`, while a task has `read_paths` or `write_paths` and runs
+/// it (TV-87, as the proposal is).
 pub(crate) fn apply_script(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
@@ -300,6 +350,12 @@ pub(crate) fn apply_script(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(ApplyError::Stale(format!(
                 "the script {name} changed since the proposal, so nothing was written"
             )));
+        }
+        // A change is refused while a run of the script has folders (TV-87). A delete is not.
+        if after.is_some()
+            && let Some(why) = shared_paths_refused(w, name, None)
+        {
+            return Err(ApplyError::Refused(why));
         }
         // A delete in use is refused first, as `script_in_use`.
         let changes = w.script_changes(name, after)?;
