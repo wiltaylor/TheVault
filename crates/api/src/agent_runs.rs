@@ -4,8 +4,13 @@
 //! [`TriggerRunner`] opens a thread (`origin = "trigger:<name>"`) and runs one unattended turn on
 //! it with [`ai_chat::run_unattended`]: the agent is the caller, and the turn is offered only the
 //! read tools its permissions allow and the change tools whose confirmation switch is off, so
-//! nothing waits for a user. A model call that fails with a transient error is retried after
-//! the waits [`crate::ai_retry`] sets out. Only the server installs it (`crate::router`); the embedded app
+//! nothing waits for a user. A call from a note and notes sent to the agent run through it too,
+//! on a thread of origin `mention` or `dispatch` that names its notes: those runs are also
+//! offered the change tools whose switch is on, and their proposals wait in the thread for the
+//! user's Apply (TV-77 D2). Such a run that ends with the thread needing the user (a proposal
+//! waits, or the agent asked a question) leaves one notification linking to the thread (TV-77
+//! Q9). A model call that fails with a transient error is retried after the waits
+//! [`crate::ai_retry`] sets out. Only the server installs it (`crate::router`); the embedded app
 //! servers never run triggers.
 //!
 //! `GET /api/agents/{name}/runs` (read) answers `{tools, triggers}`: `tools`, the tools a trigger
@@ -70,8 +75,14 @@ fn own_runtime() -> tokio::runtime::Handle {
 }
 
 impl scheduler::AgentRunner for TriggerRunner {
-    fn open_thread(&self, agent: &Agent, origin: &str, title: &str) -> Result<String, String> {
-        agent_threads::create(&self.writer, &agent.name, Some(title), origin)
+    fn open_thread(
+        &self,
+        agent: &Agent,
+        origin: &str,
+        title: &str,
+        notes: &[String],
+    ) -> Result<String, String> {
+        agent_threads::create_with(&self.writer, &agent.name, Some(title), origin, notes)
             .map(|t| t.id)
             .map_err(|e| {
                 e.body["message"]
@@ -95,12 +106,61 @@ impl scheduler::AgentRunner for TriggerRunner {
             self.waits.clone(),
         ));
         crate::ai_turns::publish(&self.writer, &agent.name, thread, None, false);
+        let outcome = done
+            .ended
+            .unwrap_or_else(|| Err("the turn stopped before it ended".to_owned()));
+        // A failed run has its own notification from the scheduler.
+        if outcome.is_ok() {
+            notify_needs_you(&self.writer, agent, thread);
+        }
         scheduler::TurnReport {
-            outcome: done
-                .ended
-                .unwrap_or_else(|| Err("the turn stopped before it ended".to_owned())),
+            outcome,
             log: done.log,
         }
+    }
+}
+
+/// "<Agent> needs you: <title>" when a run a person asked for (a call from a note, or notes sent
+/// to the agent) ended with its thread waiting for the user (TV-77 Q9), linking to the thread.
+fn notify_needs_you(w: &Writer, agent: &Agent, thread: &str) {
+    let Ok(t) = agent_threads::Thread::read(w, thread) else {
+        return;
+    };
+    if ![scheduler::MENTION_ORIGIN, scheduler::DISPATCH_ORIGIN].contains(&t.origin.as_str()) {
+        return;
+    }
+    let pending = t.transcript.pending();
+    if agent_threads::state_of(false, &t.question, pending) != "needs_you" {
+        return;
+    }
+    let body = if !t.question.is_empty() {
+        t.question.clone()
+    } else if pending == 1 {
+        "A change waits for your Apply.".to_owned()
+    } else {
+        format!("{pending} changes wait for your Apply.")
+    };
+    let clip = |s: &str, n: usize| -> String {
+        if s.chars().count() <= n {
+            return s.to_owned();
+        }
+        s.chars().take(n - 1).chain(['\u{2026}']).collect()
+    };
+    let n = state::NewNotification {
+        title: clip(
+            &format!("{} needs you: {}", agent.label, t.title),
+            state::MAX_TITLE,
+        ),
+        body: Some(clip(body.trim(), state::MAX_BODY)),
+        note_id: None,
+        url: Some(format!("/agents/{}/chat?thread={thread}", agent.name)),
+        source: format!("agent:{}", agent.name),
+    };
+    if let Err(e) = w.state().add_notification(&n) {
+        eprintln!(
+            "agent {:?}: recording the needs-you notification: {e}",
+            agent.name
+        );
     }
 }
 

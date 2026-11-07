@@ -28,7 +28,7 @@ import {
 } from "solid-js";
 import { agentLabel, agents } from "../agents";
 import { pastedName } from "../blocks/MediaBlocks";
-import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl, isSubSession } from "../api";
+import { type AgentThreadSummary, type AiAccountChoice, type AiAccounts, type AiModel, type Json, type NoteDoc, api, assetUrl, isCallThread, isSubSession } from "../api";
 import { TypeIcon } from "../components/Icon";
 import { formatValue } from "../components/Render";
 import { Spinner } from "../components/SyncStatus";
@@ -47,6 +47,8 @@ import { TypeProposalCard } from "./TypeProposalCard";
 import { outboxItemHref } from "../outbox/model";
 import { SkillProposalCard, skillHref } from "./SkillProposalCard";
 import { ToolProposalCard, toolHref } from "./ToolProposalCard";
+import { ScriptProposalCard } from "./ScriptProposalCard";
+import { TaskProposalCard } from "./TaskProposalCard";
 import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged, viewThread } from "./running";
 import {
   type Applied,
@@ -74,6 +76,8 @@ import {
   setAgent,
   skillWhat,
   subagentOf,
+  scriptWhat,
+  taskWhat,
   toolWhat,
   useChatSession,
 } from "./store";
@@ -154,6 +158,10 @@ export function stepLabel(name: string, input: Json): string {
       return "Drafted an SMS";
     case "draft_event":
       return "Drafted a calendar invite";
+    case "notify_user":
+      return `Notified the user: “${s("title")}”`;
+    case "ask_user":
+      return `Asked the user: “${s("question")}”`;
     case "web_search":
       return `Searched the web for “${s("query")}”`;
     case "fetch_url":
@@ -204,6 +212,18 @@ export function stepLabel(name: string, input: Json): string {
       return `Checked tool ${s("name")}`;
     case "propose_tool_delete":
       return `Checked a delete of tool ${s("name")}`;
+    case "get_script":
+      return `Read script ${s("name")}`;
+    case "propose_script_change":
+      return `Checked script ${s("name")}`;
+    case "propose_script_delete":
+      return `Checked a delete of script ${s("name")}`;
+    case "get_task":
+      return `Read task ${s("name")}`;
+    case "propose_task_change":
+      return `Checked task ${s("name")}`;
+    case "propose_task_delete":
+      return `Checked a delete of task ${s("name")}`;
     case "start_subagent":
       return s("agent") ? `Delegated to ${s("agent")}` : "Started a sub agent";
     default:
@@ -288,6 +308,10 @@ export function activeLabel(name: string, input: Json): string {
       return "Drafting an SMS";
     case "draft_event":
       return "Drafting a calendar invite";
+    case "notify_user":
+      return "Notifying the user";
+    case "ask_user":
+      return "Asking the user";
     case "web_search":
       return "Searching the web";
     case "fetch_url":
@@ -334,6 +358,16 @@ export function activeLabel(name: string, input: Json): string {
     case "propose_tool_change":
     case "propose_tool_delete":
       return "Checking a tool change";
+    case "get_script":
+      return "Reading a saved script";
+    case "propose_script_change":
+    case "propose_script_delete":
+      return "Checking a script change";
+    case "get_task":
+      return "Reading a scheduled task";
+    case "propose_task_change":
+    case "propose_task_delete":
+      return "Checking a task change";
     case "start_subagent":
       return "Waiting for sub agents";
     default:
@@ -390,6 +424,14 @@ const TYPE_TOOLS = new Set([
   "get_tool",
   "propose_tool_change",
   "propose_tool_delete",
+  // And the saved script tools (TV-70).
+  "get_script",
+  "propose_script_change",
+  "propose_script_delete",
+  // And the scheduled task tools (TV-71).
+  "get_task",
+  "propose_task_change",
+  "propose_task_delete",
 ]);
 
 /** What a script step says once done (script-tools T6): its outcome and how long it took. */
@@ -1426,6 +1468,10 @@ export function proposalLine(p: Part): string {
       return `Proposed ${skillWhat(p.proposal)}`;
     case "tool_proposal":
       return `Proposed ${toolWhat(p.proposal)}`;
+    case "script_proposal":
+      return `Proposed ${scriptWhat(p.proposal)}`;
+    case "task_proposal":
+      return `Proposed ${taskWhat(p.proposal)}`;
     default:
       return "Proposed a change";
   }
@@ -1478,6 +1524,8 @@ function PartView(props: { part: Part; parts: readonly Part[]; turn: number; ind
         <Match when={props.part.kind === "memory_proposal" && props.part}>{(p) => <MemoryProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "skill_proposal" && props.part}>{(p) => <SkillProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "tool_proposal" && props.part}>{(p) => <ToolProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "script_proposal" && props.part}>{(p) => <ScriptProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "task_proposal" && props.part}>{(p) => <TaskProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "applied" && props.part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
         <Match when={props.part.kind === "download" && props.part}>{(p) => <DownloadCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "notice" && props.part}>{(p) => <Notice part={p()} />}</Match>
@@ -2104,8 +2152,9 @@ function ThreadPicker() {
       // A thread that stopped running since the last read answered: a new reply, unless open.
       const was = new Set(threads().filter((t) => t.running).map((t) => t.id));
       for (const t of got.threads) if (was.has(t.id) && !t.running) turnEnded(t.id);
-      // Sub agent sessions are listed only under their parent (subagents U5).
-      setThreads(got.threads.filter((t) => !isSubSession(t.origin)));
+      // Sub agent sessions are listed only under their parent (subagents U5), and threads of
+      // notes sent to the agent or of @ calls only on the Dispatched page (TV-80).
+      setThreads(got.threads.filter((t) => !isSubSession(t.origin) && !isCallThread(t.origin)));
       if (got.threads.some((t) => t.running)) poll = setTimeout(() => void refresh(), RUNNING_POLL_MS);
     } catch {
       if (mine === asked) setThreads([]);

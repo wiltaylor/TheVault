@@ -1,0 +1,78 @@
+/* The Dispatched page (TV-80): three sections of sent and called threads. */
+
+.dispatched-intro {
+  margin: 0 0 1rem;
+}
+
+.dispatched-section h2 {
+  margin: 1rem 0 0.4rem;
+  font-size: 1rem;
+}
+
+.dispatched-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.dispatched-row {
+  border-bottom: 1px solid var(--line);
+}
+
+.dispatched-link {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.25rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.dispatched-link:hover,
+.dispatched-link:focus-visible {
+  background: var(--hover);
+}
+
+.dispatched-icon {
+  flex: none;
+  display: inline-flex;
+}
+
+.dispatched-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.dispatched-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatched-row.unopened .dispatched-title {
+  font-weight: 600;
+}
+
+.dispatched-meta {
+  font-size: 0.82rem;
+}
+
+.dispatched-waiting {
+  font-size: 0.88rem;
+  white-space: pre-wrap;
+}
+
+.dispatched-needs {
+  flex: none;
+  min-width: 1.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.35rem;
+  text-align: center;
+}

@@ -13,7 +13,9 @@
 //!   of the thread. Both run as `crate::script_tools` describes, writing as the agent.
 //! - `list_tools` and `get_tool` read; `propose_tool_change` and `propose_tool_delete` check a
 //!   change and hand it to the user as a `tool_proposal` (the `tools` confirmation switch, admin
-//!   scope), which `POST /api/ai/apply` applies through [`apply_tool`].
+//!   scope), which `POST /api/ai/apply` applies through [`apply_tool`]. The proposal carries the
+//!   "Runs as" list of the script the tool names, the tool left out, with a warning for each run
+//!   that reaches any host, the tool's own first (`crate::ai_script_changes::runs_as`, TV-70).
 //!
 //! A script's changes are made at once, so a turn whose scope cannot write notes (a `read`
 //! caller's, `crate::ai_chat`'s `change_scope`) is offered none of these script tools.
@@ -520,11 +522,22 @@ pub(crate) fn propose_change(
         script_after.or(script_before.as_deref()),
     );
     let exists = before.is_some();
+    // What else runs the script, and a warning for each run that reaches any host, the tool's own
+    // first (TV-32 Q4, Q7).
+    let (runs_as, mut warnings) = crate::ai_script_changes::runs_as(w, &tool.script, Some(name));
+    if tool.allow_domains.iter().any(|d| d == "*") {
+        warnings.insert(
+            0,
+            crate::ai_script_changes::any_host_warning(&format!("The tool {name}")),
+        );
+    }
     let content = json!({
         "proposed": true,
         "name": name,
         "exists": exists,
         "problems": checked.problems,
+        "runs_as": runs_as,
+        "warnings": warnings,
         "message": format!(
             "The tool is valid WCL and is shown to the user as a proposal. It has not been written: it awaits the user, who applies or discards it.{}",
             if checked.problems.is_empty() {
@@ -548,6 +561,8 @@ pub(crate) fn propose_change(
         "script_after": script_after,
         "script_delete": false,
         "problems": checked.problems,
+        "runs_as": runs_as,
+        "warnings": warnings,
         "proposer": by.name,
     });
     Ok(out(content, vec![json!(name)], Some(proposal)))
@@ -569,6 +584,11 @@ pub(crate) fn propose_delete(
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let script = ScriptTool::parse(name, &before).ok().map(|t| t.script);
     let script_before = takes.as_deref().and_then(|s| w.read_script(s).ok());
+    let runs_as = script
+        .as_deref()
+        .filter(|_| takes.is_none())
+        .map(|s| crate::ai_script_changes::runs_as(w, s, Some(name)).0)
+        .unwrap_or_else(|| json!([]));
     let proposal = json!({
         "id": call_id,
         "kind": "tool",
@@ -583,6 +603,8 @@ pub(crate) fn propose_delete(
         "script_after": null,
         "script_delete": takes.is_some(),
         "problems": [],
+        "runs_as": runs_as,
+        "warnings": [],
         "proposer": by.name,
     });
     let script_line = match &takes {
@@ -604,37 +626,69 @@ pub(crate) fn propose_delete(
     ))
 }
 
-/// Apply a `tool_proposal`, when the tool file and the script are still the proposal's
-/// `before` and `script_before`. Answers `{op, tool_name, script_name}`.
+/// Apply a `tool_proposal`. Answers `{op, tool_name, script_name}`. The tool file, its script, the
+/// compile check and the script's "Runs as" list (the tool left out) are checked again under the
+/// writer's lock, with the write. Any of them changed since the card is 409 `stale`, and nothing is
+/// written: the tool's problems are compared with the card's, since a tool with problems is saved
+/// and not offered.
 pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApplyError::Invalid("the change has no name".into()))?;
-    let stale = || {
+    let stale = |what: String| {
         ApplyError::Stale(format!(
-            "the tool {name} or its script changed since the proposal, so nothing was written"
+            "{what} changed since the proposal, so nothing was written"
         ))
     };
-    if w.read_tool(name).ok().as_deref() != p["before"].as_str() {
-        return Err(stale());
-    }
+    let before = p["before"].as_str();
     let script = p["script"].as_str().filter(|s| schema::is_name(s));
+    let shown_runs = &p["runs_as"];
+    let runs_changed = |w: &Writer| {
+        script.is_some_and(|s| crate::ai_script_changes::runs_as(w, s, Some(name)).0 != *shown_runs)
+    };
+    let runs_stale = || stale(format!("what runs the script of the tool {name}"));
     if p["op"] == "delete" {
-        let deleted = w.delete_tool(name)?;
+        let mut deleted = None;
+        w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+            if w.read_tool(name).ok().as_deref() != before {
+                return Err(stale(format!("the tool {name} or its script")));
+            }
+            let (changes, script_deleted) = w.delete_tool_changes(name)?;
+            if runs_changed(w) {
+                return Err(runs_stale());
+            }
+            deleted = script_deleted;
+            Ok(changes)
+        })?;
         return Ok(json!({ "op": "tool_delete", "tool_name": name, "script_name": deleted }));
     }
     let after = p["after"]
         .as_str()
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
     let script_after = p["script_after"].as_str();
-    if script_after.is_some()
-        && let Some(s) = script
-        && w.read_script(s).ok().as_deref() != p["script_before"].as_str()
-    {
-        return Err(stale());
-    }
-    w.put_tool(name, after, script_after, name_issues)?;
+    let h = host(w);
+    w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+        if w.read_tool(name).ok().as_deref() != before {
+            return Err(stale(format!("the tool {name} or its script")));
+        }
+        if script_after.is_some()
+            && let Some(s) = script
+            && w.read_script(s).ok().as_deref() != p["script_before"].as_str()
+        {
+            return Err(stale(format!("the tool {name} or its script")));
+        }
+        // The compile check again, as the card showed it.
+        let checked = check_vault(w, h.as_deref(), name, after, script_after);
+        if json!(checked.problems) != p["problems"] {
+            return Err(stale(format!("the problems of the tool {name}")));
+        }
+        if runs_changed(w) {
+            return Err(runs_stale());
+        }
+        let (_, _, changes) = w.put_tool_changes(name, after, script_after, name_issues)?;
+        Ok(changes)
+    })?;
     let op = if p["before"].is_string() {
         "tool_change"
     } else {

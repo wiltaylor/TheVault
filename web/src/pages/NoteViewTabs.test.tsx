@@ -7,9 +7,10 @@ import type { Note, Tab, TypeDef } from "../api";
 
 const note = vi.fn();
 const updateNote = vi.fn();
+const dispatched = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, note, updateNote, backlinks: () => Promise.resolve([]) } };
+  return { ...real, api: { ...real.api, note, updateNote, dispatched, backlinks: () => Promise.resolve([]) } };
 });
 
 const types: TypeDef[] = [];
@@ -67,6 +68,7 @@ function mount(tabs: Tab[], fields: Record<string, unknown>) {
     note: { fields: { title: "Ship it", ...fields } as Note["note"]["fields"], blocks: [] },
   };
   note.mockResolvedValue(stored);
+  if (!dispatched.getMockImplementation()) dispatched.mockResolvedValue({ threads: [] });
   updateNote.mockReturnValue(new Promise(() => {}));
   const r = render(() => (
     <MemoryRouter>
@@ -81,6 +83,7 @@ function mount(tabs: Tab[], fields: Record<string, unknown>) {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  dispatched.mockReset();
 });
 
 describe("conditional tabs on the note page", () => {
@@ -161,5 +164,20 @@ describe("conditional slots on the note page", () => {
     expect(m.queryByRole("combobox", { name: "Stage" })).toBeNull();
     fireEvent.click(m.getByRole("checkbox", { name: "Done" }));
     expect(m.getByRole("combobox", { name: "Stage" })).toBeTruthy();
+  });
+});
+
+describe("sending the note to an agent (TV-78)", () => {
+  it("has a Send to agent button and a robot for each thread about the note", async () => {
+    dispatched.mockResolvedValue({
+      threads: [
+        { id: "01THREAD", agent: "clerk", title: "Ship it: tidy", origin: "dispatch", notes: [ID], state: "needs_you", pending: 1, question: null, last_activity: null, running: false, turn: null, started_ms: null },
+      ],
+    });
+    const m = mount(TABS, { stage: "idea", done: false });
+    await waitFor(() => expect(m.getByRole("button", { name: "Send to agent" })).toBeTruthy());
+    await waitFor(() => expect(m.getByTestId("agent-robot").getAttribute("data-state")).toBe("needs_you"));
+    expect(dispatched).toHaveBeenCalledWith({ notes: [ID] });
+    expect(m.getByTestId("agent-robot").getAttribute("href")).toBe("/agents/clerk?thread=01THREAD");
   });
 });

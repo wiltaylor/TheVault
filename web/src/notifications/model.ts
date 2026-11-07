@@ -33,7 +33,7 @@ export function relativeTime(ms: number, now: number): string {
   return d.getFullYear() === new Date(now).getFullYear() ? day : `${day} ${d.getFullYear()}`;
 }
 
-/** Who a notification is from, for its label: a task's or token's name, a handler's type, "API" or "TheVault". */
+/** Who a notification is from, for its label: a task's or token's name, a handler's type, an agent's name, "API" or "TheVault". */
 export function sourceLabel(source: string): string {
   const [kind, ...rest] = source.split(":");
   const name = rest.join(":");
@@ -46,6 +46,8 @@ export function sourceLabel(source: string): string {
       return name || "API";
     case "script":
       return name || "Script";
+    case "agent":
+      return name ? `${name} agent` : "Agent";
     case "api":
       return "API";
     case "system":

@@ -156,6 +156,8 @@ fn change_line(event: &str, p: &Value) -> String {
         "agent_memory_proposal" => format!("memory{}", title.unwrap_or_default()),
         "skill_proposal" => format!("skill{}", name.unwrap_or_default()),
         "tool_proposal" => format!("tool{}", name.unwrap_or_default()),
+        "script_proposal" => format!("script{}", name.unwrap_or_default()),
+        "task_proposal" => format!("task{}", name.unwrap_or_default()),
         _ if op.starts_with("tool_") => {
             format!("tool {}", p["tool_name"].as_str().unwrap_or_default())
         }
@@ -451,6 +453,7 @@ pub(crate) fn applied(
         "type": change["type"],
         "name": change["name"],
         "agent": change["agent"],
+        "proposer": change["proposer"],
         "ok": error.is_none(),
     });
     if let Some(e) = error {

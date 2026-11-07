@@ -54,7 +54,7 @@ pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, 
 pub use jobs::{HandlerJob, JobStatus};
 pub use notifications::{
     MAX_BODY, MAX_NOTIFICATIONS, MAX_TITLE, NewNotification, Notification, NotificationPage,
-    READ_RETENTION_MS, is_app_path,
+    READ_RETENTION_MS, SourceLimit, is_app_path,
 };
 pub use pins::{PinEntry, PinKind, PinNode};
 pub use runs::{RunId, RunOutcome, TaskRun};
@@ -118,6 +118,14 @@ pub enum Error {
     InvalidNotification(String),
     #[error("no notification {0}")]
     UnknownNotification(String),
+    /// The source already made `count` notifications in the window, and the limit is `max`.
+    #[error("{by} made {count} notifications in the last {window_ms} ms, the limit is {max}")]
+    NotificationLimit {
+        by: String,
+        window_ms: i64,
+        count: usize,
+        max: usize,
+    },
     #[error("state.db is corrupt: {0}")]
     Corrupt(String),
 }

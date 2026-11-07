@@ -74,17 +74,22 @@ mod agent_threads;
 mod agents;
 mod ai_activity;
 mod ai_agents;
+mod ai_ask;
 mod ai_assets;
 mod ai_browser;
 mod ai_chat;
+mod ai_dispatch;
+mod ai_notify;
 mod ai_outbox;
 mod ai_retry;
 mod ai_saved;
+mod ai_script_changes;
 mod ai_scripts;
 mod ai_settings;
 mod ai_skill_changes;
 mod ai_skills;
 mod ai_subagents;
+mod ai_task_changes;
 mod ai_taxonomies;
 mod ai_turns;
 mod ai_web;
@@ -329,6 +334,8 @@ fn build() -> Built {
         .delete("/api/skills/{name}/files/{*path}", skills::delete_file)
         .get("/api/agents/calls/{call}", agent_runs::call)
         .get("/api/agents/{name}/runs", agent_runs::list)
+        .post("/api/agents/{name}/dispatch", ai_dispatch::dispatch)
+        .get("/api/dispatched", ai_dispatch::list)
         .get("/api/agents/{name}/threads", agent_threads::list)
         .post("/api/agents/{name}/threads", agent_threads::start)
         .get("/api/agents/{name}/threads/{id}", agent_threads::read)

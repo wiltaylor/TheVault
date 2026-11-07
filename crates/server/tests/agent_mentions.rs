@@ -3,7 +3,9 @@
 //! run whose first message is the request, and the note is left as it was; a call id is answered
 //! once, whatever is saved after; plain `@name` text, inline code and an agent's own writes call
 //! no one; a type the trigger leaves out records the call with no run; `GET
-//! /api/agents/calls/{call}` answers what became of a call, or 404.
+//! /api/agents/calls/{call}` answers what became of a call, or 404. A call's run keeps a change
+//! whose "ask before" switch is on as a proposal waiting in its thread, which `POST
+//! /api/ai/apply` applies, and makes a change whose switch is off at once (TV-77 D2).
 
 use std::ffi::OsStr;
 use std::time::Duration;
@@ -473,4 +475,110 @@ fn a_call_runs_on_the_agents_own_model_whatever_the_chat_box_chose() {
         .map(|r| r.json()["model"].clone())
         .collect();
     assert_eq!(models, [json!("claude-haiku-5"), json!("claude-sonnet-5")]);
+}
+
+const KEEPER: &str = r#"label = "Keeper"
+
+permissions {
+  confirm {
+    notes = false
+  }
+}
+
+trigger asked {
+  mention = true
+}
+"#;
+
+#[test]
+fn a_call_keeps_a_change_its_switch_asks_for_as_a_proposal_and_makes_the_rest() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    let asked = call("@Keeper retitle this and archive it.", "keeper", CALL);
+    let id = api.note("memo", "Roof", &["Gutters are full.", &asked]);
+    let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
+    // The edit's switch is off, the archive's is on.
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_e",
+        "propose_edit",
+        json!({
+            "id": id, "base_version": version,
+            "note": note_json("Roof (done)", &["Gutters are full.", &asked]).to_string(),
+        }),
+    ));
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_a",
+        "propose_archive",
+        json!({ "id": id, "archived": true }),
+    ));
+    fake.push(AnthropicMessage::text(
+        "Retitled; the archive waits for you.",
+    ));
+    api.advance("PT1S");
+    assert_eq!(fake.message_requests().len(), 3);
+
+    // Offered every change tool, those behind a switch too, and told nothing is held back.
+    let first = fake.message_requests()[0].json();
+    let tools: Vec<&str> = first["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for t in [
+        "get_note",
+        "propose_edit",
+        "propose_create",
+        "propose_archive",
+        "propose_delete",
+        "download_asset",
+    ] {
+        assert!(tools.contains(&t), "{t} in {tools:?}");
+    }
+    let system = first["system"].to_string();
+    assert!(!system.contains("This run is unattended"), "{system}");
+
+    // The edit was made at once, by the agent; the archive waits in the thread.
+    let note = api.get(&format!("/api/notes/{id}"));
+    assert_eq!(note["note"]["fields"]["title"], "Roof (done)", "{note}");
+    let archived = |api: &Api| {
+        let found = api.get("/api/notes?type=memo&archived=include");
+        found["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == id.as_str())
+            .unwrap()["archived"]
+            .clone()
+    };
+    assert_eq!(archived(&api), false);
+    let threads = api.threads("keeper");
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    assert_eq!(threads[0]["origin"], "mention");
+    assert_eq!(threads[0]["pending"], 1, "{threads:?}");
+    let thread = threads[0]["id"].as_str().unwrap().to_owned();
+    let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    let waiting: Vec<Value> = read["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["status"] == "pending")
+        .cloned()
+        .collect();
+    assert_eq!(waiting.len(), 1, "{read}");
+    assert_eq!(waiting[0]["event"], "proposal");
+    let proposal = waiting[0]["data"].clone();
+    assert_eq!(proposal["op"], "archive", "{proposal}");
+    assert_eq!(proposal["thread"], thread.as_str());
+    let runs = api.get("/api/agents/keeper/runs");
+    assert_eq!(
+        runs["triggers"][0]["runs"][0]["outcome"], "succeeded",
+        "{runs}"
+    );
+
+    // Applied from the thread, the note is archived and nothing waits.
+    api.send("POST", "/api/ai/apply", proposal);
+    assert_eq!(archived(&api), true);
+    assert_eq!(api.threads("keeper")[0]["pending"], 0);
 }

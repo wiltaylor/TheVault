@@ -33,11 +33,20 @@
 //! with `run_script`, and every agent may call the vault's valid script tools and, once it has
 //! opened a skill, the skill's own (`crate::ai_scripts`, script-tools T1 to T4); the tool files
 //! are proposed with `propose_tool_change` and `propose_tool_delete` under the `tools` switch.
+//! `get_script` reads a saved script, and `propose_script_change` and `propose_script_delete`
+//! propose one that always waits for the user's Apply (`crate::ai_script_changes`, TV-70).
+//! `get_task` reads a scheduled task, and `propose_task_change` and `propose_task_delete` propose
+//! one, never with `fs` paths, that always waits for the user's Apply (`crate::ai_task_changes`,
+//! TV-71).
 //! An agent with `permissions.subagents.allow` hands parts of a task to sub agents with
 //! `start_subagent` on a thread (`crate::ai_subagents`, subagents U1 to U8): each runs as a turn
 //! of its own on a session thread, the calls of one round at once, and the call's result is its
 //! answer; its proposals and changes come out in this turn's stream with `subagent`, the call id,
-//! and `sub_thread`, its session.
+//! and `sub_thread`, its session. `notify_user` raises a notification under the bell at once,
+//! with no proposal and in unattended runs too, within per-turn, hourly and daily limits
+//! (`crate::ai_notify`, TV-32 S1). On the thread of a call from a note or of notes sent to the
+//! agent, `ask_user` puts a question to the user and ends the turn after its round
+//! (`crate::ai_ask`, TV-77 D3).
 //! Events:
 //!
 //! | Event | Data |
@@ -51,9 +60,12 @@
 //! | `agent_proposal` | an agent change for the user to apply (agents G20), `kind` always `agent` and `proposer` the agent that proposed it: `create` and `change` `{id, kind, op, name, label, exists, before, after, issues, proposer}`; `delete` `{id, kind, op, name, label, before, proposer}` |
 //! | `agent_memory_proposal` | a change to another agent's memories for the user to apply (agents G21), `kind` always `agent_memory`: `{id, kind, op, memory_agent, agent_label, memory_id, base_version, title, text, before, proposer}`, `op` `create` (`memory_id`, `base_version` and `before` null), `change` (`title` and `text` the new ones, `before` `{title, text}`) or `delete` |
 //! | `skill_proposal` | a skill change for the user to apply (skills S9), `kind` always `skill`: `{id, kind, op, name, path?, exists, before, after, issues, base, proposer, ...}`, `op` `create`, `change`, `file`, `file_delete` or `delete` (`crate::ai_skill_changes`) |
-//! | `tool_proposal` | a script tool change for the user to apply (script-tools T3), `kind` always `tool`: `{id, kind, op, name, exists, before, after, script, script_exists, script_before, script_after, script_delete, problems, proposer}`, `op` `create`, `change` or `delete` (`crate::ai_scripts`) |
+//! | `tool_proposal` | a script tool change for the user to apply (script-tools T3), `kind` always `tool`: `{id, kind, op, name, exists, before, after, script, script_exists, script_before, script_after, script_delete, problems, proposer}`, `op` `create`, `change` or `delete` (`crate::ai_scripts`); `runs_as` and `warnings` as in `script_proposal`, for the script the tool names, the tool itself left out |
+//! | `script_proposal` | a saved script change for the user to apply (TV-70), `kind` always `script`, never made at once: `{id, kind, op, name, exists, before, after, runs_as, warnings, proposer}`, `op` `create`, `change` or `delete`, `runs_as` each handler, task, device file and tool that runs the script `{kind, name, file, event, allow_domains, secrets, read_paths, write_paths, schedule, timezone, paused}`, and `warnings` a line for each that may reach any host (`crate::ai_script_changes`) |
+//! | `task_proposal` | a scheduled task change for the user to apply (TV-71), `kind` always `task`, never made at once: `{id, kind, op, name, exists, before, after, script, script_exists, script_before, script_after, task, next_runs, runs_as, warnings, proposer}`, `op` `create`, `change` or `delete`, `task` the task as the scheduler reads it `{label, description, schedule, schedule_text, timezone, script, function, allow_domains, secrets, read_paths, write_paths, retries, retry_delay_ms, timeout_ms, paused}`, `next_runs` its next three runs (none while paused or for a delete), `runs_as` what else runs its script as in `script_proposal`, and `warnings` a line for any host, for secrets with hosts, for a secret that does not exist, and, when the script changes, for each other run that may reach any host (`crate::ai_task_changes`) |
 //! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change`, `type_create` and `type_delete`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `subagent` | `{id, call, thread, turn, agent, delegated, task, n, status, rounds, tools, started_ms, ended_ms, tool}`: a sub agent's block as it stands (subagents U6), sent as it starts, at each of its model calls and tool calls, and as it ends; `id` is the `start_subagent` call, `thread` its session, `status` `running`, `done`, `failed` or `stopped`, `turn` its turn in the turn routes (null for a sub agent of an unattended run), and `tool` the tool it runs now |
+//! | `question` | `{id, text}`: the agent asked the user `text` with the `ask_user` call `id` (TV-77 D3); the turn ends after this round, and the thread reads `needs_you` until the user's next message |
 //! | `context` | `{used, window}` after each model call: the tokens the call took in and gave back, and the account's context window |
 //! | `compacting` | `{reason}`: a thread's compaction started, `auto` because its last call filled `compact_at` of the window, or `command` for `/compact` (`compact: true`) |
 //! | `compacted` | `{reason, upto, summary, before, after}`: the model now reads `summary` in place of the thread's first `upto` messages; `before` is the tokens it summarized and `after` the summary's. `/compact` then ends with `done` |
@@ -71,8 +83,11 @@
 //! dropped, which closes its connection. The turns form (`crate::ai_turns`, ai D23) runs its
 //! turns through the same [`start`], holding their events itself, so a turn on a thread runs on
 //! with no client reading until it ends or is stopped (agents G17), and `POST /api/ai/apply` applies a proposal with [`apply_change`]. An agent
-//! trigger's run (`crate::agent_runs`, agents G12) is a turn with no client, [`run_unattended`],
-//! offered no change tool whose confirmation switch is on.
+//! trigger's run (`crate::agent_runs`, agents G12) is a turn with no client, [`run_unattended`].
+//! What it does with a change tool whose confirmation switch is on is its [`Held`] mode, from
+//! its thread's origin (TV-77 D2): a trigger's run is offered none, nor any tool of
+//! [`ALWAYS_PROPOSE`]; a call from a note or a dispatch keeps them, and their proposals wait in
+//! the thread for the user's Apply.
 
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -219,9 +234,11 @@ pub async fn chat(
 
 /// Run one unattended turn of agent `agent` on its thread `thread`, whose user message is
 /// `prompt`, and wait for it to end (agents G12). The agent is the caller, with `write` scope,
-/// and `admin` when its permissions allow a type or taxonomy change; the turn is offered no
-/// change tool whose confirmation switch is on, so nothing waits for a user. A model call that
-/// fails with a transient error is made again after each of `waits` (`crate::ai_retry`).
+/// and `admin` when its permissions allow a type or taxonomy change. The thread's origin sets
+/// its [`Held`] mode: a trigger's run is offered no change tool whose confirmation switch is on,
+/// so nothing waits for a user, while a call from a note or a dispatch keeps those changes as
+/// proposals in the thread (TV-77 D2). A model call that fails with a transient error is made
+/// again after each of `waits` (`crate::ai_retry`).
 pub(crate) async fn run_unattended(
     w: Arc<Writer>,
     agent: &Agent,
@@ -291,6 +308,8 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     .iter()
     .chain(crate::ai_skill_changes::PROPOSE_TOOLS.iter())
     .chain(crate::ai_scripts::PROPOSE_TOOLS.iter())
+    .chain(crate::ai_script_changes::PROPOSE_TOOLS.iter())
+    .chain(crate::ai_task_changes::PROPOSE_TOOLS.iter())
     .any(|t| p.allows_tool(t));
     if admin { Scope::Admin } else { Scope::Write }
 }
@@ -329,21 +348,64 @@ fn change_switch(name: &str) -> Option<&'static str> {
     })
 }
 
+/// The change tools that always propose, whatever the agent's switches say: their change waits
+/// for the user's Apply in every run. A trigger's run ([`Held::Drop`]) leaves them out, as no one
+/// would see the proposal; a chat, a call from a note and a dispatch offer them (TV-77 F11). A
+/// new tool of that kind is added here, and [`Direct::covers`] never covers its events.
+const ALWAYS_PROPOSE: &[&str] = &[
+    crate::ai_script_changes::PROPOSE_TOOLS[0],
+    crate::ai_script_changes::PROPOSE_TOOLS[1],
+    crate::ai_task_changes::PROPOSE_TOOLS[0],
+    crate::ai_task_changes::PROPOSE_TOOLS[1],
+];
+
+/// What a turn does with a change tool whose change would only be proposed: one whose
+/// confirmation switch is on, or one of [`ALWAYS_PROPOSE`] (agents G12, TV-77 D2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// Offer it: the change waits in the thread as a proposal for the user's Apply. A chat, and
+    /// an unattended run a person asked for: a call from a note or a dispatch.
+    Propose,
+    /// Leave it out, and say which changes are held back ([`withheld_note`]): a trigger's run,
+    /// whose thread no one looks at.
+    Drop,
+}
+
+/// The origins of the unattended runs a person asked for, which keep proposals ([`Held::Propose`]).
+const PROPOSING_ORIGINS: [&str; 2] = [scheduler::MENTION_ORIGIN, scheduler::DISPATCH_ORIGIN];
+
+impl Held {
+    /// The mode of a turn, unattended or not, on a thread of origin `origin`. An unattended run
+    /// of any other origin, a trigger's (`trigger:<name>`) or one not known here, drops them.
+    fn of(unattended: bool, origin: &str) -> Held {
+        if !unattended || PROPOSING_ORIGINS.contains(&origin) {
+            Held::Propose
+        } else {
+            Held::Drop
+        }
+    }
+}
+
 /// The tools a turn offers: those the internet switches leave (ai D28), `web_search` only with a
 /// Brave key (ai D26), only those the agent may use (agents G4), the browser tools with
 /// `browser`, the agent's browser permission and a browser box, whatever its tools list says
 /// (browser B6), the skill tools only when the agent uses skills, with
-/// `install_skill_in_browser` beside the browser tools (skills S6), and, unattended, no change
-/// tool that would only propose (agents G12).
+/// `install_skill_in_browser` beside the browser tools (skills S6), `ask_user` only when `asks`
+/// (`crate::ai_ask`, TV-77 D3), and, when `drop` gives what the turn makes ([`Held::Drop`]), no
+/// change tool that would only propose (agents G12).
 fn turn_tools(
     web: ai::Web,
     brave: bool,
     allowed: Option<&[String]>,
-    unattended: Option<Direct>,
+    drop: Option<Direct>,
     browser: bool,
     skills: bool,
+    asks: bool,
 ) -> Vec<ToolSpec> {
     let mut tools = offered_tools(web);
+    if !asks {
+        tools.retain(|t| t.name != crate::ai_ask::TOOL);
+    }
     if web.search && brave {
         tools.push(crate::brave::tool_spec());
     }
@@ -359,8 +421,11 @@ fn turn_tools(
             tools.push(crate::ai_skills::install_spec());
         }
     }
-    if let Some(direct) = unattended {
-        tools.retain(|t| change_switch(&t.name).is_none_or(|s| direct.makes(s)));
+    if let Some(direct) = drop {
+        tools.retain(|t| {
+            !ALWAYS_PROPOSE.contains(&t.name.as_str())
+                && change_switch(&t.name).is_none_or(|s| direct.makes(s))
+        });
     }
     tools
 }
@@ -407,9 +472,10 @@ const SWITCHES: [(&str, &str, &str); 9] = [
     ),
 ];
 
-/// For an unattended run: the changes `agent` may make with someone present that this run is not
-/// offered, because their switch asks first and no one can apply a proposal (agents G12), as a
-/// section of the system text. `None` when nothing is held back.
+/// For a trigger's run ([`Held::Drop`]): the changes `agent` may make with someone present that
+/// this run is not offered, because their switch asks first or their tool always proposes, and
+/// no one sees a proposal (agents G12), as a section of the system text. `None` when nothing is
+/// held back.
 fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
     let names: std::collections::BTreeSet<String> = tool_specs()
         .into_iter()
@@ -417,7 +483,7 @@ fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
         .chain(crate::ai_browser::tool_specs())
         .map(|t| t.name)
         .collect();
-    let held: Vec<String> = SWITCHES
+    let lines: Vec<String> = SWITCHES
         .iter()
         .filter(|(key, ..)| {
             !direct.makes(key)
@@ -426,21 +492,28 @@ fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
                 })
         })
         .map(|(_, label, what)| format!("- {what}: your \"{label}\" switch is on"))
+        .chain(
+            ALWAYS_PROPOSE
+                .iter()
+                .filter(|n| agent.permissions.allows_tool(n))
+                .map(|n| format!("- {n}: its change always waits for the user's Apply")),
+        )
         .collect();
-    if held.is_empty() {
+    if lines.is_empty() {
         return None;
     }
     Some(format!(
         "\n## This run is unattended\n\nNo one is present to apply a proposal, so this run has \
          no tools for the changes that would only be proposed:\n\n{}\n\nWhen the task needs one \
          of them, do not say you have no tool for it. Say which change you would make, and that \
-         it needs the user: in a chat with you, or with that switch turned off on your \
-         Permissions tab.\n",
-        held.join("\n")
+         it needs the user: in a chat with you or a call from a note, where it waits for their \
+         Apply, or with that switch turned off on your Permissions tab.\n",
+        lines.join("\n")
     ))
 }
 
-/// The tools an unattended run of `agent` is offered, by name (agents G12).
+/// The tools a trigger's run of `agent` is offered, by name (agents G12): [`Held::Drop`]. A call
+/// from a note or a dispatch is offered the change tools that would only propose too.
 pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
     let direct = Direct::of(confirm_of(agent), unattended_scope(agent));
     let brave = crate::brave::Search::load(w.state()).is_some();
@@ -451,6 +524,7 @@ pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
         Some(direct),
         agent.permissions.browser && crate::ai_browser::BrowserBox::from_env().is_some(),
         crate::ai_skills::uses_skills(agent),
+        false,
     )
     .into_iter()
     .map(|t| t.name)
@@ -555,15 +629,24 @@ async fn start_with(
         (Some(_), Some(o)) => o.clone(),
         _ => "user".to_owned(),
     };
+    // A turn on a call's or a dispatch's thread may ask the user, the user's reply turn too
+    // (TV-77 D3): keyed on the thread's own origin, which a reply turn's `origin` is not.
+    let asks = prepared
+        .origin
+        .as_deref()
+        .is_some_and(crate::ai_ask::asks_on);
     let cfg = TurnCfg {
         owner: author,
         author: actor,
         scope,
         agent_name: named.then(|| prepared.agent.name.clone()),
         unattended: report.is_some(),
+        held: Held::of(report.is_some(), &origin),
+        asks,
         retry,
         sub: None,
         origin,
+        notified: None,
     };
     Ok(spawn_turn(
         w, prepared, cfg, account, model, note_id, stop, report,
@@ -579,14 +662,22 @@ struct TurnCfg {
     scope: Scope,
     /// The agent its proposals name, so their apply is authored by it.
     agent_name: Option<String>,
-    /// Nobody waits on it to apply anything (agents G12, subagents U8).
+    /// Nobody follows it as it runs: it reports its end and is not listed as a turn (agents
+    /// G12, subagents U8).
     unattended: bool,
+    /// What it does with a change that would only be proposed (TV-77 D2).
+    held: Held,
+    /// Whether it offers `ask_user` (TV-77 D3).
+    asks: bool,
     /// How an unattended turn retries a model call that failed with a transient error.
     retry: Option<CapacityRetry>,
     /// For a sub agent's turn (subagents U1).
     sub: Option<SubMark>,
     /// Where it came from, for the activity log.
     origin: String,
+    /// The notifications sent by the turn that started a sub agent, which it shares; a turn that
+    /// starts none has its own (TV-74).
+    notified: Option<Arc<crate::ai_notify::NotifyCount>>,
 }
 
 /// What a sub agent's turn is (subagents U1).
@@ -630,12 +721,15 @@ fn spawn_turn(
         log: prepared.log.map(std::sync::Mutex::new),
         report,
         unattended: cfg.unattended,
+        held: cfg.held,
+        asks: cfg.asks,
         retry: cfg.retry,
         sub: cfg.sub,
         activity,
         skills: prepared.skills,
         skills_updated: prepared.skills_updated,
         compact: prepared.compact,
+        notified: cfg.notified.unwrap_or_default(),
     };
     let agent = prepared.agent;
     let history = prepared.history;
@@ -808,6 +902,9 @@ fn prepare_for(
         _ => fresh(),
     };
     let mut skills_updated = None;
+    // A message from the user answers a question the agent asked (TV-77 D3); a `/compact` or a
+    // `/update-skills` turn alone answers nothing.
+    let answers = !messages.is_empty();
     let mut new = messages;
     if update_skills {
         let (message, data) = updated(&skills);
@@ -872,6 +969,10 @@ fn prepare_for(
         if let Some(title) = &title {
             t.title = title.clone();
         }
+        // The answer clears the question in the same write that adds it (TV-77 D3).
+        if answers {
+            t.question.clear();
+        }
     })?;
     let log = ThreadLog {
         id: thread.id,
@@ -884,6 +985,7 @@ fn prepare_for(
         sub_changes: 0,
         saved: (0, 0, 0),
         context: None,
+        question: None,
         _busy: busy,
     };
     Ok(Prepared {
@@ -899,7 +1001,7 @@ fn prepare_for(
 }
 
 /// The events of a proposal for the user, or of a change a tool made.
-const PROPOSAL_EVENTS: [&str; 8] = [
+const PROPOSAL_EVENTS: [&str; 10] = [
     "proposal",
     "type_proposal",
     "taxonomy_proposal",
@@ -907,6 +1009,8 @@ const PROPOSAL_EVENTS: [&str; 8] = [
     "agent_memory_proposal",
     "skill_proposal",
     "tool_proposal",
+    "script_proposal",
+    "task_proposal",
     "applied",
 ];
 
@@ -930,6 +1034,9 @@ struct ThreadLog {
     saved: (usize, usize, usize),
     /// How full the context was after the turn's last call.
     context: Option<agent_threads::ContextUse>,
+    /// The question the turn asked the user with `ask_user`, written with its last round
+    /// (TV-77 D3).
+    question: Option<String>,
     _busy: Busy,
 }
 
@@ -1159,6 +1266,8 @@ impl Direct {
                     && p["grants_subagents"] != true
             }
             "tool_proposal" => self.tools,
+            // The tools of [`ALWAYS_PROPOSE`]: always the user's Apply (TV-32 Q2 O1).
+            "script_proposal" | "task_proposal" => false,
             "agent_memory_proposal" => self.memories,
             "skill_proposal" => self.skills,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
@@ -1208,7 +1317,8 @@ fn setup(
     model: Option<String>,
     note_id: Option<String>,
     skills: Option<&str>,
-    unattended: bool,
+    held: Held,
+    asks: bool,
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let settings = Settings::load(state)?;
@@ -1280,10 +1390,17 @@ fn setup(
         system.push_str(&note);
     }
     let direct = Direct::of(confirm_of(agent), change_scope(scope, agent));
-    // An unattended run is offered no change tool that would only propose (agents G12): say
+    // A trigger's run is offered no change tool that would only propose (agents G12): say
     // which, so the model names the switch rather than saying it has no tool (TV-34).
-    if unattended && let Some(note) = withheld_note(agent, direct) {
+    if held == Held::Drop
+        && let Some(note) = withheld_note(agent, direct)
+    {
         system.push_str(&note);
+    }
+    // The rule for ask_user, which a replaced system prompt would not hold (TV-77 F8), when the
+    // agent may call it.
+    if asks && agent.permissions.allows_tool(crate::ai_ask::TOOL) {
+        system.push_str(crate::ai_ask::prompt_section());
     }
     // The skills come last, the thread's snapshot, so what comes before stays a stable prefix
     // (skills S6).
@@ -1368,9 +1485,15 @@ struct Turn {
     log: Option<std::sync::Mutex<ThreadLog>>,
     /// For an unattended turn (agents G12): how it ended and its trail lines.
     report: Option<Report>,
-    /// Nobody waits on the turn: it is offered no change tool that would only propose (agents
-    /// G12), as is a sub agent of such a turn (subagents U8).
+    /// Nobody follows the turn as it runs (agents G12), nor a sub agent of such a turn
+    /// (subagents U8).
     unattended: bool,
+    /// What the turn does with a change that would only be proposed, as does a sub agent of it,
+    /// whose proposals wait in this turn's thread (TV-77 D2).
+    held: Held,
+    /// Whether the turn offers `ask_user`: on a thread of a call from a note or of notes sent to
+    /// the agent, never in a sub agent's turn (TV-77 D3).
+    asks: bool,
     /// How an unattended turn, and a sub agent of one, retries a model call that failed with a
     /// transient error (`crate::ai_retry`).
     retry: Option<CapacityRetry>,
@@ -1384,6 +1507,8 @@ struct Turn {
     skills_updated: Option<Value>,
     /// The compaction to make before the first call.
     compact: Option<PendingCompact>,
+    /// The notifications this turn and its sub agent turns have sent (TV-74).
+    notified: Arc<crate::ai_notify::NotifyCount>,
 }
 
 impl Turn {
@@ -1498,7 +1623,7 @@ impl Turn {
     /// Write the thread's transcript as it stands: the messages it started from and `added`,
     /// with this turn's steps and proposals. Nothing new since the last write writes nothing.
     async fn persist(&self, added: &[Message]) {
-        let (id, label, messages, steps, proposals, context, subagents) = {
+        let (id, label, messages, steps, proposals, context, subagents, question) = {
             let Some(mut log) = self.log() else { return };
             let now = (
                 added.len(),
@@ -1519,6 +1644,7 @@ impl Turn {
                 log.proposals.clone(),
                 log.context,
                 log.subagents.clone(),
+                log.question.clone(),
             )
         };
         let w = self.writer.clone();
@@ -1527,6 +1653,9 @@ impl Turn {
                 t.transcript.messages = messages.clone();
                 if context.is_some() {
                     t.transcript.context = context;
+                }
+                if let Some(q) = &question {
+                    t.question = q.clone();
                 }
                 for (k, v) in &steps {
                     t.transcript.steps.insert(k.clone(), v.clone());
@@ -1570,7 +1699,8 @@ impl Turn {
     ) {
         let w = self.writer.clone();
         let scope = self.scope;
-        let unattended = self.unattended;
+        let held = self.held;
+        let asks = self.asks;
         let skills = self.skills.section().map(str::to_owned);
         let uses_skills = crate::ai_skills::uses_skills(&agent);
         let setup = match tokio::task::spawn_blocking(move || {
@@ -1582,7 +1712,8 @@ impl Turn {
                 model,
                 note_id,
                 skills.as_deref(),
-                unattended,
+                held,
+                asks,
             )
         })
         .await
@@ -1603,9 +1734,10 @@ impl Turn {
             setup.web,
             setup.web_search.is_some(),
             setup.tools.as_deref(),
-            self.unattended.then_some(setup.direct),
+            (self.held == Held::Drop).then_some(setup.direct),
             setup.browser.is_some(),
             uses_skills,
+            self.asks,
         );
         // A throwaway sub agent reads its parent's memories but writes none (subagents U1).
         if self.sub.is_some_and(|s| s.throwaway) {
@@ -1812,6 +1944,8 @@ impl Turn {
             // The sub agents this round starts, run together once the other calls are answered
             // (subagents U1): where each one's result goes, and its call.
             let mut subs: Vec<(usize, ToolCall)> = Vec::new();
+            // The question this round's ask_user calls put to the user (TV-77 D3).
+            let mut asked: Option<String> = None;
             for c in calls {
                 self.activity.tool_called(&c.id, &c.name, &c.input);
                 if !self
@@ -2017,14 +2151,86 @@ impl Turn {
                     });
                     continue;
                 }
+                // ask_user (TV-77 D3): the question is kept for the thread, and the turn ends once
+                // this round's other calls are answered.
+                if c.name == crate::ai_ask::TOOL && c.error.is_none() {
+                    let got = match crate::ai_ask::question(&c.input) {
+                        Ok(q) => match crate::ai_ask::join(asked.as_deref(), &q) {
+                            // Two questions in one round are asked together, as one text that
+                            // fits the thread's field and the bell (TV-88 M2).
+                            Some(joined) => {
+                                if !self
+                                    .out
+                                    .send("question", json!({ "id": c.id, "text": q }))
+                                    .await
+                                {
+                                    return;
+                                }
+                                asked = Some(joined);
+                                ToolOut {
+                                    content: crate::ai_ask::RESULT.to_owned(),
+                                    is_error: false,
+                                    summary: json!({ "notes": [] }),
+                                    proposal: None,
+                                }
+                            }
+                            None => ToolOut::error(format!(
+                                "Not asked: with the question this round already asks, it is longer than {} characters. Ask one shorter question.",
+                                crate::ai_ask::MAX_QUESTION
+                            )),
+                        },
+                        Err(out) => out,
+                    };
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::tool_result(c.id, got.content, got.is_error));
+                    continue;
+                }
+                // notify_user (TV-32 S1): sent at once, within the agent's limits, also unattended.
+                if c.name == crate::ai_notify::TOOL && c.error.is_none() {
+                    let w = self.writer.clone();
+                    let limits = setup.limits.clone();
+                    let agent = setup.agent.clone();
+                    let input = c.input.clone();
+                    let sent = self.notified.clone();
+                    let got = tokio::task::spawn_blocking(move || {
+                        crate::ai_notify::notify(&w, scope, &agent, &limits, &sent, &input)
+                    })
+                    .await
+                    .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::ToolResult {
+                        id: c.id,
+                        content: cut(&got.content, RESULT_LIMIT),
+                        is_error: got.is_error,
+                        parts: Vec::new(),
+                    });
+                    continue;
+                }
                 let w = self.writer.clone();
                 let author = self.author.clone();
                 let call = c.clone();
                 let direct = setup.direct;
+                let held = self.held;
                 let limits = setup.limits.clone();
                 let agent = setup.agent.clone();
                 let got = tokio::task::spawn_blocking(move || {
-                    run_tool(&w, &author, scope, direct, &limits, &agent, &call)
+                    run_tool(&w, &author, scope, direct, held, &limits, &agent, &call)
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
@@ -2072,6 +2278,15 @@ impl Turn {
                 }
             }
             added.push(Message::tool_results(results));
+            // A question for the user ends the turn after its round (TV-77 D3): the thread keeps
+            // it, written with the round, and reads needs_you.
+            if let Some(q) = asked {
+                if let Some(mut log) = self.log() {
+                    log.question = Some(q);
+                }
+                self.done(&Stop::EndTurn, added).await;
+                return;
+            }
             self.persist(added).await;
         }
     }
@@ -2690,12 +2905,16 @@ impl Turn {
             scope: self.scope,
             agent_name: Some(agent.clone()),
             unattended: self.unattended,
+            held: self.held,
+            // A sub agent answers its parent, never the user.
+            asks: false,
             retry: self.retry.as_ref().map(|r| r.for_sub(n)),
             sub: Some(SubMark {
                 throwaway: delegated.is_none(),
                 n,
             }),
             origin,
+            notified: Some(self.notified.clone()),
         };
         let (rx, running) = spawn_turn(
             self.writer.clone(),
@@ -3094,9 +3313,12 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     .chain(crate::ai_skills::tool_specs())
     .chain(crate::ai_skill_changes::tool_specs())
     .chain(crate::ai_scripts::tool_specs())
+    .chain(crate::ai_script_changes::tool_specs())
+    .chain(crate::ai_task_changes::tool_specs())
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
     .chain(crate::ai_outbox::tool_specs())
+    .chain([crate::ai_notify::tool_spec(), crate::ai_ask::tool_spec()])
     .chain(crate::ai_web::tool_specs())
     .collect()
 }
@@ -3166,12 +3388,16 @@ fn rows_out(rows: Vec<Value>, extra: Value) -> ToolOut {
 
 /// Run one tool call. A call the model got wrong is answered as an error, not run (ai D5).
 /// A proposal whose confirmation is off is applied here, in place of being sent (ai D22). The
-/// Outbox tools draft at once, as the agent, with a caller that has `write` (outbox X9).
+/// Outbox tools draft at once, as the agent, with a caller that has `write` (outbox X9). A
+/// proposal that is not made here is refused in a trigger's run ([`Held::Drop`]): no one would
+/// apply it, so it must not wait (TV-84).
+#[allow(clippy::too_many_arguments)]
 fn run_tool(
     w: &Writer,
     author: &Author,
     scope: Scope,
     direct: Direct,
+    held: Held,
     limits: &Limits,
     agent: &Agent,
     call: &ToolCall,
@@ -3196,9 +3422,19 @@ fn run_tool(
             };
             make(w, &author, event, &p, out.summary)
         }
+        Some(_) if held == Held::Drop => ToolOut::error(HELD_REFUSAL),
         _ => out,
     }
 }
+
+/// What a trigger's run is told when a change would wait for an apply (TV-84). Such a change is
+/// refused, not proposed: a trigger's thread has no one to apply it, and the proposal would stay
+/// pending where nobody sees it. A grant of run code, run saved scripts or sub agents is the
+/// case the agent tools reach.
+const HELD_REFUSAL: &str = "This run is unattended, so the change was not proposed: no one is \
+    here to apply a proposal, and a change that turns on run code, run saved scripts or sub \
+    agents needs an admin's Apply in a chat. Say which change you would make, and that it \
+    needs the user.";
 
 /// Whether note proposal `p` creates or changes an Outbox item.
 fn touches_outbox(w: &Writer, event: &str, p: &Value) -> bool {
@@ -3451,6 +3687,12 @@ pub fn apply_change(
     if event == "tool_proposal" {
         return crate::ai_scripts::apply_tool(w, p);
     }
+    if event == "script_proposal" {
+        return crate::ai_script_changes::apply_script(w, p);
+    }
+    if event == "task_proposal" {
+        return crate::ai_task_changes::apply_task(w, p);
+    }
     if event != "proposal" {
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
@@ -3603,6 +3845,16 @@ fn propose_or_read(
         "get_tool" => crate::ai_scripts::get(w, input),
         "propose_tool_change" => crate::ai_scripts::propose_change(w, agent, &call.id, input),
         "propose_tool_delete" => crate::ai_scripts::propose_delete(w, agent, &call.id, input),
+        "get_script" => crate::ai_script_changes::get(w, input),
+        "propose_script_change" => {
+            crate::ai_script_changes::propose_change(w, agent, &call.id, input)
+        }
+        "propose_script_delete" => {
+            crate::ai_script_changes::propose_delete(w, agent, &call.id, input)
+        }
+        "get_task" => crate::ai_task_changes::get(w, input),
+        "propose_task_change" => crate::ai_task_changes::propose_change(w, agent, &call.id, input),
+        "propose_task_delete" => crate::ai_task_changes::propose_delete(w, agent, &call.id, input),
         n if agent_memory::is_cross_tool(n) => {
             agent_memory::run_cross(w, agent, &call.id, n, input)
         }
@@ -4348,6 +4600,21 @@ mod tests {
     }
 
     #[test]
+    fn only_a_trigger_run_drops_the_changes_that_would_only_be_proposed() {
+        // A chat keeps them, whatever its thread's origin.
+        for origin in ["user", "mention", "trigger:nightly"] {
+            assert_eq!(Held::of(false, origin), Held::Propose, "{origin}");
+        }
+        // Unattended: a call from a note and a dispatch keep them (TV-77 D2), a trigger's run
+        // and any origin not known here drop them.
+        assert_eq!(Held::of(true, "mention"), Held::Propose);
+        assert_eq!(Held::of(true, "dispatch"), Held::Propose);
+        for origin in ["trigger:nightly", "trigger:mention", "subagent:01JB", ""] {
+            assert_eq!(Held::of(true, origin), Held::Drop, "{origin}");
+        }
+    }
+
+    #[test]
     fn an_unattended_run_names_the_switches_that_hold_its_changes_back() {
         let agent = |wcl: &str| Agent::parse("a", wcl).unwrap();
         let note = |a: &Agent| withheld_note(a, Direct::of(confirm_of(a), unattended_scope(a)));
@@ -4488,6 +4755,119 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_propose_tool_has_a_switch_or_always_proposes() {
+        // A propose tool with neither would be offered to a trigger's run, where its proposal
+        // waits with no one to see it (TV-77 F11, TV-81 review F1).
+        let names: Vec<String> = tool_specs()
+            .into_iter()
+            .chain(crate::ai_browser::tool_specs())
+            .map(|t| t.name)
+            .filter(|n| n.starts_with("propose_"))
+            .collect();
+        assert!(names.len() > 20, "{names:?}");
+        for n in &names {
+            assert!(
+                change_switch(n).is_some() || ALWAYS_PROPOSE.contains(&n.as_str()),
+                "{n} has no confirmation switch and is not in ALWAYS_PROPOSE"
+            );
+        }
+        // Each always-propose tool is offered, has no switch to turn it off, and its event is
+        // never made at once, whatever the switches say.
+        for n in ALWAYS_PROPOSE {
+            assert!(names.iter().any(|m| m == n), "{n} is not a tool");
+            assert_eq!(change_switch(n), None, "{n}");
+        }
+        let all_off = Agent::parse(
+            "a",
+            "label = \"A\"\n\npermissions {\n  confirm {\n    notes = false\n    archive = false\n    delete = false\n    types = false\n    downloads = false\n    taxonomies = false\n    agents = false\n    skills = false\n    tools = false\n  }\n}\n",
+        )
+        .unwrap();
+        let direct = Direct::of(confirm_of(&all_off), Scope::Admin);
+        assert!(direct.covers("tool_proposal", &json!({})));
+        assert!(!direct.covers("script_proposal", &json!({ "op": "change" })));
+        assert!(!direct.covers("script_proposal", &json!({ "op": "delete" })));
+        assert!(!direct.covers("task_proposal", &json!({ "op": "create" })));
+        assert!(!direct.covers("task_proposal", &json!({ "op": "delete" })));
+        // The script and the task tools are the whole list (TV-70, TV-71).
+        let mut expected: Vec<&str> = crate::ai_script_changes::PROPOSE_TOOLS
+            .iter()
+            .chain(crate::ai_task_changes::PROPOSE_TOOLS.iter())
+            .copied()
+            .collect();
+        expected.sort_unstable();
+        let mut listed = ALWAYS_PROPOSE.to_vec();
+        listed.sort_unstable();
+        assert_eq!(listed, expected);
+    }
+
+    #[test]
+    fn a_trigger_run_leaves_out_the_task_proposals_and_an_agent_with_them_runs_as_admin() {
+        let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
+        let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
+        let names = |drop: Option<Direct>| -> Vec<String> {
+            turn_tools(ai::Web::default(), false, None, drop, false, false, false)
+                .into_iter()
+                .map(|t| t.name)
+                .collect()
+        };
+        let chat = names(None);
+        let trigger = names(Some(direct));
+        for n in crate::ai_task_changes::PROPOSE_TOOLS {
+            assert!(chat.iter().any(|m| m == n), "{n} in a chat");
+            assert!(
+                !trigger.iter().any(|m| m == n),
+                "{n} not in a trigger's run"
+            );
+        }
+        assert!(trigger.iter().any(|m| m == "get_task"));
+        let text = withheld_note(&agent, direct).unwrap();
+        assert!(
+            text.contains("- propose_task_change: its change always waits for the user's Apply"),
+            "{text}"
+        );
+        let tasks_only = Agent::parse(
+            "t",
+            "label = \"T\"\n\npermissions {\n  tools = [\"get_task\", \"propose_task_delete\"]\n}\n",
+        )
+        .unwrap();
+        assert_eq!(unattended_scope(&tasks_only), Scope::Admin);
+    }
+
+    #[test]
+    fn a_trigger_run_leaves_out_the_script_proposals_and_names_them() {
+        let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
+        let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
+        let names = |drop: Option<Direct>| -> Vec<String> {
+            turn_tools(ai::Web::default(), false, None, drop, false, false, false)
+                .into_iter()
+                .map(|t| t.name)
+                .collect()
+        };
+        let chat = names(None);
+        let trigger = names(Some(direct));
+        for n in crate::ai_script_changes::PROPOSE_TOOLS {
+            assert!(chat.iter().any(|m| m == n), "{n} in a chat");
+            assert!(
+                !trigger.iter().any(|m| m == n),
+                "{n} not in a trigger's run"
+            );
+        }
+        assert!(trigger.iter().any(|m| m == "get_script"));
+        let text = withheld_note(&agent, direct).unwrap();
+        assert!(
+            text.contains("- propose_script_change: its change always waits for the user's Apply"),
+            "{text}"
+        );
+        // An agent that may only propose scripts runs unattended with admin scope (TV-32 R7).
+        let scripts_only = Agent::parse(
+            "s",
+            "label = \"S\"\n\npermissions {\n  tools = [\"get_script\", \"propose_script_change\"]\n}\n",
+        )
+        .unwrap();
+        assert_eq!(unattended_scope(&scripts_only), Scope::Admin);
     }
 
     #[test]

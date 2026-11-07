@@ -59,11 +59,11 @@ vi.mock("../api", async (orig) => {
 });
 vi.mock("../inApp", () => ({ appInfo }));
 
-const { AgentScreen, BROWSER_NOTE, OUTBOX_WARNING } = await import("./AgentScreen");
+const { AgentScreen, BROWSER_NOTE, OUTBOX_WARNING, SKILLS_WITHOUT_USE_SKILL_WARNING } = await import("./AgentScreen");
 const { ApiError } = await import("../api");
 const { refreshAgents } = await import("../agents");
 const { reloadDefinitions } = await import("../session");
-const { MENTION_WARNING } = await import("./AgentTriggers");
+const { MENTION_NO_EDIT, MENTION_WARNING } = await import("./AgentTriggers");
 
 const SHIPPED = "You are the assistant inside TheVault.";
 
@@ -675,6 +675,18 @@ describe("the Permissions tab", () => {
     expect("skills" in (sent().permissions as object)).toBe(false);
   });
 
+  it("warns when skills are listed and the tools leave out use_skill, and not once it is named", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, skills: ["brand"], tools: ["get_note"] } }));
+    await open();
+    let p = await tab("Permissions");
+    expect(p.getByText(SKILLS_WITHOUT_USE_SKILL_WARNING)).toBeTruthy();
+    cleanup();
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, skills: ["brand"], tools: ["get_note", "use_skill"] } }));
+    await open();
+    p = await tab("Permissions");
+    expect(p.queryByText(SKILLS_WITHOUT_USE_SKILL_WARNING)).toBeNull();
+  });
+
   it("shows Browser automation off with its warning line, and saves it on", async () => {
     await open();
     const p = await tab("Permissions");
@@ -857,13 +869,13 @@ describe("the Triggers tab", () => {
     ]);
   });
 
-  it("adds a mention trigger, warns that the agent cannot change the note, and saves it", async () => {
+  it("adds a mention trigger, notes that the agent's edits wait for Apply, and saves it", async () => {
     await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));
     fireEvent.click(t.getByRole("button", { name: "Add a mention" }));
     const card = within(t.getByRole("group", { name: "Trigger asked" }));
     expect(card.getByText("When @mentioned in a note")).toBeTruthy();
-    // Notes confirmation is on, so a run could not change the note it is called from.
+    // Notes confirmation is on, so a run's edit of the note it is called from waits for Apply.
     expect(card.getByRole("note")).toHaveTextContent(MENTION_WARNING);
     fireEvent.click(card.getByRole("checkbox", { name: "Task" }));
     fireEvent.click(t.getByRole("button", { name: "Save" }));
@@ -894,7 +906,7 @@ describe("the Triggers tab", () => {
     );
     await open("/agents/inbox_triage/settings/triggers");
     const again = within(await screen.findByRole("region", { name: "Triggers" }));
-    expect(within(again.getByRole("group", { name: "Trigger asked" })).getByRole("note")).toHaveTextContent(MENTION_WARNING);
+    expect(within(again.getByRole("group", { name: "Trigger asked" })).getByRole("note")).toHaveTextContent(MENTION_NO_EDIT);
   });
 
   it("removes a trigger", async () => {

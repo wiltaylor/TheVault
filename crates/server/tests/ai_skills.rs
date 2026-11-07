@@ -6,7 +6,8 @@
 //! outside the skill; `permissions.skills` limits the list and the tools; unattended runs are
 //! offered the read tools; `install_skill_in_browser` copies the files into the box only with
 //! the browser permission; `allowed-tools` grants nothing; an agent cannot offer a skill it is
-//! not offered itself; each call is an `ai.skill` activity entry.
+//! not offered itself; each call is an `ai.skill` activity entry; a skills list with a tools list
+//! that lacks `use_skill` is warned on save.
 
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
@@ -799,4 +800,40 @@ fn an_agent_cannot_offer_a_skill_it_is_not_offered() {
         "{}",
         result(&fake, 1, 2)
     );
+}
+
+#[test]
+fn saving_a_skills_list_without_use_skill_in_tools_warns_the_agent() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake, None);
+    // Save the agent file and return the warnings the answer carries.
+    let save = |wcl: &str| -> Value {
+        let res = api.put_raw("/api/agents/filer", "text/plain", wcl.into());
+        assert!(res.status().is_success(), "{}", res.text().unwrap());
+        res.json().unwrap()
+    };
+
+    // Skills listed, tools without use_skill: the agent is offered no skill, and the save says so.
+    let v = save("permissions {\n  skills = [\"pdf-forms\"]\n  tools = [\"get_note\"]\n}\n");
+    let warnings = v["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{v}");
+    assert_eq!(warnings[0]["severity"], "warning", "{v}");
+    assert_eq!(warnings[0]["at"], "permissions.tools", "{v}");
+    let message = warnings[0]["message"].as_str().unwrap();
+    assert!(message.contains("\"filer\""), "{message}");
+    assert!(message.contains("\"use_skill\""), "{message}");
+    // The read answers the same warning, from the saved file.
+    assert_eq!(api.get("/api/agents/filer")["warnings"], v["warnings"]);
+
+    // use_skill named: no warning.
+    let v = save(
+        "permissions {\n  skills = [\"pdf-forms\"]\n  tools = [\"get_note\", \"use_skill\"]\n}\n",
+    );
+    assert_eq!(v["warnings"], json!([]), "{v}");
+    // No tools list: no warning.
+    let v = save("permissions {\n  skills = [\"pdf-forms\"]\n}\n");
+    assert_eq!(v["warnings"], json!([]), "{v}");
+    // An empty skills list offers none on purpose: no warning.
+    let v = save("permissions {\n  skills = []\n  tools = [\"get_note\"]\n}\n");
+    assert_eq!(v["warnings"], json!([]), "{v}");
 }

@@ -43,6 +43,54 @@ fn missing_tool(name: &str) -> Error {
     Error::Missing(format!("there is no tool {name:?}"))
 }
 
+/// One way a script runs, and what that run may reach ([`Writer::script_runs_as`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptUse {
+    /// `handler` (a type's), `task`, `device` or `tool`.
+    pub kind: &'static str,
+    /// The type, task, device platform or tool.
+    pub name: String,
+    /// Its vault file.
+    pub file: String,
+    /// A handler's event (`before_update`, ...), or a device file's `handler <event>` or
+    /// `command <name>`.
+    pub event: Option<String>,
+    /// Hosts its `http` module may reach; `"*"` is any host.
+    pub allow_domains: Vec<String>,
+    /// Secrets it may read and write.
+    pub secrets: Vec<String>,
+    /// A task's `fs` directories.
+    pub read_paths: Vec<String>,
+    pub write_paths: Vec<String>,
+    /// A task's schedule as written, its time zone, and whether it is paused.
+    pub schedule: Option<String>,
+    pub timezone: Option<String>,
+    pub paused: bool,
+}
+
+impl ScriptUse {
+    fn new(kind: &'static str, name: &str, file: String) -> ScriptUse {
+        ScriptUse {
+            kind,
+            name: name.to_owned(),
+            file,
+            ..ScriptUse::default()
+        }
+    }
+}
+
+/// The strings of list field `field`.
+fn strings(doc: &Doc, field: &str) -> Vec<String> {
+    match doc.field(field) {
+        Some(Value::List(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The script a tool file names, read without checking the rest of it.
 fn script_named(text: &str, file: &str) -> Option<String> {
     let doc = Doc::parse(text, file).ok()?;
@@ -130,33 +178,52 @@ impl Writer {
         script: Option<&str>,
         check: impl FnOnce(&ScriptTool) -> Vec<Issue>,
     ) -> Result<(String, ScriptTool)> {
+        let (text, tool, changes) = self.put_tool_changes(name, source, script, check)?;
+        self.commit_checked(|_| Ok::<_, Error>(changes))?;
+        Ok((text, tool))
+    }
+
+    /// The changes [`Writer::put_tool`] writes, for [`Writer::commit_checked`]: the tool file, and
+    /// `script` when given. Also the canonical text and the tool.
+    pub fn put_tool_changes(
+        &self,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+        check: impl FnOnce(&ScriptTool) -> Vec<Issue>,
+    ) -> Result<(String, ScriptTool, Vec<Change>)> {
         let (text, tool) = self.check_tool(name, source, check)?;
-        let _w = self.write_lock();
-        let mut inner = self.lock();
         let mut changes = Vec::new();
         if let Some(s) = script {
             changes.push(Change::write(script_path(&tool.script), s.as_bytes()));
         }
         changes.push(Change::write(tool_path(name), text.as_bytes()));
-        let generation = self.commit(changes)?;
-        inner.index.advance(generation)?;
-        Ok((text, tool))
+        Ok((text, tool, changes))
     }
 
     /// Delete `tools/<name>.wcl`, and the script it names when nothing else names it: no type's
     /// handler, task, device file or other tool. Returns the script deleted with it, if any.
     pub fn delete_tool(&self, name: &str) -> Result<Option<String>> {
-        let _w = self.write_lock();
-        let mut inner = self.lock();
+        let mut deleted = None;
+        self.commit_checked(|w| -> Result<Vec<Change>> {
+            let (changes, script) = w.delete_tool_changes(name)?;
+            deleted = script;
+            Ok(changes)
+        })?;
+        Ok(deleted)
+    }
+
+    /// The changes [`Writer::delete_tool`] makes, for [`Writer::commit_checked`], and the script
+    /// they delete with the tool, if any.
+    pub fn delete_tool_changes(&self, name: &str) -> Result<(Vec<Change>, Option<String>)> {
         let text = self.read_tool(name)?;
-        let script = self.tool_script_to_delete(&inner.schema, name, &text)?;
+        let schema = self.schema();
+        let script = self.tool_script_to_delete(&schema, name, &text)?;
         let mut changes = vec![Change::delete(tool_path(name))];
         if let Some(s) = &script {
             changes.push(Change::delete(script_path(s)));
         }
-        let generation = self.commit(changes)?;
-        inner.index.advance(generation)?;
-        Ok(script)
+        Ok((changes, script))
     }
 
     /// The script deleting tool `name` (whose file is `text`) also deletes: the one it names, when
@@ -221,6 +288,82 @@ impl Writer {
             }
         }
         Ok(by)
+    }
+
+    /// Every way script `name` runs, with the grants each gives it (TV-70, the "Runs as" list of
+    /// the script and tool proposal cards): type handlers, tasks, device files and tools, in that
+    /// order, leaving out tool `except`. The files [`Writer::script_users`] names, read in full.
+    /// A task file that does not parse is left out; a tool file that does not parse is listed
+    /// with no grants.
+    pub fn script_runs_as(&self, name: &str, except: Option<&str>) -> Result<Vec<ScriptUse>> {
+        let schema = self.schema();
+        let mut uses: Vec<ScriptUse> = schema
+            .types()
+            .flat_map(|t| {
+                t.handlers
+                    .iter()
+                    .filter(|h| h.script == name)
+                    .map(|h| ScriptUse {
+                        allow_domains: h.allow_domains.clone(),
+                        secrets: h.secrets.clone(),
+                        event: Some(h.event.clone()),
+                        ..ScriptUse::new("handler", &t.name, crate::type_path(&t.name))
+                    })
+            })
+            .collect();
+        for (task, text) in self.task_files()? {
+            let file = crate::defs::task_path(&task);
+            let Ok(doc) = Doc::parse(&text, &file) else {
+                continue;
+            };
+            if doc.field("script").and_then(Value::as_str) != Some(name) {
+                continue;
+            }
+            let field = |f: &str| doc.field(f).and_then(Value::as_str).map(str::to_owned);
+            uses.push(ScriptUse {
+                allow_domains: strings(&doc, "allow_domains"),
+                secrets: strings(&doc, "secrets"),
+                read_paths: strings(&doc, "read_paths"),
+                write_paths: strings(&doc, "write_paths"),
+                schedule: field("schedule"),
+                timezone: field("timezone"),
+                paused: matches!(doc.field("paused"), Some(Value::Bool(true))),
+                ..ScriptUse::new("task", &task, file)
+            });
+        }
+        for (platform, text) in self.device_files()? {
+            let Ok(file) = schema::DeviceFile::parse(&platform, &text) else {
+                continue;
+            };
+            let path = crate::device_file_path(&platform);
+            let hooks = file
+                .handlers
+                .iter()
+                .map(|h| (h, "handler"))
+                .chain(file.commands.iter().map(|c| (c, "command")));
+            for (h, what) in hooks.filter(|(h, _)| h.script == name) {
+                uses.push(ScriptUse {
+                    event: Some(format!("{what} {}", h.name)),
+                    ..ScriptUse::new("device", &platform, path.clone())
+                });
+            }
+        }
+        for (tool, text) in self.tool_files()? {
+            let file = tool_path(&tool);
+            if Some(tool.as_str()) == except || script_named(&text, &file).as_deref() != Some(name)
+            {
+                continue;
+            }
+            let (allow_domains, secrets) = ScriptTool::parse(&tool, &text)
+                .map(|t| (t.allow_domains, t.secrets))
+                .unwrap_or_default();
+            uses.push(ScriptUse {
+                allow_domains,
+                secrets,
+                ..ScriptUse::new("tool", &tool, file)
+            });
+        }
+        Ok(uses)
     }
 
     /// Whether some tool file names script `name`.

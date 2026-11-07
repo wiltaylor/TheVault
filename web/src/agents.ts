@@ -317,6 +317,12 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["get_tool", "Read a script tool"],
       ["propose_tool_change", "Create and change script tools"],
       ["propose_tool_delete", "Delete script tools"],
+      ["get_script", "Read a saved script"],
+      ["propose_script_change", "Create and change saved scripts (always asks)"],
+      ["propose_script_delete", "Delete saved scripts (always asks)"],
+      ["get_task", "Read a scheduled task"],
+      ["propose_task_change", "Create and change scheduled tasks (always asks)"],
+      ["propose_task_delete", "Delete scheduled tasks (always asks)"],
     ],
   },
   {
@@ -325,6 +331,13 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["draft_email", "Draft emails"],
       ["draft_sms", "Draft SMS messages"],
       ["draft_event", "Draft calendar invites"],
+    ],
+  },
+  {
+    group: "Notifications",
+    tools: [
+      ["notify_user", "Notify the user (bell and phones)"],
+      ["ask_user", "Ask the user a question (calls and sent notes)"],
     ],
   },
   {

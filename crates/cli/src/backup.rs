@@ -57,7 +57,10 @@ pub fn backup(vault: &Path, out: &Path, include_key: bool) -> Result<Value, Fail
         .map_err(state_err)?;
     // A vault that never ran git sync and was never backed up has no id yet. The archive gets a
     // new one in its copy of state.db, as `State::vault_id` would have made, and the live
-    // state.db is left as it is (TV-41).
+    // state.db is left as it is (TV-41). Each such backup gets a different id, and the live
+    // vault gets its own id at its first server start or git sync. Writing the id to the live
+    // state.db here would change a file that the pre-upgrade backup must leave as it is, so the
+    // behaviour is documented in docs/install.md instead (TV-52).
     let made_id = stored.is_none();
     let vault_id = stored.unwrap_or_else(|| state::random_hex(16));
     if out.exists() {

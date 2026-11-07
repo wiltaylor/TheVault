@@ -1,10 +1,12 @@
 // A script tool proposal's card (script-tools T3): the tool file's WCL lines removed and added,
 // and the script's, as the type proposal card shows them, with Apply and Discard. A delete shows
-// the tool file that goes and, when nothing else names it, the script. Apply writes nothing when
-// the tool or its script changed since the proposal.
+// the tool file that goes and, when nothing else names it, the script. Below it, the "Runs as"
+// list of what else runs the script, with a warning for a run that may reach any host (TV-70).
+// Apply writes nothing when the tool or its script changed since the proposal.
 
 import { For, Match, Show, Switch } from "solid-js";
 import type { DiffLine } from "./diff";
+import { RunsAs } from "./RunsAs";
 import { type Part, type ToolProposal, useChatSession } from "./store";
 import { wclDiff } from "./TypeProposalCard";
 
@@ -18,7 +20,7 @@ function head(p: ToolProposal): string {
 }
 
 /** Lines removed and added, with the unchanged ones folded. */
-function DiffLines(props: { before: string | null; after: string | null; label: string }) {
+export function DiffLines(props: { before: string | null; after: string | null; label: string }) {
   return (
     <pre class="ai-diff-lines" aria-label={props.label}>
       <For each={wclDiff(props.before, props.after ?? "")}>
@@ -65,6 +67,11 @@ export function ToolProposalCard(props: { part: Extract<Part, { kind: "tool_prop
           {p().script_delete ? `Its script ${scriptPath()} is deleted too: nothing else names it.` : `Its script ${scriptPath()} stays.`}
         </p>
       </Show>
+      <RunsAs
+        uses={p().runs_as ?? []}
+        warnings={p().warnings ?? []}
+        heading={del() ? `${scriptPath()} stays: these run it too` : `${scriptPath()} also runs as these, and a script change applies to each`}
+      />
       <Show when={p().problems.length > 0}>
         <ul class="ai-type-issues" aria-label="Problems">
           <For each={p().problems}>{(m) => <li class="muted">{m}</li>}</For>

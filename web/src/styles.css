@@ -5684,6 +5684,29 @@ h1.note-title {
   display: none;
 }
 
+/* A note's save status keeps its room beside the actions (TV-90): "Unsaved changes" or "Saved"
+   showing must not widen the actions and narrow the title, which then wraps and moves the page
+   down by a line. */
+.note-actions .save-status,
+.note-actions .save-status:empty {
+  display: block;
+  min-width: 8rem;
+  text-align: right;
+}
+
+/* In a narrow pane the actions sit under the title on their own line: no room to keep. */
+@container pane (max-width: 600px) {
+  .note-actions .save-status,
+  .note-actions .save-status:empty {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .note-actions .save-status:empty {
+    display: none;
+  }
+}
+
 .property .field-value > input:not([type="checkbox"]),
 .property .field-value > select {
   width: auto;
@@ -11124,4 +11147,159 @@ hr.divider-block {
 
 .original-dialog .original-remote + .capture-x {
   margin-left: 0.5rem;
+}
+
+/* Send to agent (TV-78): the dialog's fields, one above the other. */
+.send-agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.send-agent-field select,
+.send-agent-field textarea {
+  font-weight: 400;
+}
+
+.send-agent-dialog .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Send notes from a list (TV-79): the selection bar of the Inbox and Search, and each row's
+   checkbox and robots. */
+.send-notes-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+}
+
+.send-notes-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.send-notes-count {
+  font-weight: 600;
+}
+
+.send-notes-send {
+  margin-left: auto;
+}
+
+.select-note {
+  flex: none;
+  margin: 0;
+}
+
+.inbox-title-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.search-row-line {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 100%;
+  padding-left: 1rem;
+}
+
+.search-row-line .search-row {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0.5rem;
+}
+
+.search-row-line .agent-robots {
+  padding-right: 0.5rem;
+}
+
+/* The robots of the threads about a note (TV-78): moving while active, a "!" while the agent
+   needs the user, still with a dot when done and not opened yet. */
+.agent-robots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.agent-robot {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.4rem;
+  color: var(--muted);
+}
+
+.agent-robot:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.agent-robot[data-state="active"] {
+  color: var(--accent);
+}
+
+.agent-robot[data-state="active"] .robot-glyph {
+  animation: agent-robot-work 0.9s ease-in-out infinite alternate;
+}
+
+.agent-robot[data-state="needs_you"] {
+  color: var(--ink);
+}
+
+.agent-robot-badge,
+.agent-robot-dot {
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-radius: 50%;
+}
+
+.agent-robot-badge {
+  min-width: 0.8rem;
+  height: 0.8rem;
+  background: var(--danger, #c53030);
+  color: #ffffff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 0.8rem;
+  text-align: center;
+}
+
+.agent-robot-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  background: var(--accent, #6b46c1);
+}
+
+@keyframes agent-robot-work {
+  from {
+    transform: translateY(1px) rotate(-6deg);
+  }
+  to {
+    transform: translateY(-1px) rotate(6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-robot[data-state="active"] .robot-glyph {
+    animation: none;
+  }
+
+  .agent-robot[data-state="active"] {
+    outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    outline-offset: -2px;
+  }
 }

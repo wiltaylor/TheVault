@@ -640,6 +640,27 @@ impl Agent {
         }
     }
 
+    /// What the file says that will not do what it says, though the file is valid. A skills list
+    /// with a tools list that does not name `use_skill` offers the agent no skill at all (skills
+    /// S6): `use_skill` is the only way to open one.
+    pub fn warnings(&self) -> Vec<Issue> {
+        let listed = self
+            .permissions
+            .skills
+            .as_ref()
+            .is_some_and(|s| !s.is_empty());
+        if listed && !self.permissions.allows_tool("use_skill") {
+            return vec![Issue::warning(
+                "permissions.tools",
+                format!(
+                    "agent {:?} lists skills, but its tools do not name \"use_skill\", so it is offered no skill: add \"use_skill\" to tools, or leave out tools",
+                    self.name
+                ),
+            )];
+        }
+        Vec::new()
+    }
+
     /// The rules between the agent and the vault's types: each type `permissions.types` or a
     /// trigger's `type` names must exist.
     pub fn check(&self, schema: &Schema) -> Vec<Issue> {

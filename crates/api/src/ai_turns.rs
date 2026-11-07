@@ -22,7 +22,8 @@
 //! note, which holds the whole turn. Turns are held in memory, by id, for the caller that started
 //! them: another caller's turn is a 404. At most [`MAX_TURNS`] run per caller at once, and per
 //! agent, counting its trigger runs; one more is a 429 `too_many_turns`. A turn on a thread
-//! starting and ending is published on `/api/events` as `ai_turn {agent, thread, turn, running}`.
+//! starting and ending is published on `/api/events` as `ai_turn {agent, thread, turn, running,
+//! origin, state, notes}`, `state` the thread's `active`, `needs_you` or `done` (TV-77 D4).
 //! A sub agent's turn (subagents U6) is read and stopped through the same routes, by the caller
 //! of the turn that started it: its id is its session's running `turn`, and stopping it stops
 //! only it, its parent answered that the user stopped it.
@@ -34,10 +35,15 @@
 //! `agent_proposal`'s (its `kind` is `agent`, agents G20, checked again against its `proposer`), or an
 //! `agent_memory_proposal`'s (its `kind` is `agent_memory`, agents G21, checked again against
 //! its `proposer`, needing only `write` since memories are notes), or a `skill_proposal`'s (its
-//! `kind` is `skill`, skills S9, answering 409 `stale` when the skill changed since), through
+//! `kind` is `skill`, skills S9, answering 409 `stale` when the skill changed since), or a
+//! `tool_proposal`'s or `script_proposal`'s (its `kind` is `tool` or `script`, TV-70, answering
+//! 409 `stale` when the tool or script changed since), or a `task_proposal`'s (its `kind` is
+//! `task`, TV-71, written through the scheduler, answering 409 `stale` when the task or its script
+//! changed since), through
 //! [`ai_chat::apply_change`], the code the confirmation switches use (ai D22), as the caller,
 //! version-checked against its `base_version`. It needs `write`, and `admin` for a type,
-//! taxonomy, agent or skill change: without it, 403 `needs_admin`. It answers `{op, note_id, version}`
+//! taxonomy, agent, skill, tool, script or task change: without it, 403 `needs_admin`, unless the same
+//! proposal waits in its thread, which is then the change applied. It answers `{op, note_id, version}`
 //! for a note, `{op, type_name}` for a type, `{op, taxonomy_name, notes}` for a taxonomy and
 //! `{op, agent_name}` for an agent and `{op, memory_id, memory_agent, version}` for a memory; an
 //! agent or memory change the proposer may not make is a 403 `not_permitted`.
@@ -85,6 +91,12 @@ pub const NEEDS_ADMIN_SKILL_MESSAGE: &str = "Apply skill changes in the web app.
 
 /// Why a caller without `admin` cannot apply a script tool proposal (script-tools T3).
 pub const NEEDS_ADMIN_TOOL_MESSAGE: &str = "Apply script tool changes in the web app.";
+/// Why a caller without `admin` cannot apply a saved script proposal that does not wait in its
+/// thread (TV-70).
+pub const NEEDS_ADMIN_SCRIPT_MESSAGE: &str = "Apply script changes in the web app.";
+/// Why a caller without `admin` cannot apply a scheduled task proposal that does not wait in its
+/// thread (TV-71).
+pub const NEEDS_ADMIN_TASK_MESSAGE: &str = "Apply scheduled task changes in the web app.";
 
 /// Why a caller without `admin` cannot apply an agent change that turns on Run wscript code
 /// (script-tools T1).
@@ -305,7 +317,8 @@ fn too_many(whose: &str) -> ApiError {
     )
 }
 
-/// Tell open clients a turn on `thread` started or ended (agents G17).
+/// Tell open clients a turn on `thread` started or ended (agents G17), with the thread's origin,
+/// notes and state as they stand (TV-77 D4).
 pub(crate) fn publish(
     w: &writer::Writer,
     agent: &str,
@@ -313,11 +326,27 @@ pub(crate) fn publish(
     turn: Option<&str>,
     running: bool,
 ) {
+    let read = agent_threads::Thread::read(w, thread).ok();
+    let (origin, notes, state) = match &read {
+        Some(t) => (
+            t.origin.clone(),
+            t.notes.clone(),
+            agent_threads::state_of(running, &t.question, t.transcript.pending()),
+        ),
+        None => (
+            String::new(),
+            Vec::new(),
+            agent_threads::state_of(running, "", 0),
+        ),
+    };
     w.state().events().publish(LiveEvent::AiTurn {
         agent: agent.to_owned(),
         thread: thread.to_owned(),
         turn: turn.map(str::to_owned),
         running,
+        origin,
+        state: state.to_owned(),
+        notes,
     });
 }
 
@@ -529,6 +558,10 @@ pub async fn apply(
         "skill_proposal"
     } else if change["kind"] == "tool" {
         "tool_proposal"
+    } else if change["kind"] == "script" {
+        "script_proposal"
+    } else if change["kind"] == "task" {
+        "task_proposal"
     } else if change["kind"] == "agent_memory" {
         "agent_memory_proposal"
     } else if change["kind"] == "type"
@@ -545,6 +578,8 @@ pub async fn apply(
             "agent_proposal" => Some(NEEDS_ADMIN_AGENT_MESSAGE),
             "skill_proposal" => Some(NEEDS_ADMIN_SKILL_MESSAGE),
             "tool_proposal" => Some(NEEDS_ADMIN_TOOL_MESSAGE),
+            "script_proposal" => Some(NEEDS_ADMIN_SCRIPT_MESSAGE),
+            "task_proposal" => Some(NEEDS_ADMIN_TASK_MESSAGE),
             _ => None,
         };
         if let Some(message) = message {

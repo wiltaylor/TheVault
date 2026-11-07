@@ -319,8 +319,24 @@ fn turns_starting_and_ending_are_announced_on_the_live_stream() {
     assert_eq!(
         got,
         [
-            json!({ "agent": "assistant", "thread": thread, "turn": turn, "running": true }),
-            json!({ "agent": "assistant", "thread": thread, "turn": turn, "running": false }),
+            json!({
+                "agent": "assistant",
+                "thread": thread,
+                "turn": turn,
+                "running": true,
+                "origin": "user",
+                "state": "active",
+                "notes": [],
+            }),
+            json!({
+                "agent": "assistant",
+                "thread": thread,
+                "turn": turn,
+                "running": false,
+                "origin": "user",
+                "state": "done",
+                "notes": [],
+            }),
         ]
     );
 }

@@ -46,8 +46,9 @@ use state::{Clock, RunOutcome, TaskRun};
 use writer::Writer;
 
 pub use agents::{
-    AgentJob, AgentRunner, DEBOUNCE_MS, MAX_PER_HOUR, MAX_QUEUED, MAX_RUNNING, MENTION_ORIGIN,
-    TriggerBinding, TriggerHooks, TurnReport,
+    AgentJob, AgentRunner, DEBOUNCE_MS, DISPATCH_ORIGIN, DISPATCH_TRIGGER, DispatchRefused,
+    MAX_PER_HOUR, MAX_QUEUED, MAX_RUNNING, MENTION_ORIGIN, TriggerBinding, TriggerHooks,
+    TurnReport,
 };
 pub use describe::describe;
 pub use task::{MAX_RETRIES, TaskDef, parse_duration, preview, with_paused};
@@ -266,6 +267,45 @@ impl Scheduler {
         })?;
         self.reload()?;
         Ok(text)
+    }
+
+    /// Check `source` as task `name` as [`Scheduler::task_changes`] would, without
+    /// writing anything: its canonical text and the task. `script`, when given, is the new source
+    /// of the script the task names, so that script need not exist yet (TV-71). The script's
+    /// source is not compiled here.
+    pub fn check_task(
+        &self,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+    ) -> Result<(String, TaskDef)> {
+        let vault = self.writer.vault().root().to_path_buf();
+        let text = self.writer.check_task(name, source, script, |text| {
+            let def = TaskDef::parse(name, text)?;
+            check_paths(&def, &vault)
+        })?;
+        let def = TaskDef::parse(name, &text).map_err(writer::Error::Invalid)?;
+        Ok((text, def))
+    }
+
+    /// The task `source` as task `name` and the changes that write it, with `script`, when given,
+    /// the source of the script it names, checked as [`Scheduler::check_task`] checks it, for
+    /// [`Writer::commit_checked`] on this scheduler's writer `w` (TV-71). Call
+    /// [`Scheduler::reload`] once they are committed.
+    pub fn task_changes(
+        &self,
+        w: &Writer,
+        name: &str,
+        source: &str,
+        script: Option<&str>,
+    ) -> Result<(TaskDef, Vec<store::Change>)> {
+        let vault = w.vault().root().to_path_buf();
+        let (text, changes) = w.task_changes(name, source, script, |text| {
+            let def = TaskDef::parse(name, text)?;
+            check_paths(&def, &vault)
+        })?;
+        let def = TaskDef::parse(name, &text).map_err(writer::Error::Invalid)?;
+        Ok((def, changes))
     }
 
     /// Set task `name`'s `paused` field in its file and reload. Returns `false`, changing nothing,
