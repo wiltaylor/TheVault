@@ -15,7 +15,7 @@
 //! together. A refused call tells the model which limit it reached and writes nothing. The tool
 //! needs a caller with `write`, as `POST /api/notifications` does.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use ai::ToolSpec;
 use schema::Agent;
@@ -55,21 +55,26 @@ const LIMITS: [SourceLimit; 2] = [
 /// The notifications one turn has sent. A turn and each sub agent turn it starts share one, so
 /// the turn and its sub agents together send at most [`MAX_PER_TURN`] (TV-74).
 #[derive(Debug, Default)]
-pub(crate) struct NotifyCount(AtomicUsize);
+pub(crate) struct NotifyCount(Mutex<usize>);
 
 impl NotifyCount {
+    fn count(&self) -> MutexGuard<'_, usize> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Take one of the turn's places, or `false` when it has none left.
     fn take(&self) -> bool {
-        self.0
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < MAX_PER_TURN).then_some(n + 1)
-            })
-            .is_ok()
+        let mut sent = self.count();
+        if *sent >= MAX_PER_TURN {
+            return false;
+        }
+        *sent += 1;
+        true
     }
 
     /// Give back a place taken for a call that stored nothing.
     fn give_back(&self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        *self.count() -= 1;
     }
 }
 
