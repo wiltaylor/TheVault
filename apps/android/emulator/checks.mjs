@@ -44,6 +44,7 @@ import { join } from "node:path";
 import * as L from "./lib.mjs";
 import { noteIdOf, retryGesture } from "./gesture.mjs";
 import { logcatSinceArgs } from "./logcat.mjs";
+import { qrPng } from "./qr.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -892,7 +893,7 @@ async function main() {
 
   // 10. A file the phone never showed.
   await check(10, async () => {
-    const png = execFileSync("qrencode", ["-o", "-", "-s", "8", "TheVault check 10"]);
+    const png = await qrPng("TheVault check 10");
     const res = await fetch(`${srv.base}/api/assets?filename=check10.png`, { method: "POST", headers: { cookie: srv.cookie, "content-type": "image/png" }, body: png });
     if (!res.ok) throw new Error(`upload: ${res.status} ${await res.text()}`);
     const asset = (await res.json()).id;
