@@ -4,7 +4,7 @@ Read `CLAUDE.md` for everything else: the source of truth, the dev container, th
 
 ## Validation of a card
 
-Each card is validated on a clean checkout of its pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then the commit.
+Each card is validated on a clean checkout of its pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then check out the branch at the pushed commit. Do not run `git -C /src/<agent> checkout <commit>` after the repo checkout: the target does not allow it.
 
 GitHub CI runs only on pushes to `main` (the release train: desktop build, Android APK and smoke, images). It runs no tests on branches. So the recipes below cover more than CI.
 
@@ -31,3 +31,10 @@ These do not run per card. They run on `release/<X.Y.Z>`:
 
 - `just android-emulator-checks` and `just android-release-smoke` on thevault-android (about 1 hour, a shared box).
 - The full end-to-end suite, `pnpm -C web e2e`.
+
+thevault-android has no `just` and no `pnpm`, and takes no `terrarium repo checkout` (MEM-51). The release Android checks run in two places:
+
+- On thevault-dev, build the x86_64 debug APK, `vault` and `vault-server`, `web/dist`, `fake-messages.apk`, and for check 49 the update APKs (`THEVAULT_UPDATE_APK`, `THEVAULT_UPDATE_APK2`). Copy them to thevault-android with `terrarium cp`.
+- On thevault-android, run `node apps/android/emulator/checks.mjs` directly, with `THEVAULT_CHECKS` for a subset. Use your own AVD (`THEVAULT_AVD`, `ANDROID_AVD_HOME`), your own `EMULATOR_PORT`, and `ANDROID_SERIAL=emulator-<port>`.
+
+`emulator-5554` and the AVD `thevault` belong to herdr: never touch them. Record `adb devices` and its qemu pid before and after the run, and kill only your own serial.
