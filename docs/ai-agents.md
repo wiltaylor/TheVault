@@ -356,7 +356,7 @@ Called from note 01JB8Z0Q6W4ZK3V9T1M5XH7N2C (type memo, title "Roof").
 
 The `Context:` line is left out when the call is all its paragraph holds. The server never changes the note for a call. Saving the note again, editing the call's text or moving it never calls again, and neither does the same call copied into another note; delete the call and commit a new one to ask again. A call to an agent that may not be called from the note, is disabled or missing, or has reached its hourly limit is recorded as not run and is never tried again.
 
-The run is unattended, as any trigger run is (below). To let it change the note it was called from, turn off **Ask before creating and editing notes** on the agent's Permissions tab; the Triggers tab warns when the agent could not. Otherwise it answers in the thread, which the chip opens.
+The run is unattended, but you asked for it, so a change behind an "ask before" switch is not left out as it is in a trigger run (below): it waits in the run's thread as a proposal, which you apply or discard there, as in a chat. A change whose switch is off is made at once. To let the agent change the note it was called from without asking, turn off **Ask before creating and editing notes** on its Permissions tab; the Triggers tab says when its edits wait for you. The chip opens the thread.
 
 A call written by an agent, including the called agent's own changes to the note, calls no one. Calls are answered on the home server only: a call written in the desktop or Android app is answered when the note reaches the server by sync.
 
@@ -364,13 +364,23 @@ Links that earlier versions wrote in place of a call, `[@Clerk](/agents/clerk/ch
 
 ### What an unattended run may do
 
+Which change tools an unattended run is offered depends on who asked for it:
+
+| run | thread origin | change whose switch is on | change whose switch is off |
+|---|---|---|---|
+| a schedule or note event trigger | `trigger:<name>` | tool left out | made at once |
+| a call from a note | `mention` | waits in the thread as a proposal | made at once |
+| notes sent to the agent | `dispatch` | waits in the thread as a proposal | made at once |
+
+A call from a note and a dispatch keep their proposals because a person asked for the run and opens its thread. Apply works there as in a chat, also from an app whose token has `write` for a change that needs `admin`, such as a type change: what is applied is the change the thread holds. A sub agent of such a run proposes the same way, into its parent's thread.
+
 A trigger run has no one present to apply a proposal, so it is offered only:
 
 - the read tools the agent's permissions allow,
 - the change tools whose confirmation switch is off for the agent, and
 - the Outbox draft tools, since what they draft waits in the Outbox for you.
 
-A change tool whose switch is on is left out of the run's tool list, so nothing is left pending. The run's system text says which changes are held back this way and names each switch, so the agent tells you which change it would make and which switch allows it, rather than that it has no tool for it. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies, agents and skills only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
+A change tool whose switch is on is left out of the run's tool list, and so is a tool whose change always waits for Apply whatever the switches say, so nothing is left pending. The run's system text says which changes are held back this way and names each switch, so the agent tells you which change it would make and which switch allows it, rather than that it has no tool for it. The Triggers tab lists the tools a run is offered. A run acts as the agent itself: with `write` for notes, and `admin` for types, taxonomies, agents and skills only when its permissions allow those tools. Its permissions are its only limit, as no person or token is running it.
 
 ## No loops
 

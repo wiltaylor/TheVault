@@ -4,7 +4,9 @@
 //! [`TriggerRunner`] opens a thread (`origin = "trigger:<name>"`) and runs one unattended turn on
 //! it with [`ai_chat::run_unattended`]: the agent is the caller, and the turn is offered only the
 //! read tools its permissions allow and the change tools whose confirmation switch is off, so
-//! nothing waits for a user. A model call that fails with a transient error is retried after
+//! nothing waits for a user. A call from a note runs through it too, on a thread of origin
+//! `mention`: that run is also offered the change tools whose switch is on, and their proposals
+//! wait in the thread for the user's Apply (TV-77 D2). A model call that fails with a transient error is retried after
 //! the waits [`crate::ai_retry`] sets out. Only the server installs it (`crate::router`); the embedded app
 //! servers never run triggers.
 //!

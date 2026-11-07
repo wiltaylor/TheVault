@@ -286,6 +286,10 @@ fn a_change_tool_whose_switch_is_on_is_left_out_of_a_trigger_run() {
     api.advance("PT31S");
     let offered = tool_names(&fake, 0);
     assert_eq!(offered, tools, "the run is offered what the route says");
+    // Unlike a call from a note (TV-77 D2), the trigger's run says what it holds back.
+    let system = fake.message_requests()[0].json()["system"].to_string();
+    assert!(system.contains("This run is unattended"), "{system}");
+    assert!(system.contains("create or edit notes"), "{system}");
 }
 
 #[test]

@@ -39,13 +39,24 @@ const KIND_LEGENDS: Record<AgentTrigger["kind"], string> = {
   mention: "When @mentioned in a note",
 };
 
-/** The warning a mention trigger shows when the agent cannot change the note it is called from. */
+/** The note a mention trigger shows when the agent asks before editing notes: its edit of the note it is called
+ * from waits in the call's thread for Apply (TV-77 D2). */
 export const MENTION_WARNING =
-  "This agent cannot change the note it is called from: turn off Ask before creating and editing notes on its Permissions tab.";
+  "This agent does not change the note it is called from at once: its edits wait in the call's thread for your Apply. Turn off Ask before creating and editing notes on its Permissions tab to let it edit without asking.";
 
-/** Whether an agent with these permissions can change a note itself, with no one to confirm. */
-export function changesNotes(p: AgentTabProps["draft"]["permissions"]): boolean {
-  return !p.confirm.notes && (p.tools === null || p.tools.includes("propose_edit") || p.tools.includes("propose_fields"));
+/** The warning a mention trigger shows when the agent has no tool to edit the note it is called from. */
+export const MENTION_NO_EDIT =
+  "This agent cannot change the note it is called from: its tools list has neither propose_edit nor propose_fields.";
+
+/** Whether an agent with these permissions has a tool that edits a note. */
+function editsNotes(p: AgentTabProps["draft"]["permissions"]): boolean {
+  return p.tools === null || p.tools.includes("propose_edit") || p.tools.includes("propose_fields");
+}
+
+/** What a mention trigger says about the agent changing the note it is called from, or null when it does so at once. */
+export function mentionNote(p: AgentTabProps["draft"]["permissions"]): string | null {
+  if (!editsNotes(p)) return MENTION_NO_EDIT;
+  return p.confirm.notes ? MENTION_WARNING : null;
 }
 
 /** The browser's IANA time zone, a new schedule's default. */
@@ -350,10 +361,12 @@ export function TriggersTab(p: AgentTabProps) {
                       the call is replaced with a link to a new thread, and the run starts with the paragraph that held
                       the call.
                     </p>
-                    <Show when={!changesNotes(p.draft.permissions)}>
-                      <p class="agent-perm-note" role="note">
-                        {MENTION_WARNING}
-                      </p>
+                    <Show when={mentionNote(p.draft.permissions)}>
+                      {(text) => (
+                        <p class="agent-perm-note" role="note">
+                          {text()}
+                        </p>
+                      )}
                     </Show>
                     <div class="agent-type-list" role="group" aria-label="Note types">
                       <span>
