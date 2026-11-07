@@ -272,7 +272,11 @@ fn agent_response(
     let mut out = agent_json(agent);
     out["account"] = json!(account);
     out["wcl"] = json!(wcl);
-    let warnings: Vec<Value> = agent.warnings().iter().map(crate::error::issue_json).collect();
+    let warnings: Vec<Value> = agent
+        .warnings()
+        .iter()
+        .map(crate::error::issue_json)
+        .collect();
     out["warnings"] = json!(warnings);
     text_or_json(headers, wcl, out)
 }

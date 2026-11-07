@@ -826,7 +826,9 @@ fn saving_a_skills_list_without_use_skill_in_tools_warns_the_agent() {
     assert_eq!(api.get("/api/agents/filer")["warnings"], v["warnings"]);
 
     // use_skill named: no warning.
-    let v = save("permissions {\n  skills = [\"pdf-forms\"]\n  tools = [\"get_note\", \"use_skill\"]\n}\n");
+    let v = save(
+        "permissions {\n  skills = [\"pdf-forms\"]\n  tools = [\"get_note\", \"use_skill\"]\n}\n",
+    );
     assert_eq!(v["warnings"], json!([]), "{v}");
     // No tools list: no warning.
     let v = save("permissions {\n  skills = [\"pdf-forms\"]\n}\n");
