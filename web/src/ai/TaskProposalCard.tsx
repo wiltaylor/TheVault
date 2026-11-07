@@ -2,8 +2,9 @@
 // runs, what the task may reach (hosts, secrets, timeout, retries) with a warning for any host,
 // for secrets with hosts and for a secret that does not exist, the task file's lines removed and
 // added and the script's when the proposal writes it, and what else runs the script, with Apply
-// and Discard. The proposal always waits for the user, and never holds `fs` paths: the user adds
-// those in the task editor. Apply writes nothing when the task or its script changed since.
+// and Discard. A script the proposal does not write shows as it is, read-only. The proposal
+// always waits for the user, and never holds `fs` paths: the user adds those in the task editor.
+// Apply writes nothing when the task or its script changed since.
 
 import { For, Match, Show, Switch } from "solid-js";
 import { when } from "../admin/format";
@@ -74,6 +75,16 @@ export function TaskProposalCard(props: { part: Extract<Part, { kind: "task_prop
           <>
             <p class="muted">{`${scriptPath()}${p().script_exists ? "" : " (new)"}`}</p>
             <DiffLines before={p().script_before ?? null} after={after()} label="Script" />
+          </>
+        )}
+      </Show>
+      <Show when={!del() && !p().script_after && p().script_before}>
+        {(source) => (
+          <>
+            <p class="muted">{`${scriptPath()} stays as it is; the task runs it:`}</p>
+            <pre class="ai-diff-lines" aria-label="Script">
+              {source()}
+            </pre>
           </>
         )}
       </Show>

@@ -162,6 +162,16 @@ describe("task proposals", () => {
     await waitFor(() => expect(outcomesNow()).toEqual(["[Applied by the user: changed task nightly]"]));
   });
 
+  it("shows the script a proposal does not write, read-only", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    propose({ ...CREATE, id: "toolu_r", script_before: SCRIPT });
+    const card = await m.findByRole("region", { name: "Proposed new task nightly" });
+    expect(card).toHaveTextContent("scripts/stamp.ws stays as it is; the task runs it:");
+    expect(within(card).getByLabelText("Script")).toHaveTextContent("fn run() -> Result[(), string]");
+    expect(within(card).getByLabelText("Script")).not.toHaveTextContent("+ ");
+  });
+
   it("says a paused task runs only by hand", async () => {
     const m = render(() => <ChatPanel noteId={() => ""} />);
     await ask(m);

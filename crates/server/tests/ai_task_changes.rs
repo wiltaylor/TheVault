@@ -434,6 +434,18 @@ fn a_new_task_waits_for_apply_with_every_switch_off_then_runs_on_its_schedule() 
         got["format"].as_str().unwrap().contains("read_paths"),
         "{got}"
     );
+    // A proposal that does not write the script still shows it, and goes stale when the script
+    // changes before Apply (TV-71 review F3).
+    let p = api.propose(&fake, "nightly", &format!("{after}paused = true\n"), None);
+    assert_eq!(p["script_before"], STAMP);
+    assert!(p["script_after"].is_null());
+    let edited = format!("{STAMP}\nfn extra() -> int {{\n    1\n}}\n");
+    api.ok("PUT", "/api/scripts/stamp", json!({ "source": edited }));
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "stale");
+    assert_eq!(api.task("nightly").unwrap()["paused"], false);
+
     api.one(&fake, "get_task", json!({ "name": "nope" }));
     let (err, got) = last_result(&fake);
     assert!(
@@ -459,6 +471,11 @@ fn fs_paths_are_refused_and_any_host_or_a_missing_secret_warns() {
         );
         assert!(api.task("mover").is_none());
     }
+    // A new source for the shared script, proposed while nothing with paths runs it.
+    let changed = format!("{STAMP}\nfn extra() -> int {{\n    1\n}}\n");
+    let sharer = api.propose(&fake, "sharer", NIGHTLY, Some(&changed));
+    assert_eq!(sharer["script_after"], changed.as_str());
+
     // A task the user gave paths cannot be proposed with them either.
     api.put_task("mover", &format!("{NIGHTLY}read_paths = [\"/srv/in\"]\n"));
     let said = api.refused(
@@ -474,6 +491,20 @@ fn fs_paths_are_refused_and_any_host_or_a_missing_secret_warns() {
             .contains("only the user changes"),
         "{said}"
     );
+
+    // Nor may an agent change the code that task runs (TV-71 review F1): a new source for its
+    // script is refused, naming the task and its folders; the same task without a source is not.
+    let said = api.refused(&fake, "other", NIGHTLY, Some(&changed));
+    let why = said["error"].as_str().unwrap();
+    assert!(why.contains("task mover (reads /srv/in)"), "{said}");
+    assert!(why.contains("may not change script \"stamp\""), "{said}");
+    api.propose(&fake, "other", NIGHTLY, None);
+    // The proposal made before the paths were given is refused at Apply.
+    let (status, body) = api.apply_as(&api.token(), &sharer);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+    assert!(api.task("sharer").is_none());
 
     // An admin applying a body with paths in it: refused at Apply too.
     let p = api.propose(&fake, "lister", NIGHTLY, None);
@@ -661,4 +692,66 @@ fn a_call_from_a_note_leaves_a_task_proposal_that_a_phone_applies_from_the_threa
     let got = api.task("nightly").unwrap();
     assert_eq!(got["read_paths"], json!([]), "{got}");
     assert_eq!(api.threads("keeper")[0]["pending"], 0);
+}
+
+/// An agent whose trigger runs when a memo is created, with every switch off (TV-71 review F4).
+const WATCHER: &str = r#"label = "Watcher"
+
+permissions {
+  confirm {
+    notes      = false
+    archive    = false
+    delete     = false
+    types      = false
+    downloads  = false
+    taxonomies = false
+    agents     = false
+    skills     = false
+    tools      = false
+  }
+}
+
+trigger opened {
+  on     = ["create"]
+  type   = "memo"
+  prompt = "Look after the memo."
+}
+"#;
+
+#[test]
+fn a_trigger_run_is_not_offered_the_task_proposals_and_a_call_is_refused_without_a_proposal() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/agents/watcher", WATCHER);
+    // The model calls the tool although the run does not offer it.
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_w",
+        "propose_task_change",
+        json!({ "name": "nightly", "wcl": NIGHTLY, "script_source": null }),
+    ));
+    fake.push(AnthropicMessage::text("Needs the user."));
+    api.ok(
+        "POST",
+        "/api/notes?type=memo",
+        json!({ "note": { "fields": { "title": "Roof" } } }),
+    );
+    api.advance("PT31S");
+    let requests = fake.message_requests();
+    assert_eq!(requests.len(), 2);
+    let offered = requests[0].json()["tools"].to_string();
+    assert!(!offered.contains("\"propose_task_change\""), "{offered}");
+    assert!(!offered.contains("\"propose_task_delete\""), "{offered}");
+    assert!(offered.contains("\"get_task\""), "{offered}");
+    // The call is refused before any check, as a tool the run does not have, so it never
+    // reaches the HELD_REFUSAL of a proposal that would wait: nothing waits, nothing is written.
+    let (err, said) = last_result(&fake);
+    assert!(err, "{said}");
+    assert_eq!(
+        said["error"], "there is no tool named \"propose_task_change\"",
+        "{said}"
+    );
+    let threads = api.threads("watcher");
+    assert_eq!(threads.len(), 1, "{threads:?}");
+    assert_eq!(threads[0]["pending"], 0, "{threads:?}");
+    assert!(api.task("nightly").is_none());
 }

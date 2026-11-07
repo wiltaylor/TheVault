@@ -15,7 +15,10 @@
 //! An agent never proposes `read_paths` or `write_paths` (TV-32 Q3): the scheduler refuses only a
 //! path inside the vault, so a path such as `/` would reach the secret key file and the host. A
 //! proposal whose file has either is refused, here and again at Apply; the user adds paths in the
-//! task editor. A task that may reach any host (`allow_domains = ["*"]`) is allowed, with a warning
+//! task editor. Nor does an agent change the code such a task runs: a `script_source` for a script
+//! that another task with `fs` paths runs is refused too, naming that task (TV-71 review F1). The
+//! card shows the script, written or not, and Apply stale-checks it either way. A task that may
+//! reach any host (`allow_domains = ["*"]`) is allowed, with a warning
 //! (TV-32 Q4), as are secrets with hosts, with a warning that the task could send them out
 //! (TV-32 R4). A new task runs on its schedule once applied, and the card shows its next three
 //! runs (TV-32 Q5). A delete keeps the task's run history.
@@ -230,6 +233,36 @@ fn paths_refused(def: &TaskDef, current_has_paths: bool) -> Option<String> {
     })
 }
 
+/// The refusal of a new source for script `script` when another run of it has `fs` paths (TV-71
+/// review F1, TV-32 Q3): the agent's code would run with those folders. Task `name` itself is left
+/// out, as its proposed file has no paths. Only tasks have `fs` paths; the refusal names each.
+fn shared_paths_refused(w: &Writer, script: &str, name: &str) -> Option<String> {
+    let with_paths: Vec<String> = w
+        .script_runs_as(script, None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|u| !(u.kind == "task" && u.name == name))
+        .filter(|u| !u.read_paths.is_empty() || !u.write_paths.is_empty())
+        .map(|u| {
+            let mut paths = Vec::new();
+            if !u.read_paths.is_empty() {
+                paths.push(format!("reads {}", listed(&u.read_paths)));
+            }
+            if !u.write_paths.is_empty() {
+                paths.push(format!("writes {}", listed(&u.write_paths)));
+            }
+            format!("{} {} ({})", u.kind, u.name, paths.join(", "))
+        })
+        .collect();
+    if with_paths.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "an agent may not change script {script:?}: {} runs it with read_paths or write_paths, so the new code would reach those folders. Leave script_source out, or tell the user the change to make",
+        with_paths.join(", ")
+    ))
+}
+
 /// Whether the text of a task file names `fs` paths.
 fn has_paths(name: &str, text: &str) -> bool {
     TaskDef::parse(name, text).is_ok_and(|d| !d.read_paths.is_empty() || !d.write_paths.is_empty())
@@ -335,6 +368,14 @@ pub(crate) fn propose_change(
             None,
         ));
     }
+    if script_after.is_some()
+        && let Some(why) = shared_paths_refused(w, &def.script, name)
+    {
+        return Err(refused(
+            why,
+            json!({ "message": "The task was not proposed." }),
+        ));
+    }
     let source = script_after
         .or(script_before.as_deref())
         .unwrap_or_default();
@@ -438,7 +479,9 @@ fn apply_error(e: scheduler::Error) -> ApplyError {
 /// Apply a `task_proposal`, when the task file and the script are still the proposal's `before`
 /// and `script_before`, through the scheduler, which reloads. Answers `{op, task_name,
 /// script_name, next_run}`, `op` `task_create`, `task_change` or `task_delete`, `script_name` the
-/// script written with the task, if any. A task file with `fs` paths is refused (TV-32 Q3).
+/// script written with the task, if any. The script is stale-checked whether or not the proposal
+/// writes it, as the card showed it. A task file with `fs` paths is refused, and so is a new
+/// script source that another run with `fs` paths shares (TV-32 Q3, TV-71 review F1).
 pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
@@ -471,10 +514,13 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     if let Some(why) = paths_refused(&def, false) {
         return Err(ApplyError::Refused(why));
     }
-    if script_after.is_some()
-        && w.read_script(&def.script).ok().as_deref() != p["script_before"].as_str()
-    {
+    if w.read_script(&def.script).ok().as_deref() != p["script_before"].as_str() {
         return Err(stale());
+    }
+    if script_after.is_some()
+        && let Some(why) = shared_paths_refused(w, &def.script, name)
+    {
+        return Err(ApplyError::Refused(why));
     }
     s.put_task_with_script(name, after, script_after)
         .map_err(apply_error)?;
