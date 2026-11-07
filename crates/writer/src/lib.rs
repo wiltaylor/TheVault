@@ -1179,6 +1179,22 @@ impl Writer {
         self.writes.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Run `check` under the writer's write lock, then commit the changes it returns in one commit.
+    /// No other write lands between the check and the commit, so a change checked against the
+    /// vault is written to that same vault. `check` may read the writer, but it must not call a
+    /// write method of this writer: the lock is not held twice.
+    pub fn commit_checked<E: From<Error>>(
+        &self,
+        check: impl FnOnce(&Writer) -> std::result::Result<Vec<Change>, E>,
+    ) -> std::result::Result<(), E> {
+        let _w = self.write_lock();
+        let changes = check(self)?;
+        let mut inner = self.lock();
+        let generation = self.commit(changes)?;
+        inner.index.advance(generation).map_err(Error::from)?;
+        Ok(())
+    }
+
     /// The type folder holding note `id`, from the files on disk.
     fn locate(&self, id: &str) -> Result<Option<String>> {
         if !schema::is_ulid(id) {
