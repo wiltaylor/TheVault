@@ -332,7 +332,10 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
   },
   {
     group: "Notifications",
-    tools: [["notify_user", "Notify the user (bell and phones)"]],
+    tools: [
+      ["notify_user", "Notify the user (bell and phones)"],
+      ["ask_user", "Ask the user a question (calls and sent notes)"],
+    ],
   },
   {
     group: "Assets",

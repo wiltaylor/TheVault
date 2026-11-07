@@ -146,7 +146,7 @@ The vault ships five skills, which every agent with no `skills` list is offered,
 - `vault-queries`: how to write a query, with the rules that differ from SQL and worked examples for tasks, people, mail, messages, captures, events and links. Every example in it is checked against the parser.
 - `vault-notes`: how to write notes and types: the JSON form, a note with every common field kind, every content block, computed fields, reference, inverse and taxonomy fields, and which query views need which items. Its type files and notes are checked against the writer.
 - `vault-comms`: the email, message, call, conversation and email thread types, the inbox and when to mark an item `processed` (and what to leave for you), reading a message's attachments and its conversation, finding mail and messages, and drafting into the Outbox. Its queries are checked against the parser and its JSON examples parse.
-- `vault-automation`: scheduled tasks, handlers and script tools, which of the agent's tools come from which permission switch, and what no tool can do (write a task or a device file); a saved script is proposed with `propose_script_change`. It names `notify_user` for telling you something now. Its WCL examples parse and its wscript compiles.
+- `vault-automation`: scheduled tasks, handlers and script tools, which of the agent's tools come from which permission switch, and what no tool can do (write a task or a device file); a saved script is proposed with `propose_script_change`. It names `notify_user` for telling you something now, and `ask_user` for a question in a call from a note or a dispatch. Its WCL examples parse and its wscript compiles.
 
 A shipped skill the user has not changed is replaced by the newer version when the app updates; one the user changed stays, and the bell says a newer one exists. The model also has `query_format`, the whole query language, and `value_format`, how each field value is written, both from the vault format.
 
@@ -389,6 +389,12 @@ A thread of origin `dispatch` or `mention` is in one of three states, worked out
 | `active` | A turn runs on the thread |
 | `needs_you` | A proposal waits for Apply, or the agent asked a question and waits for your answer (the hidden `question` field) |
 | `done` | Neither |
+
+#### When the agent asks you
+
+On a thread of origin `dispatch` or `mention`, the agent can ask you a question with the `ask_user` tool, which takes a `question` of at most 2000 characters. The tool is not offered in a chat you started, where the agent asks in its answer, nor to a sub agent. It is an ordinary tool name: an agent with no tools list has it, and a tools list that leaves it out takes it away. The agent's system text explains the tool whenever it is offered, also for an agent with its own system prompt.
+
+The call ends the run once the other calls of the same model round are answered, so the thread stays whole. The question goes into the thread's hidden `question` field and the turn's stream sends a `question` event, `{id, text}`. The thread is then `needs_you`, and the run's bell notification, "<Agent> needs you: <thread title>", gives the question. Your next message in the thread clears the field and runs as a normal chat turn on it. That turn can ask again; it leaves no notification, as you started it. Truncating the thread clears the question too, and a fork starts without one.
 
 `GET /api/dispatched` lists these threads for every agent, newest activity first, without archived ones. `?notes=<id>,<id>` keeps those about any of the notes, and `?state=` keeps one state. The `ai_turn` event carries the thread's `origin`, `state` and `notes` as well.
 

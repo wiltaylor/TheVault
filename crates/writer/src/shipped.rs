@@ -310,6 +310,7 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
             "78cf2b3c5414f5aae98dc0c1d172e83e725d6f9ac1a9bc1424f17219500b1c6c",
             "cba4a1cec4b6b2d47702689c0fd3aae283171cd56d60446e851bfcfe6dc46886",
             "d79501ab334eb562d6455765b19ccc8342dcea88ef83c7cb929d24d039dd7be8",
+            "78cb113d1012c640121c41d832bf2fecda87c8bdc8df07f5d069e3866a0e3ae9",
         ],
     },
 ];

@@ -41,7 +41,9 @@
 //! answer; its proposals and changes come out in this turn's stream with `subagent`, the call id,
 //! and `sub_thread`, its session. `notify_user` raises a notification under the bell at once,
 //! with no proposal and in unattended runs too, within per-turn, hourly and daily limits
-//! (`crate::ai_notify`, TV-32 S1).
+//! (`crate::ai_notify`, TV-32 S1). On the thread of a call from a note or of notes sent to the
+//! agent, `ask_user` puts a question to the user and ends the turn after its round
+//! (`crate::ai_ask`, TV-77 D3).
 //! Events:
 //!
 //! | Event | Data |
@@ -59,6 +61,7 @@
 //! | `script_proposal` | a saved script change for the user to apply (TV-70), `kind` always `script`, never made at once: `{id, kind, op, name, exists, before, after, runs_as, warnings, proposer}`, `op` `create`, `change` or `delete`, `runs_as` each handler, task, device file and tool that runs the script `{kind, name, file, event, allow_domains, secrets, read_paths, write_paths, schedule, timezone, paused}`, and `warnings` a line for each that may reach any host (`crate::ai_script_changes`) |
 //! | `applied` | a change the tool made itself (ai D22): `{id, op, note_id, title, version}` for `update`, `create`, `archive`, `unarchive` and `delete` (whose version is the one that went to the trash); `{id, op, type_name}` for `type_change`, `type_create` and `type_delete`; `{id, op, taxonomy_name, notes}` for `taxonomy_change`, `taxonomy_create` and `taxonomy_delete` (ai D31); `{id, op, agent_name}` for `agent_create`, `agent_change` and `agent_delete` (agents G20); `{id, op, memory_id, memory_agent, version}` for `agent_memory_create`, `agent_memory_change` and `agent_memory_delete` (agents G21); `{id, op, skill_name, path?}` for `skill_create`, `skill_change`, `skill_file`, `skill_file_delete` and `skill_delete` (skills S9); `{id, op, asset_id, filename, media_type, size, url}` for `download` (ai D27) |
 //! | `subagent` | `{id, call, thread, turn, agent, delegated, task, n, status, rounds, tools, started_ms, ended_ms, tool}`: a sub agent's block as it stands (subagents U6), sent as it starts, at each of its model calls and tool calls, and as it ends; `id` is the `start_subagent` call, `thread` its session, `status` `running`, `done`, `failed` or `stopped`, `turn` its turn in the turn routes (null for a sub agent of an unattended run), and `tool` the tool it runs now |
+//! | `question` | `{id, text}`: the agent asked the user `text` with the `ask_user` call `id` (TV-77 D3); the turn ends after this round, and the thread reads `needs_you` until the user's next message |
 //! | `context` | `{used, window}` after each model call: the tokens the call took in and gave back, and the account's context window |
 //! | `compacting` | `{reason}`: a thread's compaction started, `auto` because its last call filled `compact_at` of the window, or `command` for `/compact` (`compact: true`) |
 //! | `compacted` | `{reason, upto, summary, before, after}`: the model now reads `summary` in place of the thread's first `upto` messages; `before` is the tokens it summarized and `after` the summary's. `/compact` then ends with `done` |
@@ -377,8 +380,9 @@ impl Held {
 /// Brave key (ai D26), only those the agent may use (agents G4), the browser tools with
 /// `browser`, the agent's browser permission and a browser box, whatever its tools list says
 /// (browser B6), the skill tools only when the agent uses skills, with
-/// `install_skill_in_browser` beside the browser tools (skills S6), and, when `drop` gives what
-/// the turn makes ([`Held::Drop`]), no change tool that would only propose (agents G12).
+/// `install_skill_in_browser` beside the browser tools (skills S6), `ask_user` only when `asks`
+/// (`crate::ai_ask`, TV-77 D3), and, when `drop` gives what the turn makes ([`Held::Drop`]), no
+/// change tool that would only propose (agents G12).
 fn turn_tools(
     web: ai::Web,
     brave: bool,
@@ -386,8 +390,12 @@ fn turn_tools(
     drop: Option<Direct>,
     browser: bool,
     skills: bool,
+    asks: bool,
 ) -> Vec<ToolSpec> {
     let mut tools = offered_tools(web);
+    if !asks {
+        tools.retain(|t| t.name != crate::ai_ask::TOOL);
+    }
     if web.search && brave {
         tools.push(crate::brave::tool_spec());
     }
@@ -506,6 +514,7 @@ pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
         Some(direct),
         agent.permissions.browser && crate::ai_browser::BrowserBox::from_env().is_some(),
         crate::ai_skills::uses_skills(agent),
+        false,
     )
     .into_iter()
     .map(|t| t.name)
@@ -610,6 +619,12 @@ async fn start_with(
         (Some(_), Some(o)) => o.clone(),
         _ => "user".to_owned(),
     };
+    // A turn on a call's or a dispatch's thread may ask the user, the user's reply turn too
+    // (TV-77 D3): keyed on the thread's own origin, which a reply turn's `origin` is not.
+    let asks = prepared
+        .origin
+        .as_deref()
+        .is_some_and(crate::ai_ask::asks_on);
     let cfg = TurnCfg {
         owner: author,
         author: actor,
@@ -617,6 +632,7 @@ async fn start_with(
         agent_name: named.then(|| prepared.agent.name.clone()),
         unattended: report.is_some(),
         held: Held::of(report.is_some(), &origin),
+        asks,
         retry,
         sub: None,
         origin,
@@ -641,6 +657,8 @@ struct TurnCfg {
     unattended: bool,
     /// What it does with a change that would only be proposed (TV-77 D2).
     held: Held,
+    /// Whether it offers `ask_user` (TV-77 D3).
+    asks: bool,
     /// How an unattended turn retries a model call that failed with a transient error.
     retry: Option<CapacityRetry>,
     /// For a sub agent's turn (subagents U1).
@@ -694,6 +712,7 @@ fn spawn_turn(
         report,
         unattended: cfg.unattended,
         held: cfg.held,
+        asks: cfg.asks,
         retry: cfg.retry,
         sub: cfg.sub,
         activity,
@@ -873,6 +892,9 @@ fn prepare_for(
         _ => fresh(),
     };
     let mut skills_updated = None;
+    // A message from the user answers a question the agent asked (TV-77 D3); a `/compact` or a
+    // `/update-skills` turn alone answers nothing.
+    let answers = !messages.is_empty();
     let mut new = messages;
     if update_skills {
         let (message, data) = updated(&skills);
@@ -937,6 +959,10 @@ fn prepare_for(
         if let Some(title) = &title {
             t.title = title.clone();
         }
+        // The answer clears the question in the same write that adds it (TV-77 D3).
+        if answers {
+            t.question.clear();
+        }
     })?;
     let log = ThreadLog {
         id: thread.id,
@@ -949,6 +975,7 @@ fn prepare_for(
         sub_changes: 0,
         saved: (0, 0, 0),
         context: None,
+        question: None,
         _busy: busy,
     };
     Ok(Prepared {
@@ -996,6 +1023,9 @@ struct ThreadLog {
     saved: (usize, usize, usize),
     /// How full the context was after the turn's last call.
     context: Option<agent_threads::ContextUse>,
+    /// The question the turn asked the user with `ask_user`, written with its last round
+    /// (TV-77 D3).
+    question: Option<String>,
     _busy: Busy,
 }
 
@@ -1277,6 +1307,7 @@ fn setup(
     note_id: Option<String>,
     skills: Option<&str>,
     held: Held,
+    asks: bool,
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let settings = Settings::load(state)?;
@@ -1354,6 +1385,11 @@ fn setup(
         && let Some(note) = withheld_note(agent, direct)
     {
         system.push_str(&note);
+    }
+    // The rule for ask_user, which a replaced system prompt would not hold (TV-77 F8), when the
+    // agent may call it.
+    if asks && agent.permissions.allows_tool(crate::ai_ask::TOOL) {
+        system.push_str(crate::ai_ask::prompt_section());
     }
     // The skills come last, the thread's snapshot, so what comes before stays a stable prefix
     // (skills S6).
@@ -1444,6 +1480,9 @@ struct Turn {
     /// What the turn does with a change that would only be proposed, as does a sub agent of it,
     /// whose proposals wait in this turn's thread (TV-77 D2).
     held: Held,
+    /// Whether the turn offers `ask_user`: on a thread of a call from a note or of notes sent to
+    /// the agent, never in a sub agent's turn (TV-77 D3).
+    asks: bool,
     /// How an unattended turn, and a sub agent of one, retries a model call that failed with a
     /// transient error (`crate::ai_retry`).
     retry: Option<CapacityRetry>,
@@ -1573,7 +1612,7 @@ impl Turn {
     /// Write the thread's transcript as it stands: the messages it started from and `added`,
     /// with this turn's steps and proposals. Nothing new since the last write writes nothing.
     async fn persist(&self, added: &[Message]) {
-        let (id, label, messages, steps, proposals, context, subagents) = {
+        let (id, label, messages, steps, proposals, context, subagents, question) = {
             let Some(mut log) = self.log() else { return };
             let now = (
                 added.len(),
@@ -1594,6 +1633,7 @@ impl Turn {
                 log.proposals.clone(),
                 log.context,
                 log.subagents.clone(),
+                log.question.clone(),
             )
         };
         let w = self.writer.clone();
@@ -1602,6 +1642,9 @@ impl Turn {
                 t.transcript.messages = messages.clone();
                 if context.is_some() {
                     t.transcript.context = context;
+                }
+                if let Some(q) = &question {
+                    t.question = q.clone();
                 }
                 for (k, v) in &steps {
                     t.transcript.steps.insert(k.clone(), v.clone());
@@ -1646,6 +1689,7 @@ impl Turn {
         let w = self.writer.clone();
         let scope = self.scope;
         let held = self.held;
+        let asks = self.asks;
         let skills = self.skills.section().map(str::to_owned);
         let uses_skills = crate::ai_skills::uses_skills(&agent);
         let setup = match tokio::task::spawn_blocking(move || {
@@ -1658,6 +1702,7 @@ impl Turn {
                 note_id,
                 skills.as_deref(),
                 held,
+                asks,
             )
         })
         .await
@@ -1681,6 +1726,7 @@ impl Turn {
             (self.held == Held::Drop).then_some(setup.direct),
             setup.browser.is_some(),
             uses_skills,
+            self.asks,
         );
         // A throwaway sub agent reads its parent's memories but writes none (subagents U1).
         if self.sub.is_some_and(|s| s.throwaway) {
@@ -1887,6 +1933,8 @@ impl Turn {
             // The sub agents this round starts, run together once the other calls are answered
             // (subagents U1): where each one's result goes, and its call.
             let mut subs: Vec<(usize, ToolCall)> = Vec::new();
+            // The question this round's ask_user calls put to the user (TV-77 D3).
+            let mut asked: Option<String> = None;
             for c in calls {
                 self.activity.tool_called(&c.id, &c.name, &c.input);
                 if !self
@@ -2092,6 +2140,44 @@ impl Turn {
                     });
                     continue;
                 }
+                // ask_user (TV-77 D3): the question is kept for the thread, and the turn ends once
+                // this round's other calls are answered.
+                if c.name == crate::ai_ask::TOOL && c.error.is_none() {
+                    let got = match crate::ai_ask::question(&c.input) {
+                        Ok(q) => {
+                            if !self
+                                .out
+                                .send("question", json!({ "id": c.id, "text": q }))
+                                .await
+                            {
+                                return;
+                            }
+                            // Two questions in one round are asked together.
+                            asked = Some(match asked.take() {
+                                Some(before) => format!("{before}\n\n{q}"),
+                                None => q,
+                            });
+                            ToolOut {
+                                content: crate::ai_ask::RESULT.to_owned(),
+                                is_error: false,
+                                summary: json!({ "notes": [] }),
+                                proposal: None,
+                            }
+                        }
+                        Err(out) => out,
+                    };
+                    if !self
+                        .emit(
+                            "tool_result",
+                            json!({ "id": c.id, "summary": got.summary, "is_error": got.is_error }),
+                        )
+                        .await
+                    {
+                        return;
+                    }
+                    results.push(Content::tool_result(c.id, got.content, got.is_error));
+                    continue;
+                }
                 // notify_user (TV-32 S1): sent at once, within the agent's limits, also unattended.
                 if c.name == crate::ai_notify::TOOL && c.error.is_none() {
                     let w = self.writer.clone();
@@ -2177,6 +2263,15 @@ impl Turn {
                 }
             }
             added.push(Message::tool_results(results));
+            // A question for the user ends the turn after its round (TV-77 D3): the thread keeps
+            // it, written with the round, and reads needs_you.
+            if let Some(q) = asked {
+                if let Some(mut log) = self.log() {
+                    log.question = Some(q);
+                }
+                self.done(&Stop::EndTurn, added).await;
+                return;
+            }
             self.persist(added).await;
         }
     }
@@ -2796,6 +2891,8 @@ impl Turn {
             agent_name: Some(agent.clone()),
             unattended: self.unattended,
             held: self.held,
+            // A sub agent answers its parent, never the user.
+            asks: false,
             retry: self.retry.as_ref().map(|r| r.for_sub(n)),
             sub: Some(SubMark {
                 throwaway: delegated.is_none(),
@@ -3205,7 +3302,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
     .chain(crate::ai_outbox::tool_specs())
-    .chain([crate::ai_notify::tool_spec()])
+    .chain([crate::ai_notify::tool_spec(), crate::ai_ask::tool_spec()])
     .chain(crate::ai_web::tool_specs())
     .collect()
 }
@@ -4677,7 +4774,7 @@ mod tests {
         let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
         let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
         let names = |drop: Option<Direct>| -> Vec<String> {
-            turn_tools(ai::Web::default(), false, None, drop, false, false)
+            turn_tools(ai::Web::default(), false, None, drop, false, false, false)
                 .into_iter()
                 .map(|t| t.name)
                 .collect()
