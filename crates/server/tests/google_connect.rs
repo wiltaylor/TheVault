@@ -372,7 +372,12 @@ fn finish_writes_the_settings_keeping_the_endpoints_the_start_used() {
     let connection_secrets: Vec<_> = api
         .secrets()
         .into_iter()
-        .filter(|name| !matches!(name.as_str(), "google_gmail_state" | "google_calendar_state"))
+        .filter(|name| {
+            !matches!(
+                name.as_str(),
+                "google_gmail_state" | "google_calendar_state"
+            )
+        })
         .collect();
     assert_eq!(connection_secrets, SECRETS);
     // The shipped Google tasks are unpaused.
