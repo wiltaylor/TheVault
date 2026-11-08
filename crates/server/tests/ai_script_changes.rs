@@ -830,7 +830,14 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         .unwrap_or_else(|| panic!("{events:?}"))
         .clone();
     let d = &p["device"];
-    assert_eq!(d["note"], PHONE_NOTE, "{p}");
+    assert!(d["note"].as_str().unwrap().starts_with(PHONE_NOTE), "{p}");
+    assert!(
+        d["note"]
+            .as_str()
+            .unwrap()
+            .contains("signed-in admin must apply"),
+        "{p}"
+    );
     assert_eq!(d["platforms"], json!(["android"]));
     let devices: Vec<(String, bool, bool)> = d["devices"]
         .as_array()
@@ -922,6 +929,72 @@ fn a_script_that_no_device_file_runs_has_no_phone_block() {
         .unwrap_or_else(|| panic!("{events:?}"))
         .clone();
     assert!(p["device"].is_null(), "{p}");
+}
+
+#[test]
+fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_is_unchanged() {
+    for mode in [
+        "kept_send",
+        "removed_send",
+        "new_contacts",
+        "old_contacts",
+        "plain",
+    ] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.put_text("/api/device-files/android", ANDROID);
+        api.put_text("/api/agents/keeper", KEEPER);
+        let original = api.script("device_messages").unwrap();
+        let plain = original.replace(
+            "device::sms_send(to, text_of(payload, \"body\"))",
+            "Err(\"sending disabled\")",
+        );
+        let (current, changed) = match mode {
+            "kept_send" => (original.clone(), format!("{original}\n")),
+            "removed_send" => (original.clone(), plain.clone()),
+            // Comments count conservatively too, so even aliases or unusual formatting cannot
+            // turn a scanner ambiguity into a write-token grant.
+            "new_contacts" => (plain.clone(), format!("{plain}\n// contacts_upsert\n")),
+            "old_contacts" => (format!("{plain}\n// contacts_delete\n"), plain.clone()),
+            _ => (plain.clone(), format!("{plain}\n")),
+        };
+        api.ok(
+            "PUT",
+            "/api/scripts/device_messages",
+            json!({ "source": current }),
+        );
+        fake.push(AnthropicMessage::new().tool_use(
+            "toolu_phone",
+            "propose_script_change",
+            json!({ "name": "device_messages", "source": changed }),
+        ));
+        fake.push(AnthropicMessage::text("Waiting."));
+        api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
+        api.advance("PT1S");
+        let threads = api.threads("keeper");
+        assert_eq!(threads[0]["pending"], 1, "{mode}: {threads:?}");
+        let thread = threads[0]["id"].as_str().unwrap();
+        let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+        let p = read["proposals"][0]["data"].clone();
+        let write = api.token_of("phone", "write");
+        let (status, body) = api.apply_as(&write, &p);
+        if mode == "plain" {
+            assert_eq!(status, StatusCode::OK, "{mode}: {body}");
+        } else {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
+            assert!(body.to_string().contains("signed-in admin"), "{body}");
+            assert_eq!(
+                api.script("device_messages").as_deref(),
+                Some(current.as_str())
+            );
+            let (status, body) = api.apply_as(&api.token(), &p);
+            assert_eq!(status, StatusCode::OK, "{mode}: {body}");
+        }
+        assert_eq!(
+            api.script("device_messages").as_deref(),
+            Some(changed.as_str())
+        );
+    }
 }
 
 #[test]

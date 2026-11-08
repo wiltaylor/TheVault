@@ -455,7 +455,7 @@ fn apply_error(e: scheduler::Error) -> ApplyError {
 /// must still compile as the task runs it, and what else runs the script must be as the card
 /// showed it. A task file with `fs` paths is refused, and so is a new script source that another
 /// run with `fs` paths shares (TV-32 Q3, TV-71 review F1).
-pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
+pub(crate) fn apply_task(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| schema::is_name(s))
@@ -497,6 +497,14 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(ApplyError::Refused(why));
         }
         let script_before = w.read_script(&def.script).ok();
+        if script_after.is_some() {
+            crate::ai_script_changes::require_phone_script_admin(
+                w,
+                &def.script,
+                script_after,
+                admin,
+            )?;
+        }
         if script_before.as_deref() != p["script_before"].as_str() {
             return Err(stale(&format!("the script {} changed", def.script)));
         }
