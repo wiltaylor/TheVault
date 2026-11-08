@@ -165,10 +165,8 @@ fn secrets_module(v: Arc<dyn Vault>) -> Module {
         "set",
         ["name", "value"],
         move |name: String, value: String| -> Reply<()> {
-            Fault(granted(&name).map(|granted| {
-                if let Err(refusal) = granted {
-                    return Err(refusal);
-                }
+            Fault(granted(&name).map(|granted| -> Result<(), String> {
+                granted?;
                 if value.len() > MAX_SECRET_VALUE {
                     return Err(format!(
                         "secret {name:?} is {} bytes: a secret holds at most 64 KiB",
@@ -180,10 +178,8 @@ fn secrets_module(v: Arc<dyn Vault>) -> Module {
         },
     );
     m.fn_named("get", ["name"], move |name: String| -> Reply<String> {
-        Fault(granted(&name).map(|granted| {
-            if let Err(refusal) = granted {
-                return Err(refusal);
-            }
+        Fault(granted(&name).map(|granted| -> Result<String, String> {
+            granted?;
             v.secret(&name)?
                 .ok_or_else(|| format!("there is no secret named {name:?}"))
         }))
