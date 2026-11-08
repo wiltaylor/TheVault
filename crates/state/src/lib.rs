@@ -21,6 +21,8 @@ mod notifications;
 mod pins;
 mod runs;
 mod secrets;
+mod script_secrets;
+pub use script_secrets::{internal_script_secret, proposed_secrets_refused};
 mod sessions;
 mod shipped;
 

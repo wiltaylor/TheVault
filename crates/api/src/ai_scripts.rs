@@ -514,6 +514,9 @@ pub(crate) fn propose_change(
         .to_string();
         o
     })?;
+    if let Some(why) = state::proposed_secrets_refused(&tool.secrets) {
+        return Err(ToolOut::error(why));
+    }
     let before = w.read_tool(name).ok();
     let script_before = w.read_script(&tool.script).ok();
     let script_after = script_after.filter(|s| Some(*s) != script_before.as_deref());
@@ -705,6 +708,11 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(ApplyError::Refused(why));
         }
         // The compile check again, as the card showed it.
+        let tool = ScriptTool::parse(name, after)
+            .map_err(|e| ApplyError::Invalid(e.to_string()))?;
+        if let Some(why) = state::proposed_secrets_refused(&tool.secrets) {
+            return Err(ApplyError::Refused(why));
+        }
         let checked = check_vault(w, h.as_deref(), name, after, script_after);
         if json!(checked.problems) != p["problems"] {
             return Err(stale(format!("the problems of the tool {name}")));

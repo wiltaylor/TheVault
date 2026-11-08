@@ -320,6 +320,9 @@ pub(crate) fn propose_change(
             }),
         )
     })?;
+    if let Some(why) = state::proposed_secrets_refused(&def.secrets) {
+        return Err(ToolOut::error(why));
+    }
     let before = w.read_task(name).ok();
     if let Some(why) = paths_refused(&def, before.as_deref().is_some_and(|b| has_paths(name, b))) {
         return Err(refused(
@@ -494,6 +497,9 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             .task_changes(w, name, after, script_after)
             .map_err(apply_error)?;
         if let Some(why) = paths_refused(&def, false) {
+            return Err(ApplyError::Refused(why));
+        }
+        if let Some(why) = state::proposed_secrets_refused(&def.secrets) {
             return Err(ApplyError::Refused(why));
         }
         let script_before = w.read_script(&def.script).ok();
