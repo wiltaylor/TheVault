@@ -514,8 +514,12 @@ fn main(url: Value) -> Result[string, string] {
         "http://[::ffff:127.0.0.1]/".into(),
         "http://127.1/".into(),
     ] {
-        api.one(&fake, Some("scripter"), "run_script",
-            json!({ "code": code, "function": null, "args": json!([url]).to_string() }));
+        api.one(
+            &fake,
+            Some("scripter"),
+            "run_script",
+            json!({ "code": code, "function": null, "args": json!([url]).to_string() }),
+        );
         let (err, out) = last_result(&fake);
         assert!(err, "{out}");
         assert!(out.to_string().contains(ai::web::LOCAL_NETWORK), "{out}");
@@ -962,7 +966,11 @@ fn run(params: Value) -> Result[Value, string] {
     // An agent with a tools list is offered only the tools it names.
     // User-file wildcards retain LAN access too, even when called by an agent.
     api.tool("fetch", &wcl.replace(&web.host(), "*"), Some(script));
-    api.calls(&fake, None, &[("fetch", json!({ "what": "http", "url": web.url("/data") }))]);
+    api.calls(
+        &fake,
+        None,
+        &[("fetch", json!({ "what": "http", "url": web.url("/data") }))],
+    );
     let r = results(&fake);
     assert!(!r[0].0, "{}", r[0].1);
     assert_eq!(r[0].1["result"], "fetched");

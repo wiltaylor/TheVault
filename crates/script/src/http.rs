@@ -74,7 +74,9 @@ pub fn module(client: Client, guarded: Client, ai: crate::Ai) -> Module {
               url: String,
               headers: HashMap<String, String>,
               body: String|
-              -> Reply { Fault(call((&client, &guarded), &ai, &method, &url, headers, body)) },
+              -> Reply {
+            Fault(call((&client, &guarded), &ai, &method, &url, headers, body))
+        },
     );
     m
 }
@@ -214,7 +216,10 @@ fn failed(e: reqwest::Error, url: &Url) -> Result<Result<Response, String>, Host
 }
 
 fn local_network() -> String {
-    format!("{} Agent code reaches public hosts only: call a script tool or run a task (run_task) that names the host.", ::ai::web::LOCAL_NETWORK)
+    format!(
+        "{} Agent code reaches public hosts only: call a script tool or run a task (run_task) that names the host.",
+        ::ai::web::LOCAL_NETWORK
+    )
 }
 
 #[cfg(test)]

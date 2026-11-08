@@ -566,7 +566,11 @@ fn run_task_runs_it_as_its_run_now_button_does_and_answers_the_log() {
 
     // A user task's wildcard keeps LAN access too, including through run_task.
     api.task("tally", "label = \"Tally\"\nschedule = \"0 0 1 1 *\"\nscript = \"tally\"\nallow_domains = [\"*\"]\n");
-    api.calls(&fake, Some("offline"), &[("run_task", json!({ "name": "tally" }))]);
+    api.calls(
+        &fake,
+        Some("offline"),
+        &[("run_task", json!({ "name": "tally" }))],
+    );
     let r = results(&fake);
     assert!(!r[0].0, "{}", r[0].1);
     assert_eq!(r[0].1["result"]["outcome"], "succeeded");

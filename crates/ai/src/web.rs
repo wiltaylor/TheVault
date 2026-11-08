@@ -112,7 +112,9 @@ pub fn guarded_blocking_client() -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .dns_resolver(Arc::new(GuardedResolver { exempt: Arc::new(Vec::new()) }))
+        .dns_resolver(Arc::new(GuardedResolver {
+            exempt: Arc::new(Vec::new()),
+        }))
         .build()
         .expect("build the guarded HTTP client")
 }
@@ -120,7 +122,12 @@ pub fn guarded_blocking_client() -> reqwest::blocking::Client {
 /// Whether a URL names a local IP literal (which bypasses DNS resolution).
 pub fn local_literal(url: &Url) -> bool {
     url.host_str()
-        .and_then(|h| h.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>().ok())
+        .and_then(|h| {
+            h.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<IpAddr>()
+                .ok()
+        })
         .is_some_and(is_local)
 }
 

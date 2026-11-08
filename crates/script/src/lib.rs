@@ -116,7 +116,11 @@ impl Extensions for Server {
     fn modules(&self, kind: Kind, vault: &Arc<dyn Vault>) -> Vec<Module> {
         let side_effects = || {
             vec![
-                http::module(self.http.clone(), self.guarded_http.clone(), self.ai.clone()),
+                http::module(
+                    self.http.clone(),
+                    self.guarded_http.clone(),
+                    self.ai.clone(),
+                ),
                 ai_module::module(self.ai.clone()),
                 secrets_module(vault.clone()),
             ]

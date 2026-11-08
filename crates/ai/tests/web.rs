@@ -23,7 +23,11 @@ fn blocking_guard_refuses_literals_dns_and_environment_proxies() {
     if std::env::var_os("TV104_PROXY_CHILD").is_none() {
         let proxy = testkit::StandIn::start();
         let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "web::blocking_guard_refuses_literals_dns_and_environment_proxies", "--nocapture"])
+            .args([
+                "--exact",
+                "web::blocking_guard_refuses_literals_dns_and_environment_proxies",
+                "--nocapture",
+            ])
             .env("TV104_PROXY_CHILD", "1")
             .env("HTTP_PROXY", proxy.url(""))
             .env("HTTPS_PROXY", proxy.url(""))
@@ -33,17 +37,27 @@ fn blocking_guard_refuses_literals_dns_and_environment_proxies() {
             .env("https_proxy", proxy.url(""))
             .env("all_proxy", proxy.url(""))
             .env("no_proxy", "")
-            .status().unwrap();
+            .status()
+            .unwrap();
         assert!(status.success());
         assert!(proxy.requests().is_empty(), "guarded client used a proxy");
         return;
     }
     let client = ai::web::guarded_blocking_client();
-    for url in ["http://127.1/", "http://[::1]/", "http://[::ffff:127.0.0.1]/", "http://169.254.169.254/"] {
+    for url in [
+        "http://127.1/",
+        "http://[::1]/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://169.254.169.254/",
+    ] {
         assert!(ai::web::local_literal(&url.parse().unwrap()), "{url}");
     }
     for url in ["http://localhost/", "https://localhost/"] {
-        let e = client.get(url).timeout(Duration::from_secs(5)).send().unwrap_err();
+        let e = client
+            .get(url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .unwrap_err();
         assert!(ai::web::is_local_error(&e), "{url}: {e:?}");
     }
 }
