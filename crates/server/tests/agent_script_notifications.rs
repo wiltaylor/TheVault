@@ -333,7 +333,11 @@ fn a_task_a_handler_and_a_user_tool_run_keep_their_sources_and_are_not_limited()
     assert_eq!(api.count_from("task:burst"), 11);
 
     // The same task run by an agent keeps the task's source, so it is not limited either.
-    let r = api.calls(&fake, "scripter", &[("run_task", json!({ "name": "burst" }))]);
+    let r = api.calls(
+        &fake,
+        "scripter",
+        &[("run_task", json!({ "name": "burst" }))],
+    );
     assert!(!r[0].0, "{}", r[0].1);
     assert_eq!(api.count_from("task:burst"), 22);
 
