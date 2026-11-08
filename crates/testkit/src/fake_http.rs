@@ -16,6 +16,7 @@ use crate::standin::{Reply, Request, read_request, write_reply};
 #[derive(Debug, Clone)]
 pub(crate) enum Answer {
     Whole(Reply),
+    JsonChunks(Reply),
     Stream(Streamed),
 }
 
@@ -75,6 +76,17 @@ fn write_stream(conn: TcpStream, s: &Streamed) -> std::io::Result<()> {
 pub(crate) fn write_answer(conn: TcpStream, answer: &Answer) -> std::io::Result<()> {
     match answer {
         Answer::Whole(r) => write_reply(conn, r),
+        Answer::JsonChunks(r) => {
+            let mut out = conn;
+            write!(out, "HTTP/1.1 {} OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n", r.status)?;
+            for chunk in r.body.chunks(7) {
+                write!(out, "{:x}\r\n", chunk.len())?;
+                out.write_all(chunk)?;
+                out.write_all(b"\r\n")?;
+                out.flush()?;
+            }
+            out.write_all(b"0\r\n\r\n")
+        }
         Answer::Stream(s) => write_stream(conn, s),
     }
 }

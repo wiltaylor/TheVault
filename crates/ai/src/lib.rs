@@ -57,6 +57,7 @@ mod accounts;
 mod anthropic;
 mod chat;
 mod credentials;
+pub mod decisions;
 mod error;
 pub mod html;
 mod http;
