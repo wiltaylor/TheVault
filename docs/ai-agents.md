@@ -102,8 +102,9 @@ Because every notification reaches your phones, each agent has limits:
 | Notifications in one turn or run | 3 |
 | Notifications from one agent in an hour | 10 |
 | Notifications from one agent in 24 hours | 30 |
+| Notifications from all agents together in 24 hours | 60 |
 
-A turn's sub agents share its count, so the turn and the sub agents it starts send 3 together. A call over a limit sends nothing, and the agent is told which limit it reached. The hour and day counts are the notifications stored with the agent's source, so they hold across turns and server restarts. A failed run's notification has the same source and counts too. Deleting notifications from the bell lowers the count.
+A turn's sub agents share its count, so the turn and the sub agents it starts send 3 together. A call over a limit sends nothing, and the agent is told which limit it reached. The 60 a day cap is over all agents' notifications together, so it can refuse a call from an agent that is under its own limits. The hour and day counts are the notifications stored with the agent's source, so they hold across turns and server restarts. A failed run's notification has the same source and counts too. Deleting notifications from the bell lowers the count.
 
 ## Driving the browser box
 
@@ -198,6 +199,8 @@ Safety:
 - **A saved script change always waits for you.** An agent proposes a saved script with `propose_script_change {name, source}` (a new script, or the whole new source of one) or `propose_script_delete {name}`, and reads one with `get_script {name}`. See [Agents that propose saved scripts](#agents-that-propose-saved-scripts).
 - **A scheduled task change always waits for you, and never holds folders.** An agent proposes a task with `propose_task_change {name, wcl, script_source}` or `propose_task_delete {name}`, and reads one with `get_task {name}`. A task file with `read_paths` or `write_paths` is refused. See [Agents that propose scheduled tasks](#agents-that-propose-scheduled-tasks).
 - **Every run is logged with its version.** Each run is an `ai.script` entry in the [activity log](activity.md): the agent, the thread and turn, the tool (`run_script`, `run_saved_script`, `run_task` or the script tool's name), the outcome (`ok`, `error`, or `started` for a task still running when `run_task` answered) and error kind, the time, the instructions, the start of the log, and the script that ran: for a vault tool the SHA-256 of its script and of its tool file and the vault generation they were read at, for a skill's tool the skill, the script's path and its hash, for `run_saved_script` and `run_task` the script's name, its hash and the vault generation it was read at (with the task's name for `run_task`), and for `run_script` the hash of the code, whose whole text stays in the thread as the tool call's input. A task's run is also in the task's own run history.
+
+A script an agent runs cannot queue a phone command: `vault::device_command` answers an error in any run an agent started, whatever the command, `send_sms` and `show_notification` included, and nothing is queued. A text reaches the phone only through an Outbox draft (`draft_sms`), which waits for the user's review unless the agent may send without review. A task that the agent runs with `run_task` keeps its own author and still queues its commands.
 
 A script's changes are made at once, so a turn run by a `read` caller is offered no script: neither `run_script`, nor the saved script and task tools, nor any script tool. A `write` caller's turn, an app's, has the agent's own scope and is offered them. Scripts run on the home server only. The apps send their turns there, so nothing runs on a device, and they leave Settings > Tools to the web app.
 
@@ -462,6 +465,7 @@ Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the 
 | Notes in one dispatch | 100 | The dispatch is refused with 400 `too_many_notes` |
 | Model calls in one run | 12 | The run stops, as a chat turn does |
 | Notifications one agent sends | 3 a turn, 10 an hour, 30 a day | `notify_user` is refused and sends nothing ([Notifying you](#notifying-you)) |
+| Notifications all agents send together | 60 a day | `notify_user` is refused and sends nothing, for every agent ([Notifying you](#notifying-you)) |
 | Quiet time before a note event run | 30 seconds | Changes to the same note coalesce |
 
 ## Runs and notifications

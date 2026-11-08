@@ -8,6 +8,7 @@ mod office;
 
 mod activity;
 mod agent_capacity_retry;
+mod agent_device_commands;
 mod agent_dispatch;
 mod agent_files;
 mod agent_memory;
