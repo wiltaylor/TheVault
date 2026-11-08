@@ -616,7 +616,9 @@ pub async fn apply(
         }
     }
     let w = a.writer.clone();
-    tokio::task::spawn_blocking(move || apply_as_agent(&w, author, event, &change))
+    tokio::task::spawn_blocking(move || {
+        apply_as_agent(&w, author, event, &change, scope.allows(Scope::Admin))
+    })
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
         .map(Json)
@@ -630,6 +632,7 @@ fn apply_as_agent(
     caller: Author,
     event: &str,
     change: &Value,
+    admin: bool,
 ) -> Result<Value, ApiError> {
     let author = match change["agent"].as_str().filter(|n| !n.is_empty()) {
         Some(name) => {
@@ -663,7 +666,7 @@ fn apply_as_agent(
         }
         None => caller,
     };
-    let result = ai_chat::apply_change(w, &author, event, change);
+    let result = ai_chat::apply_change_with_admin(w, &author, event, change, admin);
     crate::ai_activity::applied(
         w,
         &author,

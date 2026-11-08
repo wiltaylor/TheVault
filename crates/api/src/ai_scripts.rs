@@ -645,7 +645,7 @@ pub(crate) fn propose_delete(
 /// writer's lock, with the write. Any of them changed since the card is 409 `stale`, and nothing is
 /// written: the tool's problems are compared with the card's, since a tool with problems is saved
 /// and not offered.
-pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
+pub(crate) fn apply_tool(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -707,6 +707,9 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(runs_stale());
         }
         let (_, _, changes) = w.put_tool_changes(name, after, script_after, name_issues)?;
+        if let (Some(_), Some(s)) = (script_after, script) {
+            crate::ai_script_changes::require_phone_script_admin(w, s, script_after, admin)?;
+        }
         Ok(changes)
     })?;
     let op = if p["before"].is_string() {
