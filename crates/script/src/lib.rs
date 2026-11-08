@@ -24,11 +24,10 @@
 //! calls reach only the hosts on the job's allowlist, or any host when it holds `"*"`, and never
 //! follow redirects (D10). The image downloads of `vault::html_to_blocks` and
 //! `vault::complete_images` follow a fetch policy of their own instead, in `html.rs`
-//! (rich-import H3). A script reads only the secrets its job names, or every secret when
-//! they hold [`ALL_SECRETS`] (an agent's `run_script`, script-tools T1), and cannot list them
-//! (D10). File access reaches only the job's directories, never the vault itself. The `ai`
-//! module reads the AI credentials itself, so a script names neither them nor the providers'
-//! hosts, and can never read a key (ai D13).
+//! (rich-import H3). A script reads only the secrets its job names, and cannot list them (D10).
+//! An agent's own code names none (TV-99). File access reaches only the job's directories, never
+//! the vault itself. The `ai` module reads the AI credentials itself, so a script names neither
+//! them nor the providers' hosts, and can never read a key (ai D13).
 
 mod ai_module;
 mod fs;
@@ -138,15 +137,23 @@ impl Extensions for Server {
 /// The largest value `secrets::set` stores (google-sync D21).
 pub const MAX_SECRET_VALUE: usize = 64 * 1024;
 
-/// A job's `secrets` entry that grants every secret, which only an agent's `run_script` names
-/// (script-tools T1). A task or handler file cannot: `*` is not a secret name.
-pub const ALL_SECRETS: &str = "*";
-
-/// Whether the running job names secret `name`, or every secret.
-fn granted(name: &str) -> Result<bool, HostError> {
+/// Whether the running job names secret `name`. The refusal is the text the script sees.
+fn granted(name: &str) -> Result<Result<(), String>, HostError> {
     run::with(|r| {
         r.remaining()?;
-        Ok(r.job.secrets.iter().any(|s| s == name || s == ALL_SECRETS))
+        if r.job.secrets.iter().any(|s| s == name) {
+            return Ok(Ok(()));
+        }
+        // An agent's own code (run_script, or run_saved_script) names no secret: the refusal
+        // says which route reads one (TV-99 D1).
+        let agent = matches!(r.job.author, Some(Author::Agent(_))) && r.job.secrets.is_empty();
+        Ok(Err(if agent {
+            format!(
+                "secret {name:?} is not granted to this script: an agent's own code reads no secrets. Put the call in a script tool that names the secret (propose_tool_change), or run a task that names it (run_task)"
+            )
+        } else {
+            format!("secret {name:?} is not granted to this script")
+        }))
     })
 }
 
@@ -158,10 +165,8 @@ fn secrets_module(v: Arc<dyn Vault>) -> Module {
         "set",
         ["name", "value"],
         move |name: String, value: String| -> Reply<()> {
-            Fault(granted(&name).map(|granted| {
-                if !granted {
-                    return Err(format!("secret {name:?} is not granted to this script"));
-                }
+            Fault(granted(&name).map(|granted| -> Result<(), String> {
+                granted?;
                 if value.len() > MAX_SECRET_VALUE {
                     return Err(format!(
                         "secret {name:?} is {} bytes: a secret holds at most 64 KiB",
@@ -173,10 +178,8 @@ fn secrets_module(v: Arc<dyn Vault>) -> Module {
         },
     );
     m.fn_named("get", ["name"], move |name: String| -> Reply<String> {
-        Fault(granted(&name).map(|granted| {
-            if !granted {
-                return Err(format!("secret {name:?} is not granted to this script"));
-            }
+        Fault(granted(&name).map(|granted| -> Result<String, String> {
+            granted?;
             v.secret(&name)?
                 .ok_or_else(|| format!("there is no secret named {name:?}"))
         }))
