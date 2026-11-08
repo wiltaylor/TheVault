@@ -1,7 +1,8 @@
 //! S1 with the fake Anthropic provider: agents and wscript (script-tools T1 to T7, T10).
 //!
 //! `run_script` reports compile and run-time errors, results and logs, updates many notes in one
-//! run, reaches any host and every secret, and is offered only to an agent with `run_code`,
+//! run, reaches a host only with `web.read` and reads no secret (TV-99), and is offered only to an
+//! agent with `run_code`,
 //! which an agent cannot grant without an admin. Script tools are parsed and checked, offered
 //! with their schema when valid and allowed, called with a params map, bounded by their hosts
 //! and secrets, proposed and deleted under the `tools` switch and admin scope, and managed through
@@ -485,19 +486,20 @@ fn main(dry_run: Value) -> Result[int, string] {
 }
 
 #[test]
-fn run_script_reaches_any_host_and_reads_every_secret() {
+fn run_script_reaches_any_host_with_web_read_and_reads_no_secret() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("scripter", SCRIPTER);
     api.secret("weather_key", "k-123");
     let web = StandIn::start();
     web.route("/forecast", Reply::text(200, "sunny"));
+    let url = web.url("/forecast");
+
+    // The host is reachable: the agent may read web pages (TV-99 D2).
     let code = r#"use http
-use secrets
 
 fn main(url: Value) -> Result[string, string] {
-    let key = secrets::get("weather_key")?
-    let r = http::get(url.as_string().unwrap(), #{ "authorization": key })?
+    let r = http::get(url.as_string().unwrap(), #{})?
     Ok(r.body)
 }
 "#;
@@ -505,13 +507,78 @@ fn main(url: Value) -> Result[string, string] {
         &fake,
         Some("scripter"),
         "run_script",
-        json!({ "code": code, "function": null, "args": json!([web.url("/forecast")]).to_string() }),
+        json!({ "code": code, "function": null, "args": json!([url]).to_string() }),
     );
     let (err, out) = last_result(&fake);
     assert!(!err, "{out}");
     assert_eq!(out["result"], "sunny");
-    let req = &web.requests()[0];
-    assert_eq!(req.header("authorization"), Some("k-123"));
+    assert_eq!(web.requests()[0].header("authorization"), None);
+
+    // No secret is read, even one the vault holds (TV-99 D1, A1).
+    let code = r#"use secrets
+
+fn main() -> Result[string, string] {
+    secrets::get("weather_key")
+}
+"#;
+    api.one(
+        &fake,
+        Some("scripter"),
+        "run_script",
+        json!({ "code": code, "function": null, "args": null }),
+    );
+    let (err, out) = last_result(&fake);
+    assert!(err, "{out}");
+    assert!(out.to_string().contains("reads no secrets"), "{out}");
+    assert!(!out.to_string().contains("k-123"), "{out}");
+
+    // Nor is one written, not even a server-internal name such as ai_accounts.
+    let code = r#"use secrets
+
+fn main() -> Result[(), string] {
+    secrets::set("ai_accounts", "{}")
+}
+"#;
+    api.one(
+        &fake,
+        Some("scripter"),
+        "run_script",
+        json!({ "code": code, "function": null, "args": null }),
+    );
+    let (err, out) = last_result(&fake);
+    assert!(err, "{out}");
+    assert!(out.to_string().contains("reads no secrets"), "{out}");
+    let names = api.get("/api/secrets");
+    assert!(!names.to_string().contains("ai_accounts"), "{names}");
+}
+
+#[test]
+fn run_script_without_web_read_reaches_no_host() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "offline",
+        "label = \"Offline\"\n\npermissions {\n  web {\n    read = false\n  }\n\n  scripts {\n    run_code = true\n  }\n}\n",
+    );
+    let web = StandIn::start();
+    web.route("/forecast", Reply::text(200, "sunny"));
+    let code = r#"use http
+
+fn main(url: Value) -> Result[string, string] {
+    let r = http::get(url.as_string().unwrap(), #{})?
+    Ok(r.body)
+}
+"#;
+    api.one(
+        &fake,
+        Some("offline"),
+        "run_script",
+        json!({ "code": code, "function": null, "args": json!([web.url("/forecast")]).to_string() }),
+    );
+    let (err, out) = last_result(&fake);
+    assert!(err, "{out}");
+    assert!(out.to_string().contains("not on this script's allowlist"), "{out}");
+    assert!(web.requests().is_empty());
 }
 
 #[test]

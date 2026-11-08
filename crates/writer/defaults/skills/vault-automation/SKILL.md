@@ -21,8 +21,9 @@ Every example here is checked: the WCL parses and the wscript compiles.
 
 Each comes from a switch on your Permissions tab, so you may have none of them:
 
-- `run_script`: run your own wscript now, with full access to the vault, the web and every
-  secret, for up to five minutes. Its changes are made at once, as you, with no proposal. From
+- `run_script`: run your own wscript now, with full access to the vault and, when you may read
+  web pages, the web. It reads no secret: a script tool or a task names the secrets it may read.
+  Up to five minutes. Its changes are made at once, as you, with no proposal. From
   **Run wscript code**, which only an admin turns on.
 - `list_scripts`, `run_saved_script`, `list_tasks` and `run_task`: run the vault's saved scripts
   by function, and start a scheduled task now. From **Run saved scripts and tasks** (or Run wscript

@@ -7,9 +7,9 @@ standard `value`, `json`, `math` and `regex` (see `language.md`).
 | Module | `run_script` | Script tools | `before_*` handlers | `after_*` handlers | Tasks |
 |--------|--------------|--------------|---------------------|--------------------|-------|
 | `vault` | yes | yes | yes | yes | yes |
-| `http` | any host | the tool's `allow_domains` | no | the handler's `allow_domains` | the task's `allow_domains` |
+| `http` | any host, when the agent may read web pages | the tool's `allow_domains` | no | the handler's `allow_domains` | the task's `allow_domains` |
 | `ai` | yes | yes | no | yes | yes |
-| `secrets` | every secret | the tool's `secrets` | no | the handler's `secrets` | the task's `secrets` |
+| `secrets` | none | the tool's `secrets` | no | the handler's `secrets` | the task's `secrets` |
 | `fs` | no paths | no paths | no | no | the task's `read_paths` and `write_paths` |
 
 A module a run lacks does not compile.
@@ -231,7 +231,7 @@ fn post_json(url: string, payload: Value) -> Result[int, string] {
 | `secrets::get(name: string)` | `Result[string, string]`: a stored secret's value |
 | `secrets::set(name: string, value: string)` | `Result[(), string]`: store a value, at most 64 KiB |
 
-A tool or task reads only the secrets it names; `run_script` may read any. No function lists
+A tool or task reads only the secrets it names; `run_script` and a saved script run read none. No function lists
 them. Never return or log a secret's value.
 
 ```wscript

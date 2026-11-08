@@ -402,7 +402,7 @@ export function skillsWithoutUseSkill(p: { skills?: string[] | null; tools?: str
 
 /** What the Permissions tab warns of with Run wscript code on (script-tools T7). */
 export const RUN_CODE_WARNING =
-  "It can read and change anything in the vault, call any web host and read script secrets.";
+  "It can read and change anything in the vault. With web reading on, it can call any web host. It reads no script secret.";
 
 /** What the Permissions tab says of the Run saved scripts and tasks switch. */
 export const RUN_SAVED_NOTE =

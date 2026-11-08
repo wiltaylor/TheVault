@@ -301,8 +301,9 @@ impl Outbox {
 /// `false`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Scripts {
-    /// The `run_script` tool: wscript code the agent writes, run with full access to the vault,
-    /// any web host and every script secret. Only an admin grants it.
+    /// The `run_script` tool: wscript code the agent writes, run with full access to the vault
+    /// and, with `web.read`, any web host. It reads no script secret (TV-99). Only an admin
+    /// grants it.
     pub run_code: bool,
     /// The `run_saved_script`, `run_task`, `list_tasks` and `list_scripts` tools: the vault's own
     /// scripts and tasks, run by name. `run_code` implies it ([`Scripts::runs_saved`]). Only an

@@ -4,8 +4,9 @@
 //! - `run_script { code, function, args }` compiles `code` and calls its `function` (`main`
 //!   unless named) with `args`, JSON text of an array. It is offered only to an agent whose file
 //!   sets `permissions { scripts { run_code = true } }`, which only an admin writes, and runs with
-//!   everything a task reaches: `http` to any host, every secret by name (`*`), no `fs`
-//!   directories, five minutes. Its changes are made at once as the agent.
+//!   the vault functions and the `ai` module, `http` to any host only when the agent may read web
+//!   pages (`permissions.web.read`), no secret (TV-99), no `fs` directories, five minutes. Its
+//!   changes are made at once as the agent.
 //! - `run_saved_script`, `run_task`, `list_scripts` and `list_tasks` run the vault's own scripts
 //!   and tasks by name, for an agent with `run_saved` or `run_code` (`crate::ai_saved`).
 //! - A vault tool, `tools/<name>.wcl`, is offered under its name, and a skill's tool under
@@ -29,7 +30,7 @@ use std::time::Duration;
 
 use ai::{Content, Message, Role, ToolCall, ToolSpec};
 use schema::{Agent, ScriptTool};
-use script::{ALL_SECRETS, Host, Job, Kind};
+use script::{Host, Job, Kind};
 use serde_json::{Value, json};
 use state::Author;
 use writer::Writer;
@@ -98,7 +99,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
 pub fn run_script_spec() -> ToolSpec {
     spec_of(
         RUN_SCRIPT,
-        "Run wscript code on the vault: `code` is a whole wscript unit (with its `use` lines), and its function `function` (`main` when null) is called with `args`, each element arriving as a `Value` parameter (declare them `name: Value`). It runs with full access: every vault function, http to any host, the ai module, every script secret by name, for up to 5 minutes and 50 million instructions. Changes are made at once, as you, and recorded in history. Use it for bulk changes and lookups the other tools cannot do; read the wscript skill (use_skill wscript) before writing code, and do a dry run that changes nothing first. Answers the function's return value as JSON, its log (vault::log, print), the time it took and the instructions it used, or the compile or run-time error to fix.",
+        "Run wscript code on the vault: `code` is a whole wscript unit (with its `use` lines), and its function `function` (`main` when null) is called with `args`, each element arriving as a `Value` parameter (declare them `name: Value`). It runs with full access to the vault: every vault function and the ai module, and http to any host only when you may read web pages. It reads no secret: a script tool or a task names the secrets it may read. It runs for up to 5 minutes and 50 million instructions. Changes are made at once, as you, and recorded in history. Use it for bulk changes and lookups the other tools cannot do; read the wscript skill (use_skill wscript) before writing code, and do a dry run that changes nothing first. Answers the function's return value as JSON, its log (vault::log, print), the time it took and the instructions it used, or the compile or run-time error to fix.",
         json!({
             "code": { "type": "string", "description": "The whole wscript unit." },
             "function": { "type": ["string", "null"], "description": "The function to call; null for main." },
@@ -392,8 +393,13 @@ fn code_job(agent: &Agent, input: &Value) -> Result<(Job, Value), Ran> {
     let args = parse_args(&input["args"], &script)?;
     let mut job = Job::new(Kind::Task, RUN_SCRIPT, code, function);
     job.args = args;
-    job.allow_domains = vec!["*".to_owned()];
-    job.secrets = vec![ALL_SECRETS.to_owned()];
+    // Hosts only when the agent may read web pages, and no secret: a script tool or a task
+    // names the secrets it may read (TV-99 D1, D2).
+    job.allow_domains = if agent.permissions.web.read {
+        vec!["*".to_owned()]
+    } else {
+        Vec::new()
+    };
     job.author = Some(Author::Agent(agent.name.clone()));
     job.timeout = Some(CODE_TIMEOUT);
     Ok((job, script))
@@ -773,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn run_script_has_full_access_five_minutes_and_writes_as_the_agent() {
+    fn run_script_reaches_hosts_with_web_read_and_reads_no_secret() {
         let agent = Agent::new("scripter");
         let input =
             json!({ "code": "fn go(n: Value) -> Value { n }", "function": "go", "args": "[3]" });
@@ -781,7 +787,13 @@ mod tests {
         assert_eq!(job.timeout, Some(Duration::from_secs(300)));
         assert_eq!(CODE_TIMEOUT, Duration::from_secs(5 * 60));
         assert_eq!(job.allow_domains, ["*"]);
-        assert_eq!(job.secrets, [ALL_SECRETS]);
+        assert!(job.secrets.is_empty());
+        // Without web.read the run reaches no host.
+        let mut no_web = Agent::new("scripter");
+        no_web.permissions.web.read = false;
+        let (job, _) = code_job(&no_web, &input).unwrap();
+        assert!(job.allow_domains.is_empty());
+        assert!(job.secrets.is_empty());
         assert!(job.read_paths.is_empty() && job.write_paths.is_empty());
         assert_eq!(job.author, Some(Author::Agent("scripter".into())));
         assert_eq!(job.kind, Kind::Task);
