@@ -60,9 +60,52 @@ else
   # A container that died with the emulator running leaves the AVD's lock files behind, and the
   # next start refuses to run ("a snapshot operation is pending"). No emulator runs here now.
   rm -rf "${ANDROID_AVD_HOME:-$HOME/.android/avd}/$avd.avd/"*.lock
+
+  # The emulator binds its modem simulator on [::1] first and on 127.0.0.1 only when that bind
+  # fails, then tells QEMU to connect to the address it got. QEMU resolves ::1 with AI_ADDRCONFIG,
+  # which fails when ::1 on lo is the only IPv6 address, as in a Docker container without IPv6
+  # (TV-47): the modem is then dead, with no SIM and no radio. Here a listener holds [::1]:N during
+  # the start and -modem-simulator-port N makes the emulator use that port, so it falls back to
+  # 127.0.0.1:N, which QEMU resolves.
+  modem=()
+  if [ -r /proc/net/if_inet6 ] && grep -q '^00000000000000000000000000000001 ' /proc/net/if_inet6 \
+    && ! grep -qv '^00000000000000000000000000000001 ' /proc/net/if_inet6 \
+    && [[ " $* " != *" -modem-simulator-port "* ]]; then
+    if command -v node >/dev/null; then
+      : > "$out/modem-port"
+      node -e '
+        const net = require("node:net");
+        // A port free on [::1] and on 127.0.0.1; the [::1] one stays held until this is killed.
+        const pick = () => {
+          const v6 = net.createServer().once("error", () => process.exit(1));
+          v6.listen({ host: "::1", port: 0, ipv6Only: true }, () => {
+            const port = v6.address().port;
+            const v4 = net.createServer().once("error", () => v6.close(pick));
+            v4.listen({ host: "127.0.0.1", port }, () => v4.close(() => console.log(port)));
+          });
+        };
+        pick();
+      ' > "$out/modem-port" &
+      modem_holder=$!
+      trap 'kill "$modem_holder" 2>/dev/null || true' EXIT
+      for _ in $(seq 1 50); do
+        [ -s "$out/modem-port" ] && break
+        sleep 0.1
+      done
+      if [ -s "$out/modem-port" ]; then
+        modem=(-modem-simulator-port "$(cat "$out/modem-port")")
+        echo "::1 is the only IPv6 address: the modem uses 127.0.0.1:${modem[1]}" >&2
+      else
+        echo "could not hold a port on [::1]; the modem may fail" >&2
+      fi
+    else
+      echo "::1 is the only IPv6 address and node is missing to work around it; the modem may fail" >&2
+    fi
+  fi
+
   # -no-snapshot: a cold boot each time, so no state survives in a snapshot between runs.
   nohup emulator -avd "$avd" -port "$port" -no-window -no-audio -no-boot-anim -no-snapshot \
-    -gpu swiftshader_indirect -accel on "${wipe[@]}" "$@" > "$out/emulator.log" 2>&1 &
+    -gpu swiftshader_indirect -accel on "${modem[@]}" "${wipe[@]}" "$@" > "$out/emulator.log" 2>&1 &
   echo "emulator pid $!, log $out/emulator.log" >&2
 fi
 
@@ -75,6 +118,26 @@ for _ in $(seq 1 300); do
   sleep 1
 done
 [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ] || { echo "the emulator did not finish booting; see $out/emulator.log" >&2; exit 1; }
+if [ -n "${modem_holder:-}" ]; then
+  kill "$modem_holder" 2>/dev/null || true
+fi
+
+# The SMS and call checks need the modem. Without it the emulator boots, but adb emu sms send
+# answers OK and Android gets nothing, so fail here instead.
+if [ "$running" = no ] && grep -q "Unable to connect character device modem" "$out/emulator.log"; then
+  echo "the emulator's modem did not connect: $(grep -m1 "Unable to connect character device modem" "$out/emulator.log")" >&2
+  exit 1
+fi
+sim=
+for _ in $(seq 1 60); do
+  sim=$(adb shell getprop gsm.sim.state 2>/dev/null | tr -d '\r')
+  case "$sim" in LOADED* | READY*) break ;; esac
+  sleep 1
+done
+case "$sim" in
+  LOADED* | READY*) ;;
+  *) echo "the SIM is not ready (gsm.sim.state '$sim'): the modem does not work; see $out/emulator.log" >&2; exit 1 ;;
+esac
 
 # Quiet, predictable UI for automation: no animations, the screen stays on while charging (the
 # emulator always is), and no lock screen in the way.
