@@ -93,7 +93,7 @@ Drafting is not a change the chat asks you to apply, since the Outbox is where y
 
 An agent sends you a notification with the `notify_user` tool. It takes a `title` (1 to 200 characters), a `body` (at most 2000 characters, or empty) and a `note_id` (a note the notification opens, or empty). The note must exist and be of a type the agent may read. An agent cannot give any other link.
 
-The notification appears under the bell at once, from the agent: its source is `agent:<name>`, and the bell labels it "<name> agent". It is also pushed to your paired phones. There is no proposal and no confirmation switch, so unattended runs are offered the tool, and it is how a trigger run tells you what it found. It is an ordinary tool name: an agent with no tools list has it, and a tools list that leaves it out takes it away. On the Permissions tab it is the "Notifications" group. It needs a caller with `write`.
+The notification appears under the bell at once, from the agent: its source is `agent:<name>`, and the bell labels it "<name> agent". It is also pushed to your paired phones. A script that an agent starts and that calls `vault::notify` (see [Notifying the user](scripts.md#notifying-the-user)) notifies with the same source, so it shares the agent's limits below. There is no proposal and no confirmation switch, so unattended runs are offered the tool, and it is how a trigger run tells you what it found. It is an ordinary tool name: an agent with no tools list has it, and a tools list that leaves it out takes it away. On the Permissions tab it is the "Notifications" group. It needs a caller with `write`.
 
 Because every notification reaches your phones, each agent has limits:
 
@@ -464,8 +464,8 @@ Changes by you, by tokens, by scripts, tasks and handlers, and by sync from the 
 | Trigger runs one agent starts in an hour | 60 | Further runs are skipped and logged, with one notification an hour. Notes sent to the agent are refused with 429 `too_many_runs` instead |
 | Notes in one dispatch | 100 | The dispatch is refused with 400 `too_many_notes` |
 | Model calls in one run | 12 | The run stops, as a chat turn does |
-| Notifications one agent sends | 3 a turn, 10 an hour, 30 a day | `notify_user` is refused and sends nothing ([Notifying you](#notifying-you)) |
-| Notifications all agents send together | 60 a day | `notify_user` is refused and sends nothing, for every agent ([Notifying you](#notifying-you)) |
+| Notifications one agent sends | 3 a turn, 10 an hour, 30 a day | `notify_user` is refused and sends nothing ([Notifying you](#notifying-you)). A script an agent starts (`run_script`, `run_saved_script`, a vault or skill tool) counts against the same 10 an hour and 30 a day, but not the 3 a turn; it gets an error and sends nothing |
+| Notifications all agents send together | 60 a day | `notify_user` is refused and sends nothing, for every agent ([Notifying you](#notifying-you)); scripts an agent starts count too |
 | Quiet time before a note event run | 30 seconds | Changes to the same note coalesce |
 
 ## Runs and notifications

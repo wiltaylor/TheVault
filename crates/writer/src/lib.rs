@@ -108,6 +108,10 @@ pub use note::{
     ARCHIVED, CONFLICT_OF, Input, block_to_json, doc_to_json, is_archived, print as print_doc,
     value_to_json, value_wcl,
 };
+pub use notify::{
+    AGENT_LIMITS, AGENT_SOURCES, MAX_PER_DAY, MAX_PER_DAY_ALL_AGENTS, MAX_PER_HOUR,
+    agent_limit_message,
+};
 pub use outbox_sms::{COPY_WINDOW_MS, same_number, sms_words};
 pub use purge::Purged;
 pub use refs::Referrer;
