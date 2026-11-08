@@ -320,11 +320,18 @@ fn can(source: &str, proposed: bool) -> Vec<&'static str> {
 }
 
 /// Refuse new phone command sites with the same conservative count rule as SMS sends (TV-108).
-pub(crate) fn device_command_refused(name: &str, before: Option<&str>, after: &str) -> Option<String> {
+pub(crate) fn device_command_refused(
+    name: &str,
+    before: Option<&str>,
+    after: &str,
+) -> Option<String> {
     let now = before.map_or(0, |b| {
         qualified(&words(&without_comments(b)), "vault", "device_command")
     });
-    let then = words(after).iter().filter(|w| **w == "device_command").count();
+    let then = words(after)
+        .iter()
+        .filter(|w| **w == "device_command")
+        .count();
     if then <= now {
         return None;
     }

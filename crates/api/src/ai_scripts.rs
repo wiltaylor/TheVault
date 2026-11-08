@@ -535,7 +535,11 @@ pub(crate) fn propose_change(
         return Err(refused(why));
     }
     if let Some(source) = script_after
-        && let Some(why) = crate::ai_script_changes::device_command_refused(&tool.script, script_before.as_deref(), source)
+        && let Some(why) = crate::ai_script_changes::device_command_refused(
+            &tool.script,
+            script_before.as_deref(),
+            source,
+        )
     {
         return Err(refused(why));
     }
@@ -704,7 +708,11 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(stale(format!("the tool {name} or its script")));
         }
         if let (Some(source), Some(s)) = (script_after, script)
-            && let Some(why) = crate::ai_script_changes::device_command_refused(s, w.read_script(s).ok().as_deref(), source)
+            && let Some(why) = crate::ai_script_changes::device_command_refused(
+                s,
+                w.read_script(s).ok().as_deref(),
+                source,
+            )
         {
             return Err(ApplyError::Refused(why));
         }

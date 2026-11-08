@@ -347,9 +347,16 @@ pub(crate) fn propose_change(
         ));
     }
     if let Some(source) = script_after
-        && let Some(why) = crate::ai_script_changes::device_command_refused(&def.script, script_before.as_deref(), source)
+        && let Some(why) = crate::ai_script_changes::device_command_refused(
+            &def.script,
+            script_before.as_deref(),
+            source,
+        )
     {
-        return Err(refused(why, json!({ "message": "The task was not proposed." })));
+        return Err(refused(
+            why,
+            json!({ "message": "The task was not proposed." }),
+        ));
     }
     let source = script_after
         .or(script_before.as_deref())
@@ -511,7 +518,11 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(ApplyError::Refused(why));
         }
         if let Some(source) = script_after
-            && let Some(why) = crate::ai_script_changes::device_command_refused(&def.script, script_before.as_deref(), source)
+            && let Some(why) = crate::ai_script_changes::device_command_refused(
+                &def.script,
+                script_before.as_deref(),
+                source,
+            )
         {
             return Err(ApplyError::Refused(why));
         }

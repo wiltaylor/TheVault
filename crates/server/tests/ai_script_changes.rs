@@ -79,7 +79,9 @@ fn device_commands_are_refused_for_script_task_and_tool_proposals_and_apply() {
         let fake = FakeAnthropic::start();
         let api = Api::start(&fake);
         api.seed_users();
-        let added = format!("use vault\n{STAMP}\nfn send() -> Result[Value, string] {{\n    vault::device_command(\"phone\", \"send_sms\", #{{to: \"1\", body: \"hi\"}})\n}}\n");
+        let added = format!(
+            "use vault\n{STAMP}\nfn send(params: Value) -> Result[Value, string] {{\n    vault::device_command(\"phone\", \"send_sms\", params)\n}}\n"
+        );
         let input = |source: &str| {
             if kind == "script_proposal" {
                 json!({ "name": name, "source": source })
@@ -93,8 +95,14 @@ fn device_commands_are_refused_for_script_task_and_tool_proposals_and_apply() {
         assert!(err && got.to_string().contains("draft_sms"), "{got}");
         let kept = format!("{STAMP}\n");
         let events = api.one(&fake, tool, input(&kept));
-        let mut proposal = find(&events, kind).unwrap_or_else(|| panic!("{events:?}")).clone();
-        let field = if kind == "script_proposal" { "after" } else { "script_after" };
+        let mut proposal = find(&events, kind)
+            .unwrap_or_else(|| panic!("{events:?}"))
+            .clone();
+        let field = if kind == "script_proposal" {
+            "after"
+        } else {
+            "script_after"
+        };
         proposal[field] = json!(added);
         let (status, body) = api.apply_as(&api.token(), &proposal);
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
