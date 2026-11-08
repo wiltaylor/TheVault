@@ -402,9 +402,9 @@ pub(crate) const PHONE_ADMIN_MESSAGE: &str = "A signed-in admin must apply this 
 // need an admin, rather than letting a different spelling hide a sensitive call.
 fn sensitive_phone_source(before: Option<&str>, after: Option<&str>) -> bool {
     [before, after].into_iter().flatten().any(|source| {
-        words(source).iter().any(|word| {
-            matches!(*word, "sms_send" | "contacts_upsert" | "contacts_delete")
-        })
+        words(source)
+            .iter()
+            .any(|word| matches!(*word, "sms_send" | "contacts_upsert" | "contacts_delete"))
     })
 }
 
@@ -418,7 +418,9 @@ pub(crate) fn require_phone_script_admin(
 ) -> Result<(), ApplyError> {
     if !admin
         && sensitive_phone_source(w.read_script(name).ok().as_deref(), after)
-        && w.script_runs_as(name, None)?.iter().any(|u| u.kind == "device")
+        && w.script_runs_as(name, None)?
+            .iter()
+            .any(|u| u.kind == "device")
     {
         return Err(ApplyError::Refused(PHONE_ADMIN_MESSAGE.into()));
     }
