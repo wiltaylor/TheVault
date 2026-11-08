@@ -458,7 +458,8 @@ fn http_and_secrets_are_unavailable_in_a_before_handler() {
 fn explicitly_granted_internal_secrets_cannot_be_read_or_written() {
     let f = fixture();
     let src = r#"use secrets
-fn run(name: string) -> List[string] {
+fn run(arg: Value) -> List[string] {
+    let name = arg.as_string().unwrap()
     let read = match secrets::get(name) { Ok(v) => v, Err(e) => e }
     let write = match secrets::set(name, "changed") { Ok(_) => "written", Err(e) => e }
     [read, write]
