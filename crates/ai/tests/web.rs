@@ -22,7 +22,7 @@ fn blocking_guard_refuses_literals_dns_and_environment_proxies() {
     // Environment belongs to the child, never to the shared test process.
     if std::env::var_os("TV104_PROXY_CHILD").is_none() {
         let proxy = testkit::StandIn::start();
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "web::blocking_guard_refuses_literals_dns_and_environment_proxies",
@@ -37,9 +37,12 @@ fn blocking_guard_refuses_literals_dns_and_environment_proxies() {
             .env("https_proxy", proxy.url(""))
             .env("all_proxy", proxy.url(""))
             .env("no_proxy", "")
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{output:?}");
+        assert!(stdout.contains("running 1 test\n"), "{stdout}");
+        assert!(stdout.contains("1 passed; 0 failed"), "{stdout}");
         assert!(proxy.requests().is_empty(), "guarded client used a proxy");
         return;
     }

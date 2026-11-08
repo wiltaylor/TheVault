@@ -788,12 +788,14 @@ mod tests {
         assert_eq!(job.timeout, Some(Duration::from_secs(300)));
         assert_eq!(CODE_TIMEOUT, Duration::from_secs(5 * 60));
         assert_eq!(job.allow_domains, ["*"]);
+        assert!(job.public_only);
         assert!(job.secrets.is_empty());
         // Without web.read the run reaches no host.
         let mut no_web = Agent::new("scripter");
         no_web.permissions.web.read = false;
         let (job, _) = code_job(&no_web, &input).unwrap();
         assert!(job.allow_domains.is_empty());
+        assert!(job.public_only);
         assert!(job.secrets.is_empty());
         assert!(job.read_paths.is_empty() && job.write_paths.is_empty());
         assert_eq!(job.author, Some(Author::Agent("scripter".into())));

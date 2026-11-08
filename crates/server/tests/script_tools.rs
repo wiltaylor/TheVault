@@ -963,7 +963,6 @@ fn run(params: Value) -> Result[Value, string] {
         r[3].1
     );
 
-    // An agent with a tools list is offered only the tools it names.
     // User-file wildcards retain LAN access too, even when called by an agent.
     api.tool("fetch", &wcl.replace(&web.host(), "*"), Some(script));
     api.calls(
@@ -975,6 +974,7 @@ fn run(params: Value) -> Result[Value, string] {
     assert!(!r[0].0, "{}", r[0].1);
     assert_eq!(r[0].1["result"], "fetched");
 
+    // An agent with a tools list is offered only the tools it names.
     api.agent(
         "plain",
         "label = \"Plain\"\n\npermissions {\n  tools = [\"get_note\"]\n}\n",
