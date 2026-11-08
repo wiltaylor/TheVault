@@ -464,14 +464,28 @@ fn run(name: string) -> List[string] {
     [read, write]
 }
 "#;
-    for name in ["ai_settings", "ai_accounts", "ai_account_key_test", "ai_account_chatgpt_test", "ai_account_usage_test", "gitsync_token", "gitsync_ssh_key", "gitsync_settings", "brave_api_key", "brave_settings"] {
+    for name in [
+        "ai_settings",
+        "ai_accounts",
+        "ai_account_key_test",
+        "ai_account_chatgpt_test",
+        "ai_account_usage_test",
+        "gitsync_token",
+        "gitsync_ssh_key",
+        "gitsync_settings",
+        "brave_api_key",
+        "brave_settings",
+    ] {
         f.writer.state().set_secret(name, "original").unwrap();
         let mut j = job(Kind::Task, src);
         j.secrets = vec![name.into()];
         j.args = vec![json!(name)];
         let why = format!("secret {name:?} is reserved for the server");
         assert_eq!(f.host.run(j).result.unwrap(), json!([why, why]));
-        assert_eq!(f.writer.state().get_secret(name).unwrap().as_deref(), Some("original"));
+        assert_eq!(
+            f.writer.state().get_secret(name).unwrap().as_deref(),
+            Some("original")
+        );
     }
 }
 

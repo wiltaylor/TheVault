@@ -459,15 +459,27 @@ fn internal_secrets_are_refused_in_task_proposals_and_apply() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     let p = api.propose(&fake, "nightly", NIGHTLY, Some(STAMP));
-    for name in ["ai_accounts", "ai_account_chatgpt_test", "gitsync_ssh_key", "brave_api_key", "google_client_secret"] {
+    for name in [
+        "ai_accounts",
+        "ai_account_chatgpt_test",
+        "gitsync_ssh_key",
+        "brave_api_key",
+        "google_client_secret",
+    ] {
         let wcl = NIGHTLY.replace("api_key", name);
         let said = api.refused(&fake, "nightly", &wcl, Some(STAMP));
-        assert!(said.to_string().contains("reserved for the server"), "{said}");
+        assert!(
+            said.to_string().contains("reserved for the server"),
+            "{said}"
+        );
         let mut old = p.clone();
         old["after"] = json!(wcl);
         let (status, body) = api.apply_as(&api.token(), &old);
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-        assert!(body.to_string().contains("reserved for the server"), "{body}");
+        assert!(
+            body.to_string().contains("reserved for the server"),
+            "{body}"
+        );
         assert!(api.task("nightly").is_none());
     }
 }

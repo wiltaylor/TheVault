@@ -708,8 +708,8 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(ApplyError::Refused(why));
         }
         // The compile check again, as the card showed it.
-        let tool = ScriptTool::parse(name, after)
-            .map_err(|e| ApplyError::Invalid(e.to_string()))?;
+        let tool =
+            ScriptTool::parse(name, after).map_err(|e| ApplyError::Invalid(e.to_string()))?;
         if let Some(why) = state::proposed_secrets_refused(&tool.secrets) {
             return Err(ApplyError::Refused(why));
         }
