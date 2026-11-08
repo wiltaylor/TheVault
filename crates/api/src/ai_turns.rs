@@ -619,9 +619,9 @@ pub async fn apply(
     tokio::task::spawn_blocking(move || {
         apply_as_agent(&w, author, event, &change, scope.allows(Scope::Admin))
     })
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
-        .map(Json)
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+    .map(Json)
 }
 
 /// Apply `change` as the caller, or, when it names the agent that proposed it, as that agent

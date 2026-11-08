@@ -498,7 +498,12 @@ pub(crate) fn apply_task(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
         }
         let script_before = w.read_script(&def.script).ok();
         if script_after.is_some() {
-            crate::ai_script_changes::require_phone_script_admin(w, &def.script, script_after, admin)?;
+            crate::ai_script_changes::require_phone_script_admin(
+                w,
+                &def.script,
+                script_after,
+                admin,
+            )?;
         }
         if script_before.as_deref() != p["script_before"].as_str() {
             return Err(stale(&format!("the script {} changed", def.script)));

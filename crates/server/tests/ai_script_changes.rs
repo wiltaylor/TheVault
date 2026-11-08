@@ -954,18 +954,9 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
             "removed_send" => (original.clone(), plain.clone()),
             // Comments count conservatively too, so even aliases or unusual formatting cannot
             // turn a scanner ambiguity into a write-token grant.
-            "new_contacts" => (
-                plain.clone(),
-                format!("{plain}\n// contacts_upsert\n"),
-            ),
-            "old_contacts" => (
-                format!("{plain}\n// contacts_delete\n"),
-                plain.clone(),
-            ),
-            _ => (
-                plain.clone(),
-                format!("{plain}\n"),
-            ),
+            "new_contacts" => (plain.clone(), format!("{plain}\n// contacts_upsert\n")),
+            "old_contacts" => (format!("{plain}\n// contacts_delete\n"), plain.clone()),
+            _ => (plain.clone(), format!("{plain}\n")),
         };
         api.ok(
             "PUT",
