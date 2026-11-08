@@ -1,6 +1,7 @@
 //! The `http` host module: blocking HTTP for `after_*` handlers and scheduled tasks only, checked
 //! against the run's domain allowlist (D10, D30). An allowlist holding `"*"` reaches any http or
-//! https host. wscript has no HTTP of its own (notes/01).
+//! https host for user-file grants. Agent-supplied grants reach public addresses only unless
+//! ai_settings.fetch_private lifts the rule, with guarded DNS and no proxy. wscript has no HTTP of its own (notes/01).
 //!
 //! Request bodies are strings, so the module also encodes them: `base64` and `base64url` turn
 //! text into its UTF-8 bytes in base64, and `wrap` breaks a long line into lines, as a MIME
@@ -32,23 +33,27 @@ pub struct Response {
 
 type Reply = Fault<Result<Response, String>>;
 
-pub fn module(client: Client) -> Module {
+pub fn module(client: Client, guarded: Client, ai: crate::Ai) -> Module {
     let mut m = Module::new("http");
     m.doc("HTTP to the hosts on this script's allowlist");
     let c = client.clone();
+    let g = guarded.clone();
+    let a = ai.clone();
     m.fn_named(
         "get",
         ["url", "headers"],
         move |url: String, headers: HashMap<String, String>| -> Reply {
-            Fault(call(&c, "GET", &url, headers, String::new()))
+            Fault(call((&c, &g), &a, "GET", &url, headers, String::new()))
         },
     );
     let c = client.clone();
+    let g = guarded.clone();
+    let a = ai.clone();
     m.fn_named(
         "post",
         ["url", "headers", "body"],
         move |url: String, headers: HashMap<String, String>, body: String| -> Reply {
-            Fault(call(&c, "POST", &url, headers, body))
+            Fault(call((&c, &g), &a, "POST", &url, headers, body))
         },
     );
     m.fn_named("base64", ["text"], |text: String| -> String {
@@ -69,7 +74,7 @@ pub fn module(client: Client) -> Module {
               url: String,
               headers: HashMap<String, String>,
               body: String|
-              -> Reply { Fault(call(&client, &method, &url, headers, body)) },
+              -> Reply { Fault(call((&client, &guarded), &ai, &method, &url, headers, body)) },
     );
     m
 }
@@ -105,17 +110,19 @@ pub fn client() -> Client {
 /// `Ok(Err(..))` is a failure the script sees; `Err(..)` faults the run, which only running out
 /// of time does.
 fn call(
-    client: &Client,
+    (client, guarded): (&Client, &Client),
+    ai: &crate::Ai,
     method: &str,
     url: &str,
     headers: HashMap<String, String>,
     body: String,
 ) -> Result<Result<Response, String>, HostError> {
-    let (remaining, allow, max_bytes) = run::with(|r| {
+    let (remaining, allow, max_bytes, public_only) = run::with(|r| {
         Ok((
             r.remaining()?,
             r.job.allow_domains.clone(),
             r.limits.max_http_response,
+            r.job.public_only,
         ))
     })?;
     let url = match Url::parse(url) {
@@ -138,6 +145,11 @@ fn call(
             "host {host:?} is not on this script's allowlist"
         )));
     }
+    let restricted = public_only && allow.iter().any(|d| d == "*") && !ai.fetch_private();
+    if restricted && ::ai::web::local_literal(&url) {
+        return Ok(Err(local_network()));
+    }
+    let client = if restricted { guarded } else { client };
     let method = match Method::from_bytes(method.to_ascii_uppercase().as_bytes()) {
         Ok(m) => m,
         Err(_) => return Ok(Err(format!("{method:?} is not an HTTP method"))),
@@ -188,6 +200,9 @@ fn call(
 fn failed(e: reqwest::Error, url: &Url) -> Result<Result<Response, String>, HostError> {
     // A request cut short by the run's own deadline ends the run.
     run::with(|r| r.remaining())?;
+    if ::ai::web::is_local_error(&e) {
+        return Ok(Err(local_network()));
+    }
     let why = if e.is_timeout() {
         "timed out".to_owned()
     } else if e.is_connect() {
@@ -196,6 +211,10 @@ fn failed(e: reqwest::Error, url: &Url) -> Result<Result<Response, String>, Host
         e.to_string()
     };
     Ok(Err(format!("{url}: {why}")))
+}
+
+fn local_network() -> String {
+    format!("{} Agent code reaches public hosts only: call a script tool or run a task (run_task) that names the host.", ::ai::web::LOCAL_NETWORK)
 }
 
 #[cfg(test)]

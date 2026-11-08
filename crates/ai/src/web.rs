@@ -106,6 +106,36 @@ struct GuardedResolver {
     exempt: Arc<Vec<IpAddr>>,
 }
 
+/// A blocking client with the fetcher's DNS rule, no proxies and no redirects.
+/// Callers must also check IP literals with [`local_literal`] before sending.
+pub fn guarded_blocking_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(Arc::new(GuardedResolver { exempt: Arc::new(Vec::new()) }))
+        .build()
+        .expect("build the guarded HTTP client")
+}
+
+/// Whether a URL names a local IP literal (which bypasses DNS resolution).
+pub fn local_literal(url: &Url) -> bool {
+    url.host_str()
+        .and_then(|h| h.trim_start_matches('[').trim_end_matches(']').parse::<IpAddr>().ok())
+        .is_some_and(is_local)
+}
+
+/// Whether a request failed because the guarded resolver refused a local address.
+pub fn is_local_error(e: &reqwest::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(s) = source {
+        if s.downcast_ref::<LocalAddress>().is_some() {
+            return true;
+        }
+        source = s.source();
+    }
+    false
+}
+
 impl Resolve for GuardedResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();

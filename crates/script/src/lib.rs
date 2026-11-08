@@ -20,6 +20,9 @@
 //! `read_paths` and `write_paths`. A module a kind of run lacks is a compile error, not a runtime
 //! one: HTTP in a `before_*` handler does not compile (D30).
 //!
+//! Agent-granted HTTP reaches public addresses only unless ai_settings.fetch_private lifts the
+//! rule. User tools, tasks and handlers retain their file grants, including LAN access.
+//!
 //! Changes go through `writer`, whose [`Vault`] implementation is the write path (D13, D30). HTTP
 //! calls reach only the hosts on the job's allowlist, or any host when it holds `"*"`, and never
 //! follow redirects (D10). The image downloads of `vault::html_to_blocks` and
@@ -63,6 +66,7 @@ impl Host {
             limits,
             &Server {
                 http: http::client(),
+                guarded_http: ::ai::web::guarded_blocking_client(),
                 ai,
             },
         ))
@@ -81,6 +85,7 @@ impl Deref for Host {
 /// tasks.
 struct Server {
     http: reqwest::blocking::Client,
+    guarded_http: reqwest::blocking::Client,
     ai: Ai,
 }
 
@@ -111,7 +116,7 @@ impl Extensions for Server {
     fn modules(&self, kind: Kind, vault: &Arc<dyn Vault>) -> Vec<Module> {
         let side_effects = || {
             vec![
-                http::module(self.http.clone()),
+                http::module(self.http.clone(), self.guarded_http.clone(), self.ai.clone()),
                 ai_module::module(self.ai.clone()),
                 secrets_module(vault.clone()),
             ]

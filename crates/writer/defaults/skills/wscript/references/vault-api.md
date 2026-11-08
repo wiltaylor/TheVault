@@ -7,10 +7,12 @@ standard `value`, `json`, `math` and `regex` (see `language.md`).
 | Module | `run_script` | Script tools | `before_*` handlers | `after_*` handlers | Tasks |
 |--------|--------------|--------------|---------------------|--------------------|-------|
 | `vault` | yes | yes | yes | yes | yes |
-| `http` | any host, when the agent may read web pages | the tool's `allow_domains` | no | the handler's `allow_domains` | the task's `allow_domains` |
+| `http` | public hosts, when the agent may read web pages | the tool's `allow_domains` | no | the handler's `allow_domains` | the task's `allow_domains` |
 | `ai` | yes | yes | no | yes | yes |
 | `secrets` | none | the tool's `secrets` | no | the handler's `secrets` | the task's `secrets` |
 | `fs` | no paths | no paths | no | no | the task's `read_paths` and `write_paths` |
+
+Local addresses in agent code require a user tool or task that names the host, unless `ai_settings.fetch_private` lifts the rule. User-file grants are unchanged. Guarded agent HTTP uses no proxy.
 
 A module a run lacks does not compile.
 

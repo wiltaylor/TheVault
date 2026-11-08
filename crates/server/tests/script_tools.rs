@@ -486,7 +486,7 @@ fn main(dry_run: Value) -> Result[int, string] {
 }
 
 #[test]
-fn run_script_reaches_any_host_with_web_read_and_reads_no_secret() {
+fn run_script_reaches_lan_only_with_fetch_private_and_reads_no_secret() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("scripter", SCRIPTER);
@@ -495,7 +495,7 @@ fn run_script_reaches_any_host_with_web_read_and_reads_no_secret() {
     web.route("/forecast", Reply::text(200, "sunny"));
     let url = web.url("/forecast");
 
-    // The host is reachable: the agent may read web pages (TV-99 D2).
+    // Agent-granted HTTP refuses local literals and names before any request (TV-104).
     let code = r#"use http
 
 fn main(url: Value) -> Result[string, string] {
@@ -503,6 +503,25 @@ fn main(url: Value) -> Result[string, string] {
     Ok(r.body)
 }
 "#;
+    for url in [
+        url.clone(),
+        url.replace("127.0.0.1", "localhost"),
+        "http://[::1]/".into(),
+        "http://10.0.0.1/".into(),
+        "http://192.168.1.1/".into(),
+        "http://169.254.169.254/".into(),
+        "http://[fd00::1]/".into(),
+        "http://[::ffff:127.0.0.1]/".into(),
+        "http://127.1/".into(),
+    ] {
+        api.one(&fake, Some("scripter"), "run_script",
+            json!({ "code": code, "function": null, "args": json!([url]).to_string() }));
+        let (err, out) = last_result(&fake);
+        assert!(err, "{out}");
+        assert!(out.to_string().contains(ai::web::LOCAL_NETWORK), "{out}");
+    }
+    assert!(web.requests().is_empty());
+    api.secret("ai_settings", r#"{"fetch_private":true}"#);
     api.one(
         &fake,
         Some("scripter"),
@@ -941,6 +960,13 @@ fn run(params: Value) -> Result[Value, string] {
     );
 
     // An agent with a tools list is offered only the tools it names.
+    // User-file wildcards retain LAN access too, even when called by an agent.
+    api.tool("fetch", &wcl.replace(&web.host(), "*"), Some(script));
+    api.calls(&fake, None, &[("fetch", json!({ "what": "http", "url": web.url("/data") }))]);
+    let r = results(&fake);
+    assert!(!r[0].0, "{}", r[0].1);
+    assert_eq!(r[0].1["result"], "fetched");
+
     api.agent(
         "plain",
         "label = \"Plain\"\n\npermissions {\n  tools = [\"get_note\"]\n}\n",

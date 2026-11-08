@@ -359,6 +359,27 @@ fn run_saved_script_calls_a_function_with_its_args_as_the_agent() {
     web.route("/forecast", Reply::text(200, "sunny"));
     let url = web.url("/forecast");
 
+    for url in [
+        url.clone(),
+        url.replace("127.0.0.1", "localhost"),
+        "http://[::1]/".into(),
+        "http://10.0.0.1/".into(),
+        "http://192.168.1.1/".into(),
+        "http://169.254.169.254/".into(),
+        "http://[fd00::1]/".into(),
+        "http://[::ffff:127.0.0.1]/".into(),
+        "http://127.1/".into(),
+    ] {
+        api.calls(&fake, Some("saver"), &[("run_saved_script",
+            json!({ "script": "helpers", "function": "fetch", "args": json!([url]).to_string() }))]);
+        let r = results(&fake);
+        let (err, out) = r.last().unwrap();
+        assert!(err, "{out}");
+        assert!(out.to_string().contains(ai::web::LOCAL_NETWORK), "{out}");
+    }
+    assert!(web.requests().is_empty());
+    api.secret("ai_settings", r#"{"fetch_private":true}"#);
+
     api.calls(
         &fake,
         Some("saver"),
@@ -542,6 +563,14 @@ fn run_task_runs_it_as_its_run_now_button_does_and_answers_the_log() {
     let runs = api.get("/api/tasks/tally/runs");
     assert_eq!(runs["runs"][0]["id"], run_id, "{runs}");
     assert_eq!(runs["runs"][0]["outcome"], "succeeded");
+
+    // A user task's wildcard keeps LAN access too, including through run_task.
+    api.task("tally", "label = \"Tally\"\nschedule = \"0 0 1 1 *\"\nscript = \"tally\"\nallow_domains = [\"*\"]\n");
+    api.calls(&fake, Some("offline"), &[("run_task", json!({ "name": "tally" }))]);
+    let r = results(&fake);
+    assert!(!r[0].0, "{}", r[0].1);
+    assert_eq!(r[0].1["result"]["outcome"], "succeeded");
+    assert_eq!(r[0].1["log"], "tallied pong\n");
 
     // list_tasks reads it back.
     api.calls(&fake, Some("offline"), &[("list_tasks", json!({}))]);
