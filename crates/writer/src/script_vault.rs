@@ -334,18 +334,33 @@ impl Vault for Writer {
         self.state().set_secret(name, value).map_err(err)
     }
 
+    /// A run an agent started (`agent:<name>`, TV-76) counts against that agent's limits and
+    /// the cap of all agents; any other run is not limited, as before.
     fn notify(&self, source: &str, title: &str, body: &str, note: &str) -> Result<Json, String> {
-        let n = Writer::notify(
-            self,
-            &state::NewNotification {
-                title: title.to_owned(),
-                body: (!body.is_empty()).then(|| body.to_owned()),
-                note_id: (!note.is_empty()).then(|| note.to_owned()),
-                url: None,
-                source: source.to_owned(),
-            },
-        )
-        .map_err(err)?;
+        let n = state::NewNotification {
+            title: title.to_owned(),
+            body: (!body.is_empty()).then(|| body.to_owned()),
+            note_id: (!note.is_empty()).then(|| note.to_owned()),
+            url: None,
+            source: source.to_owned(),
+        };
+        let stored = if source.starts_with(crate::AGENT_SOURCES) {
+            self.notify_within(&n, &crate::AGENT_LIMITS)
+        } else {
+            Writer::notify(self, &n)
+        };
+        let n = stored.map_err(|e| match e {
+            crate::Error::State(state::Error::NotificationLimit {
+                by,
+                window_ms,
+                count,
+                max,
+            }) => format!(
+                "{}. Nothing was sent.",
+                crate::agent_limit_message(&by, window_ms, count, max)
+            ),
+            other => err(other),
+        })?;
         Ok(json!({
             "id": n.id,
             "title": n.title,

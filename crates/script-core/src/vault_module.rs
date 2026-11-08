@@ -34,12 +34,16 @@ fn today(now_ms: i64) -> String {
         .unwrap_or_default()
 }
 
-/// Who a notification from the run in progress is from: `task:<name>` for a scheduled script,
-/// `handler:<type>.<event>` for a handler, `script:<name>` otherwise.
+/// Who a notification from the run in progress is from: `agent:<name>` for a run an agent started
+/// (its limits apply, TV-76), `task:<name>` for a scheduled script, `handler:<type>.<event>` for
+/// a handler, `script:<name>` otherwise.
 fn notify_source() -> String {
     crate::current_job(|j| {
         if let Some(vocab::Author::Task(task)) = &j.author {
             return format!("task:{task}");
+        }
+        if let Some(vocab::Author::Agent(agent)) = &j.author {
+            return format!("agent:{agent}");
         }
         let note = j.args.first();
         let text = |k: &str| note.and_then(|n| n.get(k)).and_then(Json::as_str);
