@@ -20,7 +20,9 @@ mod jobs;
 mod notifications;
 mod pins;
 mod runs;
+mod script_secrets;
 mod secrets;
+pub use script_secrets::{internal_script_secret, proposed_secrets_refused};
 mod sessions;
 mod shipped;
 
