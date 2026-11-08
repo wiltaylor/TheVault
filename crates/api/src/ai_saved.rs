@@ -44,6 +44,22 @@ pub const RUN_TASK: &str = "run_task";
 pub const LIST_SCRIPTS: &str = "list_scripts";
 pub const LIST_TASKS: &str = "list_tasks";
 
+/// The shipped scripts that only handlers and device commands run. A function of one of them
+/// acts as the handler does (an Outbox send, a device message) on arguments an agent made up, so
+/// `run_saved_script` refuses them. The scripts of the shipped tasks (the Google sync) and the
+/// user's own scripts stay callable. A unit test checks this list against the shipped files.
+pub const HANDLER_ONLY_SCRIPTS: [&str; 9] = [
+    "device_calls",
+    "device_contacts",
+    "device_import",
+    "device_messages",
+    "device_share",
+    "google_event",
+    "google_mail",
+    "google_series",
+    "outbox_send",
+];
+
 /// How long `run_task` waits for the task to end before answering that it started.
 pub const TASK_WAIT: Duration = Duration::from_secs(60);
 
@@ -109,6 +125,15 @@ pub(crate) fn saved_job(w: &Writer, agent: &Agent, input: &Value) -> Result<(Job
         return Err(Ran::refused(
             "arguments",
             format!("{name:?} is not a script name: list_scripts answers them"),
+            blank,
+        ));
+    }
+    if HANDLER_ONLY_SCRIPTS.contains(&name) {
+        return Err(Ran::refused(
+            "not_allowed",
+            format!(
+                "{name} is a built-in handler script: only the vault's handlers and device commands run it, not run_saved_script. To send mail or a text, use draft_email or draft_sms: it goes to the Outbox for the user to review"
+            ),
             blank,
         ));
     }
@@ -323,5 +348,43 @@ pub(crate) fn list_tasks(s: &Scheduler) -> ToolOut {
         is_error: false,
         summary: json!({ "notes": [] }),
         proposal: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HANDLER_ONLY_SCRIPTS;
+
+    /// Every shipped script is either handler-only (listed) or named by a shipped task, so a new
+    /// shipped script that a handler runs cannot slip past the list unnoticed.
+    #[test]
+    fn handler_only_scripts_match_the_shipped_files() {
+        let scripts: Vec<&str> = writer::SHIPPED_FILES
+            .iter()
+            .filter_map(|f| f.path.strip_prefix("scripts/")?.strip_suffix(".ws"))
+            .collect();
+        for name in HANDLER_ONLY_SCRIPTS {
+            assert!(scripts.contains(&name), "{name} is not a shipped script");
+        }
+        let tasks: Vec<&str> = writer::SHIPPED_FILES
+            .iter()
+            .filter(|f| f.path.starts_with("tasks/"))
+            .map(|f| f.source)
+            .collect();
+        for name in scripts {
+            if HANDLER_ONLY_SCRIPTS.contains(&name) {
+                continue;
+            }
+            let quoted = format!("\"{name}\"");
+            let named = tasks.iter().any(|source| {
+                source
+                    .lines()
+                    .any(|l| l.trim_start().starts_with("script") && l.contains(&quoted))
+            });
+            assert!(
+                named,
+                "{name} is neither handler-only nor a shipped task's script"
+            );
+        }
     }
 }
