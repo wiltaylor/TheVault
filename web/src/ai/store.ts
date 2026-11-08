@@ -344,7 +344,28 @@ export interface ScriptProposal {
   after: string | null;
   runs_as: ScriptUse[];
   warnings: string[];
+  /** Where and what the code can do on a phone, when a device file runs the script (TV-98). */
+  device?: ScriptOnPhone | null;
   proposer?: string;
+}
+
+/** A paired device that runs a phone script, with its switches (TV-98). */
+export interface PhoneOfScript {
+  id: string;
+  name: string;
+  platform: string;
+  sms_send: boolean;
+  contacts_write: boolean;
+}
+
+/** What a script proposal's new code can do on a phone (TV-98, TV-72 U2-U4). */
+export interface ScriptOnPhone {
+  /** "Runs on your phone at its next sync, with no further prompt there." */
+  note: string;
+  platforms: string[];
+  devices: PhoneOfScript[];
+  /** Each thing the new code can do; `new` when the current code cannot. */
+  can: { key: string; label: string; new: boolean }[];
 }
 
 /** A scheduled task as a task proposal shows it (TV-71): the task as the scheduler reads it. */
