@@ -734,7 +734,10 @@ fn backup_with_include_key_of_a_vault_with_no_vault_id_fails_and_writes_nothing(
         s(&failed["message"]).contains("start the server once"),
         "{failed}"
     );
-    assert!(!Path::new(&archive).exists(), "a failed backup left an archive");
+    assert!(
+        !Path::new(&archive).exists(),
+        "a failed backup left an archive"
+    );
     let live = rusqlite::Connection::open(&db).unwrap();
     assert_eq!(
         stored_vault_id(&live),
