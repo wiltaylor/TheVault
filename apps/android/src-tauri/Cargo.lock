@@ -4513,6 +4513,7 @@ dependencies = [
  "script",
  "serde_json",
  "state",
+ "store",
  "thiserror 2.0.21",
  "writer",
 ]
