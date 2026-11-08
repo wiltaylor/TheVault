@@ -341,9 +341,19 @@ fn an_agents_run_script_and_saved_script_cannot_queue_a_device_command() {
             }),
         )],
     );
+    // run_saved_script refuses the shipped handler script before it runs (TV-100), so the
+    // device_command guard is not reached; nothing is queued either way.
     let r = results(&fake);
     assert!(r[0].0, "{}", r[0].1);
-    assert!(r[0].1.contains(REFUSED), "{}", r[0].1);
+    assert_eq!(r[0].1["kind"], "not_allowed", "{}", r[0].1);
+    assert!(
+        r[0].1["error"]
+            .as_str()
+            .unwrap()
+            .contains("built-in handler script"),
+        "{}",
+        r[0].1
+    );
     assert!(api.commands(&device).is_empty());
 
     // The refusals are logged as failed runs, not as successes.
