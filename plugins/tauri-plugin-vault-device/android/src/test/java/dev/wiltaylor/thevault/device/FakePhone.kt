@@ -27,7 +27,7 @@ class FakePhone(private val context: Context) {
 
     init {
         db.execSQL("CREATE TABLE sms (_id INTEGER PRIMARY KEY, thread_id INTEGER, address TEXT, body TEXT, date INTEGER, date_sent INTEGER, type INTEGER)")
-        db.execSQL("CREATE TABLE mms (_id INTEGER PRIMARY KEY, thread_id INTEGER, date INTEGER, date_sent INTEGER, sub TEXT, msg_box INTEGER)")
+        db.execSQL("CREATE TABLE mms (_id INTEGER PRIMARY KEY, thread_id INTEGER, date INTEGER, date_sent INTEGER, sub TEXT, msg_box INTEGER, m_type INTEGER)")
         db.execSQL("CREATE TABLE addr (_id INTEGER PRIMARY KEY, msg_id INTEGER, address TEXT, type INTEGER)")
         db.execSQL("CREATE TABLE part (_id INTEGER PRIMARY KEY, mid INTEGER, ct TEXT, name TEXT, fn TEXT, cl TEXT, text TEXT)")
         db.execSQL("CREATE TABLE calls (_id INTEGER PRIMARY KEY, number TEXT, type INTEGER, date INTEGER, duration INTEGER)")
@@ -62,8 +62,20 @@ class FakePhone(private val context: Context) {
         notify(android.provider.Telephony.Sms.CONTENT_URI)
     }
 
-    fun mms(id: Long, from: String, to: List<String>, dateSeconds: Long = id * 60, subject: String? = null, thread: Long = 9) {
-        db.execSQL("INSERT INTO mms VALUES (?, ?, ?, ?, ?, ?)", arrayOf(id, thread, dateSeconds, dateSeconds, subject, 1))
+    /**
+     * An MMS row in the inbox. [messageType] is its `m_type`: 132 (RetrieveConf) for a downloaded
+     * MMS, the default; 130 (NotificationInd) for the pre-download notification, which has no parts.
+     */
+    fun mms(
+        id: Long,
+        from: String,
+        to: List<String>,
+        dateSeconds: Long = id * 60,
+        subject: String? = null,
+        thread: Long = 9,
+        messageType: Int = 132,
+    ) {
+        db.execSQL("INSERT INTO mms VALUES (?, ?, ?, ?, ?, ?, ?)", arrayOf(id, thread, dateSeconds, dateSeconds, subject, 1, messageType))
         db.execSQL("INSERT INTO addr (msg_id, address, type) VALUES (?, ?, 137)", arrayOf(id, from))
         to.forEach { db.execSQL("INSERT INTO addr (msg_id, address, type) VALUES (?, ?, 151)", arrayOf(id, it)) }
     }
