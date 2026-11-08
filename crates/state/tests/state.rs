@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use state::{
     Author, Clock, Error, JobStatus, LiveEvent, MAX_NOTIFICATIONS, Missed, NewNotification,
-    PrunePolicy, RunOutcome, Scope, SecretKey, SourceLimit, State, Subscription, key_file_path,
+    PrunePolicy, RunOutcome, Scope, SecretKey, SourceLimit, SourceMatch, State, Subscription,
+    key_file_path,
 };
 use tempfile::TempDir;
 
@@ -946,6 +947,7 @@ fn add_notification_within_refuses_past_a_limit_and_stores_nothing() {
     let limits = [SourceLimit {
         window_ms: 1_000,
         max: 2,
+        sources: SourceMatch::Own,
     }];
     state
         .add_notification_within(&from("agent:a"), &limits)
@@ -981,12 +983,68 @@ fn add_notification_within_refuses_past_a_limit_and_stores_nothing() {
 }
 
 #[test]
+fn a_prefix_limit_counts_every_source_with_the_prefix_together() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(1_000_000);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let from = |source: &str| NewNotification {
+        source: source.to_owned(),
+        ..note("hi")
+    };
+    let own = [SourceLimit {
+        window_ms: DAY_MS,
+        max: 2,
+        sources: SourceMatch::Own,
+    }];
+    let all = [SourceLimit {
+        window_ms: DAY_MS,
+        max: 3,
+        sources: SourceMatch::Prefix("agent:"),
+    }];
+    // Four agent notifications, from three sources: agent:a is at its own limit of 2, and the
+    // prefix holds 4 of its 3.
+    state.add_notification(&from("agent:a")).unwrap();
+    state.add_notification(&from("agent:a")).unwrap();
+    state.add_notification(&from("agent:b")).unwrap();
+    state.add_notification(&from("agent:c")).unwrap();
+    // A source outside the prefix is stored, and is not counted by it.
+    state.add_notification(&from("token:x")).unwrap();
+    let err = state
+        .add_notification_within(&from("agent:d"), &all)
+        .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            Error::NotificationLimit { by, window_ms: DAY_MS, count: 4, max: 3 } if by == "agent:"
+        ),
+        "{err:?}"
+    );
+    assert!(
+        state
+            .add_notification_within(&from("agent:a"), &own)
+            .is_err(),
+        "agent:a is at its own limit of 2"
+    );
+    // A notification outside the prefix is not held back by the prefix limit.
+    state
+        .add_notification_within(&from("token:y"), &all)
+        .unwrap();
+    assert_eq!(state.notifications_from("token:y", DAY_MS).unwrap(), 1);
+    // The window moves on, and the prefix may notify again.
+    clock.advance(DAY_MS);
+    state
+        .add_notification_within(&from("agent:d"), &all)
+        .unwrap();
+}
+
+#[test]
 fn concurrent_adds_from_one_source_never_pass_a_limit() {
     let dir = TempDir::new().unwrap();
     let state = Arc::new(open(&dir));
     let limits = [SourceLimit {
         window_ms: DAY_MS,
         max: 10,
+        sources: SourceMatch::Own,
     }];
     let callers: Vec<_> = (0..32)
         .map(|i| {
