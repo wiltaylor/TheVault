@@ -62,6 +62,17 @@ pub fn backup(vault: &Path, out: &Path, include_key: bool) -> Result<Value, Fail
     // state.db here would change a file that the pre-upgrade backup must leave as it is, so the
     // behaviour is documented in docs/install.md instead (TV-52).
     let made_id = stored.is_none();
+    // With no stored id, the key file is named after an id that does not exist yet, so there is
+    // no key to include. Fail before anything is written (TV-73).
+    if made_id && include_key {
+        return Err(Fail::new(
+            "no_vault_id",
+            format!(
+                "--include-key: {} has no vault id yet, so its key file cannot be found; start the server once (or run git sync), then back up again",
+                vault.display()
+            ),
+        ));
+    }
     let vault_id = stored.unwrap_or_else(|| state::random_hex(16));
     if out.exists() {
         return Err(Fail::new(

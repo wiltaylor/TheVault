@@ -284,7 +284,7 @@ No backup holds the secret key. Without `/config/vault.key` a restored vault can
 docker compose cp thevault:/config/vault.key ./vault.key
 ```
 
-To put the key in a backup anyway, add `--include-key` to the `vault backup` command.
+To put the key in a backup anyway, add `--include-key` to the `vault backup` command. A vault with no id yet has no key file to include, so that backup fails: start the server once, then back up again.
 
 Each vault has an id, which names its key file and its git sync branch. `vault init` makes it and keeps it in `state.db`, and a backup copies it. A vault that has no id in `state.db`, such as one from an older build, gets a new id in each backup, and the vault keeps having none until the server starts or git sync runs. The id of a later backup or sync then differs from the id of the earlier backups. A backup taken before that does not restore as the same git sync instance: it syncs as an instance of its own. Start the server once before you take a backup that you want to keep as the same vault.
 
