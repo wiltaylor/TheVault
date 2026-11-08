@@ -577,7 +577,10 @@ fn main(url: Value) -> Result[string, string] {
     );
     let (err, out) = last_result(&fake);
     assert!(err, "{out}");
-    assert!(out.to_string().contains("not on this script's allowlist"), "{out}");
+    assert!(
+        out.to_string().contains("not on this script's allowlist"),
+        "{out}"
+    );
     assert!(web.requests().is_empty());
 }
 

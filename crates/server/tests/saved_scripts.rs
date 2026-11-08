@@ -459,7 +459,11 @@ fn run_saved_script_calls_a_function_with_its_args_as_the_agent() {
     );
     let r = results(&fake);
     assert!(r[0].0, "{}", r[0].1);
-    assert!(r[0].1.to_string().contains("reads no secrets"), "{}", r[0].1);
+    assert!(
+        r[0].1.to_string().contains("reads no secrets"),
+        "{}",
+        r[0].1
+    );
     assert!(!r[0].1.to_string().contains("k-123"), "{}", r[0].1);
 
     // Each run is logged with the script's hash and the generation it was read at.
