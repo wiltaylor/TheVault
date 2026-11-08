@@ -710,6 +710,39 @@ fn backup_with_include_key_carries_the_key_to_a_new_machine() {
     );
 }
 
+/// A vault with no vault id has no key file to find, so `--include-key` fails before it writes
+/// anything, and says to start the server once first (TV-73).
+#[test]
+fn backup_with_include_key_of_a_vault_with_no_vault_id_fails_and_writes_nothing() {
+    let vault = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let vault_dir = tmp_path(&dirs, "v");
+    vault.ok(&["init", &vault_dir, "--password-stdin"], "pw\n");
+    let db = Path::new(&vault_dir).join(".vault/state.db");
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("DELETE FROM meta WHERE key = 'vault_id'", [])
+        .unwrap();
+
+    let archive = tmp_path(&dirs, "k.sqlar");
+    let failed = vault.fails(
+        &["backup", &archive, "--include-key", "--vault", &vault_dir],
+        "",
+    );
+    assert_eq!(failed["error"], "no_vault_id", "{failed}");
+    assert!(
+        s(&failed["message"]).contains("start the server once"),
+        "{failed}"
+    );
+    assert!(!Path::new(&archive).exists(), "a failed backup left an archive");
+    let live = rusqlite::Connection::open(&db).unwrap();
+    assert_eq!(
+        stored_vault_id(&live),
+        None,
+        "backup wrote the live state.db"
+    );
+}
+
 #[test]
 fn init_creates_the_layout_and_key_file_and_sets_the_password() {
     let vault = Vault::offline();
