@@ -65,7 +65,8 @@ fn send_many(n: int, title: string) -> Result[(), string] {
 /// The saved script `ping`: `ping(n)` sends `n` notifications.
 fn ping_source() -> String {
     format!(
-        "{SEND_MANY}\nfn ping(n: int) -> Result[(), string] {{\n    send_many(n, \"Ping\")\n}}\n"
+        "{SEND_MANY}\nfn ping(n: Value) -> Result[(), string] {{\n    \
+         send_many(n.as_int().unwrap(), \"Ping\")\n}}\n"
     )
 }
 
