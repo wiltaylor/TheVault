@@ -69,6 +69,49 @@ fn call(params: Value) -> Value {
 
 const NIGHTLY: &str = "schedule = \"0 3 * * *\"\ntimezone = \"Europe/London\"\nscript = \"stamp\"\nallow_domains = [\"api.example.com\"]\nsecrets = [\"api_key\"]\npaused = true\n";
 
+#[test]
+fn device_commands_are_refused_for_script_task_and_tool_proposals_and_apply() {
+    for (tool, kind, name, wcl) in [
+        ("propose_script_change", "script_proposal", "stamp", ""),
+        ("propose_task_change", "task_proposal", "nightly", NIGHTLY),
+        ("propose_tool_change", "tool_proposal", "echo", ECHO),
+    ] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.seed_users();
+        let added = format!("use vault\n{STAMP}\nfn send() -> Result[Value, string] {{\n    vault::device_command(\"phone\", \"send_sms\", #{{to: \"1\", body: \"hi\"}})\n}}\n");
+        let input = |source: &str| {
+            if kind == "script_proposal" {
+                json!({ "name": name, "source": source })
+            } else {
+                json!({ "name": name, "wcl": wcl, "script_source": source })
+            }
+        };
+        let events = api.one(&fake, tool, input(&added));
+        assert!(find(&events, kind).is_none(), "{events:?}");
+        let (err, got) = last_result(&fake);
+        assert!(err && got.to_string().contains("draft_sms"), "{got}");
+        let kept = format!("{STAMP}\n");
+        let events = api.one(&fake, tool, input(&kept));
+        let mut proposal = find(&events, kind).unwrap_or_else(|| panic!("{events:?}")).clone();
+        let field = if kind == "script_proposal" { "after" } else { "script_after" };
+        proposal[field] = json!(added);
+        let (status, body) = api.apply_as(&api.token(), &proposal);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(body.to_string().contains("draft_sms"), "{body}");
+        assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+
+        // Existing command sites may be kept, including in handler/task/tool scripts.
+        api.ok("PUT", "/api/scripts/stamp", json!({ "source": added }));
+        let changed = format!("{added}\n");
+        let events = api.one(&fake, tool, input(&changed));
+        let proposal = find(&events, kind).unwrap_or_else(|| panic!("{events:?}"));
+        let (status, body) = api.apply_as(&api.token(), proposal);
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
+    }
+}
+
 const ECHO: &str = "description = \"Echo the parameters.\"\nscript = \"stamp\"\nfunction = \"call\"\nallow_domains = [\"echo.example.com\"]\n";
 
 /// Every confirmation switch off.
