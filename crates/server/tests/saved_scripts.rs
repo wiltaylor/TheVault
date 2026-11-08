@@ -766,9 +766,15 @@ fn run_saved_script_refuses_the_built_in_handler_scripts() {
             r[i].1
         );
     }
-    // A user's own script is not on the list, so it still runs for this agent.
-    assert!(!r[3].0, "{}", r[3].1);
-    assert_eq!(r[3].1["result"], "k-123", "{}", r[3].1);
+    // A user's own script is not on the list, so it still runs for this agent; but a saved
+    // script run reads no secret (TV-99 D3), so its secret read is refused.
+    assert!(r[3].0, "{}", r[3].1);
+    assert!(
+        r[3].1.to_string().contains("reads no secrets"),
+        "{}",
+        r[3].1
+    );
+    assert!(!r[3].1.to_string().contains("k-123"), "{}", r[3].1);
     // The refusal is the same for an agent without run_code.
     api.calls(
         &fake,

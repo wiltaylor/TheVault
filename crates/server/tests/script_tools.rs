@@ -532,11 +532,12 @@ fn main() -> Result[string, string] {
     assert!(out.to_string().contains("reads no secrets"), "{out}");
     assert!(!out.to_string().contains("k-123"), "{out}");
 
-    // Nor is one written, not even a server-internal name such as ai_accounts.
+    // Nor is one written: the probe name does not exist yet, so its absence shows nothing was
+    // written.
     let code = r#"use secrets
 
 fn main() -> Result[(), string] {
-    secrets::set("ai_accounts", "{}")
+    secrets::set("tv99_probe", "x")
 }
 "#;
     api.one(
@@ -549,7 +550,7 @@ fn main() -> Result[(), string] {
     assert!(err, "{out}");
     assert!(out.to_string().contains("reads no secrets"), "{out}");
     let names = api.get("/api/secrets");
-    assert!(!names.to_string().contains("ai_accounts"), "{names}");
+    assert!(!names.to_string().contains("tv99_probe"), "{names}");
 }
 
 #[test]
