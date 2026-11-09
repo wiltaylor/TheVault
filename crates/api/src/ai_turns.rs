@@ -134,8 +134,9 @@ fn keep_finished() -> Duration {
 /// the production reader wait or the clocks of other turns/tests.
 fn initial_unread_since() -> Instant {
     let now = Instant::now();
-    if cfg!(debug_assertions)
-        && let Some(age) = std::env::var("VAULT_TEST_AI_TURN_UNREAD_AGE_MS")
+    // Release binaries do not even read this child-test deadline injection.
+    #[cfg(debug_assertions)]
+    if let Some(age) = std::env::var("VAULT_TEST_AI_TURN_UNREAD_AGE_MS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
         && let Some(since) = now.checked_sub(Duration::from_millis(age))
