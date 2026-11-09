@@ -51,6 +51,21 @@ pub struct PrunePolicy {
 
 const VERSION_COLUMNS: &str = "note_id, note_type, token, author_kind, author_name, at_ms, content";
 
+/// Rows and UTF-8 content bytes eligible for thread-history pruning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadHistoryPrune {
+    pub note_id: String,
+    pub rows: u64,
+    pub bytes: u64,
+}
+
+// Device bases are additional to the newest N rows, as in State::prune (D29).
+const THREAD_PRUNE_ROWS: &str = "SELECT seq FROM (
+    SELECT seq, token, ROW_NUMBER() OVER (PARTITION BY note_id ORDER BY seq DESC) AS n
+    FROM versions WHERE note_type = 'agent_thread' AND (?2 IS NULL OR note_id = ?2)
+) WHERE n > ?1 AND token NOT IN (SELECT version FROM device_bases)
+  AND token NOT IN (SELECT token FROM heads)";
+
 type VersionRow = (Version, String, String);
 
 fn version_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VersionRow> {
@@ -170,6 +185,12 @@ impl State {
         )?;
         tx.execute("DELETE FROM trash WHERE note_id = ?1", [note_id])?;
         journal(&tx, &ChangeKey::Note(note_id.to_owned()), true, at_ms)?;
+        if note_type == "agent_thread" {
+            tx.execute(
+                &format!("DELETE FROM versions WHERE seq IN ({THREAD_PRUNE_ROWS})"),
+                params![3, note_id],
+            )?;
+        }
         tx.commit()?;
 
         Ok(Version {
@@ -354,6 +375,33 @@ impl State {
         tx.execute("DELETE FROM trash WHERE note_id = ?1", [note_id])?;
         tx.commit()?;
         finish_trash(row)
+    }
+
+    /// Preview or apply thread-only pruning. Counts refer to content bytes, not SQLite file
+    /// size. Preview and deletion use one transaction. Device bases and heads are protected.
+    pub fn prune_thread_history(&self, keep: u32, apply: bool) -> Result<Vec<ThreadHistoryPrune>> {
+        if keep == 0 {
+            return Err(Error::InvalidPrunePolicy("keep must be at least 1".into()));
+        }
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let report = {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT note_id, COUNT(*), SUM(length(CAST(content AS BLOB))) FROM versions
+                 WHERE seq IN ({THREAD_PRUNE_ROWS}) GROUP BY note_id ORDER BY note_id"
+            ))?;
+            stmt.query_map(params![keep, Option::<String>::None], |r| {
+                Ok(ThreadHistoryPrune { note_id: r.get(0)?, rows: r.get(1)?, bytes: r.get(2)? })
+            })?.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if apply {
+            tx.execute(
+                &format!("DELETE FROM versions WHERE seq IN ({THREAD_PRUNE_ROWS})"),
+                params![keep, Option::<String>::None],
+            )?;
+        }
+        tx.commit()?;
+        Ok(report)
     }
 
     /// Removes old versions under `policy` and returns how many were removed. A version a device
