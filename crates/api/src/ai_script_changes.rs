@@ -420,7 +420,7 @@ pub(crate) fn on_phone(
     })))
 }
 
-pub(crate) const PHONE_ADMIN_MESSAGE: &str = "A signed-in admin must apply this change because the current or proposed phone code contains SMS send or contact writes. A write token cannot apply it.";
+pub(crate) const PHONE_ADMIN_MESSAGE: &str = "A signed-in admin must apply this change because the current or proposed phone code contains SMS send or contact writes. API tokens, including admin-scoped tokens, cannot apply it.";
 
 // Count bare names too, including imports, aliases, interpolation and comments. False positives
 // need an admin, rather than letting a different spelling hide a sensitive call.

@@ -553,6 +553,30 @@ impl Api {
         self.call("POST", "/api/ai/apply", token, Some(change.clone()))
     }
 
+    fn apply_signed_in(&self, change: &Value) -> (StatusCode, Value) {
+        let login = self
+            .client
+            .post(self.server.url("/api/login"))
+            .json(&json!({ "password": PASSWORD }))
+            .send()
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::OK);
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let response = self
+            .client
+            .post(self.server.url("/api/ai/apply"))
+            .header("Cookie", cookie)
+            .json(change)
+            .send()
+            .unwrap();
+        (response.status(), response.json().unwrap())
+    }
+
     fn threads(&self, agent: &str) -> Vec<Value> {
         self.get(&format!("/api/agents/{agent}/threads"))["threads"]
             .as_array()
@@ -1247,12 +1271,12 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
     assert!(!err, "{got}");
     assert_eq!(got["device"], *d);
 
-    // The Pixel's SMS send is turned off after the card: Apply answers stale, nothing is written.
+    // The Pixel's SMS send is turned off after the card: session Apply answers stale.
     api.set_switches(
         &pixel,
         json!({ "commands": ["send_sms"], "sms_send": false }),
     );
-    let (status, body) = api.apply_as(&api.token(), &p);
+    let (status, body) = api.apply_signed_in(&p);
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale");
     assert_eq!(
@@ -1270,7 +1294,7 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         .unwrap_or_else(|| panic!("{events:?}"))
         .clone();
     assert_eq!(p["device"]["devices"][0]["sms_send"], false, "{p}");
-    let (status, body) = api.apply_as(&api.token(), &p);
+    let (status, body) = api.apply_signed_in(&p);
     assert!(status.is_success(), "{status}: {body}");
     assert_eq!(
         api.script("device_messages").as_deref(),
@@ -1355,6 +1379,13 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
                 Some(current.as_str())
             );
             let (status, body) = api.apply_as(&api.token(), &p);
+            assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
+            assert!(body.to_string().contains("admin-scoped tokens"), "{body}");
+            assert_eq!(
+                api.script("device_messages").as_deref(),
+                Some(current.as_str())
+            );
+            let (status, body) = api.apply_signed_in(&p);
             assert_eq!(status, StatusCode::OK, "{mode}: {body}");
         }
         assert_eq!(
@@ -1422,7 +1453,7 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
     // written.
     let mut forged = p.clone();
     forged["after"] = json!(forward);
-    let (status, body) = api.apply_as(&api.token(), &forged);
+    let (status, body) = api.apply_signed_in(&forged);
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"], "not_permitted");
     assert!(
