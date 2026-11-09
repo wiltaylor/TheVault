@@ -78,6 +78,8 @@ mod ai_ask;
 mod ai_assets;
 mod ai_browser;
 mod ai_chat;
+mod ai_decide;
+mod ai_device_changes;
 mod ai_dispatch;
 mod ai_notify;
 mod ai_outbox;
@@ -280,6 +282,7 @@ fn build() -> Built {
         .get("/api/events", events::stream)
         .get("/api/activity", activity::list)
         .post("/api/ai/chat", ai_chat::chat)
+        .post("/api/ai/decide", ai_decide::decide)
         .get("/api/notifications", notifications::list)
         .post("/api/notifications", notifications::create)
         .delete("/api/notifications", notifications::clear_read)

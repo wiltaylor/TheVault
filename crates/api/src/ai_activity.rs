@@ -157,6 +157,7 @@ fn change_line(event: &str, p: &Value) -> String {
         "skill_proposal" => format!("skill{}", name.unwrap_or_default()),
         "tool_proposal" => format!("tool{}", name.unwrap_or_default()),
         "script_proposal" => format!("script{}", name.unwrap_or_default()),
+        "device_file_proposal" => "device file android".into(),
         "task_proposal" => format!("task{}", name.unwrap_or_default()),
         _ if op.starts_with("tool_") => {
             format!("tool {}", p["tool_name"].as_str().unwrap_or_default())

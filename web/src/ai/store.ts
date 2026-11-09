@@ -330,9 +330,23 @@ export interface ScriptUse {
 }
 
 /**
- * A saved script change the model proposed (TV-70): a new or changed `scripts/<name>.ws`, or its
- * delete, with what runs it. It always waits for the user's Apply.
+ * An atomic Android device-file and script bundle (TV-72), with current/proposed phone
+ * capabilities and stale-check snapshots. Always waits for the user's Apply.
  */
+export interface DeviceFileProposal {
+  id: string;
+  kind: "device_file";
+  platform: "android";
+  before: string | null;
+  after: string;
+  snapshots: ScriptProposal[];
+  proposer?: string;
+  requires_admin: boolean;
+  warnings: string[];
+  devices: { id: string; name: string; settings: string; health?: string | null }[];
+}
+
+/** A saved script create, change or delete (TV-70), with its uses. Always waits for Apply. */
 export interface ScriptProposal {
   id: string;
   kind: "script";
@@ -548,6 +562,7 @@ export type Part =
   | { kind: "memory_proposal"; proposal: MemoryProposal; state: ProposalState; error?: string }
   | { kind: "skill_proposal"; proposal: SkillProposal; state: ProposalState; error?: string }
   | { kind: "tool_proposal"; proposal: ToolProposal; state: ProposalState; error?: string }
+  | { kind: "device_file_proposal"; proposal: DeviceFileProposal; state: ProposalState; error?: string }
   | { kind: "script_proposal"; proposal: ScriptProposal; state: ProposalState; error?: string }
   | { kind: "task_proposal"; proposal: TaskProposal; state: ProposalState; error?: string }
   | { kind: "notice"; notice: string; text: string; category?: string | null }
@@ -950,7 +965,7 @@ export const NOTE_GONE = "This note is no longer there, so nothing was applied."
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
   return (
-    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "skill_proposal" || p.kind === "tool_proposal" || p.kind === "script_proposal" || p.kind === "task_proposal" || p.kind === "download") &&
+    (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "skill_proposal" || p.kind === "tool_proposal" || p.kind === "device_file_proposal" || p.kind === "script_proposal" || p.kind === "task_proposal" || p.kind === "download") &&
     (p.state === "open" || p.state === "failed")
   );
 }
@@ -1080,6 +1095,8 @@ function eventPart(event: string, d: Record<string, unknown>): Part | null {
         },
         state: "open",
       };
+    case "device_file_proposal":
+      return { kind: "device_file_proposal", proposal: d as unknown as DeviceFileProposal, state: "open" };
     case "script_proposal":
       return {
         kind: "script_proposal",
@@ -1404,6 +1421,7 @@ function createConversation(agent: string, id: string | null) {
       case "agent_memory_proposal":
       case "skill_proposal":
       case "tool_proposal":
+      case "device_file_proposal":
       case "script_proposal":
       case "task_proposal": {
         // A re-read turn's proposal, applied or discarded meanwhile, shows as it stands.
@@ -1892,6 +1910,7 @@ function createConversation(agent: string, id: string | null) {
       else if (p.kind === "memory_proposal") await applyMemoryProposal(turn, i);
       else if (p.kind === "skill_proposal") await applySkillProposal(turn, i);
       else if (p.kind === "tool_proposal") await applyToolProposal(turn, i);
+      else if (p.kind === "device_file_proposal") await applyDeviceFileProposal(turn, i);
       else if (p.kind === "script_proposal") await applyScriptProposal(turn, i);
       else if (p.kind === "task_proposal") await applyTaskProposal(turn, i);
       else await applyTypeProposal(turn, i);
@@ -2184,6 +2203,50 @@ function createConversation(agent: string, id: string | null) {
     discarded(p.proposal);
   }
 
+  function setDeviceFileProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
+    setChat(
+      "turns",
+      turn,
+      "parts",
+      part,
+      produce((p) => {
+        if (p.kind !== "device_file_proposal") return;
+        p.state = patch.state;
+        p.error = patch.error;
+      }),
+    );
+  }
+
+  /**
+   * Apply an atomic Android device-file/script bundle. Changed files, script uses or phone
+   * settings answer 409 stale. Sensitive current or proposed code needs a signed-in admin;
+   * other token applies use only the proposal stored in the thread, never the submitted body.
+   */
+  async function applyDeviceFileProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "device_file_proposal" || (p.state !== "open" && p.state !== "failed")) return;
+    setDeviceFileProposal(turn, part, { state: "applying" });
+    try {
+      await api.aiApply(p.proposal);
+      setDeviceFileProposal(turn, part, { state: "applied" });
+      record(p.proposal.id, `[Applied by the user: ${"Android device file"}]`);
+      notify();
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409 && e.body.error === "stale";
+      const error = stale ? "The device file, scripts or phones changed. Propose it again." : e instanceof Error ? e.message : String(e);
+      setDeviceFileProposal(turn, part, { state: stale ? "stale" : "failed", error });
+      record(p.proposal.id, `[Failed to apply: ${"Android device file"}: ${error}]`);
+    }
+  }
+
+  function discardDeviceFileProposal(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "device_file_proposal" || p.state === "applied" || p.state === "applying" || p.state === "discarded") return;
+    setDeviceFileProposal(turn, part, { state: "discarded" });
+    record(p.proposal.id, `[Discarded by the user: ${"Android device file"}]`);
+    discarded(p.proposal);
+  }
+
   function setTaskProposal(turn: number, part: number, patch: { state: ProposalState; error?: string }) {
     setChat(
       "turns",
@@ -2369,7 +2432,9 @@ function createConversation(agent: string, id: string | null) {
       discardSkillProposal,
       applyToolProposal,
       discardToolProposal,
+      applyDeviceFileProposal,
       applyScriptProposal,
+      discardDeviceFileProposal,
       discardScriptProposal,
       applyTaskProposal,
       discardTaskProposal,
@@ -2598,7 +2663,9 @@ export function createChatSession(options: ChatOptions = {}) {
       discardSkillProposal: (turn: number, part: number) => current().discardSkillProposal(turn, part),
       applyToolProposal: (turn: number, part: number) => current().applyToolProposal(turn, part),
       discardToolProposal: (turn: number, part: number) => current().discardToolProposal(turn, part),
+      applyDeviceFileProposal: (turn: number, part: number) => current().applyDeviceFileProposal(turn, part),
       applyScriptProposal: (turn: number, part: number) => current().applyScriptProposal(turn, part),
+      discardDeviceFileProposal: (turn: number, part: number) => current().discardDeviceFileProposal(turn, part),
       discardScriptProposal: (turn: number, part: number) => current().discardScriptProposal(turn, part),
       applyTaskProposal: (turn: number, part: number) => current().applyTaskProposal(turn, part),
       discardTaskProposal: (turn: number, part: number) => current().discardTaskProposal(turn, part),

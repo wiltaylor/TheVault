@@ -309,6 +309,7 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     .chain(crate::ai_skill_changes::PROPOSE_TOOLS.iter())
     .chain(crate::ai_scripts::PROPOSE_TOOLS.iter())
     .chain(crate::ai_script_changes::PROPOSE_TOOLS.iter())
+    .chain(["propose_device_file_change"].iter())
     .chain(crate::ai_task_changes::PROPOSE_TOOLS.iter())
     .any(|t| p.allows_tool(t));
     if admin { Scope::Admin } else { Scope::Write }
@@ -353,6 +354,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
 /// would see the proposal; a chat, a call from a note and a dispatch offer them (TV-77 F11). A
 /// new tool of that kind is added here, and [`Direct::covers`] never covers its events.
 const ALWAYS_PROPOSE: &[&str] = &[
+    "propose_device_file_change",
     crate::ai_script_changes::PROPOSE_TOOLS[0],
     crate::ai_script_changes::PROPOSE_TOOLS[1],
     crate::ai_task_changes::PROPOSE_TOOLS[0],
@@ -1001,7 +1003,7 @@ fn prepare_for(
 }
 
 /// The events of a proposal for the user, or of a change a tool made.
-const PROPOSAL_EVENTS: [&str; 10] = [
+const PROPOSAL_EVENTS: [&str; 11] = [
     "proposal",
     "type_proposal",
     "taxonomy_proposal",
@@ -1009,6 +1011,7 @@ const PROPOSAL_EVENTS: [&str; 10] = [
     "agent_memory_proposal",
     "skill_proposal",
     "tool_proposal",
+    "device_file_proposal",
     "script_proposal",
     "task_proposal",
     "applied",
@@ -1267,7 +1270,7 @@ impl Direct {
             }
             "tool_proposal" => self.tools,
             // The tools of [`ALWAYS_PROPOSE`]: always the user's Apply (TV-32 Q2 O1).
-            "script_proposal" | "task_proposal" => false,
+            "script_proposal" | "task_proposal" | "device_file_proposal" => false,
             "agent_memory_proposal" => self.memories,
             "skill_proposal" => self.skills,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
@@ -3117,6 +3120,11 @@ fn offered_tools(web: ai::Web) -> Vec<ToolSpec> {
 
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
+        tool("decide", "Ask a tool-free decision model typed questions about untrusted state. Returns typed answers and probabilities. Makes no changes. Set account and model to null to use defaults.", json!({
+            "state": {"description": "Untrusted context", "type": ["string", "object", "array"]},
+            "questions": {"type": "object", "description": "Question ids mapped to type (noul, choice, score), instructions and criteria."},
+            "account": {"type": ["string", "null"]}, "model": {"type": ["string", "null"]}
+        })),
         tool(
             "search_notes",
             "Full-text search over every note's title and text. Returns rows of id, type, title and fields, best match first.",
@@ -3314,6 +3322,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     .chain(crate::ai_skill_changes::tool_specs())
     .chain(crate::ai_scripts::tool_specs())
     .chain(crate::ai_script_changes::tool_specs())
+    .chain(crate::ai_device_changes::tool_specs())
     .chain(crate::ai_task_changes::tool_specs())
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
@@ -3698,6 +3707,9 @@ pub(crate) fn apply_change_with_admin(
     if event == "tool_proposal" {
         return crate::ai_scripts::apply_tool(w, p, admin);
     }
+    if event == "device_file_proposal" {
+        return crate::ai_device_changes::apply(w, p, admin);
+    }
     if event == "script_proposal" {
         return crate::ai_script_changes::apply_script(w, p, admin);
     }
@@ -3758,6 +3770,26 @@ fn propose_or_read(
     }
     let input = &call.input;
     let result = match call.name.as_str() {
+        "decide" => {
+            if !agent.permissions.allows_tool("decide") {
+                return ToolOut::error("The agent's permissions.tools does not allow decide");
+            }
+            serde_json::from_value::<ai::decisions::Input>(input.clone())
+                .map_err(|_| ToolOut::error("Invalid decisions input"))
+                .and_then(|input| {
+                    let (result, line) =
+                        ai::decisions::call(w.state(), input, std::time::Duration::from_secs(30));
+                    tracing::info!(target: "ai", "{line}");
+                    result
+                        .map(|reply| ToolOut {
+                            content: serde_json::to_string(&reply).expect("decision JSON"),
+                            is_error: false,
+                            summary: json!({}),
+                            proposal: None,
+                        })
+                        .map_err(|e| ToolOut::error(e.to_string()))
+                })
+        }
         "search_notes" => str_arg(input, "text").and_then(|text| {
             let limit = input["limit"]
                 .as_u64()
@@ -3856,6 +3888,10 @@ fn propose_or_read(
         "get_tool" => crate::ai_scripts::get(w, input),
         "propose_tool_change" => crate::ai_scripts::propose_change(w, agent, &call.id, input),
         "propose_tool_delete" => crate::ai_scripts::propose_delete(w, agent, &call.id, input),
+        "get_device_file" => crate::ai_device_changes::get(w, input),
+        "propose_device_file_change" => {
+            crate::ai_device_changes::propose(w, agent, &call.id, input)
+        }
         "get_script" => crate::ai_script_changes::get(w, input),
         "propose_script_change" => {
             crate::ai_script_changes::propose_change(w, agent, &call.id, input)
@@ -4799,6 +4835,7 @@ mod tests {
         let direct = Direct::of(confirm_of(&all_off), Scope::Admin);
         assert!(direct.covers("tool_proposal", &json!({})));
         assert!(!direct.covers("script_proposal", &json!({ "op": "change" })));
+        assert!(!direct.covers("device_file_proposal", &json!({})));
         assert!(!direct.covers("script_proposal", &json!({ "op": "delete" })));
         assert!(!direct.covers("task_proposal", &json!({ "op": "create" })));
         assert!(!direct.covers("task_proposal", &json!({ "op": "delete" })));
@@ -4808,6 +4845,7 @@ mod tests {
             .chain(crate::ai_task_changes::PROPOSE_TOOLS.iter())
             .copied()
             .collect();
+        expected.push("propose_device_file_change");
         expected.sort_unstable();
         let mut listed = ALWAYS_PROPOSE.to_vec();
         listed.sort_unstable();
@@ -4826,6 +4864,8 @@ mod tests {
         };
         let chat = names(None);
         let trigger = names(Some(direct));
+        assert!(chat.iter().any(|n| n == "propose_device_file_change"));
+        assert!(!trigger.iter().any(|n| n == "propose_device_file_change"));
         for n in crate::ai_task_changes::PROPOSE_TOOLS {
             assert!(chat.iter().any(|m| m == n), "{n} in a chat");
             assert!(

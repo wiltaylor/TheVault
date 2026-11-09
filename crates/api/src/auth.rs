@@ -34,7 +34,8 @@ const SESSION_TTL: Duration = Duration::from_millis(state::SESSION_TTL_MS as u64
 
 /// Paths whose non-read requests need `write`: notes and assets, batches and upserts of notes,
 /// and notifications (D11). Any other change needs `admin`, so a new endpoint is admin-only until it is listed here.
-const WRITE_PATHS: [&str; 10] = [
+const WRITE_PATHS: [&str; 11] = [
+    "/api/ai/decide",
     "/api/notes",
     "/api/ai/apply",
     "/api/notifications",

@@ -53,7 +53,9 @@ pub use events::{
     CAPACITY as EVENT_CAPACITY, ClientBuild, Events, LiveEvent, Missed, Subscription,
 };
 pub use gitsync::GitsyncNote;
-pub use history::{Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, TrashEntry, Version};
+pub use history::{
+    Author, MERGE_GAP_MS, MERGE_SPAN_MS, PrunePolicy, ThreadHistoryPrune, TrashEntry, Version,
+};
 pub use jobs::{HandlerJob, JobStatus};
 pub use notifications::{
     MAX_BODY, MAX_NOTIFICATIONS, MAX_TITLE, NewNotification, Notification, NotificationPage,

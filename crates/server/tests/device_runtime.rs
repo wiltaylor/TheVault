@@ -67,10 +67,10 @@ fn send(rb: RequestBuilder, status: u16) -> Value {
 
 /// A phone that records what it is asked to do.
 #[derive(Default)]
-struct Phone(Mutex<Vec<String>>);
+pub(super) struct Phone(Mutex<Vec<String>>);
 
 impl Phone {
-    fn actions(&self) -> Vec<String> {
+    pub(super) fn actions(&self) -> Vec<String> {
         self.0.lock().unwrap().clone()
     }
 }

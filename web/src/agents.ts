@@ -317,6 +317,8 @@ export const TOOL_GROUPS: { group: string; tools: [string, string][] }[] = [
       ["get_tool", "Read a script tool"],
       ["propose_tool_change", "Create and change script tools"],
       ["propose_tool_delete", "Delete script tools"],
+      ["get_device_file", "Read Android device files"],
+      ["propose_device_file_change", "Change Android device files and scripts (always asks)"],
       ["get_script", "Read a saved script"],
       ["propose_script_change", "Create and change saved scripts (always asks)"],
       ["propose_script_delete", "Delete saved scripts (always asks)"],

@@ -343,6 +343,10 @@ describe("Settings > AI accounts (accounts A11)", () => {
     expect(form.getByLabelText("Header 1 value")).toHaveValue("TheVault");
     expect(await form.findByText(/The model list could not be read \(the service answered 404\): type a model id/)).toBeTruthy();
     expect(form.getByLabelText("Model").tagName).toBe("INPUT");
+    aiUpdateAccount.mockResolvedValue(status([CLAUDE, { ...ROUTER, decisions_model: "decision-custom" }]));
+    fireEvent.input(form.getByLabelText("Decisions model"), { target: { value: "decision-custom" } });
+    fireEvent.click(form.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(aiUpdateAccount).toHaveBeenCalledWith("r1", expect.objectContaining({ decisions_model: "decision-custom" })));
   });
 
   it("removes a key after confirming", async () => {

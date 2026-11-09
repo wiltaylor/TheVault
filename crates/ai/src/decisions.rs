@@ -40,7 +40,7 @@ pub struct Request {
     pub questions: BTreeMap<String, Question>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Answer {
     Noul {
@@ -88,7 +88,7 @@ impl Answer {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub id: String,
     pub model: String,
@@ -97,7 +97,7 @@ pub struct Response {
     pub usage: TokenUsage,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -105,6 +105,71 @@ pub struct TokenUsage {
 
 fn probability(n: f64) -> bool {
     n.is_finite() && (0.0..=1.0).contains(&n)
+}
+
+/// General decisions input. No tools or side effects are accepted.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Input {
+    pub account: Option<String>,
+    pub model: Option<String>,
+    pub state: Value,
+    pub questions: BTreeMap<String, Question>,
+}
+
+/// Resolve credentials internally and return exactly one safe trail line, including failures
+/// before HTTP. The caller records the line in its own log.
+pub fn call(
+    state: &state::State,
+    input: Input,
+    timeout: Duration,
+) -> (Result<Response, AiError>, String) {
+    let began = std::time::Instant::now();
+    let mut destination = None;
+    let mut model = input
+        .model
+        .clone()
+        .unwrap_or_else(|| DEFAULT_MODEL.to_owned());
+    let result = (|| {
+        let accounts = crate::Accounts::load(state)?;
+        let account = accounts.pick(input.account.as_deref(), None)?;
+        if input.model.is_none() {
+            model = account.decisions_model().to_owned();
+        }
+        destination = Some((account.name.clone(), account.kind, account.custom_host()));
+        let credential = crate::Credentials::resolve(state, account)?;
+        decide(
+            &credential,
+            &Request {
+                model: model.clone(),
+                state: input.state,
+                questions: input.questions,
+            },
+            timeout,
+        )
+    })();
+    let usage = result.as_ref().map_or_else(
+        |e| e.usage,
+        |r| crate::Usage {
+            input: r.usage.input_tokens,
+            output: r.usage.output_tokens,
+        },
+    );
+    let outcome = result
+        .as_ref()
+        .map_or_else(Outcome::of_error, |_| Outcome::Ok);
+    let (name, kind, host) =
+        destination.unwrap_or_else(|| ("unconfigured".to_owned(), Kind::OpenAiCompatible, None));
+    let line = crate::trail_line(
+        &name,
+        kind,
+        &model,
+        usage,
+        outcome,
+        began.elapsed(),
+        host.as_deref(),
+    );
+    (result, format!("{line} operation=decide"))
 }
 
 fn context(value: &Value) -> bool {
@@ -230,7 +295,7 @@ pub fn decide(
     if body.len() as u64 > MAX_BYTES {
         return Err(AiError::invalid("Decisions request is too large"));
     }
-    call(credential, request, timeout, url, body)
+    send_request(credential, request, timeout, url, body)
 }
 
 /// Check local account compatibility without making a provider call.
@@ -257,7 +322,7 @@ fn endpoint(credential: &Credential) -> Result<reqwest::Url, AiError> {
     Ok(url)
 }
 
-fn call(
+fn send_request(
     credential: &Credential,
     request: &Request,
     timeout: Duration,

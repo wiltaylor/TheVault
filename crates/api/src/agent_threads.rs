@@ -350,6 +350,7 @@ pub fn proposal_what(event: &str, d: &Value) -> String {
             _ => format!("new agent {}", s("name")),
         },
         "skill_proposal" => skill_what(d, false),
+        "device_file_proposal" => "change the Android device file and scripts".into(),
         "script_proposal" => match d["op"].as_str() {
             Some("delete") => format!("delete of script {}", s("name")),
             _ if d["exists"] == true => format!("change to script {}", s("name")),
@@ -422,6 +423,7 @@ fn proposal_done(event: &str, d: &Value, done: &Value) -> String {
             _ => format!("created agent {}", s(d, "name")),
         },
         "skill_proposal" => skill_what(d, true),
+        "device_file_proposal" => "changed the Android device file and scripts".into(),
         "script_proposal" => match d["op"].as_str() {
             Some("delete") => format!("deleted script {}", s(d, "name")),
             _ if d["exists"] == true => format!("changed script {}", s(d, "name")),

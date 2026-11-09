@@ -11,3 +11,4 @@ mod gitsync;
 mod sessions;
 mod shipped;
 mod state;
+mod thread_history;
