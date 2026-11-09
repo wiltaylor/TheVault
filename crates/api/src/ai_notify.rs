@@ -8,20 +8,23 @@
 //! `state::MAX_BODY`).
 //!
 //! Each notification is also pushed to the paired phones, so an agent may send at most
-//! [`MAX_PER_TURN`] in one turn, [`MAX_PER_HOUR`] in an hour and [`MAX_PER_DAY`] in a day. The
-//! turn count is shared by the turn and the sub agent turns it starts ([`NotifyCount`]). The
-//! hour and day counts are checked in the same transaction that stores the notification
-//! (`State::add_notification_within`), so concurrent calls of one agent cannot pass them
-//! together. A refused call tells the model which limit it reached and writes nothing. The tool
-//! needs a caller with `write`, as `POST /api/notifications` does.
+//! [`MAX_PER_TURN`] in one turn, [`MAX_PER_HOUR`] in an hour and [`MAX_PER_DAY`] in a day. All
+//! agents together may send at most [`MAX_PER_DAY_ALL_AGENTS`] in a day (TV-75). The turn count
+//! is shared by the turn and the sub agent turns it starts ([`NotifyCount`]). The hour and day
+//! counts are checked in the same transaction that stores the notification
+//! (`State::add_notification_within`), so concurrent calls cannot pass them together. A refused
+//! call tells the model which limit it reached and writes nothing. The tool needs a caller with
+//! `write`, as `POST /api/notifications` does.
 
 use std::sync::{Mutex, MutexGuard};
 
 use ai::ToolSpec;
 use schema::Agent;
 use serde_json::{Value, json};
-use state::{NewNotification, Scope, SourceLimit};
-use writer::Writer;
+use state::{NewNotification, Scope};
+use writer::{
+    AGENT_LIMITS, MAX_PER_DAY, MAX_PER_DAY_ALL_AGENTS, MAX_PER_HOUR, Writer, agent_limit_message,
+};
 
 use crate::ai_chat::{Limits, ToolOut, tool};
 
@@ -30,27 +33,6 @@ pub const TOOL: &str = "notify_user";
 
 /// The most notifications an agent sends in one turn.
 pub const MAX_PER_TURN: usize = 3;
-
-/// The most notifications an agent sends in an hour.
-pub const MAX_PER_HOUR: usize = 10;
-
-/// The most notifications an agent sends in a day.
-pub const MAX_PER_DAY: usize = 30;
-
-const HOUR_MS: i64 = 60 * 60 * 1000;
-const DAY_MS: i64 = 24 * HOUR_MS;
-
-/// The hour and day limits, counted over the notifications stored with the agent's source.
-const LIMITS: [SourceLimit; 2] = [
-    SourceLimit {
-        window_ms: HOUR_MS,
-        max: MAX_PER_HOUR,
-    },
-    SourceLimit {
-        window_ms: DAY_MS,
-        max: MAX_PER_DAY,
-    },
-];
 
 /// The notifications one turn has sent. A turn and each sub agent turn it starts share one, so
 /// the turn and its sub agents together send at most [`MAX_PER_TURN`] (TV-74).
@@ -87,8 +69,9 @@ pub(crate) fn tool_spec() -> ToolSpec {
              agent, and is pushed to the user's paired phones. Use it for something the user \
              should know soon, such as the result of an unattended run that needs them; not for \
              an answer in a chat the user is reading. It is sent at once, without asking. At \
-             most {MAX_PER_TURN} per turn, {MAX_PER_HOUR} per hour and {MAX_PER_DAY} per day; \
-             a call over a limit is refused and sends nothing."
+             most {MAX_PER_TURN} per turn, {MAX_PER_HOUR} per hour and {MAX_PER_DAY} per day, \
+             and all agents together {MAX_PER_DAY_ALL_AGENTS} per day; a call over a limit is \
+             refused and sends nothing."
         ),
         json!({
             "title": { "type": "string", "description": format!("A short title, 1 to {} characters.", state::MAX_TITLE) },
@@ -153,26 +136,16 @@ pub(crate) fn notify(
         url: None,
         source,
     };
-    let stored = match w.notify_within(&n, &LIMITS) {
+    let stored = match w.notify_within(&n, &AGENT_LIMITS) {
         Ok(s) => s,
         Err(writer::Error::State(state::Error::NotificationLimit {
+            by,
             window_ms,
             count,
             max,
-            ..
         })) => {
             sent.give_back();
-            return refused(&if window_ms == HOUR_MS {
-                format!(
-                    "this agent sent {count} notifications in the last hour, and the limit is \
-                     {max} an hour"
-                )
-            } else {
-                format!(
-                    "this agent sent {count} notifications in the last 24 hours, and the limit \
-                     is {max} a day"
-                )
-            });
+            return refused(&agent_limit_message(&by, window_ms, count, max));
         }
         Err(e) => {
             sent.give_back();

@@ -8,10 +8,12 @@ mod office;
 
 mod activity;
 mod agent_capacity_retry;
+mod agent_device_commands;
 mod agent_dispatch;
 mod agent_files;
 mod agent_memory;
 mod agent_mentions;
+mod agent_script_notifications;
 mod agent_threads;
 mod agent_triggers;
 mod agents;

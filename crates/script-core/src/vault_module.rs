@@ -34,12 +34,16 @@ fn today(now_ms: i64) -> String {
         .unwrap_or_default()
 }
 
-/// Who a notification from the run in progress is from: `task:<name>` for a scheduled script,
-/// `handler:<type>.<event>` for a handler, `script:<name>` otherwise.
+/// Who a notification from the run in progress is from: `agent:<name>` for a run an agent started
+/// (its limits apply, TV-76), `task:<name>` for a scheduled script, `handler:<type>.<event>` for
+/// a handler, `script:<name>` otherwise.
 fn notify_source() -> String {
     crate::current_job(|j| {
         if let Some(vocab::Author::Task(task)) = &j.author {
             return format!("task:{task}");
+        }
+        if let Some(vocab::Author::Agent(agent)) = &j.author {
+            return format!("agent:{agent}");
         }
         let note = j.args.first();
         let text = |k: &str| note.and_then(|n| n.get(k)).and_then(Json::as_str);
@@ -301,6 +305,17 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
                 if !matches!(kind, Some(crate::Kind::After | crate::Kind::Task)) {
                     return Err(
                         "vault::device_command works only in after_* handlers and scheduled scripts"
+                            .into(),
+                    );
+                }
+                // An agent's run may read or write notes, but it may not put a command on a
+                // phone: that would send a text the user never reviewed. An agent sends SMS
+                // through an Outbox draft instead.
+                if crate::current_job(|j| matches!(j.author, Some(vocab::Author::Agent(_))))
+                    .unwrap_or(false)
+                {
+                    return Err(
+                        "vault::device_command is not available in a run an agent started: an agent sends an SMS through an Outbox draft (draft_sms), which waits for your review"
                             .into(),
                     );
                 }
