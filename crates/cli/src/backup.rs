@@ -342,7 +342,16 @@ pub fn restore(archive: &Path, dir: &Path) -> Result<Value, Fail> {
         Connection::open_with_flags(archive, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(sqlite)?;
     // Keep a read transaction across validation and extraction, including concurrent writers.
     conn.execute_batch("BEGIN").map_err(sqlite)?;
-    let scratch = tempfile::tempdir().map_err(Fail::from_display("io"))?;
+    // Use the closest existing destination ancestor, including the destination itself,
+    // so staging and installation share a filesystem without creating vault files yet.
+    let staging_parent = dir
+        .ancestors()
+        .find(|path| path.is_dir())
+        .unwrap_or_else(|| Path::new("."));
+    let scratch = tempfile::Builder::new()
+        .prefix(".vault-restore-")
+        .tempdir_in(staging_parent)
+        .map_err(Fail::from_display("io"))?;
     let rows = stage_archive(&conn, scratch.path())?;
     let mut files = 0;
     let mut key = None;
@@ -358,7 +367,7 @@ pub fn restore(archive: &Path, dir: &Path) -> Result<Value, Fail> {
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(io(parent))?;
         }
-        std::fs::copy(&staged, &target).map_err(io(&target))?;
+        std::fs::rename(&staged, &target).map_err(io(&target))?;
         if name != STATE_ENTRY {
             files += 1;
         }
@@ -445,6 +454,8 @@ fn stage_archive(conn: &Connection, dir: &Path) -> Result<Vec<(String, PathBuf)>
                     size += n as u64;
                     out.write_all(&buffer[..n]).map_err(io(&output))?;
                 }
+                drop(input);
+                std::fs::remove_file(&path).map_err(io(&path))?;
             }
             if size != file.size || format!("{:x}", hash.finalize()) != file.sha256 {
                 return Err(Fail::new(
@@ -583,6 +594,18 @@ mod tests {
             std::fs::read(dest.join("assets/large.bin")).unwrap(),
             std::fs::read(tmp.path().join("vault/assets/large.bin")).unwrap()
         );
+        assert_no_restore_staging(tmp.path());
+        assert_no_restore_staging(&dest);
+    }
+
+    fn assert_no_restore_staging(dir: &Path) {
+        assert!(std::fs::read_dir(dir).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".vault-restore-")
+        }));
     }
 
     #[test]
@@ -595,6 +618,7 @@ mod tests {
         let dest = tmp.path().join("destination");
         assert!(restore(&archive, &dest).is_err());
         assert!(!dest.exists());
+        assert_no_restore_staging(tmp.path());
     }
 
     #[test]
@@ -610,7 +634,8 @@ mod tests {
         let dest = tmp.path().join("destination");
         std::fs::create_dir(&dest).unwrap();
         assert!(restore(&archive, &dest).is_err());
-        assert_eq!(std::fs::read_dir(dest).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+        assert_no_restore_staging(tmp.path());
     }
 
     #[test]
