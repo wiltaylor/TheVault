@@ -98,7 +98,7 @@ afterEach(() => {
 describe("script proposals", () => {
   it("shows and applies an atomic Android device file proposal", async () => {
     aiApply.mockResolvedValue({ op: "device_file_change", platform: "android" });
-    const m = render(() => <ChatPanel />);
+    const m = render(() => <ChatPanel noteId={() => ""} />);
     await ask(m);
     const proposal = {
       id: "phone_bundle", kind: "device_file", platform: "android", before: "", after: "handler sms_received {}",
@@ -118,7 +118,7 @@ describe("script proposals", () => {
   });
 
   it("discards a device file proposal without writing", async () => {
-    const m = render(() => <ChatPanel />);
+    const m = render(() => <ChatPanel noteId={() => ""} />);
     await ask(m);
     live!.onEvent({ event: "device_file_proposal", data: { id: "discard_phone", kind: "device_file", platform: "android", before: "", after: "", snapshots: [], devices: [], requires_admin: false } });
     live!.end();
