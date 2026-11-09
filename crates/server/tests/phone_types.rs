@@ -121,6 +121,8 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
             "body",
             "attachments",
             "partial",
+            "scam_probability",
+            "communication_category",
             "processed",
             "device_ref"
         ]
@@ -423,7 +425,17 @@ fn a_message_can_be_ticked_processed_from_its_page_and_its_card() {
         .filter(|b| b["kind"] == "slot")
         .map(|b| b["labels"][0].as_str().unwrap())
         .collect();
-    assert_eq!(first, ["from", "processed", "to"], "{page}");
+    assert_eq!(
+        first,
+        [
+            "from",
+            "processed",
+            "scam_probability",
+            "communication_category",
+            "to"
+        ],
+        "{page}"
+    );
     let card = template("card");
     let card: Vec<&str> = card
         .as_array()

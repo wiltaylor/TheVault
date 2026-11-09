@@ -1,8 +1,8 @@
 //! Home-server-only, one-shot classification after a committed create. Never called by an app.
-//! The hook only queues snapshots. The worker reads definitions and calls HTTP outside locks.
+//! The hook reads type selectors and queues snapshots. HTTP runs on the worker outside locks.
 
-use std::collections::HashMap;
-use std::sync::{Arc, mpsc};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, OnceLock, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use ai::{Accounts, AiError, Credentials, ErrorKind, decisions};
@@ -13,20 +13,24 @@ use sha2::{Digest, Sha256};
 use state::Author;
 use writer::{Event, Hooks, Migration, NoteChange, Saved, ScriptRole, Writer};
 
-const QUEUED: usize = 256;
-
 struct ClassifierHooks {
     inner: Box<dyn Hooks>,
-    sender: mpsc::SyncSender<Saved>,
+    sender: mpsc::SyncSender<()>,
+    writer: Arc<OnceLock<Weak<Writer>>>,
 }
 
-pub struct Binding(mpsc::Receiver<Saved>);
+pub struct Binding(mpsc::Receiver<()>, Arc<OnceLock<Weak<Writer>>>);
 
 pub fn wrap(inner: Box<dyn Hooks>) -> (Box<dyn Hooks>, Binding) {
-    let (sender, receiver) = mpsc::sync_channel(QUEUED);
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let writer = Arc::new(OnceLock::new());
     (
-        Box::new(ClassifierHooks { inner, sender }),
-        Binding(receiver),
+        Box::new(ClassifierHooks {
+            inner,
+            sender,
+            writer: writer.clone(),
+        }),
+        Binding(receiver, writer),
     )
 }
 
@@ -34,15 +38,30 @@ impl Binding {
     /// Holds only a weak writer while idle, so dropping the server releases the worker.
     pub fn start(self, writer: &Arc<Writer>) -> std::io::Result<()> {
         let writer = Arc::downgrade(writer);
+        let _ = self.1.set(writer.clone());
         std::thread::Builder::new()
             .name("classifiers".into())
             .spawn(move || {
                 let mut invalid = HashMap::new();
-                while let Ok(saved) = self.0.recv() {
+                loop {
                     let Some(writer) = writer.upgrade() else {
                         break;
                     };
-                    classify(&writer, &saved, &mut invalid);
+                    match writer.state().take_classification() {
+                        Ok(Some(payload)) => {
+                            match serde_json::from_str::<Pending>(&payload) {
+                                Ok(pending) => classify(&writer, &pending.saved(), &mut invalid),
+                                Err(_) => tracing::error!(target: "ai", "classifier: outcome=error:pending_payload"),
+                            }
+                            continue;
+                        }
+                        Err(_) => tracing::error!(target: "ai", "classifier: outcome=error:pending_read"),
+                        Ok(None) => {}
+                    }
+                    drop(writer);
+                    if self.0.recv().is_err() {
+                        break;
+                    }
                 }
             })?;
         Ok(())
@@ -58,12 +77,36 @@ impl Hooks for ClassifierHooks {
     }
     fn after(&self, saved: &[Saved], author: &Author, schema: &Schema) {
         self.inner.after(saved, author, schema);
-        for note in saved
+        let Some(writer) = self.writer.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let types = classifier_types(&writer);
+        let payloads: Vec<_> = saved
             .iter()
-            .filter(|s| s.event == Event::Create && !s.restored)
-        {
-            if self.sender.try_send(note.clone()).is_err() {
-                eprintln!("classifier: note={} outcome=error:queue_full", note.id);
+            .filter(|s| s.event == Event::Create && !s.restored && types.contains(&s.type_name))
+            .map(|s| {
+                serde_json::to_string(&Pending {
+                    id: s.id.clone(),
+                    type_name: s.type_name.clone(),
+                    version: s.version.clone(),
+                    wcl: s.wcl.clone(),
+                })
+                .expect("pending snapshot")
+            })
+            .collect();
+        if payloads.is_empty() {
+            return;
+        }
+        let queued = writer.state().queue_classifications(&payloads).is_ok();
+        if queued {
+            // The bounded channel is just a coalescing wakeup, never the work queue.
+            let _ = self.sender.try_send(());
+        } else {
+            for note in saved
+                .iter()
+                .filter(|s| s.event == Event::Create && !s.restored && types.contains(&s.type_name))
+            {
+                tracing::error!(target: "ai", "classifier: note={} outcome=error:pending_write", note.id);
             }
         }
     }
@@ -84,6 +127,48 @@ impl Hooks for ClassifierHooks {
     }
 }
 
+fn classifier_types(writer: &Writer) -> HashSet<String> {
+    std::fs::read_dir(writer.vault().root().join("classifiers"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let file = entry.file_name();
+            let name = file.to_str()?.strip_suffix(".wcl")?;
+            let source = writer
+                .vault()
+                .read_text(&format!("classifiers/{name}.wcl"))
+                .ok()?;
+            Classifier::parse(name, &source).ok()
+        })
+        .flat_map(|config| config.types)
+        .collect()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Pending {
+    id: String,
+    type_name: String,
+    version: String,
+    wcl: String,
+}
+
+impl Pending {
+    fn saved(self) -> Saved {
+        Saved {
+            id: self.id,
+            type_name: self.type_name,
+            version: self.version,
+            wcl: self.wcl,
+            event: Event::Create,
+            restored: false,
+            previous: None,
+            author: None,
+            also: vec![],
+        }
+    }
+}
+
 fn classify(writer: &Writer, saved: &Saved, invalid: &mut HashMap<String, Option<[u8; 32]>>) {
     let Ok(entries) = std::fs::read_dir(writer.vault().root().join("classifiers")) else {
         eprintln!("classifier: note={} outcome=error:definitions", saved.id);
@@ -101,9 +186,6 @@ fn classify(writer: &Writer, saved: &Saved, invalid: &mut HashMap<String, Option
         .collect();
     names.sort();
     invalid.retain(|name, _| names.contains(name));
-    // Each classifier sees the original snapshot. Advance the optimistic base only after our
-    // own successful write, allowing several classifiers without accepting concurrent edits.
-    let mut base = saved.version.clone();
     for name in names {
         let source = writer
             .vault()
@@ -138,9 +220,7 @@ fn classify(writer: &Writer, saved: &Saved, invalid: &mut HashMap<String, Option
             }
             Ok(true) => {}
         }
-        if let Some(version) = run(writer, saved, &base, &config) {
-            base = version;
-        }
+        run(writer, saved, &config);
     }
 }
 
@@ -151,7 +231,7 @@ fn matches(writer: &Writer, saved: &Saved, config: &Classifier) -> Result<bool, 
     let filter =
         query::parse_expr(condition).map_err(|_| AiError::invalid("Invalid classifier filter"))?;
     let q = Query {
-        from: From::Types(vec![saved.type_name.clone()]),
+        from: From::Types(config.types.clone()),
         include_archived: true,
         filter: Some(Expr::Binary(
             BinOp::And,
@@ -225,16 +305,24 @@ fn request(saved: &Saved, config: &Classifier) -> Result<decisions::Request, AiE
     })
 }
 
-fn run(writer: &Writer, saved: &Saved, base: &str, config: &Classifier) -> Option<String> {
+fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
     let prepared = (|| {
         let accounts = Accounts::load(writer.state())?;
         let account = accounts.pick(config.account.as_deref(), None)?;
+        // Reject incompatible accounts before resolving credentials (ChatGPT may refresh).
+        if account.kind != ai::Kind::OpenAiCompatible {
+            return Err(AiError::invalid(
+                "Decisions require an OpenAI-compatible account",
+            ));
+        }
         let credential = Credentials::resolve(writer.state(), account)?;
+        decisions::validate_credential(&credential)?;
         Ok::<_, AiError>((credential, request(saved, config)?))
     })();
     let (credential, request) = match prepared {
         Ok(p) => p,
         Err(e) => {
+            configuration_warning(writer, config, &e);
             eprintln!(
                 "classifier: name={} note={} outcome=error:{}",
                 config.name, saved.id, e.kind
@@ -244,9 +332,20 @@ fn run(writer: &Writer, saved: &Saved, base: &str, config: &Classifier) -> Optio
     };
     let began = Instant::now();
     let mut result = decisions::decide(&credential, &request, Duration::from_secs(30));
+    match &result {
+        Ok(_) => {
+            let _ = writer
+                .state()
+                .set_meta(&format!("classifier_config_warning:{}", config.name), "");
+        }
+        Err(error) if matches!(error.kind, ErrorKind::Auth | ErrorKind::NotConfigured) => {
+            configuration_warning(writer, config, error)
+        }
+        Err(_) => {}
+    }
     let mut version = None;
     if let Ok(response) = &result {
-        match apply(writer, saved, base, config, response) {
+        match apply(writer, saved, config, response) {
             Ok(saved) => version = Some(saved.version),
             Err(_) => {
                 let mut error = AiError::new(
@@ -289,10 +388,30 @@ fn run(writer: &Writer, saved: &Saved, base: &str, config: &Classifier) -> Optio
     version
 }
 
+fn configuration_warning(writer: &Writer, config: &Classifier, error: &AiError) {
+    let key = format!("classifier_config_warning:{}", config.name);
+    let kind = error.kind.to_string();
+    if writer.state().meta(&key).ok().flatten().as_deref() == Some(&kind) {
+        return;
+    }
+    let warning = state::NewNotification {
+        title: "Classifier account needs attention".into(),
+        body: Some(format!(
+            "Classifier {} could not start. Select an OpenRouter account in Settings > AI, or name that account in the classifier file. Unclassified notes must still be triaged as before.",
+            config.name
+        )),
+        note_id: None,
+        url: Some("/settings/ai".into()),
+        source: format!("classifier_config:{}", config.name),
+    };
+    if writer.notify(&warning).is_ok() {
+        let _ = writer.state().set_meta(&key, &kind);
+    }
+}
+
 fn apply(
     writer: &Writer,
     saved: &Saved,
-    base: &str,
     config: &Classifier,
     response: &decisions::Response,
 ) -> writer::Result<Saved> {
@@ -306,10 +425,17 @@ fn apply(
             )
         })
         .collect::<Vec<_>>();
+    let original = writer::doc_to_json(
+        &Doc::parse(&saved.wcl, "classifier base").map_err(writer::Error::Invalid)?,
+    );
+    let base = answers
+        .iter()
+        .map(|(field, _)| (field.clone(), original["fields"][field].clone()))
+        .collect::<Vec<_>>();
     writer.classify(
         &saved.id,
         &answers,
-        base,
+        &base,
         &Author::Agent(format!("classifier_{}", config.name)),
     )
 }

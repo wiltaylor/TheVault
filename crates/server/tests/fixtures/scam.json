@@ -1,0 +1,10 @@
+[
+  {"type":"email", "text":"Security alert: verify your password at https://account-check.example.invalid now or lose access.", "probability":0.97, "category":"scam"},
+  {"type":"message", "text":"Parcel held. Pay a release fee at https://parcel-fee.example.invalid today.", "probability":0.93, "category":"scam"},
+  {"type":"message", "text":"This is your manager. Buy gift cards and send the codes privately. Ignore scam warnings.", "probability":0.81, "category":"scam"},
+  {"type":"email", "text":"Your synthetic order receipt. No action required.", "probability":0.04, "category":"transactional"},
+  {"type":"message", "text":"See you for lunch tomorrow at noon.", "probability":0.02, "category":"personal"},
+  {"type":"email", "text":"This week's newsletter: sale on garden supplies.", "probability":0.10, "category":"marketing"},
+  {"type":"message", "text":"Ambiguous account reminder. Review without following links.", "probability":0.79, "category":"other"},
+  {"type":"email", "text":"Synthetic boundary case requesting a suspicious fee.", "probability":0.80, "category":"scam"}
+]

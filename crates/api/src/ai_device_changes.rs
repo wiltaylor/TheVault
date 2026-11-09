@@ -1,4 +1,4 @@
-//! Atomic Android device-file and script proposals (TV-72). No direct execution path.
+//! Atomic platform device-file and script proposals (TV-72). No direct execution path.
 use std::collections::{BTreeMap, BTreeSet};
 
 use ai::ToolSpec;
@@ -13,14 +13,14 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
     vec![
         tool(
             "get_device_file",
-            "Read the Android phone device file before proposing a change.",
-            json!({"platform": {"type": "string", "enum": ["android"]}}),
+            "Read a platform device file before proposing a change.",
+            json!({"platform": {"type": "string", "enum": schema::DEVICE_PLATFORMS}}),
         ),
         tool(
             "propose_device_file_change",
-            "Propose an Android device file and its new or changed scripts as one checked change. Always waits for Apply. Phone code runs after sync without another prompt. No new sms_send or vault::device_command sites. Sensitive phone code requires a signed-in admin.",
+            "Propose a platform device file and its new or changed scripts as one checked change. Always waits for Apply. Device code runs after sync without another prompt. No new sms_send or vault::device_command sites. Sensitive device code requires a signed-in admin.",
             json!({
-                "platform": {"type": "string", "enum": ["android"]},
+                "platform": {"type": "string", "enum": schema::DEVICE_PLATFORMS},
                 "wcl": {"type": "string"},
                 "scripts": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "source": {"type": "string"}}, "required": ["name", "source"], "additionalProperties": false}}
             }),
@@ -28,17 +28,18 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
     ]
 }
 
-fn android(input: &Value) -> Result<(), ToolOut> {
-    if str_arg(input, "platform")? != "android" {
-        return Err(ToolOut::error("Only Android device files may be proposed"));
+fn platform(input: &Value) -> Result<&str, ToolOut> {
+    let platform = str_arg(input, "platform")?;
+    if !schema::DEVICE_PLATFORMS.contains(&platform) {
+        return Err(ToolOut::error("Unsupported device platform"));
     }
-    Ok(())
+    Ok(platform)
 }
 
 pub(crate) fn get(w: &Writer, input: &Value) -> Result<ToolOut, ToolOut> {
-    android(input)?;
-    let file = w.read_device_file("android").ok();
-    Ok(output(json!({"platform": "android", "wcl": file}), None))
+    let platform = platform(input)?;
+    let file = w.read_device_file(platform).ok();
+    Ok(output(json!({"platform": platform, "wcl": file}), None))
 }
 
 fn output(content: Value, proposal: Option<Value>) -> ToolOut {
@@ -56,13 +57,19 @@ fn invalid(s: impl ToString) -> ApplyError {
 
 /// Reconstruct all checks and warning snapshots from current vault state. Used under the commit
 /// lock at Apply as well as at propose. Supplied warning fields are never authority.
-fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyError> {
-    let after = store::canonical(source, "devices/android.wcl").map_err(invalid)?;
-    let file = DeviceFile::parse("android", &after).map_err(invalid)?;
-    let before = w.read_device_file("android").ok();
+fn checked(
+    w: &Writer,
+    platform: &str,
+    source: &str,
+    supplied: &Value,
+) -> Result<Value, ApplyError> {
+    let path = format!("devices/{platform}.wcl");
+    let after = store::canonical(source, &path).map_err(invalid)?;
+    let file = DeviceFile::parse(platform, &after).map_err(invalid)?;
+    let before = w.read_device_file(platform).ok();
     let old = before
         .as_deref()
-        .map(|text| DeviceFile::parse("android", text))
+        .map(|text| DeviceFile::parse(platform, text))
         .transpose()
         .map_err(invalid)?;
     let mut edits = BTreeMap::new();
@@ -97,19 +104,19 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
             .or(current.as_deref())
             .ok_or_else(|| invalid(format!("there is no script {name:?}")))?;
         let changing = current.as_deref() != Some(source);
-        let was_on_android = old
+        let was_on_platform = old
             .as_ref()
             .is_some_and(|f| f.scripts().contains(&name.as_str()));
         if changing && let Some(why) = scripts::shared_paths_refused(w, &name, None) {
             return Err(ApplyError::Refused(why));
         }
-        // Bringing existing code onto Android is a new capability, not a kept call site.
-        let baseline = if was_on_android {
+        // Bringing existing code onto this platform is a new capability, not a kept call site.
+        let baseline = if was_on_platform {
             current.as_deref()
         } else {
             None
         };
-        if (changing || !was_on_android)
+        if (changing || !was_on_platform)
             && let Some(why) = scripts::sms_send_refused(&name, baseline, source)
                 .or_else(|| scripts::device_command_refused(&name, baseline, source))
         {
@@ -146,14 +153,14 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
         let (runs_before, _) = scripts::described(&uses);
         let mut proposed: Vec<_> = uses
             .into_iter()
-            .filter(|u| !(u.kind == "device" && u.name == "android"))
+            .filter(|u| !(u.kind == "device" && u.name == platform))
             .collect();
         for (kind, hooks) in [("handler", &file.handlers), ("command", &file.commands)] {
             for h in hooks.iter().filter(|h| h.script == name) {
                 proposed.push(ScriptUse {
                     kind: "device",
-                    name: "android".into(),
-                    file: "devices/android.wcl".into(),
+                    name: platform.into(),
+                    file: path.clone(),
                     event: Some(format!("{kind} {}", h.name)),
                     ..ScriptUse::default()
                 });
@@ -172,31 +179,31 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
                 "This code handles Outbox sends and can change what an approved SMS sends.".into(),
             );
         }
-        // Include Android even for removed references so removals retain phone warnings.
+        // Include the platform even for removed references so removals retain phone warnings.
         let mut phones = proposed.clone();
         phones.push(ScriptUse {
             kind: "device",
-            name: "android".into(),
+            name: platform.into(),
             ..ScriptUse::default()
         });
         let mut phone = scripts::on_phone(
             w,
             &phones,
-            if was_on_android {
+            if was_on_platform {
                 current.as_deref()
             } else {
                 None
             },
             source,
         )?;
-        // Capability highlighting uses the previous Android binding, but the admin note must
+        // Capability highlighting uses the previous platform binding, but the admin note must
         // also consider sensitive current source in a newly bound script (including removals).
         if scripts::sensitive_phone_source(current.as_deref(), Some(source))
             && let Some(phone) = &mut phone
         {
             phone["note"] = json!(format!(
                 "{} {}",
-                scripts::PHONE_NOTE,
+                scripts::device_note(&phones),
                 scripts::PHONE_ADMIN_MESSAGE
             ));
         }
@@ -205,7 +212,7 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
     }
     // Settings and permission reports also invalidate the card, not only the two switches.
     let mut devices = w.state().list_devices().map_err(writer::Error::from)?;
-    devices.retain(|d| d.platform == "android");
+    devices.retain(|d| d.platform == platform);
     devices.sort_by(|a, b| a.id.cmp(&b.id));
     let devices: Vec<_> = devices
         .iter()
@@ -213,10 +220,10 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
         .collect();
     let warnings: Vec<&str> = if before.as_deref() != Some(after.as_str())
         && before.as_ref().is_some_and(|text| {
-            let hash = writer::shipped_hash("devices/android.wcl", text);
+            let hash = writer::shipped_hash(&path, text);
             writer::SHIPPED_FILES
                 .iter()
-                .any(|f| f.path == "devices/android.wcl" && f.hashes.contains(&hash.as_str()))
+                .any(|f| f.path == path && f.hashes.contains(&hash.as_str()))
         }) {
         vec![
             "Editing this shipped device file stops automatic replacement by future app upgrades. A bell notice reports newer defaults.",
@@ -235,14 +242,14 @@ pub(crate) fn propose(
     call_id: &str,
     input: &Value,
 ) -> Result<ToolOut, ToolOut> {
-    android(input)?;
+    let platform = platform(input)?;
     // An empty device file is valid: it removes bindings without deleting the file and
     // activating the phone's built-in fallback. Still require an explicit string.
     let source = input["wcl"]
         .as_str()
         .ok_or_else(|| ToolOut::error("wcl must be a string"))?;
     let supplied = input.get("scripts").cloned().unwrap_or_else(|| json!([]));
-    let mut p = checked(w, source, &supplied).map_err(|e| {
+    let mut p = checked(w, platform, source, &supplied).map_err(|e| {
         let mut out = ToolOut::error(e.to_string());
         out.content =
             json!({"error": e.to_string(), "message": "The device file was not proposed."})
@@ -251,7 +258,7 @@ pub(crate) fn propose(
     })?;
     p["id"] = json!(call_id);
     p["kind"] = json!("device_file");
-    p["platform"] = json!("android");
+    p["platform"] = json!(platform);
     p["scripts"] = supplied;
     p["proposer"] = json!(by.name);
     Ok(output(
@@ -261,14 +268,12 @@ pub(crate) fn propose(
 }
 
 pub(crate) fn apply(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyError> {
-    if p["platform"] != "android" {
-        return Err(invalid("Only Android is supported"));
-    }
+    let platform = platform(p).map_err(|e| invalid(e.content))?;
     let after = p["after"]
         .as_str()
         .ok_or_else(|| invalid("missing device file"))?;
     w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
-        if json!(w.read_device_file("android").ok()) != p["before"] {
+        if json!(w.read_device_file(platform).ok()) != p["before"] {
             return Err(ApplyError::Stale(
                 "The device file changed. Propose it again.".into(),
             ));
@@ -288,7 +293,7 @@ pub(crate) fn apply(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyEr
                 ));
             }
         }
-        let now = checked(w, after, &p["scripts"])?;
+        let now = checked(w, platform, after, &p["scripts"])?;
         if now["requires_admin"] == true && !admin {
             return Err(ApplyError::Refused(scripts::PHONE_ADMIN_MESSAGE.into()));
         }
@@ -307,7 +312,7 @@ pub(crate) fn apply(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyEr
             }
         }
         let mut changes = vec![store::Change::write(
-            "devices/android.wcl",
+            format!("devices/{platform}.wcl"),
             after.as_bytes(),
         )];
         for s in now["snapshots"].as_array().expect("checked snapshots") {
@@ -317,5 +322,5 @@ pub(crate) fn apply(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyEr
         }
         Ok(changes)
     })?;
-    Ok(json!({"op": "device_file_change", "platform": "android"}))
+    Ok(json!({"op": "device_file_change", "platform": platform}))
 }

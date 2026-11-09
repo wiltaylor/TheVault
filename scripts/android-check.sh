@@ -11,4 +11,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo ndk -t x86_64 clippy -p store -p embedded -- -D warnings
-(cd apps/android/src-tauri && cargo ndk -t x86_64 clippy --workspace --all-targets -- -D warnings)
+(cd apps/android/src-tauri && env -u CARGO_TARGET_DIR cargo ndk -t x86_64 clippy --workspace --all-targets -- -D warnings)

@@ -71,6 +71,18 @@ field partial {
   default     = false
 }
 
+field scam_probability {
+  kind        = "float"
+  label       = "Scam probability"
+  description = "Model estimate from 0 to 1. Missing means unclassified. A low estimate is not proof of safety."
+}
+
+field communication_category {
+  kind    = "select"
+  label   = "Communication category"
+  options = ["scam", "spam", "marketing", "personal", "transactional", "other"]
+}
+
 field processed {
   kind    = "bool"
   label   = "Processed"
@@ -89,6 +101,8 @@ template default {
       column {
         slot "from"
         slot "processed"
+        slot "scam_probability"
+        slot "communication_category"
         slot "to"
       }
       column {

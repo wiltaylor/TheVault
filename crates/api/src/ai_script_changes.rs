@@ -157,6 +157,14 @@ pub(crate) fn shared_paths_refused(
 pub(crate) const PHONE_NOTE: &str =
     "Runs on your phone at its next sync, with no further prompt there.";
 
+pub(crate) fn device_note(uses: &[ScriptUse]) -> &'static str {
+    if uses.iter().any(|u| u.kind == "device" && u.name == "linux") {
+        "Runs on your paired devices at their next sync, with no further prompt there. Linux includes the desktop app."
+    } else {
+        PHONE_NOTE
+    }
+}
+
 /// What code that runs on a phone can do, as the card lists it (TV-98, TV-72 U3): a key, the
 /// words, the `device` functions and the `vault` functions that give it.
 type Capability = (
@@ -303,6 +311,13 @@ fn qualified(words: &[&str], module: &str, f: &str) -> usize {
 /// most: a `device` function's bare name anywhere counts, in a comment or a string too. The current
 /// source is read at the least: only `device::f` and `vault::f` outside comments.
 fn can(source: &str, proposed: bool) -> Vec<&'static str> {
+    let uncommented = without_comments(source);
+    // Comment separators keep the current source conservative. For a proposal, join across
+    // them too: `vault /* comment */ :: create` must still warn about writing notes.
+    let joined: Vec<_> = words(&uncommented)
+        .into_iter()
+        .filter(|w| *w != ";")
+        .collect();
     let text;
     let words = if proposed {
         words(source)
@@ -319,7 +334,10 @@ fn can(source: &str, proposed: bool) -> Vec<&'static str> {
                 } else {
                     qualified(&words, "device", f) > 0
                 }
-            }) || vault.iter().any(|f| qualified(&words, "vault", f) > 0)
+            }) || vault.iter().any(|f| {
+                qualified(&words, "vault", f) > 0
+                    || (proposed && qualified(&joined, "vault", f) > 0)
+            })
         })
         .map(|(key, ..)| *key)
         .collect()
@@ -410,9 +428,9 @@ pub(crate) fn on_phone(
         .collect();
     Ok(Some(json!({
         "note": if sensitive_phone_source(before, Some(after)) {
-            format!("{PHONE_NOTE} {PHONE_ADMIN_MESSAGE}")
+            format!("{} {PHONE_ADMIN_MESSAGE}", device_note(uses))
         } else {
-            PHONE_NOTE.to_owned()
+            device_note(uses).to_owned()
         },
         "platforms": platforms,
         "devices": devices,
@@ -808,6 +826,21 @@ mod tests {
             qualified(&words(&without_comments(url)), "device", "sms_send"),
             1
         );
+    }
+
+    #[test]
+    fn proposed_vault_calls_split_by_comments_warn() {
+        for src in [
+            "vault /* x */ :: create(\"note\", x)",
+            "vault :: /* x */ create(\"note\", x)",
+            "vault // x\n :: create(\"note\", x)",
+        ] {
+            assert_eq!(can(src, true), ["notes_write"], "{src}");
+            assert!(can(src, false).is_empty(), "{src}");
+        }
+        // Keep the raw-word match too, even when comment stripping drops this mention.
+        assert_eq!(can("/* vault::create */", true), ["notes_write"]);
+        assert!(can("/* vault::create */", false).is_empty());
     }
 
     #[test]
