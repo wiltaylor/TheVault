@@ -78,7 +78,11 @@ pub(crate) fn write_answer(conn: TcpStream, answer: &Answer) -> std::io::Result<
         Answer::Whole(r) => write_reply(conn, r),
         Answer::JsonChunks(r) => {
             let mut out = conn;
-            write!(out, "HTTP/1.1 {} OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n", r.status)?;
+            write!(
+                out,
+                "HTTP/1.1 {} OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+                r.status
+            )?;
             for chunk in r.body.chunks(7) {
                 write!(out, "{:x}\r\n", chunk.len())?;
                 out.write_all(chunk)?;
