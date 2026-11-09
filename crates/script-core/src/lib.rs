@@ -184,6 +184,8 @@ pub struct Job {
     pub kind: Kind,
     /// Hosts the `http` module may reach. Ignored for kinds without HTTP.
     pub allow_domains: Vec<String>,
+    /// Agent-supplied grants reach public addresses only, unless fetch_private lifts the rule.
+    pub public_only: bool,
     /// Secrets the `secrets` module may read. Ignored for kinds without secrets.
     pub secrets: Vec<String>,
     /// Directories the `fs` module may read. Ignored for kinds without `fs`.
@@ -211,6 +213,7 @@ impl Job {
             args: Vec::new(),
             kind,
             allow_domains: Vec::new(),
+            public_only: false,
             secrets: Vec::new(),
             read_paths: Vec::new(),
             write_paths: Vec::new(),
