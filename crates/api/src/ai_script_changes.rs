@@ -319,10 +319,28 @@ fn can(source: &str, proposed: bool) -> Vec<&'static str> {
         .collect()
 }
 
-/// The refusal of a new source that adds a call to `device::sms_send` (TV-98, TV-72 policy P-a).
-/// Every mention of `sms_send` in the new source counts, in comments and strings too; the current
-/// source counts only its `device::sms_send` outside comments. More in the new source is refused,
-/// whatever runs the script.
+/// Refuse new phone command sites with the same conservative count rule as SMS sends (TV-108).
+pub(crate) fn device_command_refused(
+    name: &str,
+    before: Option<&str>,
+    after: &str,
+) -> Option<String> {
+    let now = before.map_or(0, |b| {
+        qualified(&words(&without_comments(b)), "vault", "device_command")
+    });
+    let then = words(after)
+        .iter()
+        .filter(|w| **w == "device_command")
+        .count();
+    if then <= now {
+        return None;
+    }
+    Some(format!(
+        "an agent may not add a call to vault::device_command to script {name:?}: the current script calls it {now} times and the proposed source names device_command {then} times. Every mention counts, in comments and strings too. Use draft_sms to draft an SMS through the Outbox for review instead"
+    ))
+}
+
+/// Refuse added SMS send sites. Every proposed mention counts, but current comments do not.
 pub(crate) fn sms_send_refused(name: &str, before: Option<&str>, after: &str) -> Option<String> {
     let now = before.map_or(0, |b| {
         qualified(&words(&without_comments(b)), "device", "sms_send")
@@ -517,6 +535,9 @@ pub(crate) fn propose_change(
     if let Some(why) = sms_send_refused(name, before.as_deref(), after) {
         return Err(refused(why));
     }
+    if let Some(why) = device_command_refused(name, before.as_deref(), after) {
+        return Err(refused(why));
+    }
     let problems = w
         .script_problems(name, after)
         .map_err(|e| ToolOut::error(e.to_string()))?;
@@ -652,6 +673,11 @@ pub(crate) fn apply_script(w: &Writer, p: &Value, admin: bool) -> Result<Value, 
         // A change that adds a call to device::sms_send is refused (TV-98, policy P-a).
         if let Some(source) = after
             && let Some(why) = sms_send_refused(name, before, source)
+        {
+            return Err(ApplyError::Refused(why));
+        }
+        if let Some(source) = after
+            && let Some(why) = device_command_refused(name, before, source)
         {
             return Err(ApplyError::Refused(why));
         }

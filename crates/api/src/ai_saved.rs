@@ -4,7 +4,7 @@
 //!
 //! - `run_saved_script { script, function, args }` calls exported `function` of
 //!   `scripts/<script>.ws` with `args`, JSON text of an array, each element a `Value`. It runs
-//!   with the modules a task has; `http` reaches any host only when the agent may read web pages
+//!   with the modules a task has; `http` reaches public hosts only when the agent may read web pages
 //!   (`permissions.web.read`), and none otherwise; it reads no secret, whatever the agent may do
 //!   (TV-99); no `fs` directories; five minutes. Its
 //!   changes are made at once, as the agent.
@@ -85,7 +85,7 @@ pub fn specs() -> Vec<ToolSpec> {
         ),
         tool(
             RUN_SAVED,
-            "Run an exported function of one of the vault's saved scripts (scripts/<script>.ws) with `args`, each element arriving as a `Value` parameter. It runs with the vault, value, json, math, regex, http, ai and secrets modules for up to 5 minutes: http reaches any host only when you may read web pages, and it reads no secret: a task or a script tool names the secrets it may read. Changes are made at once, as you, and recorded in history. Answers the function's return value as JSON, its log, the time it took and the instructions it used, or the compile or run-time error.",
+            "Run an exported function of one of the vault's saved scripts (scripts/<script>.ws) with `args`, each element arriving as a `Value` parameter. It runs with the vault, value, json, math, regex, http, ai and secrets modules for up to 5 minutes: http reaches public hosts only when you may read web pages (local addresses require a user tool or task that names the host, or ai_settings.fetch_private), and it reads no secret: a task or a script tool names the secrets it may read. Changes are made at once, as you, and recorded in history. Answers the function's return value as JSON, its log, the time it took and the instructions it used, or the compile or run-time error.",
             json!({
                 "script": { "type": "string", "description": "The script's name, as list_scripts answers it." },
                 "function": { "type": "string", "description": "The exported function to call." },
@@ -154,6 +154,7 @@ pub(crate) fn saved_job(w: &Writer, agent: &Agent, input: &Value) -> Result<(Job
     job.args = args;
     // No secret, whatever the agent may do: a task or a script tool names the secrets it reads
     // (TV-99 D3).
+    job.public_only = true;
     job.allow_domains = if p.web.read {
         vec!["*".to_owned()]
     } else {

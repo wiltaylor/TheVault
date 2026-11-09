@@ -14,6 +14,7 @@ import { AgentRobots } from "../components/AgentRobot";
 import { ChipPicker, typeSuggestions } from "../components/ChipPicker";
 import { type Selection, SelectBox, SendNotesBar, createSelection } from "../components/SendNotesBar";
 import { showToast } from "../components/Toasts";
+import { SendToAgentButton } from "../components/SendToAgent";
 import { watchListThreads } from "../dispatch";
 import { knowTitle } from "../editor/titles";
 import { appInfo } from "../inApp";
@@ -70,6 +71,61 @@ export function Inbox() {
   const ids = createMemo(() => items().map((i) => i.row.id));
   const selection = createSelection(ids);
   const threads = watchListThreads(ids);
+  const [bulkBusy, setBulkBusy] = createSignal(false);
+  const selectedItems = () => items().filter((i) => selection.selected().includes(i.row.id));
+
+  async function bulk(action: "archive" | "delete") {
+    if (bulkBusy()) return;
+    const picked = [...selectedItems()];
+    if (action === "delete" && picked.some((i) => i.source.key === "mail")) return;
+    setBulkBusy(true);
+    setError(null);
+    const completed: { id: string; version: string }[] = [];
+    const resultText = () => `${completed.length} ${completed.length === 1 ? "note" : "notes"} ${action === "archive" ? "archived" : "moved to the trash"}`;
+    try {
+      for (const i of picked) {
+        const n = await api.note(i.row.id);
+        if (action === "archive") {
+          const saved = await api.archiveNote(i.row.id, n.version);
+          completed.push({ id: i.row.id, version: saved.version });
+        } else {
+          await api.deleteNote(i.row.id, n.version);
+          completed.push({ id: i.row.id, version: n.version });
+        }
+        hide(i.row.id);
+        selection.toggle(i.row.id, false);
+      }
+    } catch (e) {
+      setError(`${resultText()} before the error: ${errorText(e)}`);
+    } finally {
+      setBulkBusy(false);
+      if (completed.length > 0) {
+        showToast(resultText(), {
+          label: "Undo",
+          run: () => void undoBulk(),
+        });
+      }
+    }
+
+    async function undoBulk() {
+      setError(null);
+      let restored = 0;
+      try {
+        for (const n of completed) {
+          if (action === "archive") await api.unarchiveNote(n.id, n.version);
+          else await api.restoreFromTrash(n.id);
+          restored++;
+          setGone((s) => {
+            const next = new Set(s);
+            next.delete(n.id);
+            return next;
+          });
+        }
+      } catch (e) {
+        setError(`${restored} of ${completed.length} notes restored before the error: ${errorText(e)}`);
+      }
+    }
+  }
 
   async function run(id: string, act: () => Promise<void>) {
     setError(null);
@@ -190,7 +246,10 @@ export function Inbox() {
             </p>
           }
         >
-          <SendNotesBar selection={selection} page={ids} />
+          <SendNotesBar selection={selection} page={ids} actions={<>
+            <button type="button" disabled={bulkBusy()} onClick={() => void bulk("archive")}>Archive selected</button>
+            <button type="button" class="danger" disabled={bulkBusy() || selectedItems().some((i) => i.source.key === "mail")} title={selectedItems().some((i) => i.source.key === "mail") ? "Mail cannot be deleted from the Inbox" : undefined} onClick={() => void bulk("delete")}>Delete selected</button>
+          </>} />
           <ul class="inbox-list" aria-label="Inbox">
             <For each={items()}>
               {(i) => (
@@ -314,6 +373,7 @@ function InboxItem(props: {
         </Show>
       </div>
       <div class="inbox-actions">
+        <SendToAgentButton notes={[row().id]} />
         <a href={href()} class="button">
           Open
         </a>
