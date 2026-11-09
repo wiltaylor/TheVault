@@ -520,8 +520,7 @@ pub(crate) fn apply_task(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
             return Err(ApplyError::Refused(why));
         }
         let script_before = w.read_script(&def.script).ok();
-        if script_after.is_some() {
-            let source = script_after.unwrap();
+        if let Some(source) = script_after {
             if let Some(why) = crate::ai_script_changes::sms_send_refused(
                 &def.script,
                 script_before.as_deref(),
