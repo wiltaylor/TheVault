@@ -558,6 +558,8 @@ pub async fn apply(
         "skill_proposal"
     } else if change["kind"] == "tool" {
         "tool_proposal"
+    } else if change["kind"] == "device_file" {
+        "device_file_proposal"
     } else if change["kind"] == "script" {
         "script_proposal"
     } else if change["kind"] == "task" {
@@ -578,7 +580,7 @@ pub async fn apply(
             "agent_proposal" => Some(NEEDS_ADMIN_AGENT_MESSAGE),
             "skill_proposal" => Some(NEEDS_ADMIN_SKILL_MESSAGE),
             "tool_proposal" => Some(NEEDS_ADMIN_TOOL_MESSAGE),
-            "script_proposal" => Some(NEEDS_ADMIN_SCRIPT_MESSAGE),
+            "script_proposal" | "device_file_proposal" => Some(NEEDS_ADMIN_SCRIPT_MESSAGE),
             "task_proposal" => Some(NEEDS_ADMIN_TASK_MESSAGE),
             _ => None,
         };

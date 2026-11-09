@@ -84,6 +84,7 @@ mod ai_outbox;
 mod ai_retry;
 mod ai_saved;
 mod ai_script_changes;
+mod ai_device_changes;
 mod ai_scripts;
 mod ai_settings;
 mod ai_skill_changes;

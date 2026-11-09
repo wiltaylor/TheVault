@@ -418,7 +418,7 @@ pub(crate) const PHONE_ADMIN_MESSAGE: &str = "A signed-in admin must apply this 
 
 // Count bare names too, including imports, aliases, interpolation and comments. False positives
 // need an admin, rather than letting a different spelling hide a sensitive call.
-fn sensitive_phone_source(before: Option<&str>, after: Option<&str>) -> bool {
+pub(crate) fn sensitive_phone_source(before: Option<&str>, after: Option<&str>) -> bool {
     [before, after].into_iter().flatten().any(|source| {
         words(source)
             .iter()

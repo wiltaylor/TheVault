@@ -309,6 +309,7 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     .chain(crate::ai_skill_changes::PROPOSE_TOOLS.iter())
     .chain(crate::ai_scripts::PROPOSE_TOOLS.iter())
     .chain(crate::ai_script_changes::PROPOSE_TOOLS.iter())
+    .chain(["propose_device_file_change"].iter())
     .chain(crate::ai_task_changes::PROPOSE_TOOLS.iter())
     .any(|t| p.allows_tool(t));
     if admin { Scope::Admin } else { Scope::Write }
@@ -353,6 +354,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
 /// would see the proposal; a chat, a call from a note and a dispatch offer them (TV-77 F11). A
 /// new tool of that kind is added here, and [`Direct::covers`] never covers its events.
 const ALWAYS_PROPOSE: &[&str] = &[
+    "propose_device_file_change",
     crate::ai_script_changes::PROPOSE_TOOLS[0],
     crate::ai_script_changes::PROPOSE_TOOLS[1],
     crate::ai_task_changes::PROPOSE_TOOLS[0],
@@ -1001,7 +1003,7 @@ fn prepare_for(
 }
 
 /// The events of a proposal for the user, or of a change a tool made.
-const PROPOSAL_EVENTS: [&str; 10] = [
+const PROPOSAL_EVENTS: [&str; 11] = [
     "proposal",
     "type_proposal",
     "taxonomy_proposal",
@@ -1009,6 +1011,7 @@ const PROPOSAL_EVENTS: [&str; 10] = [
     "agent_memory_proposal",
     "skill_proposal",
     "tool_proposal",
+    "device_file_proposal",
     "script_proposal",
     "task_proposal",
     "applied",
@@ -1267,7 +1270,7 @@ impl Direct {
             }
             "tool_proposal" => self.tools,
             // The tools of [`ALWAYS_PROPOSE`]: always the user's Apply (TV-32 Q2 O1).
-            "script_proposal" | "task_proposal" => false,
+            "script_proposal" | "task_proposal" | "device_file_proposal" => false,
             "agent_memory_proposal" => self.memories,
             "skill_proposal" => self.skills,
             "proposal" => match p["op"].as_str().unwrap_or("update") {
@@ -3314,6 +3317,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     .chain(crate::ai_skill_changes::tool_specs())
     .chain(crate::ai_scripts::tool_specs())
     .chain(crate::ai_script_changes::tool_specs())
+    .chain(crate::ai_device_changes::tool_specs())
     .chain(crate::ai_task_changes::tool_specs())
     .chain(agent_memory::tool_specs())
     .chain(agent_memory::cross_tool_specs())
@@ -3698,6 +3702,9 @@ pub(crate) fn apply_change_with_admin(
     if event == "tool_proposal" {
         return crate::ai_scripts::apply_tool(w, p, admin);
     }
+    if event == "device_file_proposal" {
+        return crate::ai_device_changes::apply(w, p, admin);
+    }
     if event == "script_proposal" {
         return crate::ai_script_changes::apply_script(w, p, admin);
     }
@@ -3856,6 +3863,8 @@ fn propose_or_read(
         "get_tool" => crate::ai_scripts::get(w, input),
         "propose_tool_change" => crate::ai_scripts::propose_change(w, agent, &call.id, input),
         "propose_tool_delete" => crate::ai_scripts::propose_delete(w, agent, &call.id, input),
+        "get_device_file" => crate::ai_device_changes::get(w, input),
+        "propose_device_file_change" => crate::ai_device_changes::propose(w, agent, &call.id, input),
         "get_script" => crate::ai_script_changes::get(w, input),
         "propose_script_change" => {
             crate::ai_script_changes::propose_change(w, agent, &call.id, input)
@@ -4808,6 +4817,7 @@ mod tests {
             .chain(crate::ai_task_changes::PROPOSE_TOOLS.iter())
             .copied()
             .collect();
+        expected.push("propose_device_file_change");
         expected.sort_unstable();
         let mut listed = ALWAYS_PROPOSE.to_vec();
         listed.sort_unstable();
