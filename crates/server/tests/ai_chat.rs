@@ -330,7 +330,7 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
             .unwrap()
             .starts_with(ai::CHAT_PROMPT)
     );
-    assert_eq!(first["tools"].as_array().unwrap().len(), 62);
+    assert_eq!(first["tools"].as_array().unwrap().len(), 63);
     for name in ["get_device_file", "propose_device_file_change"] {
         assert!(
             first["tools"]

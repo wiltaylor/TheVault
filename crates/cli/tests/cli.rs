@@ -26,6 +26,32 @@ term "Active" {
 term "Done"
 "#;
 
+#[test]
+fn decide_calls_fake_decisions_through_server() {
+    let fake = testkit::FakeDecisions::start();
+    let server = TestServer::start();
+    let client = reqwest::blocking::Client::new();
+    let response = client.post(server.url("/api/integrations/ai/accounts"))
+        .bearer_auth(server.admin_token()).json(&json!({"name":"router", "kind":"openai_compatible", "base_url":fake.base_url(), "key":testkit::FakeDecisions::KEY})).send().unwrap();
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().unwrap()
+    );
+    fake.push(Reply::json(
+        200,
+        &json!({"id":"d", "model":"jev", "answers":{"safe":{"type":"noul","noul":0.8}}}),
+    ));
+    let out = Vault::against(&server).run(
+        &["decide"],
+        &json!({"state":"untrusted", "questions":{"safe":{"type":"noul","instructions":"Safe?"}}})
+            .to_string(),
+    );
+    assert!(out.ok, "{} {}", out.stdout, out.stderr);
+    assert_eq!(out.json["answers"]["safe"]["noul"], 0.8);
+    assert_eq!(fake.requests().len(), 1);
+}
+
 const TASK: &str = r#"label = "Task"
 
 field ext_id {
@@ -1306,6 +1332,13 @@ fn init_without_a_terminal_needs_password_stdin() {
 #[test]
 fn every_command_prints_json() {
     let server = TestServer::start_seeded(seed);
+    let fake = testkit::FakeDecisions::start();
+    reqwest::blocking::Client::new().post(server.url("/api/integrations/ai/accounts"))
+        .bearer_auth(server.admin_token()).json(&json!({"name":"router", "kind":"openai_compatible", "base_url":fake.base_url(), "key":testkit::FakeDecisions::KEY})).send().unwrap().error_for_status().unwrap();
+    fake.push(Reply::json(
+        200,
+        &json!({"id":"d", "model":"jev", "answers":{"safe":{"type":"noul","noul":0.8}}}),
+    ));
     let vault = Vault::against(&server);
     let scratch = TempDir::new().unwrap();
     let mut seen = BTreeSet::new();
@@ -1322,6 +1355,12 @@ fn every_command_prints_json() {
     let listing = run("commands", &[], "");
     run("skill", &[], "");
     run("health", &[], "");
+    run(
+        "decide",
+        &[],
+        &json!({"state":"untrusted", "questions":{"safe":{"type":"noul","instructions":"Safe?"}}})
+            .to_string(),
+    );
     run("schema", &[], "");
 
     let a = run("put", &["--type", "task"], "title = \"A\"\n");

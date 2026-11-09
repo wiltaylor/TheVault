@@ -864,6 +864,8 @@ export interface AiAccount {
   base_url: string | null;
   /** The default model; null is the kind's default. */
   model: string | null;
+  /** Independent decisions default; omitted by older servers. */
+  decisions_model?: string | null;
   /** Extra request headers, `openai_compatible` only (accounts A3). */
   headers: [string, string][];
   /** The context window; null is the kind's default. */

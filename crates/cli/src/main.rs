@@ -91,6 +91,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Typed, tool-free decisions. Read request JSON from a file or stdin.
+    Decide { file: Option<std::path::PathBuf> },
     /// Every command this binary has, with what it does.
     Commands,
     /// The agent skill document: how to drive a vault with this CLI. Start here.
@@ -943,6 +945,11 @@ fn run(cli: Cli) -> Result<Value, Fail> {
 
 fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
     match command {
+        Command::Decide { file } => {
+            let input: Value = serde_json::from_str(&read_text(file.as_deref())?)
+                .map_err(|_| Fail::new("usage", "Invalid decisions JSON"))?;
+            api.post(&["api", "ai", "decide"], input)
+        }
         Command::Health => api.get(&["api", "health"]),
         Command::Schema => api.get(&["api", "schema"]),
         Command::List {
