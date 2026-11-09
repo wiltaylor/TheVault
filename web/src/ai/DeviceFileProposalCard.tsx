@@ -14,6 +14,17 @@ function commands(settings: string): string {
   }
 }
 
+function healthProblems(health: string | null | undefined): string[] | null {
+  if (!health) return null;
+  try {
+    const value: unknown = JSON.parse(health);
+    const problems = value && typeof value === "object" && "problems" in value ? value.problems : null;
+    return Array.isArray(problems) ? problems.filter((p): p is string => typeof p === "string") : null;
+  } catch {
+    return null;
+  }
+}
+
 export function DeviceFileProposalCard(props: { part: Extract<Part, { kind: "device_file_proposal" }>; turn: number; index: number }) {
   const session = useChatSession();
   const p = () => props.part.proposal;
@@ -24,8 +35,15 @@ export function DeviceFileProposalCard(props: { part: Extract<Part, { kind: "dev
       <p class="muted">{`Proposed by ${p().proposer ?? "agent"}. Runs on your phone at its next sync, with no further prompt there.`}</p>
       <Show when={p().requires_admin}><p role="note">A signed-in admin must apply this change because the current or proposed phone code sends SMS or writes contacts.</p></Show>
       <DiffLines before={p().before} after={p().after} label="devices/android.wcl" />
-      <p role="note">Editing a shipped device file or script stops its automatic replacement by future app upgrades. A bell notice reports newer defaults.</p>
-      <For each={p().devices}>{(d) => <p class="muted">{`${d.name}: enabled commands: ${commands(d.settings)}. Permission report: ${d.health ?? "not reported"}`}</p>}</For>
+      <For each={p().warnings}>{(warning) => <p role="note">{warning}</p>}</For>
+      <For each={p().devices}>{(d) => <div>
+        <p class="muted">{`${d.name}: enabled commands: ${commands(d.settings)}.`}</p>
+        <Show when={healthProblems(d.health) !== null} fallback={<p class="muted">Capture health not reported.</p>}>
+          <ul aria-label={`${d.name} capture health problems`}>
+            <For each={healthProblems(d.health) ?? []} fallback={<li>No problems reported.</li>}>{(problem) => <li>{problem}</li>}</For>
+          </ul>
+        </Show>
+      </div>}</For>
       <For each={p().snapshots}>{(s) => <div>
         <p><code>{`scripts/${s.name}.ws`}</code></p>
         <DiffLines before={s.before} after={s.after} label={s.name} />

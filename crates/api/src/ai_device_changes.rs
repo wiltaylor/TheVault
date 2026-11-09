@@ -60,6 +60,11 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
     let after = store::canonical(source, "devices/android.wcl").map_err(invalid)?;
     let file = DeviceFile::parse("android", &after).map_err(invalid)?;
     let before = w.read_device_file("android").ok();
+    let old = before
+        .as_deref()
+        .map(|text| DeviceFile::parse("android", text))
+        .transpose()
+        .map_err(invalid)?;
     let mut edits = BTreeMap::new();
     for s in supplied
         .as_array()
@@ -79,8 +84,7 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
         }
     }
     let mut names: BTreeSet<String> = file.scripts().into_iter().map(str::to_owned).collect();
-    if let Some(text) = &before {
-        let old = DeviceFile::parse("android", text).map_err(invalid)?;
+    if let Some(old) = &old {
         names.extend(old.scripts().into_iter().map(str::to_owned));
     }
     let mut snapshots = Vec::new();
@@ -93,17 +97,41 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
             .or(current.as_deref())
             .ok_or_else(|| invalid(format!("there is no script {name:?}")))?;
         let changing = current.as_deref() != Some(source);
-        if changing
-            && let Some(why) = [
-                scripts::shared_paths_refused(w, &name, None),
-                scripts::sms_send_refused(&name, current.as_deref(), source),
-                scripts::device_command_refused(&name, current.as_deref(), source),
-            ]
-            .into_iter()
-            .flatten()
-            .next()
+        let was_on_android = old
+            .as_ref()
+            .is_some_and(|f| f.scripts().contains(&name.as_str()));
+        if changing && let Some(why) = scripts::shared_paths_refused(w, &name, None) {
+            return Err(ApplyError::Refused(why));
+        }
+        // Bringing existing code onto Android is a new capability, not a kept call site.
+        let baseline = if was_on_android {
+            current.as_deref()
+        } else {
+            None
+        };
+        if (changing || !was_on_android)
+            && let Some(why) = scripts::sms_send_refused(&name, baseline, source)
+                .or_else(|| scripts::device_command_refused(&name, baseline, source))
         {
             return Err(ApplyError::Refused(why));
+        }
+        // A new event/command target can create a send path without changing any source.
+        // Keep the kind, name, script and function in the comparison. Existing bindings stay.
+        for (kind, hooks, previous) in [
+            ("handler", &file.handlers, old.as_ref().map(|f| &f.handlers)),
+            ("command", &file.commands, old.as_ref().map(|f| &f.commands)),
+        ] {
+            for hook in hooks.iter().filter(|h| h.script == name) {
+                if !previous.is_some_and(|list| list.contains(hook))
+                    && let Some(why) = scripts::sms_send_refused(&name, None, source)
+                        .or_else(|| scripts::device_command_refused(&name, None, source))
+                {
+                    return Err(ApplyError::Refused(format!(
+                        "A new {kind} binding {:?} to {}::{} is not permitted: {why}",
+                        hook.name, hook.script, hook.function
+                    )));
+                }
+            }
         }
         if file.scripts().contains(&name.as_str()) {
             let problems = w.script_problems_with_device(&name, source, Some(&file))?;
@@ -115,9 +143,6 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
         }
         admin |= scripts::sensitive_phone_source(current.as_deref(), Some(source));
         let uses = w.script_runs_as(&name, None)?;
-        let was_on_android = uses
-            .iter()
-            .any(|u| u.kind == "device" && u.name == "android");
         let (runs_before, _) = scripts::described(&uses);
         let mut proposed: Vec<_> = uses
             .into_iter()
@@ -154,7 +179,7 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
             name: "android".into(),
             ..ScriptUse::default()
         });
-        let phone = scripts::on_phone(
+        let mut phone = scripts::on_phone(
             w,
             &phones,
             if was_on_android {
@@ -164,6 +189,17 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
             },
             source,
         )?;
+        // Capability highlighting uses the previous Android binding, but the admin note must
+        // also consider sensitive current source in a newly bound script (including removals).
+        if scripts::sensitive_phone_source(current.as_deref(), Some(source))
+            && let Some(phone) = &mut phone
+        {
+            phone["note"] = json!(format!(
+                "{} {}",
+                scripts::PHONE_NOTE,
+                scripts::PHONE_ADMIN_MESSAGE
+            ));
+        }
         snapshots.push(json!({"name": name, "before": current, "after": source,
             "runs_before": runs_before, "runs_as": runs_after, "warnings": warnings, "device": phone}));
     }
@@ -175,8 +211,21 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
         .iter()
         .map(|d| json!({"id": d.id, "name": d.name, "settings": d.settings, "health": d.health}))
         .collect();
+    let warnings: Vec<&str> = if before.as_deref() != Some(after.as_str())
+        && before.as_ref().is_some_and(|text| {
+            let hash = writer::shipped_hash("devices/android.wcl", text);
+            writer::SHIPPED_FILES
+                .iter()
+                .any(|f| f.path == "devices/android.wcl" && f.hashes.contains(&hash.as_str()))
+        }) {
+        vec![
+            "Editing this shipped device file stops automatic replacement by future app upgrades. A bell notice reports newer defaults.",
+        ]
+    } else {
+        Vec::new()
+    };
     Ok(
-        json!({"before": before, "after": after, "snapshots": snapshots, "devices": devices, "requires_admin": admin}),
+        json!({"before": before, "after": after, "snapshots": snapshots, "devices": devices, "requires_admin": admin, "warnings": warnings}),
     )
 }
 
@@ -189,7 +238,13 @@ pub(crate) fn propose(
     android(input)?;
     let source = str_arg(input, "wcl")?;
     let supplied = input.get("scripts").cloned().unwrap_or_else(|| json!([]));
-    let mut p = checked(w, source, &supplied).map_err(|e| ToolOut::error(format!("{e:?}")))?;
+    let mut p = checked(w, source, &supplied).map_err(|e| {
+        let mut out = ToolOut::error(e.to_string());
+        out.content =
+            json!({"error": e.to_string(), "message": "The device file was not proposed."})
+                .to_string();
+        out
+    })?;
     p["id"] = json!(call_id);
     p["kind"] = json!("device_file");
     p["platform"] = json!("android");
@@ -233,7 +288,14 @@ pub(crate) fn apply(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyEr
         if now["requires_admin"] == true && !admin {
             return Err(ApplyError::Refused(scripts::PHONE_ADMIN_MESSAGE.into()));
         }
-        for field in ["before", "after", "snapshots", "devices", "requires_admin"] {
+        for field in [
+            "before",
+            "after",
+            "snapshots",
+            "devices",
+            "requires_admin",
+            "warnings",
+        ] {
             if now[field] != p[field] {
                 return Err(ApplyError::Stale(format!(
                     "{field} changed since the proposal. Propose it again."

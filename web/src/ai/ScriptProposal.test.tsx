@@ -102,7 +102,7 @@ describe("script proposals", () => {
     await ask(m);
     const proposal = {
       id: "phone_bundle", kind: "device_file", platform: "android", before: "", after: "handler sms_received {}",
-      requires_admin: true, proposer: "assistant", devices: [{ id: "phone", name: "My phone", settings: '{"commands":["send_sms"]}', health: null }],
+      requires_admin: true, warnings: ["Editing this shipped device file stops automatic replacement by future app upgrades."], proposer: "assistant", devices: [{ id: "phone", name: "My phone", settings: '{"commands":["send_sms"]}', health: JSON.stringify({ problems: ["SMS permission missing", "Battery restricted"] }) }],
       snapshots: [{ ...CHANGE, device: { note: "Runs on your phone at its next sync, with no further prompt there.", platforms: ["android"], devices: [], can: [{ key: "sms_read", label: "Read all SMS, including codes", new: true }] } }],
     };
     live!.onEvent({ event: "device_file_proposal", data: proposal });
@@ -112,6 +112,10 @@ describe("script proposals", () => {
     expect(card.textContent).toContain("My phone");
     expect(card.textContent).toContain("send_sms");
     expect(card.textContent).toContain("New: Read all SMS");
+    const health = within(card).getByRole("list", { name: "My phone capture health problems" });
+    expect(within(health).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["SMS permission missing", "Battery restricted"]);
+    expect(card.textContent).not.toContain('{"problems"');
+    expect(card.textContent).toContain("Editing this shipped device file");
     fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(aiApply).toHaveBeenCalledWith(proposal));
     await waitFor(() => expect(card.textContent).toContain("Applied."));
@@ -126,6 +130,20 @@ describe("script proposals", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Discard" }));
     expect(card.textContent).toContain("Discarded.");
     expect(aiApply).not.toHaveBeenCalled();
+    expect(card.textContent).not.toContain("automatic replacement");
+  });
+
+  it.each([
+    ["healthy", JSON.stringify({ problems: [] }), "No problems reported."],
+    ["unreported", null, "Capture health not reported."],
+  ])("renders %s phone health without raw JSON or a false shipped warning", async (_name, health, expected) => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    live!.onEvent({ event: "device_file_proposal", data: { id: "health_phone", kind: "device_file", platform: "android", before: "", after: "", snapshots: [], devices: [{ id: "p", name: "Phone", settings: "{}", health }], requires_admin: false, warnings: [] } });
+    live!.end();
+    const card = await waitFor(() => m.getByRole("region", { name: "Proposed Android device file" }));
+    expect(card.textContent).toContain(expected);
+    expect(card.textContent).not.toContain("automatic replacement");
   });
 
   it("shows the diff, what runs the script with its grants and the any-host warning, and applies it", async () => {

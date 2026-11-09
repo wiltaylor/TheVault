@@ -330,8 +330,8 @@ export interface ScriptUse {
 }
 
 /**
- * A saved script change the model proposed (TV-70): a new or changed `scripts/<name>.ws`, or its
- * delete, with what runs it. It always waits for the user's Apply.
+ * An atomic Android device-file and script bundle (TV-72), with current/proposed phone
+ * capabilities and stale-check snapshots. Always waits for the user's Apply.
  */
 export interface DeviceFileProposal {
   id: string;
@@ -342,9 +342,11 @@ export interface DeviceFileProposal {
   snapshots: ScriptProposal[];
   proposer?: string;
   requires_admin: boolean;
+  warnings: string[];
   devices: { id: string; name: string; settings: string; health?: string | null }[];
 }
 
+/** A saved script create, change or delete (TV-70), with its uses. Always waits for Apply. */
 export interface ScriptProposal {
   id: string;
   kind: "script";
@@ -2216,10 +2218,9 @@ function createConversation(agent: string, id: string | null) {
   }
 
   /**
-   * Apply a saved script proposal with POST /api/ai/apply (TV-70). The server writes nothing when
-   * the script changed since the proposal (a 409 `stale`), and refuses a delete of a script
-   * something has started to run since (a 409 `script_in_use`). It needs admin, or the copy
-   * waiting in the thread.
+   * Apply an atomic Android device-file/script bundle. Changed files, script uses or phone
+   * settings answer 409 stale. Sensitive current or proposed code needs a signed-in admin;
+   * other token applies use only the proposal stored in the thread, never the submitted body.
    */
   async function applyDeviceFileProposal(turn: number, part: number) {
     const p = chat.turns[turn]?.parts[part];

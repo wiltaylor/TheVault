@@ -448,6 +448,13 @@ Current or proposed sensitive phone code requires a signed-in admin. Tokens may 
 apply only the copy stored in a thread. A changed device file, script, script use, or phone
 settings makes the proposal stale (409). Nothing is partially written.
 
+With the shipped `android.wcl`, `device_messages` contains SMS sending, so almost every
+device-file proposal needs a signed-in admin, even a WCL-only change. A stored thread copy
+does not let an API token bypass this requirement. Adding an existing script to Android is
+checked as new code. New handler or command bindings to scripts naming `sms_send` or
+`device_command` are refused, including a different event, command, script or function.
+Existing bindings remain allowed. Agents send SMS only through Outbox drafts.
+
 ### Agents that propose scheduled tasks
 
 A scheduled task, `tasks/<name>.wcl`, runs its script unattended and again and again, as the task, with the hosts and secrets its file gives it. So an agent's change to one always waits for your Apply, whatever its confirmation switches say, and there is no switch to turn that off (TV-32 decision Q2).
