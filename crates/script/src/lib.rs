@@ -150,6 +150,9 @@ pub const MAX_SECRET_VALUE: usize = 64 * 1024;
 fn granted(name: &str) -> Result<Result<(), String>, HostError> {
     run::with(|r| {
         r.remaining()?;
+        if state::internal_script_secret(name) {
+            return Ok(Err(format!("secret {name:?} is reserved for the server")));
+        }
         if r.job.secrets.iter().any(|s| s == name) {
             return Ok(Ok(()));
         }

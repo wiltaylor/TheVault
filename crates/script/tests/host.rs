@@ -455,6 +455,42 @@ fn http_and_secrets_are_unavailable_in_a_before_handler() {
 }
 
 #[test]
+fn explicitly_granted_internal_secrets_cannot_be_read_or_written() {
+    let f = fixture();
+    let src = r#"use secrets
+fn run(arg: Value) -> List[string] {
+    let name = arg.as_string().unwrap()
+    let read = match secrets::get(name) { Ok(v) => v, Err(e) => e }
+    let write = match secrets::set(name, "changed") { Ok(_) => "written", Err(e) => e }
+    [read, write]
+}
+"#;
+    for name in [
+        "ai_settings",
+        "ai_accounts",
+        "ai_account_key_test",
+        "ai_account_chatgpt_test",
+        "ai_account_usage_test",
+        "gitsync_token",
+        "gitsync_ssh_key",
+        "gitsync_settings",
+        "brave_api_key",
+        "brave_settings",
+    ] {
+        f.writer.state().set_secret(name, "original").unwrap();
+        let mut j = job(Kind::Task, src);
+        j.secrets = vec![name.into()];
+        j.args = vec![json!(name)];
+        let why = format!("secret {name:?} is reserved for the server");
+        assert_eq!(f.host.run(j).result.unwrap(), json!([why, why]));
+        assert_eq!(
+            f.writer.state().get_secret(name).unwrap().as_deref(),
+            Some("original")
+        );
+    }
+}
+
+#[test]
 fn a_script_reads_only_the_secrets_it_was_granted() {
     let f = fixture();
     f.writer.state().set_secret("granted", "one").unwrap();
