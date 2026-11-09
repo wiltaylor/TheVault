@@ -236,7 +236,11 @@ pub(crate) fn propose(
     input: &Value,
 ) -> Result<ToolOut, ToolOut> {
     android(input)?;
-    let source = str_arg(input, "wcl")?;
+    // An empty device file is valid: it removes bindings without deleting the file and
+    // activating the phone's built-in fallback. Still require an explicit string.
+    let source = input["wcl"]
+        .as_str()
+        .ok_or_else(|| ToolOut::error("wcl must be a string"))?;
     let supplied = input.get("scripts").cloned().unwrap_or_else(|| json!([]));
     let mut p = checked(w, source, &supplied).map_err(|e| {
         let mut out = ToolOut::error(e.to_string());
