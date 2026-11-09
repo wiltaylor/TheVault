@@ -153,6 +153,14 @@ enum Command {
     },
     /// Every version of a note.
     History { id: String },
+    /// Prune old agent_thread history in a local vault. Dry run unless --apply is given.
+    /// Keeps device sync bases in addition to the newest N copies.
+    PruneThreadHistory {
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
+        keep: u32,
+        #[arg(long)]
+        apply: bool,
+    },
     /// The notes linked to or from a note, most recently updated first, with every link among
     /// them: the graph the web app draws beside the note.
     Graph {
@@ -898,6 +906,18 @@ fn run(cli: Cli) -> Result<Value, Fail> {
         } => local::init(&dir, starter, password_stdin),
         Command::Passwd { password_stdin } => local::passwd(vault, password_stdin),
         Command::Reindex => local::reindex(vault),
+        Command::PruneThreadHistory { keep, apply } => {
+            let state = local::open_state(vault)?;
+            let report = state
+                .prune_thread_history(keep, apply)
+                .map_err(Fail::from_display("state"))?;
+            let rows: u64 = report.iter().map(|r| r.rows).sum();
+            let bytes: u64 = report.iter().map(|r| r.bytes).sum();
+            Ok(
+                json!({ "apply": apply, "keep": keep, "rows": rows, "bytes": bytes,
+                "threads": report.iter().map(|r| json!({"id": r.note_id, "rows": r.rows, "bytes": r.bytes})).collect::<Vec<_>>() }),
+            )
+        }
         Command::Backup { out, include_key } => backup::backup(vault, &out, include_key),
         Command::RestoreBackup { archive, dir } => backup::restore(&archive, &dir),
         Command::VersionCompare { a, b } => version_compare(&a, &b),
@@ -1289,6 +1309,7 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
         | Command::Init { .. }
         | Command::Passwd { .. }
         | Command::Reindex
+        | Command::PruneThreadHistory { .. }
         | Command::Backup { .. }
         | Command::RestoreBackup { .. }
         | Command::VersionCompare { .. } => unreachable!("local commands are handled in run"),
