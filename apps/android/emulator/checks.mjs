@@ -50,6 +50,7 @@ import { logcatSinceArgs } from "./logcat.mjs";
 import { qrPng } from "./qr.mjs";
 import { classifierNotes, classifierSynced, assertClassifierView } from "./classifier.mjs";
 import { ownedEmulatorGone, recoverReboot } from "./reboot.mjs";
+import { resultsTap } from "./report.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -1696,7 +1697,7 @@ async function main() {
   record(5, "na", "Not possible in the emulator: the emulator's camera shows a virtual scene, so there is no way to hold a QR code up to it.", []);
 }
 
-function writeReport() {
+function writeReport(completed) {
   const run = existsSync(join(out, "run.json")) ? JSON.parse(readFileSync(join(out, "run.json"), "utf8")) : {};
   const labels = { pass: "Pass", fail: "Fail", na: "Not possible in emulator", partial: "Partial" };
   const lines = [
@@ -1718,24 +1719,17 @@ function writeReport() {
   lines.push("", `Totals: ${Object.entries(counts).map(([k, v]) => `${labels[k] ?? k} ${v}`).join(", ")}.`, "");
   writeFileSync(join(out, "RESULTS.generated.md"), lines.join("\n"));
   // Standard test evidence for `terrarium test push`, alongside the detailed JSON and shots.
-  const cases = Object.entries(TITLES).filter(([n]) => !only || only.has(Number(n)));
-  const tap = ["TAP version 13", `1..${cases.length}`];
-  for (const [i, [n, title]] of cases.entries()) {
-    const r = results[n];
-    const skip = r && ["na", "partial"].includes(r.status) ? ` # SKIP ${r.status}` : "";
-    const ok = r && r.status !== "fail";
-    tap.push(`${ok ? "ok" : "not ok"} ${i + 1} - Check ${n}: ${title.doing.replace(/[\r\n#]/g, " ")}${skip}`);
-    tap.push(`# ${(r?.note ?? "The run stopped before this check.").replace(/[\r\n]/g, " ")}`);
-  }
-  writeFileSync(join(out, "results.tap"), `${tap.join("\n")}\n`);
+  writeFileSync(join(out, "results.tap"), resultsTap(TITLES, results, { only, completed }));
 }
 
 // Playwright's adb connection emits an unhandled error when adb restarts (a reboot, adb root);
 // the next page() reconnects, so log it rather than lose the run.
 process.on("uncaughtException", (e) => console.error(`ignored: ${e.message}`));
 
+let completed = false;
 try {
   await main();
+  completed = true;
 } catch (e) {
   console.error(`run stopped: ${e.stack ?? e}`);
   process.exitCode = 1;
@@ -1760,7 +1754,7 @@ try {
     }
   } catch {}
   await pw?.device.close().catch(() => {});
-  writeReport();
+  writeReport(completed);
   for (const c of children) await L.stop(c);
   const failed = Object.values(results).filter((r) => r.status === "fail").length;
   console.log(`${Object.keys(results).length} checks recorded, ${failed} failed; see ${join(out, "RESULTS.generated.md")}`);
