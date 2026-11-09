@@ -153,6 +153,12 @@ Content block kinds are closed, so an app refuses a note holding a block kind it
 
 Skills raised the vault format version to 3 ([Skills](vault-format.md#skills)): the feed carries `skills/` files, binary ones as base64, which an app at format 2 cannot write. Such an app refuses to sync with a server at format 3 and keeps its queued writes until it is updated. Apps from 0.1.9 update themselves first when the new builds are published, so publish them with the server, in the server-first order above.
 
+Classifier files (`classifiers/<name>.wcl`) require vault format 10. Publish app
+builds that support that folder with the server. Apps from 0.1.9 update themselves
+before the format check. Older apps that cannot update stop at the format gate
+before pulling any classifiers and keep their queued writes. Classifiers run only
+on the home server, never on a phone or desktop's embedded server.
+
 When the new builds cannot be published with the server, or a phone runs 0.1.8 or earlier, use the apps-first order instead:
 
 1. Publish the new app first: `./dev just publish-clients <clients dir>`, with the old server still running. The old server announces the update.

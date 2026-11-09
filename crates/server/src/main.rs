@@ -64,6 +64,16 @@ struct Args {
 const SCRIPT_WORKERS: usize = 4;
 
 fn main() -> anyhow::Result<()> {
+    // Classifier trails use the AI tracing target. Keep them visible by default, with
+    // RUST_LOG available to the operator, and do not disturb an existing subscriber.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "warn,ai=info".into()),
+        )
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .try_init();
     let args = Args::parse();
     let test_clock = args.test_clock.as_deref().map(test_clock).transpose()?;
     if !args.vault.is_dir() {
@@ -100,6 +110,7 @@ fn main() -> anyhow::Result<()> {
     let handlers = script::Handlers::new(script::Limits::default());
     // Note event triggers hear of each change once it is durable (agents G10).
     let (hooks, triggers) = scheduler::TriggerHooks::wrap(handlers.hooks());
+    let (hooks, classifiers) = api::classifiers::wrap(hooks);
     let writer = Arc::new(
         writer::Writer::open(vault, state)
             .context("loading the vault")?
@@ -110,6 +121,7 @@ fn main() -> anyhow::Result<()> {
         .upgrade_shipped_defaults(writer::Upkeep::Home)
         .context("bringing the vault's shipped defaults up to date")?;
     handlers.start(&writer);
+    classifiers.start(&writer).context("starting classifiers")?;
     // The script hosts' HTTP clients block, so they are made outside the async runtime. Tasks
     // change notes through the writer, so a task's changes run handlers too.
     let host = Arc::new(script::Host::new(

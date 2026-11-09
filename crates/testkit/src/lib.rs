@@ -35,6 +35,7 @@ mod ai_seed;
 pub mod fake_anthropic;
 pub mod fake_brave;
 pub mod fake_browser;
+pub mod fake_decisions;
 pub mod fake_google;
 mod fake_http;
 mod fake_images;
@@ -51,6 +52,7 @@ pub use fake_anthropic::{
 };
 pub use fake_brave::{BRAVE_SEARCH_PATH, BraveReply, BraveResult, DEFAULT_BRAVE_KEY, FakeBrave};
 pub use fake_browser::{BROWSER_WORK, BrowserRun, DEFAULT_BROWSER_TOKEN, FakeBrowser};
+pub use fake_decisions::FakeDecisions;
 pub use fake_images::FakeImage;
 pub use fake_novnc::{FakeNoVnc, NOVNC_PAGE, WsClient};
 pub use fake_openai::{

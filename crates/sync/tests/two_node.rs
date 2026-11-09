@@ -456,6 +456,36 @@ fn a_newer_server_refuses_sync_and_keeps_the_queue() {
 }
 
 #[test]
+fn classifiers_require_format_ten_before_the_folder_is_pulled() {
+    let source = "types = [\"memo\"]\nmodel = \"typesafe/jev-1.13\"\nfields = [\"title\"]\nquestion check { type = \"noul\" instructions = \"Check\" target = \"score\" }\n";
+    let server = TestServer::start_seeded(|vault| {
+        seed(vault);
+        std::fs::create_dir_all(vault.join("classifiers")).unwrap();
+        std::fs::write(vault.join("classifiers/incoming.wcl"), source).unwrap();
+    });
+    let phone = Device::pair(&server, "Phone");
+    let path = phone._vault.path().join("classifiers/incoming.wcl");
+    let err = phone
+        .engine(AssetPolicy::desktop())
+        .with_supported(Supported {
+            protocol: vocab::SYNC_PROTOCOL,
+            format_version: 9,
+        })
+        .sync()
+        .unwrap_err();
+    assert!(matches!(err, Error::ServerNewer { .. }));
+    assert!(
+        !path.exists(),
+        "older client must not receive the new folder"
+    );
+    phone.sync();
+    assert_eq!(
+        schema::Doc::parse(&std::fs::read_to_string(path).unwrap(), "synced classifier").unwrap(),
+        schema::Doc::parse(source, "classifier").unwrap()
+    );
+}
+
+#[test]
 fn the_version_gate_pauses_pushing_and_pulling_until_it_lets_the_round_through() {
     let server = TestServer::start_seeded(seed);
     let admin = Http::admin(&server);

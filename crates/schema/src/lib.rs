@@ -10,6 +10,7 @@
 mod agents;
 mod blocks;
 mod change;
+mod classifiers;
 mod devices;
 mod doc;
 mod encoding;
@@ -42,6 +43,7 @@ pub use blocks::{
     is_icon,
 };
 pub use change::{FieldChanges, NoteEdit};
+pub use classifiers::{Classifier, ClassifierNotify, ClassifierQuestion};
 pub use devices::{DEVICE_COMMANDS, DEVICE_EVENTS, DEVICE_PLATFORMS, DeviceFile, DeviceHook};
 pub use doc::{Doc, DocBlock, Value};
 pub use encoding::{

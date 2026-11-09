@@ -10,7 +10,7 @@ use crate::{Error, Result, commit, io_err, parse_data_only};
 
 /// The folders a vault holds files in, in the order `init` creates them. `.vault/` is the server's
 /// own folder and is not listed.
-pub const LAYOUT_DIRS: [&str; 10] = [
+pub const LAYOUT_DIRS: [&str; 11] = [
     "notes",
     "types",
     "taxonomies",
@@ -21,6 +21,7 @@ pub const LAYOUT_DIRS: [&str; 10] = [
     "assets",
     "skills",
     "tools",
+    "classifiers",
 ];
 
 /// The server's own folder: `index.db`, `state.db` and the commit journal.
@@ -228,14 +229,15 @@ pub(crate) fn check_path(path: &str) -> Result<()> {
     let top = segments[0];
     if !LAYOUT_DIRS.contains(&top) {
         return fail(
-            "it is not under notes/, types/, taxonomies/, scripts/, tasks/, devices/, agents/, assets/, skills/ or tools/",
+            "it is not under notes/, types/, taxonomies/, scripts/, tasks/, devices/, agents/, assets/, skills/, tools/ or classifiers/",
         );
     }
     if top == crate::skills::SKILLS_DIR && segments.len() < 3 {
         return fail("files under skills/ are inside a skill's folder");
     }
     let wants = match top {
-        "notes" | "types" | "taxonomies" | "tasks" | "devices" | "agents" | "tools" => Some(".wcl"),
+        "notes" | "types" | "taxonomies" | "tasks" | "devices" | "agents" | "tools"
+        | "classifiers" => Some(".wcl"),
         "scripts" => Some(".ws"),
         _ => None,
     };

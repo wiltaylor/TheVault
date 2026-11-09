@@ -37,7 +37,8 @@ pub const SYNC_PROTOCOL: u32 = 1;
 /// note as an unknown block kind.
 /// 9: the `divider` content block, a horizontal rule, which an older reader refuses in a note as
 /// an unknown block kind.
-pub const FORMAT_VERSION: u32 = 9;
+/// 10: classifier definitions, `classifiers/<name>.wcl`, a synced folder older apps refuse.
+pub const FORMAT_VERSION: u32 = 10;
 
 /// Who made a change (D13, D30).
 #[derive(Debug, Clone, PartialEq, Eq)]

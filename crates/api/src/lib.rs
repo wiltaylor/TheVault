@@ -99,6 +99,7 @@ mod auth;
 mod batch;
 mod brave;
 mod browser;
+pub mod classifiers;
 mod defs;
 mod devices;
 mod error;

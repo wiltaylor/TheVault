@@ -188,6 +188,7 @@ impl Writer {
                 version: self.head(id, type_name, wcl)?,
                 wcl: wcl.to_owned(),
                 previous: None,
+                restored: false,
                 author: None,
                 also: Vec::new(),
             });
@@ -221,6 +222,7 @@ impl Writer {
             version: version.token,
             wcl: wcl.to_owned(),
             previous: None,
+            restored: false,
             author: None,
             also: Vec::new(),
         };
@@ -261,6 +263,7 @@ impl Writer {
                         version: entry.version.clone(),
                         wcl: entry.content,
                         previous: None,
+                        restored: false,
                         author: None,
                         also: Vec::new(),
                     }],

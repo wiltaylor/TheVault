@@ -37,6 +37,7 @@ mod background_turns;
 mod brave;
 mod browser_desktop;
 mod canvas;
+mod classifiers;
 mod client_ids;
 mod clients;
 mod completeness;
