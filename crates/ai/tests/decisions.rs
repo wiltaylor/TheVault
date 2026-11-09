@@ -143,3 +143,21 @@ fn invalid_request_makes_no_call() {
     assert!(decisions::decide(&credential, &request, Duration::from_secs(2)).is_err());
     assert!(fake.requests().is_empty());
 }
+
+#[test]
+fn timeout_is_one_attempt_and_redirect_is_not_followed() {
+    let (fake, credential, request) = setup();
+    fake.push(Reply::json(200, &response()).delay(Duration::from_millis(300)));
+    assert_eq!(
+        decisions::decide(&credential, &request, Duration::from_millis(50))
+            .unwrap_err()
+            .kind,
+        ErrorKind::Timeout
+    );
+    assert_eq!(fake.requests().len(), 1);
+    fake.push(
+        Reply::text(307, "redirect").header("location", &format!("{}/stolen", fake.base_url())),
+    );
+    assert!(decisions::decide(&credential, &request, Duration::from_secs(2)).is_err());
+    assert_eq!(fake.requests().len(), 2);
+}

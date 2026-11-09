@@ -811,6 +811,40 @@ impl Writer {
         self.apply(inner, vec![change], &check, author).map(first)
     }
 
+    /// Apply classifier answers only to existing, noncomputed fields under the write lock.
+    /// Unlike ordinary note edits, classifier results cannot introduce undeclared fields.
+    pub fn classify(
+        &self,
+        id: &str,
+        answers: &[(String, serde_json::Value)],
+        base: &str,
+        author: &Author,
+    ) -> Result<Saved> {
+        let _w = self.write_lock();
+        let inner = self.lock();
+        let (type_name, old) = self.existing(id)?;
+        self.check_base(id, &type_name, &old, Some(base))?;
+        let definition = inner
+            .schema
+            .type_def(&type_name)
+            .ok_or_else(|| Error::BadRequest("Unknown classifier note type".into()))?;
+        for (field, _) in answers {
+            if definition.field(field).is_none_or(|f| f.computed) {
+                return Err(Error::BadRequest(
+                    "Classifier target must be an existing noncomputed field".into(),
+                ));
+            }
+        }
+        let mut note = doc_to_json(&Input::Wcl(old.clone()).parse(&note_path(&type_name, id))?);
+        for (field, value) in answers {
+            note["fields"][field] = value.clone();
+        }
+        let doc = Input::Json(note).parse(&note_path(&type_name, id))?;
+        let change = self.prepare_put(&inner, id, &type_name, doc, Some(&old), author)?;
+        self.apply(inner, vec![change], &|| Ok(()), author)
+            .map(first)
+    }
+
     /// Delete note `id`, which must be at version `base`, moving it to the trash.
     pub fn delete(&self, id: &str, base: Option<&str>, author: &Author) -> Result<Saved> {
         let _w = self.write_lock();

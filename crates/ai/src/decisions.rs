@@ -95,6 +95,10 @@ fn probability(n: f64) -> bool {
     n.is_finite() && (0.0..=1.0).contains(&n)
 }
 
+fn context(value: &Value) -> bool {
+    value.is_string() || value.is_object() || value.is_array()
+}
+
 impl Request {
     pub fn validate(&self) -> Result<(), AiError> {
         if self.model.trim().is_empty()
@@ -114,17 +118,28 @@ impl Request {
                 } => (
                     instructions,
                     criteria.as_ref().is_none_or(|c| {
-                        c.len() == 2 && c.contains_key("true") && c.contains_key("false")
+                        c.len() == 2
+                            && c.contains_key("true")
+                            && c.contains_key("false")
+                            && c.values().all(context)
                     }),
                 ),
                 Question::Choice {
                     instructions,
                     criteria,
-                } => (instructions, criteria.len() >= 2),
+                } => (
+                    instructions,
+                    criteria.len() >= 2
+                        && criteria.keys().all(|k| !k.trim().is_empty())
+                        && criteria.values().all(context),
+                ),
                 Question::Score {
                     instructions,
                     criteria,
-                } => (instructions, criteria.len() >= 2),
+                } => (
+                    instructions,
+                    criteria.len() >= 2 && criteria.iter().all(context),
+                ),
             };
             if id.is_empty()
                 || !valid
@@ -199,8 +214,9 @@ pub fn decide(
             "Decisions require an OpenAI-compatible account",
         ));
     }
-    let mut url = reqwest::Url::parse(&credential.base_url)
-        .map_err(|_| AiError::invalid("Invalid decisions base URL"))?;
+    let base = crate::check_url(&credential.base_url)?;
+    let mut url =
+        reqwest::Url::parse(&base).map_err(|_| AiError::invalid("Invalid decisions base URL"))?;
     if !url.path().trim_end_matches('/').ends_with("/api/v1") {
         return Err(AiError::invalid(
             "Decisions require an OpenRouter /api/v1 base URL",

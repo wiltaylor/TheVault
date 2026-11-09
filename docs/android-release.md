@@ -140,6 +140,12 @@ Android refuses an update whose `versionCode` is lower than the installed app's.
 
 ### Releasing a format change
 
+Classifier files (`classifiers/<name>.wcl`) require vault format 10. Publish app
+builds that support that folder with the server. Older apps stop at the format gate
+before pulling any classifiers and keep their queued writes. When matching builds
+cannot be published with the server, use the apps-first order below. Classifiers
+run only on the home server, never on a phone or desktop's embedded server.
+
 A release that adds an attribute to a type or a field, such as `labels` on a list field, ships type files that an older app has never seen. An app tolerates an attribute it does not know: it ignores it with a warning and keeps loading the type ([Attributes a reader does not know](vault-format.md#attributes-a-reader-does-not-know)). Apps from before that rule, 0.1.6 and earlier, refuse such a type file, and then refuse to open their vault on the next start.
 
 From 0.1.9 the apps update themselves before they sync with a newer server ([The app updates before it syncs](#the-app-updates-before-it-syncs)), so the server goes first:

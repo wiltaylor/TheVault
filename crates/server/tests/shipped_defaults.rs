@@ -484,5 +484,5 @@ fn a_vault_from_before_thread_notes_gains_notes_and_question_and_keeps_its_threa
     assert_eq!(listed["threads"][0]["notes"], serde_json::json!([]));
     assert_eq!(listed["threads"][0]["state"], "done");
     // The fields are kinds every reader knows, so the format stays the same.
-    assert_eq!(get(&server, "/api/sync/info")["format_version"], 9);
+    assert_eq!(get(&server, "/api/sync/info")["format_version"], 10);
 }
