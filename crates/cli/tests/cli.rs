@@ -1587,6 +1587,7 @@ fn every_command_prints_json() {
     run("init", &[&dir, "--password-stdin"], "pw\n");
     run("passwd", &["--vault", &dir, "--password-stdin"], "pw2\n");
     run("reindex", &["--vault", &dir], "");
+    run("prune-thread-history", &["--vault", &dir], "");
     run("version-compare", &["0.1.13-alpha.4", "0.1.13"], "");
     let archive = tmp_path(&scratch, "local.backup");
     run("backup", &[&archive, "--vault", &dir], "");
