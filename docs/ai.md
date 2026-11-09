@@ -192,6 +192,7 @@ To answer, the model calls note tools on the server. Each call shows as a step a
 | Tool | Does |
 |---|---|
 | `search_notes` | Full-text search, at most 20 notes |
+| `decide` | Tool-free typed decisions about supplied state. Gated by the agent's `permissions.tools` list under `decide`, not a write or code permission. It reads no notes and writes nothing. |
 | `query_notes` | A query in the vault query language, at most 50 notes. A failed query's error names the SQL habit it shows, such as `=` for `==` or `AND` for `&&`, and points at `query_format` |
 | `value_format` | The JSON form of a note, then the [Value encodings](vault-format.md#value-encodings) and [Note files](vault-format.md#note-files) sections of the vault format: how each kind of value is written, and which fields the server or a handler writes |
 | `query_format` | The [Query language](vault-format.md#query-language) and [Query views](vault-format.md#query-views) sections of the vault format: clauses, values, operators, every function, the SQL habits to avoid, and examples |
@@ -520,3 +521,53 @@ An account in these answers is `{ id, name, kind, kind_label, base_url, default_
 | `GET /api/ai/accounts` | The chat panel's picker in every client: `{ accounts: [{ id, name, kind, kind_label, model, configured, window, usage }], default, confirm, web, context }`. It holds no URL, header, sign-in, system prompt and never a key or token |
 
 An `{id}` is an account's id; an unknown one is a 404.
+
+## General decisions
+
+`POST /api/ai/decide` requires a write or admin token (or an owner session).
+`vault decide [file]` sends the same JSON, reading stdin when the file is omitted
+or `-`. The agent tool `decide` takes the same fields. Scripts call
+`ai::decide(request_json)` and receive `Result[Value, AiError]`. The request is a
+JSON string, not a prompt for a chat model:
+
+```json
+{
+  "account": "OpenRouter",
+  "state": {"text": "Untrusted input to assess"},
+  "questions": {
+    "urgent": {"type": "noul", "instructions": "Does this need attention today?"}
+  }
+}
+```
+
+`account` (id or name) and `model` are optional in JSON requests. The agent
+tool's strict schema requires both keys, with null selecting their defaults.
+Without an account the vault's
+default is used. The account must be OpenAI-compatible with a base URL ending in
+`/api/v1`, normally `https://openrouter.ai/api/v1`. Set its independent
+`decisions_model` with the AI account create/update API or the Decisions model
+field in Settings > AI for an OpenAI-compatible account. Null or empty resets it
+to `typesafe/jev-1.13`. The chat `model` is never used for decisions. The account
+status includes the effective `decisions_model`.
+
+Questions support `noul`, `choice` (criteria object) and `score` (ordered criteria
+array), as described in the classifiers section of `docs/vault-format.md`. `box`
+is not supported. Responses contain `id`, `model`, typed `answers` and `usage`.
+Noul answers are yes probabilities, not booleans. Choice and score answers also
+carry confidence and probabilities. Missing usage is zero.
+
+State is untrusted text, an object or an array. Decisions receive no tools and
+cannot read notes, write fields, send notifications or run code. The agent tool
+is offered only when `permissions.tools` allows `decide` (an absent list allows
+all tools), and execution checks that permission too. Reading notes before a
+decision still requires the agent's usual type permissions. Scripts use the
+same home-server AI capability as `ai::complete`, without exposing credentials.
+Embedded devices return `unavailable`.
+
+Each call makes at most one bounded HTTP attempt, without redirects or retries.
+The API and agent tool time out after 30 seconds. Scripts use their remaining
+run deadline. Each call emits one safe trail line with `operation=decide`, in
+the script run log or server AI log. State, questions, answers, provider error
+bodies and credentials are not logged. Invalid requests and provider failures
+return safe errors. The alpha endpoint's schema is isolated in
+`crates/ai/src/decisions.rs`.

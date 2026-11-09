@@ -24,9 +24,11 @@ serde_json.workspace = true
 state.workspace = true
 store.workspace = true
 tokio.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 writer.workspace = true
 
 [dev-dependencies]
+sync.workspace = true
 ai.workspace = true
 base64.workspace = true
 clients.workspace = true

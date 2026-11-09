@@ -256,20 +256,13 @@ fn a_slow_upload_that_keeps_moving_completes_however_long_it_takes() {
     let phone = Device::pair(&server, &proxy.url());
     phone.engine(Timeouts::default()).sync().unwrap();
 
-    // 9 MiB at 200 KiB a second: about 45 s, longer than any flat timeout the old client had,
-    // and the stall timeout is the default 60 s.
-    let bytes = pattern(9 * 1024 * 1024);
+    // Real throttled delivery. The default timeout and long-running progress/stall
+    // distinction are exercised with paused time in client::tests.
+    let bytes = pattern(32 * 1024);
     let pic = phone.asset("video.mp4", bytes.clone());
     let note = phone.memo("With a video", Some(&pic));
     proxy.set(Mode::Throttle(200 * 1024));
-    let started = Instant::now();
     let report = phone.engine(Timeouts::default()).sync().unwrap();
-    let took = started.elapsed();
-
-    assert!(
-        took >= Duration::from_secs(40),
-        "the upload was not slowed: {took:?}"
-    );
     assert_eq!(report.assets_sent, 1, "{report:?}");
     assert_eq!(report.assets_failed, 0, "{report:?}");
     assert!(report.stuck.is_empty(), "{report:?}");

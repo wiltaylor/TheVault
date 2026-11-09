@@ -314,6 +314,8 @@ pub struct Saved {
     /// For an update of a note whose type has an `after_update` handler, the canonical WCL the
     /// note held before it, so the handler can tell what changed (TV-25). `None` otherwise.
     pub previous: Option<String>,
+    /// A create event that restores an existing note, not a new note.
+    pub restored: bool,
     /// The author of this note's change when it is not the write's, such as a note a `before_*`
     /// handler staged, for the `after_*` handlers' argument (TV-25). `None` is the write's
     /// author. The other hooks hear the write's author, as before.
@@ -811,6 +813,40 @@ impl Writer {
         self.apply(inner, vec![change], &check, author).map(first)
     }
 
+    /// Apply classifier answers only to existing, noncomputed fields under the write lock.
+    /// Unlike ordinary note edits, classifier results cannot introduce undeclared fields.
+    pub fn classify(
+        &self,
+        id: &str,
+        answers: &[(String, serde_json::Value)],
+        base: &str,
+        author: &Author,
+    ) -> Result<Saved> {
+        let _w = self.write_lock();
+        let inner = self.lock();
+        let (type_name, old) = self.existing(id)?;
+        self.check_base(id, &type_name, &old, Some(base))?;
+        let definition = inner
+            .schema
+            .type_def(&type_name)
+            .ok_or_else(|| Error::BadRequest("Unknown classifier note type".into()))?;
+        for (field, _) in answers {
+            if definition.field(field).is_none_or(|f| f.computed) {
+                return Err(Error::BadRequest(
+                    "Classifier target must be an existing noncomputed field".into(),
+                ));
+            }
+        }
+        let mut note = doc_to_json(&Input::Wcl(old.clone()).parse(&note_path(&type_name, id))?);
+        for (field, value) in answers {
+            note["fields"][field] = value.clone();
+        }
+        let doc = Input::Json(note).parse(&note_path(&type_name, id))?;
+        let change = self.prepare_put(&inner, id, &type_name, doc, Some(&old), author)?;
+        self.apply(inner, vec![change], &|| Ok(()), author)
+            .map(first)
+    }
+
     /// Delete note `id`, which must be at version `base`, moving it to the trash.
     pub fn delete(&self, id: &str, base: Option<&str>, author: &Author) -> Result<Saved> {
         let _w = self.write_lock();
@@ -914,6 +950,7 @@ impl Writer {
                 version,
                 wcl: old,
                 previous: None,
+                restored: false,
                 author: None,
                 also: Vec::new(),
             });
@@ -1443,6 +1480,7 @@ impl Writer {
                         version,
                         wcl,
                         previous: None,
+                        restored: false,
                         author: None,
                         also: Vec::new(),
                     })
@@ -1554,6 +1592,7 @@ impl Writer {
                             _ => activity::NoteAct::Update,
                         }
                     };
+                    let restored = matches!(act, activity::NoteAct::Restore);
                     acts.push((by.clone(), act, id.clone()));
                     // The version below is not recorded yet, so the head is still the note as it
                     // was before this write, as for the person and Outbox changes above.
@@ -1586,6 +1625,7 @@ impl Writer {
                         version: v.token,
                         wcl: text,
                         previous,
+                        restored,
                         author: (by != author).then(|| by.clone()),
                         also: Vec::new(),
                     });
@@ -1602,6 +1642,7 @@ impl Writer {
                         version: entry.version,
                         wcl: entry.content,
                         previous: None,
+                        restored: false,
                         author: (by != author).then(|| by.clone()),
                         also: Vec::new(),
                     });

@@ -584,6 +584,16 @@ impl Writer {
     /// names yet is checked as a task, unless it uses the `device` module: then the one problem is
     /// that no device file names it. Empty when it compiles every way it runs. Nothing is stored.
     pub fn script_problems(&self, name: &str, source: &str) -> Result<Vec<ScriptProblem>> {
+        self.script_problems_with_device(name, source, None)
+    }
+
+    /// Check roles with one proposed device file replacing its current file. Nothing is written.
+    pub fn script_problems_with_device(
+        &self,
+        name: &str,
+        source: &str,
+        device: Option<&schema::DeviceFile>,
+    ) -> Result<Vec<ScriptProblem>> {
         check_name("script", name)?;
         let mut roles: Vec<ScriptRole> = self.read_index(|_, schema| {
             schema
@@ -606,7 +616,17 @@ impl Writer {
                 roles.push(ScriptRole::Task);
             }
         }
-        if !self.device_files_naming(name)?.is_empty() {
+        let on_device = if let Some(proposed) = device {
+            proposed.scripts().contains(&name)
+                || self.device_files()?.iter().any(|(platform, text)| {
+                    platform != &proposed.platform
+                        && schema::DeviceFile::parse(platform, text)
+                            .is_ok_and(|f| f.scripts().contains(&name))
+                })
+        } else {
+            !self.device_files_naming(name)?.is_empty()
+        };
+        if on_device {
             roles.push(ScriptRole::Device);
         }
         // A tool's script runs with the modules a task has (script-tools T2).

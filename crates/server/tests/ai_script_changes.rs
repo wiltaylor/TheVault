@@ -21,6 +21,482 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, PASSWORD, TestAccount, Te
 
 const MODEL: &str = "claude-opus-5";
 
+const PHONE_FILE: &str =
+    "handler \"sms_received\" {\n script = \"phone_test\"\n function = \"run\"\n}\n";
+
+#[test]
+fn device_file_bundle_reaches_a_synced_phone_and_runs_its_handler() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/device-files/android", "");
+    let paired: Value = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
+        .json(&json!({"password": PASSWORD, "name": "Bundle phone", "platform": "android"}))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let source = "use device\nfn run(event: Value) -> Result[(), string] {\n device::show_notification(\"Bundle\", \"Applied\", \"\")?\n Ok(())\n}\n";
+    let events = api.one(&fake, "propose_device_file_change", json!({"platform": "android", "wcl": PHONE_FILE.replace("sms_received", "call_ended"), "scripts": [{"name": "phone_test", "source": source}]}));
+    let p = find(&events, "device_file_proposal").unwrap_or_else(|| panic!("{events:?}"));
+    let (status, body) = api.apply_as(&api.token(), p);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let dir = tempfile::TempDir::new().unwrap();
+    let local = embedded::Embedded::open(embedded::Config {
+        vault: dir.path().to_owned(),
+        web: None,
+        secret_key: None,
+    })
+    .unwrap();
+    let remote = sync::Remote {
+        url: api.server.url(""),
+        token: paired["token"].as_str().unwrap().into(),
+        device_id: paired["device_id"].as_str().unwrap().into(),
+        device_name: "Bundle phone".into(),
+    };
+    local
+        .sync_engine(remote.clone(), sync::AssetPolicy::android())
+        .unwrap()
+        .sync()
+        .unwrap();
+    assert_eq!(local.writer().read_script("phone_test").unwrap(), source);
+    let phone = std::sync::Arc::new(super::device_runtime::Phone::default());
+    let runtime = local
+        .device(embedded::device::DeviceConfig {
+            id: remote.device_id,
+            platform: "android".into(),
+            data: phone.clone(),
+        })
+        .unwrap();
+    let id = runtime
+        .enqueue("call_ended", json!({}), 1_760_000_000_000)
+        .unwrap();
+    let event = runtime.run_event(id).unwrap().unwrap();
+    assert_eq!(
+        event.status,
+        embedded::device::EventStatus::Done,
+        "{event:?}"
+    );
+    assert_eq!(phone.actions(), ["notify Bundle: Applied"]);
+}
+
+#[test]
+fn device_file_thread_apply_uses_stored_body_and_sensitive_code_requires_session() {
+    for sensitive in [false, true] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.put_text("/api/device-files/android", "");
+        api.put_text("/api/agents/keeper", KEEPER);
+        let source = format!(
+            "fn run(event: Value) -> Result[(), string] {{\n Ok(())\n}}\n{}",
+            if sensitive {
+                "// contacts_upsert\n"
+            } else {
+                ""
+            }
+        );
+        fake.push(AnthropicMessage::new().tool_use("phone_bundle", "propose_device_file_change", json!({"platform": "android", "wcl": PHONE_FILE, "scripts": [{"name": "phone_test", "source": source}]})));
+        fake.push(AnthropicMessage::text("Waiting for Apply."));
+        api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
+        api.advance("PT1S");
+        let threads = api.threads("keeper");
+        assert_eq!(threads[0]["pending"], 1, "{threads:?}");
+        let thread = threads[0]["id"].as_str().unwrap();
+        let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+        let p = read["proposals"][0]["data"].clone();
+        let write = api.token_of("bundle_phone", "write");
+        let mut forged = p.clone();
+        forged["after"] = json!("not WCL");
+        let (status, body) = api.apply_as(&write, &forged);
+        if sensitive {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+            assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
+            let login = api
+                .client
+                .post(api.server.url("/api/login"))
+                .json(&json!({"password": PASSWORD}))
+                .send()
+                .unwrap();
+            assert_eq!(login.status(), StatusCode::OK);
+            let cookie = login
+                .headers()
+                .get("set-cookie")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap();
+            let res = api
+                .client
+                .post(api.server.url("/api/ai/apply"))
+                .header("cookie", cookie)
+                .json(&p)
+                .send()
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "{}", res.text().unwrap());
+        } else {
+            assert_eq!(status, StatusCode::OK, "{body}");
+        }
+        assert_eq!(api.script("phone_test").as_deref(), Some(source.as_str()));
+    }
+}
+
+#[test]
+fn device_file_bundle_is_checked_atomic_and_stale() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/device-files/android", "");
+    let source = "use device\nfn run(event: Value) -> Result[(), string] {\n Ok(())\n}\n";
+    let input = json!({"platform": "android", "wcl": PHONE_FILE, "scripts": [{"name": "phone_test", "source": source}]});
+    let events = api.one(&fake, "propose_device_file_change", input.clone());
+    let p = find(&events, "device_file_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    assert!(api.script("phone_test").is_none()); // Discarding writes nothing.
+    assert!(
+        p["snapshots"][0]["device"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("no further prompt")
+    );
+    let write = api.token_of("bundle_write", "write");
+    assert_eq!(api.apply_as(&write, &p).0, StatusCode::FORBIDDEN);
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(api.script("phone_test").as_deref(), Some(source));
+    assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::CONFLICT);
+
+    for stale in ["script", "file", "phone"] {
+        let events = api.one(&fake, "propose_device_file_change", input.clone());
+        let p = find(&events, "device_file_proposal").unwrap().clone();
+        match stale {
+            "script" => {
+                api.ok(
+                    "PUT",
+                    "/api/scripts/phone_test",
+                    json!({"source": format!("{source}\n")}),
+                );
+            }
+            "file" => api.put_text("/api/device-files/android", ""),
+            _ => {
+                api.phone("New phone", json!({"sms_send": false}));
+            }
+        }
+        let (status, body) = api.apply_as(&api.token(), &p);
+        assert_eq!(status, StatusCode::CONFLICT, "{stale}: {body}");
+        assert_eq!(body["error"], "stale");
+    }
+}
+
+#[test]
+fn device_file_bundle_refuses_invalid_code_and_rechecks_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/device-files/android", "");
+    let plain = "fn run(event: Value) -> Result[(), string] {\n Ok(())\n}\n";
+    for (platform, wcl, source) in [
+        ("linux", PHONE_FILE.to_owned(), plain.to_owned()),
+        (
+            "android",
+            PHONE_FILE.replace("sms_received", "bad_event"),
+            plain.to_owned(),
+        ),
+        (
+            "android",
+            PHONE_FILE.to_owned(),
+            "invalid code here".to_owned(),
+        ),
+        (
+            "android",
+            PHONE_FILE.to_owned(),
+            format!("{plain}// sms_send\n"),
+        ),
+        (
+            "android",
+            PHONE_FILE.to_owned(),
+            format!("{plain}// device_command\n"),
+        ),
+    ] {
+        let events = api.one(&fake, "propose_device_file_change", json!({"platform": platform, "wcl": wcl, "scripts": [{"name": "phone_test", "source": source}]}));
+        assert!(
+            find(&events, "device_file_proposal").is_none(),
+            "{events:?}"
+        );
+        assert!(last_result(&fake).0);
+    }
+    let missing = api.one(
+        &fake,
+        "propose_device_file_change",
+        json!({"platform": "android", "wcl": PHONE_FILE, "scripts": []}),
+    );
+    assert!(find(&missing, "device_file_proposal").is_none());
+    let events = api.one(&fake, "propose_device_file_change", json!({"platform": "android", "wcl": PHONE_FILE, "scripts": [{"name": "phone_test", "source": plain}]}));
+    let p = find(&events, "device_file_proposal").unwrap().clone();
+    for name in ["sms_send", "device_command"] {
+        let mut forged = p.clone();
+        forged["scripts"][0]["source"] = json!(format!("{plain}// {name}\n"));
+        let (status, body) = api.apply_as(&api.token(), &forged);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(api.script("phone_test").is_none());
+    }
+}
+
+#[test]
+fn device_file_bundle_warns_about_sms_reads_and_sensitive_bindings() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/device-files/android", "");
+    let source =
+        "fn run(event: Value) -> Result[(), string] {\n Ok(())\n}\n// sms_list contacts_delete\n";
+    let events = api.one(&fake, "propose_device_file_change", json!({"platform": "android", "wcl": PHONE_FILE, "scripts": [{"name": "phone_test", "source": source}]}));
+    let p = find(&events, "device_file_proposal").unwrap().clone();
+    assert_eq!(p["requires_admin"], true);
+    let can = p["snapshots"][0]["device"]["can"].as_array().unwrap();
+    assert!(
+        can.iter()
+            .any(|c| c["key"] == "sms_read" && c["new"] == true)
+    );
+    assert!(can.iter().any(|c| c["key"] == "contacts_write"));
+    assert!(
+        p.to_string()
+            .contains("codes and people that capture skips")
+    );
+}
+
+#[test]
+fn device_file_bundle_checks_shared_roles_and_rejects_folder_access() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.seed_users();
+    api.put_text("/api/device-files/android", "");
+    let file = PHONE_FILE.replace("phone_test", "stamp");
+    let source = format!("{STAMP}\n");
+    let input = json!({"platform": "android", "wcl": file, "scripts": [{"name": "stamp", "source": source}]});
+    let events = api.one(&fake, "propose_device_file_change", input.clone());
+    let p = find(&events, "device_file_proposal").unwrap().clone();
+    api.put_text(
+        "/api/tasks/nightly",
+        &format!("{NIGHTLY}read_paths = [\"/srv/in\"]\n"),
+    );
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let events = api.one(&fake, "propose_device_file_change", input);
+    assert!(find(&events, "device_file_proposal").is_none());
+    assert!(last_result(&fake).1.to_string().contains("read_paths"));
+    api.put_text("/api/tasks/nightly", NIGHTLY);
+    let events = api.one(&fake, "propose_device_file_change", json!({"platform": "android", "wcl": file, "scripts": [{"name": "stamp", "source": format!("use device\n{STAMP}")}]}));
+    assert!(find(&events, "device_file_proposal").is_none());
+    assert!(last_result(&fake).1.to_string().contains("compile"));
+}
+
+#[test]
+fn device_file_new_android_scripts_refuse_existing_sensitive_sites_without_source_edits() {
+    for site in ["sms_send", "device_command"] {
+        for from_linux in [false, true] {
+            let fake = FakeAnthropic::start();
+            let api = Api::start(&fake);
+            api.put_text("/api/device-files/android", "");
+            let source = if site == "sms_send" {
+                writer::default_device_script("device_messages")
+                    .unwrap()
+                    .to_owned()
+            } else {
+                format!("{STAMP}\n// vault::device_command\n")
+            };
+            api.ok("PUT", "/api/scripts/sensitive", json!({"source": source}));
+            let file =
+                "command \"send_sms\" {\n script = \"sensitive\"\n function = \"send_sms\"\n}\n";
+            if from_linux {
+                api.put_text("/api/device-files/linux", file);
+            }
+            let events = api.one(
+                &fake,
+                "propose_device_file_change",
+                json!({"platform": "android", "wcl": "", "scripts": []}),
+            );
+            let mut forged = find(&events, "device_file_proposal").unwrap().clone();
+            forged["after"] = json!(file);
+            let events = api.one(
+                &fake,
+                "propose_device_file_change",
+                json!({"platform": "android", "wcl": file, "scripts": []}),
+            );
+            assert!(
+                find(&events, "device_file_proposal").is_none(),
+                "{events:?}"
+            );
+            let (error, result) = last_result(&fake);
+            assert!(
+                error && result["error"].as_str().unwrap().contains(site),
+                "{result}"
+            );
+            assert!(!result["error"].as_str().unwrap().starts_with("Refused("));
+            assert_eq!(result["message"], "The device file was not proposed.");
+            let (status, body) = api.apply_signed_in(&forged);
+            assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+            assert!(body.to_string().contains(site), "{body}");
+            assert_eq!(api.script("sensitive").as_deref(), Some(source.as_str()));
+        }
+    }
+}
+
+#[test]
+fn device_file_new_sensitive_bindings_are_refused_but_existing_bindings_are_kept() {
+    for site in ["sms_send", "device_command"] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        let source = if site == "sms_send" {
+            writer::default_device_script("device_messages")
+                .unwrap()
+                .to_owned()
+        } else {
+            format!("{STAMP}\n// vault::device_command\n")
+        };
+        for name in ["sensitive", "other_sensitive"] {
+            api.ok(
+                "PUT",
+                &format!("/api/scripts/{name}"),
+                json!({"source": source}),
+            );
+        }
+        let old = "command \"send_sms\" {\n script = \"sensitive\"\n function = \"send_sms\"\n}\n";
+        api.put_text("/api/device-files/android", old);
+        let events = api.one(
+            &fake,
+            "propose_device_file_change",
+            json!({"platform": "android", "wcl": old, "scripts": []}),
+        );
+        let kept = find(&events, "device_file_proposal")
+            .unwrap_or_else(|| panic!("{events:?}"))
+            .clone();
+        assert_eq!(api.apply_signed_in(&kept).0, StatusCode::OK);
+        for new in [
+            format!(
+                "{old}\nhandler \"sms_received\" {{\n script = \"sensitive\"\n function = \"send_sms\"\n}}\n"
+            ),
+            old.replace("command \"send_sms\"", "command \"show_notification\""),
+            old.replace("function = \"send_sms\"", "function = \"sms_received\""),
+            old.replace("script = \"sensitive\"", "script = \"other_sensitive\""),
+        ] {
+            let events = api.one(
+                &fake,
+                "propose_device_file_change",
+                json!({"platform": "android", "wcl": new, "scripts": []}),
+            );
+            assert!(
+                find(&events, "device_file_proposal").is_none(),
+                "{events:?}"
+            );
+            assert!(last_result(&fake).1.to_string().contains(site));
+            let mut forged = kept.clone();
+            forged["after"] = json!(new);
+            let (status, body) = api.apply_signed_in(&forged);
+            assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+            assert!(body.to_string().contains(site), "{body}");
+        }
+    }
+}
+
+#[test]
+fn device_file_existing_phone_switch_changes_are_stale() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/device-files/android", "");
+    let id = api.phone(
+        "Existing phone",
+        json!({"sms_send": false, "contacts_write": false}),
+    );
+    for switch in ["sms_send", "contacts_write"] {
+        api.set_switches(&id, json!({"sms_send": false, "contacts_write": false}));
+        let events = api.one(&fake, "propose_device_file_change", json!({"platform": "android", "wcl": PHONE_FILE, "scripts": [{"name": "phone_test", "source": STAMP}]}));
+        let p = find(&events, "device_file_proposal").unwrap();
+        let mut settings = json!({"sms_send": false, "contacts_write": false});
+        settings[switch] = json!(true);
+        api.set_switches(&id, settings);
+        let (status, body) = api.apply_signed_in(p);
+        assert_eq!(status, StatusCode::CONFLICT, "{switch}: {body}");
+        assert_eq!(body["error"], "stale");
+        assert!(api.script("phone_test").is_none());
+    }
+}
+
+#[test]
+fn device_file_wcl_only_thread_changes_need_a_session_and_warn_only_for_shipped_copies() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text(
+        "/api/device-files/android",
+        writer::DEFAULT_ANDROID_DEVICE_FILE,
+    );
+    api.put_text("/api/agents/keeper", KEEPER);
+    let input = json!({"platform": "android", "wcl": ANDROID, "scripts": []});
+    fake.push(AnthropicMessage::new().tool_use("wcl_only", "propose_device_file_change", input));
+    fake.push(AnthropicMessage::text("Waiting."));
+    api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
+    api.advance("PT1S");
+    let threads = api.threads("keeper");
+    assert_eq!(threads[0]["pending"], 1, "{threads:?}");
+    let thread = threads[0]["id"].as_str().unwrap();
+    let p =
+        api.get(&format!("/api/agents/keeper/threads/{thread}"))["proposals"][0]["data"].clone();
+    assert_eq!(p["requires_admin"], true);
+    assert_eq!(p["warnings"].as_array().unwrap().len(), 1);
+    for token in [api.token(), api.token_of("wcl_phone", "write")] {
+        let (status, body) = api.apply_as(&token, &p);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(body.to_string().contains("signed-in admin"));
+    }
+    let (status, body) = api.apply_signed_in(&p);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // android.wcl is now customized, so further edits do not claim to stop its upgrades.
+    let events = api.one(
+        &fake,
+        "propose_device_file_change",
+        json!({"platform": "android", "wcl": "", "scripts": []}),
+    );
+    assert_eq!(
+        find(&events, "device_file_proposal").unwrap()["warnings"],
+        json!([])
+    );
+    api.put_text(
+        "/api/device-files/android",
+        writer::DEFAULT_ANDROID_DEVICE_FILE,
+    );
+    let events = api.one(
+        &fake,
+        "propose_device_file_change",
+        json!({"platform": "android", "wcl": writer::DEFAULT_ANDROID_DEVICE_FILE, "scripts": []}),
+    );
+    assert_eq!(
+        find(&events, "device_file_proposal").unwrap()["warnings"],
+        json!([])
+    );
+}
+
+#[test]
+fn device_file_new_android_binding_keeps_admin_note_for_removed_current_contact_writes() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/device-files/android", "");
+    api.ok(
+        "PUT",
+        "/api/scripts/phone_test",
+        json!({"source": format!("{STAMP}\n// contacts_delete\n")}),
+    );
+    let events = api.one(&fake, "propose_device_file_change", json!({"platform": "android", "wcl": PHONE_FILE, "scripts": [{"name": "phone_test", "source": STAMP}]}));
+    let p = find(&events, "device_file_proposal").unwrap();
+    assert_eq!(p["requires_admin"], true);
+    assert!(
+        p["snapshots"][0]["device"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("signed-in admin")
+    );
+    assert_eq!(p["warnings"], json!([]));
+}
+
 /// Monday 2026-01-05, half past midnight UTC.
 const START: &str = "2026-01-05T00:30:00Z";
 
@@ -307,6 +783,30 @@ impl Api {
 
     fn apply_as(&self, token: &str, change: &Value) -> (StatusCode, Value) {
         self.call("POST", "/api/ai/apply", token, Some(change.clone()))
+    }
+
+    fn apply_signed_in(&self, change: &Value) -> (StatusCode, Value) {
+        let login = self
+            .client
+            .post(self.server.url("/api/login"))
+            .json(&json!({ "password": PASSWORD }))
+            .send()
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::OK);
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let response = self
+            .client
+            .post(self.server.url("/api/ai/apply"))
+            .header("Cookie", cookie)
+            .json(change)
+            .send()
+            .unwrap();
+        (response.status(), response.json().unwrap())
     }
 
     fn threads(&self, agent: &str) -> Vec<Value> {
@@ -1003,12 +1503,12 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
     assert!(!err, "{got}");
     assert_eq!(got["device"], *d);
 
-    // The Pixel's SMS send is turned off after the card: Apply answers stale, nothing is written.
+    // The Pixel's SMS send is turned off after the card: session Apply answers stale.
     api.set_switches(
         &pixel,
         json!({ "commands": ["send_sms"], "sms_send": false }),
     );
-    let (status, body) = api.apply_as(&api.token(), &p);
+    let (status, body) = api.apply_signed_in(&p);
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale");
     assert_eq!(
@@ -1026,7 +1526,7 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         .unwrap_or_else(|| panic!("{events:?}"))
         .clone();
     assert_eq!(p["device"]["devices"][0]["sms_send"], false, "{p}");
-    let (status, body) = api.apply_as(&api.token(), &p);
+    let (status, body) = api.apply_signed_in(&p);
     assert!(status.is_success(), "{status}: {body}");
     assert_eq!(
         api.script("device_messages").as_deref(),
@@ -1111,6 +1611,13 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
                 Some(current.as_str())
             );
             let (status, body) = api.apply_as(&api.token(), &p);
+            assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
+            assert!(body.to_string().contains("admin-scoped tokens"), "{body}");
+            assert_eq!(
+                api.script("device_messages").as_deref(),
+                Some(current.as_str())
+            );
+            let (status, body) = api.apply_signed_in(&p);
             assert_eq!(status, StatusCode::OK, "{mode}: {body}");
         }
         assert_eq!(
@@ -1178,7 +1685,7 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
     // written.
     let mut forged = p.clone();
     forged["after"] = json!(forward);
-    let (status, body) = api.apply_as(&api.token(), &forged);
+    let (status, body) = api.apply_signed_in(&forged);
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"], "not_permitted");
     assert!(

@@ -87,6 +87,15 @@ pub struct Account {
 }
 
 impl Account {
+    /// Independent of the conversational default.
+    pub fn decisions_model(&self) -> &str {
+        self.other
+            .get("decisions_model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(crate::decisions::DEFAULT_MODEL)
+    }
     /// The model calls use when none is asked for, if the account names one.
     pub fn model(&self) -> Option<&str> {
         self.model
@@ -182,6 +191,7 @@ pub struct AccountInput {
     /// `Some(None)` clears it.
     pub base_url: Option<Option<String>>,
     pub model: Option<Option<String>>,
+    pub decisions_model: Option<Option<String>>,
     pub headers: Option<Vec<(String, String)>>,
     pub context: Option<Option<AccountContext>>,
 }
@@ -410,6 +420,18 @@ fn apply(all: &Accounts, account: &mut Account, input: AccountInput) -> Result<(
     }
     if let Some(model) = input.model {
         account.model = model.map(|m| m.trim().to_owned()).filter(|m| !m.is_empty());
+    }
+    if let Some(model) = input.decisions_model {
+        match model.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()) {
+            Some(model) => {
+                account
+                    .other
+                    .insert("decisions_model".to_owned(), Value::String(model));
+            }
+            None => {
+                account.other.remove("decisions_model");
+            }
+        }
     }
     if let Some(headers) = input.headers {
         if account.kind != Kind::OpenAiCompatible && !headers.is_empty() {

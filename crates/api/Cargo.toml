@@ -30,8 +30,12 @@ sha2.workspace = true
 state.workspace = true
 store.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
+tracing = "0.1"
 vocab.workspace = true
 writer.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

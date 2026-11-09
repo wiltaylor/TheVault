@@ -123,6 +123,14 @@ pub fn module(access: Ai) -> Module {
          trail line to the run log",
     );
     let a = access.clone();
+    let decisions = access.clone();
+    m.fn_named(
+        "decide",
+        ["request"],
+        move |request: String| -> Fault<Result<DynValue, AiError>> {
+            Fault(decide_call(&decisions, &request))
+        },
+    );
     m.fn_named(
         "complete",
         ["prompt", "options"],
@@ -141,6 +149,42 @@ pub fn module(access: Ai) -> Module {
         },
     );
     m
+}
+
+fn decide_call(access: &Ai, text: &str) -> Result<Result<DynValue, AiError>, HostError> {
+    let timeout = run::with(|r| r.remaining())?;
+    let result = (|| {
+        let input = serde_json::from_str::<::ai::decisions::Input>(text)
+            .map_err(|_| ::ai::AiError::invalid("Invalid decisions JSON"))?;
+        let writer = access
+            .0
+            .as_ref()
+            .and_then(|(b, _)| b.get())
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| ::ai::AiError::new(ErrorKind::Unavailable, "AI is unavailable"))?;
+        let (result, line) = ::ai::decisions::call(writer.state(), input, timeout);
+        Ok::<_, ::ai::AiError>((result, line))
+    })();
+    let (result, line) = match result {
+        Ok(pair) => pair,
+        Err(e) => {
+            let line = format!("ai operation=decide outcome=error:{}", e.kind);
+            (Err(e), line)
+        }
+    };
+    run::with(|r| {
+        r.log(&line, true);
+        r.remaining().map(|_| ())
+    })?;
+    Ok(result
+        .map(|r| convert::to_dyn(serde_json::to_value(r).expect("decision JSON")))
+        .map_err(|e| AiError {
+            kind: e.kind.to_string(),
+            message: e.message,
+            account: String::new(),
+            model: String::new(),
+            category: String::new(),
+        }))
 }
 
 /// `messages` as the transcript a request sends, in order.

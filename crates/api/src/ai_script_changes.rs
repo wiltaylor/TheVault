@@ -166,7 +166,7 @@ type Capability = (
     &'static [&'static str],
 );
 
-const CAPABILITIES: [Capability; 6] = [
+const CAPABILITIES: [Capability; 7] = [
     ("sms_send", "Send SMS", &["sms_send"], &[]),
     (
         "sms_read",
@@ -175,6 +175,12 @@ const CAPABILITIES: [Capability; 6] = [
         &[],
     ),
     ("calls_read", "Read calls", &["calls_list"], &[]),
+    (
+        "contacts_read",
+        "Read contacts",
+        &["contacts_list", "contacts_get"],
+        &[],
+    ),
     (
         "contacts_write",
         "Add or delete contacts",
@@ -414,11 +420,11 @@ pub(crate) fn on_phone(
     })))
 }
 
-pub(crate) const PHONE_ADMIN_MESSAGE: &str = "A signed-in admin must apply this change because the current or proposed phone code contains SMS send or contact writes. A write token cannot apply it.";
+pub(crate) const PHONE_ADMIN_MESSAGE: &str = "A signed-in admin must apply this change because the current or proposed phone code contains SMS send or contact writes. API tokens, including admin-scoped tokens, cannot apply it.";
 
 // Count bare names too, including imports, aliases, interpolation and comments. False positives
 // need an admin, rather than letting a different spelling hide a sensitive call.
-fn sensitive_phone_source(before: Option<&str>, after: Option<&str>) -> bool {
+pub(crate) fn sensitive_phone_source(before: Option<&str>, after: Option<&str>) -> bool {
     [before, after].into_iter().flatten().any(|source| {
         words(source)
             .iter()

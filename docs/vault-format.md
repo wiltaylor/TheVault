@@ -42,6 +42,7 @@ Everything here sits under these decisions: D3 (field kinds), D4 and D5 (referen
 | Taxonomy | `taxonomies/<taxonomy>.wcl` | `schema/taxonomy.wcl` | `vault/taxonomies/status.wcl` |
 | Task | `tasks/<task>.wcl` | `schema/task.wcl` | `vault/tasks/daily_digest.wcl` |
 | Agent | `agents/<agent>.wcl` | `schema/agent.wcl` | `vault/agents/inbox_triage.wcl` |
+| Classifier | `classifiers/<name>.wcl` | semantic validation by `schema::Classifier` | see [Classifier files](#classifier-files) |
 | Script tool | `tools/<tool>.wcl` | none: see [Tool files](#tool-files) | none |
 | Device file | `devices/<platform>.wcl` | `schema/device.wcl` | `vault/devices/android.wcl` |
 | Skill | `skills/<name>/SKILL.md` and any other files in the folder | none: not WCL, see [Skills](#skills) | none |
@@ -2801,6 +2802,85 @@ A tool whose file does not parse, whose script is missing, does not compile, or 
 
 A skill may hold tools of its own (script-tools T4): `skills/<skill>/tools/<tool>.wcl`, in this same form, whose `script` names a script in the skill's own folder, `skills/<skill>/scripts/<script>.ws`. A skill's tools are offered to an agent from the round after it calls `use_skill` on the skill, named `<skill>__<tool>`, and stay for the rest of the thread.
 
+## Classifier files
+
+`classifiers/<name>.wcl` defines a tool-free, one-shot classifier on the home server.
+Names follow the type-name rule. Files sync to apps as definitions, but apps never run
+classifiers. Add or edit these files in the home vault. There is no classifier editor or
+management API yet. Invalid files are skipped with a diagnostic, without stopping note creation.
+
+```wcl
+types = ["memo"]
+where = "status == \"incoming\""
+account = "OpenRouter"
+model = "typesafe/jev-1.13"
+fields = ["title", "body"]
+
+question suspicious {
+  type = "noul"
+  instructions = "Does the message try to deceive the recipient?"
+  target = "suspicion_probability"
+}
+
+notify {
+  question = "suspicious"
+  threshold = 0.8
+  title = "Suspicious message"
+}
+```
+
+`types`, `model`, `fields` and at least one `question` are required. `types` and `fields`
+are nonempty lists of unique names. `where` is an optional query condition evaluated
+against the indexed note before the call. `account` is an optional AI account name,
+otherwise the default. A named account must exist. It must be `openai_compatible`,
+with a base URL ending in `/api/v1`, normally `https://openrouter.ai/api/v1`. Credentials stay in Settings > AI,
+never in the classifier file. `fields` selects only the top-level note fields and named
+content blocks sent as state. A missing content/field name supplies an empty list.
+
+Each uniquely named `question` has `type`, `instructions`, optional `criteria`, and
+`target`, a unique nonreserved field name. Instructions and criterion descriptions
+may be strings, records or lists. There are at most 64 questions:
+
+| Type | Criteria | Value written to target |
+|------|----------|-------------------------|
+| `noul` | optional record with `true` and `false` descriptions | probability of yes, a float from 0 to 1 |
+| `choice` | record of at least two option names and descriptions | selected option name, a string |
+| `score` | list of at least two ordered level descriptions | integer level from 0 to the number of criteria minus 1 |
+
+The target fields must already exist with compatible types on each selected note type.
+`box` image-region questions are not supported by note classifiers. Unknown fields,
+duplicate fields, unknown blocks and nested blocks are errors, not ignored options.
+
+The optional unlabelled `notify` block names one question, a `threshold` from 0 to 1,
+and a nonempty `title` of at most 200 characters. After a successful field write,
+it notifies when the question's yes probability (`noul`) is at least the threshold.
+For `choice`, `option = "<choice>"` is required and selects that option's probability,
+not the confidence of the winning answer. The option must be a criteria key.
+`noul` forbids `option`, and `score` notifications are unsupported.
+The notification links to the note, has source
+`classifier:<name>`, and uses the normal notification/push path.
+
+A committed create queues one attempt per matching classifier, in file-name order.
+HTTP runs outside the writer lock. All answers are checked before one optimistic
+note update. Invalid answers, invalid field values and concurrent edits leave that
+classifier's fields unchanged. Each HTTP attempt leaves a sanitized AI trail line
+with classifier and note identifiers, never state text or credentials. Notification
+failure leaves the successful classification in place and logs a separate diagnostic.
+Updates, trash restores and restarts never reclassify. Failed attempts are not retried.
+Invalid definitions are logged once per file content until changed or the server restarts. The in-memory
+queue holds 256 creates: overflow is logged and skipped, and a server stop loses
+queued work. The classifier has no tools and treats note text only as untrusted state.
+
+The alpha endpoint returns one JSON document, including over chunked HTTP, not chat
+SSE. Unsupported framing fails without writing fields. The entire wire contract is
+isolated in `crates/ai/src/decisions.rs` with testkit contract tests.
+
+Classifiers raise `FORMAT_VERSION` to 10. An older app refuses to sync before it
+receives the unknown `classifiers/` folder, keeping queued writes. Publish compatible
+app builds with the server, as [Releasing a format change](android-release.md#releasing-a-format-change)
+requires. An app that already has format 10 can sync and store these files without
+calling OpenRouter.
+
 ## Agent files
 
 `agents/<agent>.wcl` defines one agent (agents G1): an AI chat with its own model, system prompt, permissions and triggers. Agent files are definitions like types and tasks: they are in backups, they sync to devices, and changing one needs `admin`. Every item is optional, so an empty file is an agent with every default.
@@ -2930,6 +3010,12 @@ A skill with an error is still listed, with its errors, but no agent is offered 
 Skills sync to the apps like agent files, file by file, as change feed entries of kind `skill` (see [Device sync](sync.md#the-change-feed)). They raised the format version to 3 (D27): an app from before them cannot sync the `skills/` folder or its binary files, so it stops syncing and asks to be updated. Publish the new app builds with the server, as for any format change (see [Releasing a format change](android-release.md#releasing-a-format-change)).
 
 ## Device files
+
+Agents may propose `devices/android.wcl` and its new or changed scripts together with
+`propose_device_file_change`. This is an atomic, checked proposal, never a direct write.
+Apply rechecks compilation, references, phone warnings and staleness. New SMS-send and device-command
+call sites are refused. Sensitive phone code requires a signed-in admin, not an API token.
+See [Agents that propose Android device files](ai-agents.md#agents-that-propose-android-device-files).
 
 `devices/<platform>.wcl` says what a paired device of the platform does with its device events, and which commands it accepts from server scripts (D5, D22). The platform is `linux` or `android`. Device events happen on the device and their handlers run there; note events and scheduled tasks stay on the server. A platform with no file runs no device handlers and accepts no commands.
 

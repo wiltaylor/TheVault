@@ -3,6 +3,7 @@
 //! `cargo test -p schema --test main <module>::`.
 
 mod agents;
+mod classifiers;
 mod columns;
 mod controls;
 mod list_page;

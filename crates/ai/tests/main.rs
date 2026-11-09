@@ -9,6 +9,7 @@ mod anthropic;
 mod chat_completions;
 mod credentials;
 mod custom_url;
+mod decisions;
 mod images;
 mod openai;
 mod web;

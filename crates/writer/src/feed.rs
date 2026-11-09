@@ -16,7 +16,7 @@ use crate::{Error, Result, Writer};
 
 /// The folders whose files devices sync: folder, file extension, and the kind the feed names.
 /// A type file holds its templates, so a template change is a change to its type.
-pub const SYNCED_FILES: [(&str, &str, &str); 7] = [
+pub const SYNCED_FILES: [(&str, &str, &str); 8] = [
     ("types", ".wcl", "type"),
     ("taxonomies", ".wcl", "taxonomy"),
     ("scripts", ".ws", "script"),
@@ -24,6 +24,7 @@ pub const SYNCED_FILES: [(&str, &str, &str); 7] = [
     ("devices", ".wcl", "device"),
     ("agents", ".wcl", "agent"),
     ("tools", ".wcl", "tool"),
+    ("classifiers", ".wcl", "classifier"),
 ];
 
 /// The feed's kind and the name of synced file `path`, such as `("type", "memo")` for
