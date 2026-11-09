@@ -1039,6 +1039,34 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
                 Some(current.as_str())
             );
             let (status, body) = api.apply_as(&api.token(), &p);
+            assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
+            assert!(body.to_string().contains("admin-scoped tokens"), "{body}");
+            assert_eq!(
+                api.script("device_messages").as_deref(),
+                Some(current.as_str())
+            );
+            let login = api
+                .client
+                .post(api.server.url("/api/login"))
+                .json(&json!({ "password": PASSWORD }))
+                .send()
+                .unwrap();
+            assert_eq!(login.status(), StatusCode::OK);
+            let cookie = login.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap();
+            let response = api
+                .client
+                .post(api.server.url("/api/ai/apply"))
+                .header("Cookie", cookie)
+                .json(&p)
+                .send()
+                .unwrap();
+            let status = response.status();
+            let body: Value = response.json().unwrap();
             assert_eq!(status, StatusCode::OK, "{mode}: {body}");
         }
         assert_eq!(
