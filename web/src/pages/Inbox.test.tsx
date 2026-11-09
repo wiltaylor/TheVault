@@ -57,6 +57,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -78,7 +79,7 @@ describe("the Inbox", () => {
 
   it.each(["archive", "delete"] as const)("bulk %s acts on two selected cards only", async (action) => {
     loadInbox.mockResolvedValue({ items: items.map((i) => ({ ...i, source: SOURCES.find((s) => s.key === "messages")! })), total: 3 });
-    vi.spyOn(api, "note").mockImplementation(async (id) => ({ id, version: "v1", note: { fields: {}, blocks: [] } }) as Awaited<ReturnType<typeof api.note>>);
+    vi.spyOn(api, "note").mockImplementation(async (id) => ({ id, type: "message", wcl: "", version: "v1", note: { fields: {}, blocks: [] } }));
     const archive = vi.spyOn(api, "archiveNote").mockResolvedValue({} as Awaited<ReturnType<typeof api.note>>);
     const remove = vi.spyOn(api, "deleteNote").mockResolvedValue(undefined);
     render(() => <Inbox />);
