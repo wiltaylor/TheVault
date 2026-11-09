@@ -1,5 +1,5 @@
 import { MemoryRouter, Route } from "@solidjs/router";
-import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Note, Tab, TypeDef } from "../api";
 
@@ -97,7 +97,7 @@ describe("conditional tabs on the note page", () => {
     expect(send.parentElement).toBe(m.getByRole("button", { name: "Archive" }).parentElement);
     expect(send.parentElement).toBe(m.getByRole("button", { name: "Delete" }).parentElement);
     fireEvent.click(send);
-    expect(await m.findByRole("dialog")).toHaveTextContent("Send this note to an agent");
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Send this note to an agent");
   });
   it("leaves out a tab whose when is false", async () => {
     const m = mount(TABS, { stage: "idea", done: false });
