@@ -364,6 +364,18 @@ pub(crate) fn propose_change(
             json!({ "message": "The task was not proposed." }),
         ));
     }
+    if let Some(source) = script_after
+        && let Some(why) = crate::ai_script_changes::device_command_refused(
+            &def.script,
+            script_before.as_deref(),
+            source,
+        )
+    {
+        return Err(refused(
+            why,
+            json!({ "message": "The task was not proposed." }),
+        ));
+    }
     let source = script_after
         .or(script_before.as_deref())
         .unwrap_or_default();
@@ -548,6 +560,15 @@ pub(crate) fn apply_task(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
         }
         if script_after.is_some()
             && let Some(why) = shared_paths_refused(w, &def.script, Some(name))
+        {
+            return Err(ApplyError::Refused(why));
+        }
+        if let Some(source) = script_after
+            && let Some(why) = crate::ai_script_changes::device_command_refused(
+                &def.script,
+                script_before.as_deref(),
+                source,
+            )
         {
             return Err(ApplyError::Refused(why));
         }

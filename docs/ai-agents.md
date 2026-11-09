@@ -70,6 +70,8 @@ The confirmation switch is "Ask before changing agents" (`permissions.confirm.ag
 
 The whole new file is checked, not only what the change adds, so an agent with fewer permissions cannot edit a more powerful agent at all. An agent can never change or delete its own file: "An agent cannot change its own file." Deleting another agent needs only the tool and the switch. Each proposal records the agent that made it, and `POST /api/ai/apply` checks the change again against that agent as it is at the time of Apply, so an agent whose permissions were narrowed since cannot apply what it proposed before. Your own edits on the agent screen are never checked this way.
 
+Agent proposals for scripts, tasks and tools may not add `vault::device_command` sites, at propose or Apply. The proposed source may name `device_command` no more times than the current source names `vault::device_command` outside comments. Every proposed mention counts, including comments, strings, imports and aliases. Existing sites may be kept. Use `draft_sms` to draft SMS through the Outbox instead, even when a task or handler will run the script.
+
 ## Drafting into the Outbox
 
 An agent drafts emails, SMS messages and calendar invites with three chat tools. Each creates one Outbox item and answers its id and status. They are ordinary tool names, so an agent has them only when its tools list allows them; the Assistant has them. On the agent screen's Permissions tab they are the "Outbox" group.
