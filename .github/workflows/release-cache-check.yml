@@ -1,0 +1,22 @@
+name: release-cache-check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+# No inherited secrets, image publication, release creation, signing or emulator runs.
+# Run twice on the same branch commit to compare cold and warm compilation.
+jobs:
+  desktop:
+    uses: ./.github/workflows/release.yml
+    with:
+      version: 0.0.0-alpha.1
+      compile-only: true
+  android:
+    uses: ./.github/workflows/android-release.yml
+    with:
+      version: 0.0.0-alpha.1
+      compile-only: true

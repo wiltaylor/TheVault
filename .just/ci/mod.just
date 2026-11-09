@@ -85,3 +85,4 @@ emulator-harness-test: emulator-harness-deps (require-tool "node")
 release-test: (require-tool "git") (require-tool "jq") (require-tool "dpkg") (require-tool "rpm") (require-tool "vercmp")
 	scripts/release/test.sh
 	node --test scripts/release/gradle-wrapper.test.mjs
+	node --test scripts/release/cache.test.mjs

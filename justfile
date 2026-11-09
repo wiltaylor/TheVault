@@ -246,9 +246,13 @@ android-release: (require-tool "cargo-tauri") (require-tool "cargo-ndk") (requir
 
 # Build the release APK for x86_64 and run it on the headless emulator: it must start, stay up, onboard and pair, and pass checks 1, 2, 3, 7, 8, 11, 17 and 29; builds the aarch64 release too when the release keystore is there (not with THEVAULT_SMOKE_SKIP_AARCH64=1), and records both APKs' sha256 in target/android-release/SMOKE_PASSED, which publish-clients requires (docs/android-release.md)
 [group('android')]
-android-release-smoke: ci::emulator-harness-deps (require-tool "cargo-tauri") (require-tool "cargo-ndk") (require-tool "emulator") (require-tool "adb") (require-tool "jq") (require-tool "cargo") web-build
+android-release-smoke: ci::emulator-harness-deps (require-tool "cargo-tauri") (require-tool "cargo-ndk") (require-tool "emulator") (require-tool "adb") (require-tool "jq") (require-tool "cargo")
 	#!/usr/bin/env bash
 	set -euo pipefail
+	phase=build
+	phase_start=$SECONDS
+	trap 'status=$?; printf "android-smoke timing: phase=%s seconds=%s exit=%s\n" "$phase" "$((SECONDS - phase_start))" "$status"' EXIT
+	just web-build
 	keystore_env="${XDG_CONFIG_HOME:-$HOME/.config}/thevault/android/keystore.env"
 	if [ -z "${THEVAULT_ANDROID_KEYSTORE:-}" ] && [ -f "$keystore_env" ]; then . "$keystore_env"; fi
 	build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
@@ -261,6 +265,7 @@ android-release-smoke: ci::emulator-harness-deps (require-tool "cargo-tauri") (r
 	# with the release key when THEVAULT_ANDROID_KEYSTORE is set and leaves it unsigned otherwise;
 	# an unsigned one is signed here with the debug key, so the test needs no release keystore.
 	(cd apps/android && GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --apk --target x86_64)
+	if [ "${THEVAULT_SMOKE_COMPILE_ONLY:-}" = 1 ]; then exit 0; fi
 	built=$(find "$apks" -name '*-release.apk' -o -name '*-release-unsigned.apk' | head -n 1)
 	test -n "$built" || { echo "no release APK under $apks" >&2; exit 1; }
 	apk="$smoke/TheVault_${version}_x86_64.apk"
@@ -290,13 +295,24 @@ android-release-smoke: ci::emulator-harness-deps (require-tool "cargo-tauri") (r
 		echo "no release keystore: testing the x86_64 build alone; no aarch64 APK is vouched for" >&2
 	fi
 	cargo build -p server -p cli --bins
+	printf 'android-smoke timing: phase=build seconds=%s exit=0\n' "$((SECONDS - phase_start))"
+	phase=boot
+	phase_start=$SECONDS
 	export ANDROID_SERIAL="emulator-${EMULATOR_PORT:-5554}"
 	apps/android/emulator/boot.sh --wipe -writable-system
+	printf 'android-smoke timing: phase=boot seconds=%s exit=0\n' "$((SECONDS - phase_start))"
+	phase=checks
+	phase_start=$SECONDS
 	out=.scratch/emulator-release
 	status=0
 	THEVAULT_APK="$apk" THEVAULT_SMOKE=1 THEVAULT_CHECKS=1,2,3,7,8,11,17,29 THEVAULT_CHECKS_ONLY=1 THEVAULT_EMULATOR_OUT="$out" \
 		node apps/android/emulator/checks.mjs || status=$?
+	printf 'android-smoke timing: phase=checks seconds=%s exit=%s\n' "$((SECONDS - phase_start))" "$status"
+	phase=shutdown
+	phase_start=$SECONDS
 	adb -s "$ANDROID_SERIAL" emu kill >/dev/null 2>&1 || true
+	printf 'android-smoke timing: phase=shutdown seconds=%s exit=0\n' "$((SECONDS - phase_start))"
+	trap - EXIT
 	if [ "$status" -ne 0 ] || ! jq -e '.status == "pass"' "$out/smoke.json" > /dev/null 2>&1; then
 		echo "android-release-smoke FAILED for $apk; see $out/RESULTS.generated.md and $out/smoke.json. Nothing is recorded, so publish-clients will not publish this release." >&2
 		exit 1

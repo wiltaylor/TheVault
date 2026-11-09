@@ -1,0 +1,44 @@
+name: Release compilation caches
+description: Cache only dependencies and compiler output, not bundles, signing material or runtime data
+inputs:
+  lane:
+    description: Separate desktop, Android arm64 and Android x86_64 compiler outputs
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Configure container cache mounts
+      shell: bash
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE/.cache/cargo" "$GITHUB_WORKSPACE/.cache/pnpm"
+        echo "THEVAULT_CARGO_CACHE=$GITHUB_WORKSPACE/.cache/cargo" >> "$GITHUB_ENV"
+        echo "THEVAULT_PNPM_CACHE=$GITHUB_WORKSPACE/.cache/pnpm" >> "$GITHUB_ENV"
+    - name: Cache Cargo registry and git dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          .cache/cargo/registry
+          .cache/cargo/git
+        key: release-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('docker/dev.Dockerfile', '**/Cargo.lock') }}
+    - name: Cache pnpm store
+      uses: actions/cache@v4
+      with:
+        path: .cache/pnpm/store
+        key: release-pnpm-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('docker/dev.Dockerfile', 'web/pnpm-lock.yaml') }}
+    - name: Cache Cargo compiler output
+      uses: actions/cache@v4
+      with:
+        # Deliberately exclude binaries, bundles, APKs, smoke evidence and all .scratch data.
+        path: |
+          target/**/deps
+          target/**/build
+          target/**/.fingerprint
+          apps/desktop/src-tauri/target/**/deps
+          apps/desktop/src-tauri/target/**/build
+          apps/desktop/src-tauri/target/**/.fingerprint
+          apps/android/src-tauri/target/**/deps
+          apps/android/src-tauri/target/**/build
+          apps/android/src-tauri/target/**/.fingerprint
+        key: release-target-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.lane }}-${{ hashFiles('docker/dev.Dockerfile', '**/Cargo.lock', '**/Cargo.toml', '.cargo/**', '**/build.rs', 'web/pnpm-lock.yaml') }}-${{ github.sha }}
+        restore-keys: |
+          release-target-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.lane }}-${{ hashFiles('docker/dev.Dockerfile', '**/Cargo.lock', '**/Cargo.toml', '.cargo/**', '**/build.rs', 'web/pnpm-lock.yaml') }}-
