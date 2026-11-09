@@ -10,7 +10,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-j
 import { agentLabel, agents, refreshAgents } from "../agents";
 import { ApiError, api } from "../api";
 import { notesSent } from "../dispatch";
-import { dispatchedHref } from "./AgentRobot";
+import { dispatchedHref, RobotGlyph } from "./AgentRobot";
 
 /** The longest instruction the dialog takes, in characters. */
 export const INSTRUCTION_MAX = 4_000;
@@ -172,8 +172,8 @@ export function SendToAgentButton(props: { notes: readonly string[]; disabled?: 
   const [open, setOpen] = createSignal(false);
   return (
     <>
-      <button type="button" class="outbox-note-action send-agent-button" disabled={props.disabled} onClick={() => setOpen(true)}>
-        Send to agent
+      <button type="button" class="icon-button send-agent-button" aria-label="Send to agent" title="Send to agent" disabled={props.disabled} onClick={() => setOpen(true)}>
+        <RobotGlyph />
       </button>
       <Show when={open()}>
         <SendToAgentDialog notes={props.notes} onClose={() => setOpen(false)} />
