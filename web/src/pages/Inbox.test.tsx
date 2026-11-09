@@ -17,6 +17,7 @@ vi.mock("@solidjs/router", () => ({ useNavigate: () => vi.fn() }));
 
 const { Inbox } = await import("./Inbox");
 const { api } = await import("../api");
+const { Toasts, dismissToast } = await import("../components/Toasts");
 const { refreshAgents } = await import("../agents");
 const { resetDispatched } = await import("../dispatch");
 const { SOURCES } = await import("../inbox/sources");
@@ -56,6 +57,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  document.querySelectorAll<HTMLElement>("[data-toast]").forEach((el) => dismissToast(Number(el.dataset.toast)));
   cleanup();
   vi.restoreAllMocks();
   vi.clearAllMocks();
@@ -80,9 +82,11 @@ describe("the Inbox", () => {
   it.each(["archive", "delete"] as const)("bulk %s acts on two selected cards only", async (action) => {
     loadInbox.mockResolvedValue({ items: items.map((i) => ({ ...i, source: SOURCES.find((s) => s.key === "messages")! })), total: 3 });
     vi.spyOn(api, "note").mockImplementation(async (id) => ({ id, type: "message", wcl: "", version: "v1", note: { fields: {}, blocks: [] } }));
-    const archive = vi.spyOn(api, "archiveNote").mockResolvedValue({} as Awaited<ReturnType<typeof api.note>>);
+    const archive = vi.spyOn(api, "archiveNote").mockResolvedValue({ version: "v2" } as Awaited<ReturnType<typeof api.note>>);
     const remove = vi.spyOn(api, "deleteNote").mockResolvedValue(undefined);
-    render(() => <Inbox />);
+    const restore = vi.spyOn(api, "restoreFromTrash").mockResolvedValue({} as Awaited<ReturnType<typeof api.note>>);
+    const unarchive = vi.spyOn(api, "unarchiveNote").mockResolvedValue({} as Awaited<ReturnType<typeof api.note>>);
+    render(() => <><Inbox /><Toasts /></>);
     await screen.findByRole("link", { name: "Roof quote" });
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Roof quote" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Gutter invoice" }));
@@ -93,6 +97,36 @@ describe("the Inbox", () => {
     expect(called).toHaveBeenNthCalledWith(2, "01JN2", "v1");
     await waitFor(() => expect(screen.queryByRole("link", { name: "Roof quote" })).toBeNull());
     expect(screen.getByRole("link", { name: "Tiles" })).toBeInTheDocument();
+    expect(await screen.findByText(action === "archive" ? "2 notes archived" : "2 notes moved to the trash")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    const undone = action === "archive" ? unarchive : restore;
+    await waitFor(() => expect(undone).toHaveBeenCalledTimes(2));
+    if (action === "archive") {
+      expect(unarchive).toHaveBeenNthCalledWith(1, "01JN1", "v2");
+      expect(unarchive).toHaveBeenNthCalledWith(2, "01JN2", "v2");
+    } else {
+      expect(restore).toHaveBeenNthCalledWith(1, "01JN1");
+      expect(restore).toHaveBeenNthCalledWith(2, "01JN2");
+    }
+    expect(await screen.findByRole("link", { name: "Roof quote" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Gutter invoice" })).toBeInTheDocument();
+  });
+
+  it("reports partial bulk failure and lets Undo restore only completed notes", async () => {
+    loadInbox.mockResolvedValue({ items: items.map((i) => ({ ...i, source: SOURCES.find((s) => s.key === "messages")! })), total: 3 });
+    vi.spyOn(api, "note").mockImplementation(async (id) => ({ id, type: "message", wcl: "", version: "v1", note: { fields: {}, blocks: [] } }));
+    vi.spyOn(api, "deleteNote").mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("conflict"));
+    const restore = vi.spyOn(api, "restoreFromTrash").mockResolvedValue({} as Awaited<ReturnType<typeof api.note>>);
+    render(() => <><Inbox /><Toasts /></>);
+    await screen.findByRole("link", { name: "Roof quote" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("1 note moved to the trash before the error: conflict");
+    expect(screen.getByRole("checkbox", { name: "Select Gutter invoice" })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(restore).toHaveBeenCalledTimes(1));
+    expect(restore).toHaveBeenCalledWith("01JN1");
+    expect(await screen.findByRole("link", { name: "Roof quote" })).toBeInTheDocument();
   });
 
   it("keeps bulk delete unavailable when mail is selected", async () => {

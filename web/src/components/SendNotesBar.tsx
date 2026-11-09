@@ -3,7 +3,7 @@
 // agent dialog, in one request and one thread (TV-77 Q1 B). The bar says how many notes one send
 // takes before it is sent, and a send of more is not offered. The selection is cleared once sent.
 
-import { type Accessor, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { type Accessor, type JSX, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { MAX_NOTES, SendToAgentDialog } from "./SendToAgent";
 
 export interface Selection {
@@ -51,7 +51,7 @@ export function SelectBox(props: { selection: Selection; id: string; title: stri
 }
 
 /** "Select all on this page", and with notes selected, how many and "Send N notes to agent". */
-export function SendNotesBar(props: { selection: Selection; page: Accessor<readonly string[]>; actions?: import("solid-js").JSX.Element }) {
+export function SendNotesBar(props: { selection: Selection; page: Accessor<readonly string[]>; actions?: JSX.Element }) {
   const count = () => props.selection.selected().length;
   const all = () => props.page().length > 0 && count() === props.page().length;
   const over = () => count() > MAX_NOTES;

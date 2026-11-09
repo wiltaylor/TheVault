@@ -80,18 +80,50 @@ export function Inbox() {
     if (action === "delete" && picked.some((i) => i.source.key === "mail")) return;
     setBulkBusy(true);
     setError(null);
+    const completed: { id: string; version: string }[] = [];
+    const resultText = () => `${completed.length} ${completed.length === 1 ? "note" : "notes"} ${action === "archive" ? "archived" : "moved to the trash"}`;
     try {
       for (const i of picked) {
         const n = await api.note(i.row.id);
-        if (action === "archive") await api.archiveNote(i.row.id, n.version);
-        else await api.deleteNote(i.row.id, n.version);
+        if (action === "archive") {
+          const saved = await api.archiveNote(i.row.id, n.version);
+          completed.push({ id: i.row.id, version: saved.version });
+        } else {
+          await api.deleteNote(i.row.id, n.version);
+          completed.push({ id: i.row.id, version: n.version });
+        }
         hide(i.row.id);
         selection.toggle(i.row.id, false);
       }
     } catch (e) {
-      setError(errorText(e));
+      setError(`${resultText()} before the error: ${errorText(e)}`);
     } finally {
       setBulkBusy(false);
+      if (completed.length > 0) {
+        showToast(resultText(), {
+          label: "Undo",
+          run: () => void undoBulk(),
+        });
+      }
+    }
+
+    async function undoBulk() {
+      setError(null);
+      let restored = 0;
+      try {
+        for (const n of completed) {
+          if (action === "archive") await api.unarchiveNote(n.id, n.version);
+          else await api.restoreFromTrash(n.id);
+          restored++;
+          setGone((s) => {
+            const next = new Set(s);
+            next.delete(n.id);
+            return next;
+          });
+        }
+      } catch (e) {
+        setError(`${restored} of ${completed.length} notes restored before the error: ${errorText(e)}`);
+      }
     }
   }
 
