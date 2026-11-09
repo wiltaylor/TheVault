@@ -313,10 +313,19 @@ android-release-smoke: ci::emulator-harness-deps (require-tool "cargo-tauri") (r
 # Run the app's Rust tests (the core against a vault-server), then the S5 Kotlin unit tests with Robolectric on the JVM against a host build of the plugin's Rust library
 [group('android')]
 android-test: (require-tool "java") android-build
+	#!/usr/bin/env bash
+	set -euo pipefail
+	# Cargo resolves relative CARGO_TARGET_DIR and config overrides in each workspace.
+	server_target=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
 	cargo build -p server --bin vault-server
-	cd apps/android/src-tauri && VAULT_SERVER_BIN="$PWD/../../../target/debug/vault-server" cargo test -p tauri-plugin-vault-device -p thevault-android
-	cd apps/android/src-tauri && cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib
-	cd apps/android/src-tauri/gen/android && VAULT_CORE_LIBRARY="$PWD/../../target/debug/libtauri_plugin_vault_device.so" ./gradlew --no-daemon testDebugUnitTest
+	export VAULT_SERVER_BIN="$server_target/debug/vault-server"
+	cd apps/android/src-tauri
+	app_target=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
+	cargo test -p tauri-plugin-vault-device -p thevault-android
+	cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib
+	export VAULT_CORE_LIBRARY="$app_target/debug/libtauri_plugin_vault_device.so"
+	cd gen/android
+	./gradlew --no-daemon testDebugUnitTest
 
 # Build the static vault CLI for both Linux architectures into target/cli-release, as vault-<version>-linux-<arch>, with their SHA256SUMS (D27)
 [group('cli')]
