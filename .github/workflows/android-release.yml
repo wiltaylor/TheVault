@@ -64,6 +64,17 @@ jobs:
           docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin <<< "${GH_TOKEN}"
           ./dev true
 
+      # Cache only the distribution ZIP, never /gradle (which includes Android user data).
+      # Hash the committed properties before the next step writes a CI-only local URL.
+      - name: Cache the Gradle wrapper distribution
+        uses: actions/cache@v4
+        with:
+          path: .scratch/gradle-wrapper/*.zip
+          key: gradle-wrapper-${{ runner.os }}-${{ hashFiles('apps/android/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties') }}
+
+      - name: Download and verify the Gradle wrapper distribution
+        run: ./dev python3 scripts/release/gradle-wrapper.py apps/android/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties .scratch/gradle-wrapper
+
       - name: Write the keystore from the repository secrets
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
