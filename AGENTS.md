@@ -51,6 +51,8 @@ A machine can run emulators that are not yours, such as `emulator-5554` on theva
 
 ## Only at release time
 
+For slow contact check 35, set `THEVAULT_CONTACT_DIAGNOSTIC=1` to save capture/job state at 30 s and wait without a foreground nudge (diagnosis only, normal timing checks stay unchanged).
+
 These do not run per card. They run on `release/<X.Y.Z>`:
 
 - `just android-emulator-checks` and `just android-release-smoke` on thevault-android (about 1 hour, a shared box).
