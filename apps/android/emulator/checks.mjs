@@ -17,6 +17,8 @@
 //                           process lives 20 s after launch, shows onboarding, and no FATAL EXCEPTION
 //                           of the app is in logcat then or at the end of the run
 //   THEVAULT_PERIODIC_WAIT  minutes to wait for the 15-minute background work (default 17)
+//   THEVAULT_CONTACT_DIAGNOSTIC  1: check 35 saves capture/job state at 30 s, then waits up to
+//                           120 s total without a foreground nudge (diagnosis, not timing proof)
 //   THEVAULT_UPDATE_APK     the newer APK check 49 publishes first, with THEVAULT_UPDATE_VERSION its
 //                           version (default: built here, the same app one patch version up, with
 //                           the versionCode scripts/release/version-code.sh gives that version)
@@ -43,6 +45,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
 import { noteIdOf, retryGesture } from "./gesture.mjs";
+import { contactDiagnostic } from "./contact-diagnostic.mjs";
 import { logcatSinceArgs } from "./logcat.mjs";
 import { qrPng } from "./qr.mjs";
 
@@ -1292,8 +1295,18 @@ async function main() {
   await sleep(2_000);
   let bob;
   await check(35, async () => {
+    // THEVAULT_CONTACT_DIAGNOSTIC=1 records slow capture state without a foreground nudge.
     bob = addContact("Bob Builder", "+16502530002");
-    const p = await capturedUntil("a person for the contact", async () => (await people()).find((x) => x.note.fields.title === "Bob Builder"));
+    const findBob = async () => (await people()).find((x) => x.note.fields.title === "Bob Builder");
+    let p;
+    if (process.env.THEVAULT_CONTACT_DIAGNOSTIC === "1") {
+      p = await contactDiagnostic(findBob, until, () => {
+        saveLog("35-at-30s");
+        writeFileSync(join(logs, "35-at-30s-jobs.txt"), shellTry("dumpsys jobscheduler"));
+      });
+    } else {
+      p = await capturedUntil("a person for the contact", findBob);
+    }
     const ok = phonesOf(p).includes("+16502530002");
     return [ok ? "pass" : "fail", `Person ${p.id} "${p.note.fields.title}", phones ${JSON.stringify(phonesOf(p))}.`, []];
   });
