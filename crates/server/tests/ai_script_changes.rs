@@ -847,6 +847,78 @@ const ANDROID: &str = "handler \"sms_received\" {\n  script = \"device_messages\
 
 const PHONE_NOTE: &str = "Runs on your phone at its next sync, with no further prompt there.";
 
+#[test]
+fn tool_and_task_phone_sources_show_warnings_and_refuse_added_sms_send() {
+    for (kind, name, wcl) in [("tool", "echo", ECHO), ("task", "nightly", NIGHTLY)] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.seed_users();
+        api.put_text(
+            "/api/device-files/android",
+            "handler \"sms_received\" {\n script = \"stamp\"\n function = \"after_update\"\n}\n",
+        );
+        let pixel = api.phone("Pixel", json!({ "sms_send": true }));
+        let changed = format!("{STAMP}\n// vault::patch\n");
+        let method = format!("propose_{kind}_change");
+        let event = format!("{kind}_proposal");
+        let events = api.one(
+            &fake,
+            &method,
+            json!({ "name": name, "wcl": wcl, "script_source": changed }),
+        );
+        let p = find(&events, &event)
+            .unwrap_or_else(|| panic!("{events:?}"))
+            .clone();
+        assert_eq!(p["device"]["note"], PHONE_NOTE, "{p}");
+        assert_eq!(p["device"]["platforms"], json!(["android"]));
+        assert_eq!(p["device"]["devices"][0]["name"], "Pixel");
+        assert_eq!(p["device"]["devices"][0]["sms_send"], true);
+        assert_eq!(can(&p["device"]), [("notes_write".to_owned(), true)]);
+        let (err, got) = last_result(&fake);
+        assert!(!err, "{got}");
+        assert_eq!(got["device"], p["device"]);
+
+        // Mentions count even in comments, so this still compiles as a tool/task.
+        let forbidden = format!("{changed}\n// device::sms_send\n");
+        let events = api.one(
+            &fake,
+            &method,
+            json!({ "name": name, "wcl": wcl, "script_source": forbidden }),
+        );
+        assert!(find(&events, &event).is_none(), "{events:?}");
+        let (err, got) = last_result(&fake);
+        assert!(err, "{got}");
+        assert!(
+            got["error"]
+                .as_str()
+                .unwrap()
+                .contains("may not add a call to device::sms_send"),
+            "{got}"
+        );
+        let mut forged = p.clone();
+        forged["script_after"] = json!(forbidden);
+        let (status, body) = api.apply_as(&api.token(), &forged);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "not_permitted");
+        assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+
+        api.set_switches(&pixel, json!({ "sms_send": false }));
+        let (status, body) = api.apply_as(&api.token(), &p);
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"], "stale");
+        assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+        let events = api.one(
+            &fake,
+            &method,
+            json!({ "name": name, "wcl": wcl, "script_source": changed }),
+        );
+        let p = find(&events, &event).unwrap();
+        let (status, body) = api.apply_as(&api.token(), p);
+        assert!(status.is_success(), "{status}: {body}");
+        assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
+    }
+}
+
 /// The `key` and `new` of each item of a card's "This code can" list.
 fn can(device: &Value) -> Vec<(String, bool)> {
     device["can"]

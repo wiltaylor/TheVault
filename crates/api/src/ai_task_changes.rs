@@ -332,6 +332,21 @@ pub(crate) fn propose_change(
     }
     let script_before = w.read_script(&def.script).ok();
     let script_after = script_given.filter(|src| Some(*src) != script_before.as_deref());
+    let mut phone = None;
+    if let Some(source) = script_after {
+        if let Some(why) = crate::ai_script_changes::sms_send_refused(
+            &def.script,
+            script_before.as_deref(),
+            source,
+        ) {
+            return Err(ToolOut::error(why));
+        }
+        let uses = w
+            .script_runs_as(&def.script, None)
+            .map_err(|e| ToolOut::error(e.to_string()))?;
+        phone = crate::ai_script_changes::on_phone(w, &uses, script_before.as_deref(), source)
+            .map_err(|e| ToolOut::error(e.to_string()))?;
+    }
     if before.as_deref() == Some(after.as_str()) && script_after.is_none() {
         return Ok(out(
             json!({
@@ -386,6 +401,7 @@ pub(crate) fn propose_change(
         "proposed": true,
         "name": name,
         "exists": exists,
+        "device": phone,
         "schedule_text": def.schedule_text(),
         "next_runs": next,
         "paused": def.paused,
@@ -405,6 +421,7 @@ pub(crate) fn propose_change(
         "script_exists": script_before.is_some(),
         "script_before": script_before,
         "script_after": script_after,
+        "device": phone,
         "task": task_json(&def),
         "next_runs": next,
         "runs_as": runs_as,
@@ -515,7 +532,22 @@ pub(crate) fn apply_task(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
             return Err(ApplyError::Refused(why));
         }
         let script_before = w.read_script(&def.script).ok();
-        if script_after.is_some() {
+        if let Some(source) = script_after {
+            if let Some(why) = crate::ai_script_changes::sms_send_refused(
+                &def.script,
+                script_before.as_deref(),
+                source,
+            ) {
+                return Err(ApplyError::Refused(why));
+            }
+            let uses = w.script_runs_as(&def.script, None)?;
+            let phone =
+                crate::ai_script_changes::on_phone(w, &uses, script_before.as_deref(), source)?;
+            if phone.as_ref().unwrap_or(&Value::Null) != &p["device"] {
+                return Err(stale(
+                    "the phones that run the script, or their switches, changed",
+                ));
+            }
             crate::ai_script_changes::require_phone_script_admin(
                 w,
                 &def.script,
