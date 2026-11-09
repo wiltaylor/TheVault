@@ -272,6 +272,8 @@ docker compose exec thevault sh -c 'vault backup /data/backups/manual-$(date -u 
 
 The backup holds every vault file and `state.db` in one SQLite archive. Copy it off the volume to keep it somewhere else:
 
+Files over 256 MiB are stored as ordered, uncompressed parts under `.vault-backup/`, with a versioned JSON manifest recording each original path, total size, part count and SHA-256. This avoids SQLite's single-blob size limit, including for large `state.db` snapshots. Use `vault restore-backup` to reassemble them and verify their size and hash before any destination files are written. It needs temporary disk space for the extracted archive and reassembled files. Small files keep the original single-entry format and old backups still restore unchanged. `sqlite3 -A` can extract the individual entries, but does not reassemble chunked files. Manual recovery requires concatenating the parts in manifest order and checking the recorded size and SHA-256.
+
 ```sh
 docker compose cp thevault:/data/backups/manual-20261018T090000Z.sqlar .
 ```
