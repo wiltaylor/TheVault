@@ -816,7 +816,10 @@ mod timeout_tests {
         tokio::time::advance(READER_WAIT - Duration::from_secs(1)).await;
         assert!(futures_util::poll!(&mut watchdog).is_pending());
         tokio::time::advance(Duration::from_secs(1)).await;
-        assert_eq!(futures_util::poll!(&mut watchdog), std::task::Poll::Ready(true));
+        assert_eq!(
+            futures_util::poll!(&mut watchdog),
+            std::task::Poll::Ready(true)
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -840,6 +843,9 @@ mod timeout_tests {
         assert!(futures_util::poll!(&mut watchdog).is_pending());
         log.lock().unwrap().done = true;
         tokio::time::advance(Duration::from_secs(1)).await;
-        assert_eq!(futures_util::poll!(&mut watchdog), std::task::Poll::Ready(false));
+        assert_eq!(
+            futures_util::poll!(&mut watchdog),
+            std::task::Poll::Ready(false)
+        );
     }
 }
