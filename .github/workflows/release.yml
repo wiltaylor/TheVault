@@ -18,15 +18,19 @@ name: release
 on:
   workflow_call:
     inputs:
+      compile-only:
+        description: Build without signing, publishing or emulator execution
+        type: boolean
+        default: false
       version:
         description: The version to build, X.Y.Z or X.Y.Z-alpha.N
         type: string
         required: true
     secrets:
       TAURI_SIGNING_PRIVATE_KEY:
-        required: true
+        required: false
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -37,6 +41,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/release-cache
+        with:
+          lane: desktop
 
       - name: Write the version into the checkout
         env:
@@ -57,6 +65,7 @@ jobs:
           ./dev true
 
       - name: Check the updater signing key is set
+        if: ${{ !inputs.compile-only }}
         env:
           UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           UPDATER_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -72,12 +81,14 @@ jobs:
       # ./dev passes the key itself into the container; base64 holds no whitespace, so a newline
       # pasted with the secret is dropped.
       - name: Build the bundles, sign the AppImage and smoke-test it
+        if: ${{ !inputs.compile-only }}
         env:
           UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: TAURI_SIGNING_PRIVATE_KEY=$(printf '%s' "$UPDATER_KEY" | tr -d '[:space:]') ./dev just desktop-release-test
 
       - name: Check the AppImage has its updater signature
+        if: ${{ !inputs.compile-only }}
         run: |
           shopt -s nullglob
           images=(target/desktop-release/*.AppImage)
@@ -94,14 +105,25 @@ jobs:
           done
 
       - name: Write the AUR package for this release
+        if: ${{ !inputs.compile-only }}
         run: ./dev just aur-release
 
       - name: Build the static vault CLI for x86_64 and aarch64
+        # Also exercised by the unsigned branch compilation check.
         run: |
           ./dev just cli-release
           mv target/cli-release/SHA256SUMS target/cli-release/SHA256SUMS-cli
 
+      - name: Compile the desktop without signing
+        if: inputs.compile-only
+        env:
+          THEVAULT_NO_SIGNING_KEYS: "1"
+        run: |
+          ./dev just web-build
+          ./dev cargo build --release --manifest-path apps/desktop/src-tauri/Cargo.toml
+
       - name: Gather the release files
+        if: ${{ !inputs.compile-only }}
         run: |
           mkdir -p target/release-desktop
           cp target/desktop-release/*.AppImage \
@@ -116,6 +138,7 @@ jobs:
           ls -l target/release-desktop
 
       - name: Keep them for the train's publish job
+        if: ${{ !inputs.compile-only }}
         uses: actions/upload-artifact@v6
         with:
           name: release-desktop
