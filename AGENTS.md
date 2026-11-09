@@ -21,6 +21,26 @@ thevault-dev is the dev container itself. Run the recipes there without `./dev`,
 
 A card is ready for review when each recipe it needs exits 0.
 
+### Per-worker Cargo output
+
+Terrarium sets `CARGO_TARGET_DIR=/src/terrarium/thevault/<agent>/target` on
+thevault-dev. This is outside the clean checkout and survives repeated checkouts
+for that worker. Keep it set for `just validate` and `just validate-android`.
+Android tests resolve the server and host plugin paths through `cargo metadata`.
+The server uses the configured output directory. Tauri app lint and Android build,
+lint and test commands unset `CARGO_TARGET_DIR` to keep path-sensitive generated
+output in each checkout's app workspace. Only root-workspace output is reused.
+`./dev` does not set this variable and keeps Cargo's default output directories.
+
+Only one build or validation may write a worker's cache at a time. Never point
+two agents at one writable target directory. Cargo separates host and Android
+target-triple output and tracks each workspace's packages and dependencies.
+Do not copy `apps/android/src-tauri/target` between checkout paths: Tauri build
+scripts generate files in the source tree. Never override the app isolation with
+a shared Cargo configuration target-dir either.
+Keep `CARGO_BUILD_JOBS=8` or lower and run under `ionice -c3 nice -n19`.
+The cache belongs to the worker and can be removed with that worker's leftovers.
+
 ## Merge queue
 
 Only the lead merges. One merge job takes every card in the merge_queue column (`terrarium card merge A B C`), merges them onto `next` in order, runs `just check` once on the result, and pushes `next` when it is green. A card that conflicts goes back to ready. A red batch is split until the failing card is found. When a batch holds a card that needs `just validate-android`, the lead also runs that recipe on the merged `next`.
