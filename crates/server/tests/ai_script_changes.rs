@@ -978,7 +978,7 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         .unwrap_or_else(|| panic!("{events:?}"))
         .clone();
     assert_eq!(p["device"]["devices"][0]["sms_send"], false, "{p}");
-    let (status, body) = api.apply_as(&api.token(), &p);
+    let (status, body) = api.apply_signed_in(&p);
     assert!(status.is_success(), "{status}: {body}");
     assert_eq!(
         api.script("device_messages").as_deref(),
