@@ -7,6 +7,9 @@
 //! from the files when it starts.
 
 use std::path::{Component, Path, PathBuf};
+use std::io::{Read, Write};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -37,6 +40,26 @@ fn state_err(e: rusqlite::Error) -> Fail {
 
 const STATE_ENTRY: &str = ".vault/state.db";
 const KEY_DIR: &str = "key";
+const MANIFEST: &str = ".vault-backup/manifest.json";
+const CHUNK_SIZE: usize = 256 * 1024 * 1024;
+
+#[derive(Serialize, Deserialize)]
+struct ChunkedFile {
+    name: String,
+    size: u64,
+    parts: usize,
+    sha256: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Manifest {
+    version: u32,
+    files: Vec<ChunkedFile>,
+}
+
+fn part_name(file: usize, part: usize) -> String {
+    format!(".vault-backup/{file}.part-{part:08}")
+}
 
 fn sqlite(e: rusqlite::Error) -> Fail {
     Fail::new("archive", e.to_string())
@@ -130,6 +153,7 @@ pub fn backup(vault: &Path, out: &Path, include_key: bool) -> Result<Value, Fail
         &state_copy,
         include_key.then_some(&key_file),
         &vault_id,
+        CHUNK_SIZE,
     );
     let files = match result {
         Ok(files) => files,
@@ -167,6 +191,7 @@ fn write_archive(
     state_copy: &Path,
     key: Option<&PathBuf>,
     vault_id: &str,
+    chunk_size: usize,
 ) -> Result<usize, Fail> {
     let mut conn = Connection::open(out).map_err(sqlite)?;
     conn.execute_batch(
@@ -193,17 +218,39 @@ fn write_archive(
         let mut insert = tx
             .prepare("INSERT INTO sqlar (name, mode, mtime, sz, data) VALUES (?1, ?2, ?3, ?4, ?5)")
             .map_err(sqlite)?;
+        let mut manifest = Manifest { version: 1, files: Vec::new() };
         for (name, path) in &files {
-            let data = std::fs::read(path).map_err(io(path))?;
             let meta = std::fs::metadata(path).map_err(io(path))?;
             let mtime = meta
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs() as i64);
-            insert
-                .execute(params![name, mode(&meta), mtime, data.len() as i64, data])
-                .map_err(sqlite)?;
+            let mut input = std::fs::File::open(path).map_err(io(path))?;
+            let mut hash = Sha256::new();
+            let mut size = 0;
+            let mut parts = 0;
+            loop {
+                let mut data = Vec::new();
+                input.by_ref().take(chunk_size as u64).read_to_end(&mut data).map_err(io(path))?;
+                if data.is_empty() && parts > 0 { break; }
+                hash.update(&data);
+                size += data.len() as u64;
+                let entry = if meta.len() > chunk_size as u64 {
+                    part_name(manifest.files.len(), parts)
+                } else { name.clone() };
+                insert.execute(params![entry, mode(&meta), mtime, data.len() as i64, data]).map_err(sqlite)?;
+                parts += 1;
+                if meta.len() <= chunk_size as u64 { break; }
+            }
+            if size != meta.len() { return Err(Fail::new("io", format!("{} changed size during backup", path.display()))); }
+            if meta.len() > chunk_size as u64 {
+                manifest.files.push(ChunkedFile { name: name.clone(), size, parts, sha256: format!("{:x}", hash.finalize()) });
+            }
+        }
+        if !manifest.files.is_empty() {
+            let data = serde_json::to_vec(&manifest).map_err(Fail::from_display("archive"))?;
+            insert.execute(params![MANIFEST, 0o100600, 0, data.len() as i64, data]).map_err(sqlite)?;
         }
     }
     tx.commit().map_err(sqlite)?;
@@ -266,7 +313,44 @@ pub fn restore(archive: &Path, dir: &Path) -> Result<Value, Fail> {
     }
     let conn =
         Connection::open_with_flags(archive, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(sqlite)?;
-    let mut rows = Vec::new();
+    // Keep a read transaction across validation and extraction, including concurrent writers.
+    conn.execute_batch("BEGIN").map_err(sqlite)?;
+    let scratch = tempfile::tempdir().map_err(Fail::from_display("io"))?;
+    let rows = stage_archive(&conn, scratch.path())?;
+    let mut files = 0;
+    let mut key = None;
+    for (name, staged) in rows {
+        if let Some(file) = name.strip_prefix(&format!("{KEY_DIR}/")) {
+            key = Some((file.trim_end_matches(".key").to_owned(), std::fs::read(&staged).map_err(io(&staged))?));
+            continue;
+        }
+        let target = entry_path(dir, &name)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(io(parent))?;
+        }
+        std::fs::copy(&staged, &target).map_err(io(&target))?;
+        if name != STATE_ENTRY { files += 1; }
+    }
+    let vault = store::Vault::open(dir).map_err(Fail::from_display("store"))?;
+    let state = open_state(vault.root())?;
+    let vault_id = state.vault_id().map_err(Fail::from_display("state"))?;
+    let key = match key {
+        Some((id, bytes)) => {
+            if id != vault_id {
+                return Err(Fail::new("archive", format!("the archive's key is for vault {id}, not {vault_id}")));
+            }
+            restore_key(&key_path(&vault_id)?, &bytes)?
+        }
+        None => json!({ "restored": false, "in_archive": false, "path": key_path(&vault_id)? }),
+    };
+    Ok(json!({ "vault": vault.root(), "vault_id": vault_id, "files": files,
+        "state_db": state_db(vault.root()), "key": key }))
+}
+
+// Validate the whole archive before touching the destination. Only paths and metadata remain
+// in memory between rows; file contents live in temporary staging files.
+fn stage_archive(conn: &Connection, dir: &Path) -> Result<Vec<(String, PathBuf)>, Fail> {
+    let mut rows = std::collections::BTreeMap::new();
     {
         let mut stmt = conn
             .prepare("SELECT name, sz, data FROM sqlar ORDER BY name")
@@ -276,60 +360,67 @@ pub fn restore(archive: &Path, dir: &Path) -> Result<Value, Fail> {
             let name: String = row.get(0).map_err(sqlite)?;
             let sz: i64 = row.get(1).map_err(sqlite)?;
             let data: Option<Vec<u8>> = row.get(2).map_err(sqlite)?;
-            rows.push((name, sz, data.unwrap_or_default()));
+            let data = data.unwrap_or_default();
+            if sz != data.len() as i64 {
+                return Err(Fail::new("archive", format!("{name} is compressed; vault backups store entries uncompressed")));
+            }
+            let path = dir.join(rows.len().to_string());
+            std::fs::write(&path, data).map_err(io(&path))?;
+            if rows.insert(name, path).is_some() {
+                return Err(Fail::new("archive", "duplicate archive entry"));
+            }
         }
     }
-    if !rows.iter().any(|(name, _, _)| name == STATE_ENTRY) {
+    if let Some(path) = rows.remove(MANIFEST) {
+        let manifest: Manifest = serde_json::from_reader(std::fs::File::open(&path).map_err(io(&path))?)
+            .map_err(Fail::from_display("archive"))?;
+        if manifest.version != 1 { return Err(Fail::new("archive", "unsupported chunk manifest version")); }
+        for (index, file) in manifest.files.into_iter().enumerate() {
+            validate_name(dir, &file.name)?;
+            if rows.contains_key(&file.name) || file.parts == 0 || file.parts > rows.len() {
+                return Err(Fail::new("archive", "invalid chunk manifest or missing part"));
+            }
+            let output = dir.join(format!("joined-{index}"));
+            let mut out = std::fs::File::create(&output).map_err(io(&output))?;
+            let mut hash = Sha256::new();
+            let mut size = 0u64;
+            let mut buffer = [0u8; 64 * 1024];
+            for part in 0..file.parts {
+                let path = rows.remove(&part_name(index, part)).ok_or_else(|| Fail::new("archive", "missing chunk part"))?;
+                let mut input = std::fs::File::open(&path).map_err(io(&path))?;
+                loop {
+                    let n = input.read(&mut buffer).map_err(io(&path))?;
+                    if n == 0 { break; }
+                    hash.update(&buffer[..n]);
+                    size += n as u64;
+                    out.write_all(&buffer[..n]).map_err(io(&output))?;
+                }
+            }
+            if size != file.size || format!("{:x}", hash.finalize()) != file.sha256 {
+                return Err(Fail::new("archive", format!("{}: chunk size or SHA-256 mismatch", file.name)));
+            }
+            rows.insert(file.name, output);
+        }
+    }
+    for name in rows.keys() { validate_name(dir, name)?; }
+    if !rows.contains_key(STATE_ENTRY) {
         return Err(Fail::new(
             "archive",
             "not a vault backup: it holds no state.db",
         ));
     }
 
-    let mut files = 0;
-    let mut key = None;
-    for (name, sz, data) in rows {
-        if sz != data.len() as i64 {
-            return Err(Fail::new(
-                "archive",
-                format!("{name} is compressed; vault backups store entries uncompressed"),
-            ));
-        }
-        if let Some(file) = name.strip_prefix(&format!("{KEY_DIR}/")) {
-            key = Some((file.trim_end_matches(".key").to_owned(), data));
-            continue;
-        }
-        let target = entry_path(dir, &name)?;
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).map_err(io(parent))?;
-        }
-        std::fs::write(&target, &data).map_err(io(&target))?;
-        if name != STATE_ENTRY {
-            files += 1;
+    Ok(rows.into_iter().collect())
+}
+
+fn validate_name(dir: &Path, name: &str) -> Result<(), Fail> {
+    if let Some(key) = name.strip_prefix("key/") {
+        if key.ends_with(".key") && Path::new(key).components().count() == 1
+            && Path::new(key).components().all(|c| matches!(c, Component::Normal(_))) {
+            return Ok(());
         }
     }
-    let vault = store::Vault::open(dir).map_err(Fail::from_display("store"))?;
-    let state = open_state(vault.root())?;
-    let vault_id = state.vault_id().map_err(Fail::from_display("state"))?;
-    let key = match key {
-        Some((id, bytes)) => {
-            if id != vault_id {
-                return Err(Fail::new(
-                    "archive",
-                    format!("the archive's key is for vault {id}, not {vault_id}"),
-                ));
-            }
-            restore_key(&key_path(&vault_id)?, &bytes)?
-        }
-        None => json!({ "restored": false, "in_archive": false, "path": key_path(&vault_id)? }),
-    };
-    Ok(json!({
-        "vault": vault.root(),
-        "vault_id": vault_id,
-        "files": files,
-        "state_db": state_db(vault.root()),
-        "key": key,
-    }))
+    entry_path(dir, name).map(|_| ())
 }
 
 /// Where an archive entry goes under `dir`. Only layout folders and `.vault/state.db` are
@@ -377,4 +468,67 @@ fn restore_key(path: &Path, bytes: &[u8]) -> Result<Value, Fail> {
     let mut file = options.open(path).map_err(io(path))?;
     file.write_all(bytes).map_err(io(path))?;
     Ok(json!({ "restored": true, "in_archive": true, "path": path }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(chunk: usize) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(vault.join("assets")).unwrap();
+        std::fs::write(vault.join("assets/large.bin"), (0..251).collect::<Vec<u8>>()).unwrap();
+        std::fs::write(vault.join("assets/large.bin.part-0001"), b"ordinary file").unwrap();
+        let state = tmp.path().join("state.db");
+        std::fs::write(&state, b"snapshot bytes").unwrap();
+        let archive = tmp.path().join("backup.sqlar");
+        write_archive(&vault, &archive, &state, None, "test", chunk).unwrap();
+        (tmp, archive)
+    }
+
+    #[test]
+    fn chunked_archive_round_trips_with_bounded_chunks() {
+        let (tmp, archive) = fixture(32);
+        let conn = Connection::open(archive).unwrap();
+        let max: i64 = conn.query_row("SELECT max(sz) FROM sqlar WHERE name != ?1", [MANIFEST], |r| r.get(0)).unwrap();
+        assert!(max <= 32);
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let rows = stage_archive(&conn, &staging).unwrap();
+        for (name, path) in rows {
+            let original = if name == STATE_ENTRY { tmp.path().join("state.db") } else { tmp.path().join("vault").join(name) };
+            assert_eq!(std::fs::read(path).unwrap(), std::fs::read(original).unwrap());
+        }
+    }
+
+    #[test]
+    fn missing_chunk_refused_before_destination_writes() {
+        let (tmp, archive) = fixture(32);
+        Connection::open(&archive).unwrap().execute("DELETE FROM sqlar WHERE name = ?1", [part_name(0, 1)]).unwrap();
+        let dest = tmp.path().join("destination");
+        assert!(restore(&archive, &dest).is_err());
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn corrupt_chunk_refused_before_destination_writes() {
+        let (tmp, archive) = fixture(32);
+        Connection::open(&archive).unwrap().execute("UPDATE sqlar SET data = zeroblob(sz) WHERE name = ?1", [part_name(0, 1)]).unwrap();
+        let dest = tmp.path().join("destination");
+        std::fs::create_dir(&dest).unwrap();
+        assert!(restore(&archive, &dest).is_err());
+        assert_eq!(std::fs::read_dir(dest).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn old_single_entry_archive_still_stages() {
+        let (tmp, archive) = fixture(1024);
+        let conn = Connection::open(archive).unwrap();
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir(&staging).unwrap();
+        let rows = stage_archive(&conn, &staging).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().any(|(name, _)| name == STATE_ENTRY));
+    }
 }
