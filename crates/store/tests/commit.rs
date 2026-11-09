@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use store::{Change, CommitStep, Error, Vault};
 use tempfile::TempDir;
@@ -160,6 +160,9 @@ fn a_process_killed_between_file_writes_leaves_all_or_nothing() {
             ])
             .env("STORE_CRASH_ROOT", dir.path())
             .env("STORE_CRASH_AT", format!("{stop:?}"))
+            // The aborted libtest child leaves an unfinished status line. Keep it
+            // out of the parent's output, including its JSON test report.
+            .stdout(Stdio::null())
             .status()
             .unwrap();
         assert!(!status.success(), "{stop:?}: the child was not killed");
