@@ -4,6 +4,240 @@ use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use testkit::{FakeDecisions, Reply, TestServer};
 
+#[test]
+fn shipped_scam_fixture_labels_and_encrypted_phone_pushes_follow_threshold() {
+    // Synthetic examples and prescribed fake answers prove wiring, not model accuracy.
+    let fixtures: Vec<Value> = serde_json::from_str(include_str!("fixtures/scam.json")).unwrap();
+    let fake = FakeDecisions::start();
+    let (server, client) = setup(&fake, CONFIG);
+    let stamp = create(&server, &client, "outgoing");
+    let recent = stamp["note"]["fields"]["created"].as_str().unwrap();
+    let service = testkit::StandIn::start();
+    service.route("/scam", Reply::text(201, ""));
+    let phone = super::push::Phone::pair(&server, "Classifier fixture phone", 42);
+    phone.register(&server, &service.url("/scam"));
+    let mut expected = Vec::new();
+    for fixture in &fixtures {
+        let category = fixture["category"].as_str().unwrap();
+        let probabilities: serde_json::Map<String, Value> = [
+            "scam",
+            "spam",
+            "marketing",
+            "personal",
+            "transactional",
+            "other",
+        ]
+        .into_iter()
+        .map(|name| (name.into(), json!(if name == category { 1.0 } else { 0.0 })))
+        .collect();
+        fake.push(Reply::json(200, &json!({"id":"fixture", "model":"jev-1.13.0", "answers": {
+            "scam": {"type":"noul", "noul":fixture["probability"]},
+            "category": {"type":"choice", "choice":category, "confidence":1.0, "probabilities":probabilities}
+        }})));
+        let kind = fixture["type"].as_str().unwrap();
+        let res = client.post(server.url(&format!("/api/notes?type={kind}")))
+            .bearer_auth(server.admin_token()).json(&json!({"note":{"fields":{
+                "title":"Synthetic fixture", "direction":"in", "channel":"sms", "snippet":fixture["text"], "sent":recent
+            }, "blocks":[{"kind":"content", "labels":["body"], "fields":{}, "blocks":[{"kind":"paragraph", "labels":[], "fields":{"text":fixture["text"]}, "blocks":[]}]}]}}))
+            .send().unwrap().error_for_status().unwrap().json::<Value>().unwrap();
+        let id = res["id"].as_str().unwrap();
+        server.stderr_lines_when(|lines| {
+            lines
+                .iter()
+                .any(|l| l.contains(&format!("classifier=scam note={id}")))
+        });
+        let note = get(&server, &client, &format!("/api/notes/{id}"));
+        assert_eq!(
+            note["note"]["fields"]["scam_probability"],
+            fixture["probability"]
+        );
+        assert_eq!(
+            note["note"]["fields"]["communication_category"],
+            fixture["category"]
+        );
+        if fixture["probability"].as_f64().unwrap() >= 0.8 {
+            expected.push(id.to_owned());
+        }
+    }
+    // Drain prior work and notification dispatch with a second, independently created push.
+    client
+        .post(server.url("/api/notifications"))
+        .bearer_auth(server.admin_token())
+        .json(&json!({"title":"Fixture barrier"}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let started = Instant::now();
+    let events = loop {
+        let events: Vec<_> = service
+            .requests()
+            .iter()
+            .map(|r| phone.open(&r.body))
+            .filter(|event| event["event"] == "notification.created")
+            .collect();
+        if events.len() > expected.len() {
+            break events;
+        }
+        assert!(started.elapsed() < Duration::from_secs(15));
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(events.len(), expected.len() + 1);
+    let notifications = get(&server, &client, "/api/notifications");
+    let mut notified: Vec<_> = notifications["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["source"] == "classifier:scam")
+        .map(|n| n["note"].as_str().unwrap().to_owned())
+        .collect();
+    notified.sort();
+    expected.sort();
+    assert_eq!(notified, expected);
+    for event in events {
+        assert!(
+            notifications
+                .to_string()
+                .contains(event["id"].as_str().unwrap())
+        );
+    }
+    for id in &expected {
+        assert!(notifications.to_string().contains(id));
+    }
+    assert_eq!(fake.requests().len(), fixtures.len());
+    // Outgoing SMS and sent/draft email must not call the classifier.
+    for (kind, mut fields) in [
+        (
+            "message",
+            json!({"title":"Outgoing fixture", "direction":"out", "channel":"sms"}),
+        ),
+        (
+            "email",
+            json!({"title":"Sent fixture", "labels":["system/SENT"]}),
+        ),
+        (
+            "email",
+            json!({"title":"Draft fixture", "labels":["system/DRAFT"]}),
+        ),
+    ] {
+        fields["sent"] = json!(recent);
+        client
+            .post(server.url(&format!("/api/notes?type={kind}")))
+            .bearer_auth(server.admin_token())
+            .json(&json!({"note":{"fields":fields}}))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+    let historical = client.post(server.url("/api/notes?type=email")).bearer_auth(server.admin_token())
+        .json(&json!({"note":{"fields":{"title":"Old incoming scam fixture", "sent":"2000-01-01T00:00:00Z"}}}))
+        .send().unwrap().error_for_status().unwrap().json::<Value>().unwrap();
+    fake.push(Reply::json(200, &response()));
+    let sentinel = create(&server, &client, "incoming");
+    wait_trail(&server, sentinel["id"].as_str().unwrap());
+    assert_eq!(fake.requests().len(), fixtures.len() + 1);
+    let old = get(
+        &server,
+        &client,
+        &format!("/api/notes/{}", historical["id"].as_str().unwrap()),
+    );
+    assert!(old["note"]["fields"].get("scam_probability").is_none());
+    assert!(
+        !get(&server, &client, "/api/notifications")
+            .to_string()
+            .contains(historical["id"].as_str().unwrap())
+    );
+}
+
+#[test]
+fn unrelated_types_are_not_persisted_while_a_classifier_is_busy() {
+    let fake = FakeDecisions::start();
+    fake.push(Reply::json(200, &response()).delay(Duration::from_secs(2)));
+    let (server, client) = setup(&fake, CONFIG);
+    let first = create(&server, &client, "incoming");
+    let began = Instant::now();
+    while fake.requests().is_empty() {
+        assert!(began.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    client
+        .post(server.url("/api/notes?type=fleeting"))
+        .bearer_auth(server.admin_token())
+        .json(&json!({"note":{"fields":{"title":"Unrelated private fixture"}}}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let state = state::State::open(&server.vault_path().join(".vault/state.db"), None).unwrap();
+    assert_eq!(state.take_classification().unwrap(), None);
+    wait_trail(&server, first["id"].as_str().unwrap());
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[test]
+fn configuration_warning_is_deduplicated_across_notes_and_restart_then_recovers() {
+    let fake = FakeDecisions::start();
+    let missing = CONFIG.replace("account = \"router\"", "account = \"missing_account\"");
+    let (mut server, client) = setup(&fake, &missing);
+    for index in 0..3 {
+        if index == 2 {
+            server.restart();
+        }
+        let note = create(&server, &client, "incoming");
+        let marker = format!(
+            "name=incoming note={} outcome=error:",
+            note["id"].as_str().unwrap()
+        );
+        let lines = server.stderr_lines_when(|lines| lines.iter().any(|l| l.contains(&marker)));
+        assert!(lines.iter().any(|l| l.contains(&marker)));
+        let notifications = get(&server, &client, "/api/notifications");
+        assert_eq!(
+            notifications["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|n| n["source"] == "classifier_config:incoming")
+                .count(),
+            1
+        );
+    }
+    assert!(fake.requests().is_empty());
+    std::fs::write(server.vault_path().join("classifiers/incoming.wcl"), CONFIG).unwrap();
+    fake.push(Reply::json(200, &response()));
+    let recovered = create(&server, &client, "incoming");
+    wait_trail(&server, recovered["id"].as_str().unwrap());
+    assert_eq!(
+        get(
+            &server,
+            &client,
+            &format!("/api/notes/{}", recovered["id"].as_str().unwrap())
+        )["note"]["fields"]["scam_probability"],
+        0.95
+    );
+    std::fs::write(
+        server.vault_path().join("classifiers/incoming.wcl"),
+        missing,
+    )
+    .unwrap();
+    let again = create(&server, &client, "incoming");
+    let marker = format!(
+        "name=incoming note={} outcome=error:",
+        again["id"].as_str().unwrap()
+    );
+    server.stderr_lines_when(|lines| lines.iter().any(|l| l.contains(&marker)));
+    let notifications = get(&server, &client, "/api/notifications");
+    assert_eq!(
+        notifications["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["source"] == "classifier_config:incoming")
+            .count(),
+        2
+    );
+}
+
 const CONFIG: &str = r#"
 types = ["memo"]
 where = "status == \"incoming\""
@@ -328,7 +562,35 @@ fn rejects_partial_answers_and_invalid_field_writes_atomically() {
 }
 
 #[test]
-fn stale_result_does_not_overwrite_a_concurrent_edit() {
+fn unrelated_edit_preserves_classification_and_user_changes() {
+    let fake = FakeDecisions::start();
+    fake.push(Reply::json(200, &response()).delay(Duration::from_millis(500)));
+    let (server, client) = setup(&fake, CONFIG);
+    let created = create(&server, &client, "incoming");
+    let id = created["id"].as_str().unwrap();
+    let started = Instant::now();
+    while fake.requests().is_empty() {
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    client.put(server.url(&format!("/api/notes/{id}"))).bearer_auth(server.admin_token())
+        .json(&json!({"base_version": created["version"], "note": {"fields": {"title": "Edited", "status": "incoming"}}}))
+        .send().unwrap().error_for_status().unwrap().json::<Value>().unwrap();
+    let lines = wait_trail(&server, id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("outcome=ok") && l.contains(id))
+    );
+    let note = get(&server, &client, &format!("/api/notes/{id}"));
+    assert_eq!(note["note"]["fields"]["title"], "Edited");
+    assert_eq!(note["note"]["fields"]["scam_probability"], 0.95);
+    assert_eq!(note["note"]["fields"]["category"], "other");
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[test]
+fn concurrent_target_edit_rejects_entire_classifier_patch() {
     let fake = FakeDecisions::start();
     fake.push(Reply::json(200, &response()).delay(Duration::from_millis(500)));
     let (server, client) = setup(&fake, CONFIG);
@@ -340,7 +602,7 @@ fn stale_result_does_not_overwrite_a_concurrent_edit() {
         std::thread::sleep(Duration::from_millis(5));
     }
     let updated = client.put(server.url(&format!("/api/notes/{id}"))).bearer_auth(server.admin_token())
-        .json(&json!({"base_version": created["version"], "note": {"fields": {"title": "Edited", "status": "incoming"}}}))
+        .json(&json!({"base_version": created["version"], "note": {"fields": {"title": "Corrected", "status": "incoming", "category": "personal"}}}))
         .send().unwrap().error_for_status().unwrap().json::<Value>().unwrap();
     let lines = wait_trail(&server, id);
     assert!(
@@ -350,9 +612,62 @@ fn stale_result_does_not_overwrite_a_concurrent_edit() {
     );
     let note = get(&server, &client, &format!("/api/notes/{id}"));
     assert_eq!(note["version"], updated["version"]);
-    assert_eq!(note["note"]["fields"]["title"], "Edited");
+    assert_eq!(note["note"]["fields"]["category"], "personal");
     assert!(note["note"]["fields"].get("scam_probability").is_none());
+    assert!(
+        !get(&server, &client, "/api/notifications")
+            .to_string()
+            .contains("Possible scam")
+    );
     assert_eq!(fake.requests().len(), 1);
+}
+
+#[test]
+fn burst_beyond_old_queue_capacity_classifies_every_create() {
+    let fake = FakeDecisions::start();
+    let (server, client) = setup(&fake, CONFIG);
+    // One commit queues the entire burst under the writer lock, without timing assumptions.
+    let ops: Vec<_> = (0..280).map(|_| {
+        fake.push(Reply::json(200, &response()));
+        json!({"op":"create", "type":"memo", "note":{"fields":{"title":"Burst fixture", "status":"incoming"}}})
+    }).collect();
+    let batch = client
+        .post(server.url("/api/batch"))
+        .bearer_auth(server.admin_token())
+        .json(&json!({"ops":ops}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .unwrap();
+    assert_eq!(batch["ok"], true, "{batch}");
+    let ids: Vec<_> = batch["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_owned())
+        .collect();
+    // A full suite has hundreds of concurrent servers. Allow the durable worker to drain
+    // the whole burst, rather than using the single-call stderr helper's 10-second limit.
+    let began = Instant::now();
+    let last = ids.last().unwrap();
+    while get(&server, &client, &format!("/api/notes/{last}"))["note"]["fields"]["scam_probability"]
+        != 0.95
+    {
+        assert!(
+            began.elapsed() < Duration::from_secs(60),
+            "burst did not drain"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(fake.requests().len(), ids.len());
+    for id in ids {
+        assert_eq!(
+            get(&server, &client, &format!("/api/notes/{id}"))["note"]["fields"]["scam_probability"],
+            0.95
+        );
+    }
 }
 
 #[test]

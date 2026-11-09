@@ -1,0 +1,179 @@
+label       = "Email"
+plural      = "Emails"
+description = "One email message, pulled from Gmail."
+icon        = "mail"
+colour      = "red"
+
+field from {
+  kind   = "reference"
+  label  = "From"
+  target = "person"
+}
+
+field from_raw {
+  kind        = "string"
+  label       = "From (as sent)"
+  description = "The sender as the message gave it, such as Alex Example <alex@example.com>."
+}
+
+field to {
+  kind   = "list"
+  items  = "reference"
+  label  = "To"
+  target = "person"
+}
+
+field to_raw {
+  kind        = "list"
+  label       = "To (as sent)"
+  description = "Each recipient as the message gave it."
+  items       = "string"
+}
+
+field cc {
+  kind   = "list"
+  items  = "reference"
+  label  = "Cc"
+  target = "person"
+}
+
+field cc_raw {
+  kind        = "list"
+  label       = "Cc (as sent)"
+  description = "Each copied recipient as the message gave it."
+  items       = "string"
+}
+
+field sent {
+  kind  = "datetime"
+  label = "Sent"
+}
+
+field thread {
+  kind   = "reference"
+  label  = "Thread"
+  target = "email_thread"
+}
+
+field labels {
+  kind     = "list"
+  items    = "taxonomy"
+  label    = "Labels"
+  taxonomy = "gmail_label"
+}
+
+field snippet {
+  kind        = "string"
+  label       = "Snippet"
+  description = "Gmail's short preview of the message."
+}
+
+field body {
+  kind  = "content"
+  label = "Body"
+}
+
+field html {
+  kind        = "asset"
+  label       = "HTML"
+  description = "The message's HTML part, as Gmail sent it."
+}
+
+field attachments {
+  kind  = "list"
+  items = "asset"
+  label = "Attachments"
+}
+
+field processed {
+  kind    = "bool"
+  label   = "Processed"
+  default = false
+}
+
+field gmail_ref {
+  kind        = "string"
+  label       = "Gmail reference"
+  description = "Gmail's id for the message, so it is pulled once."
+  hidden      = true
+}
+
+field inline_images {
+  kind        = "list"
+  items       = "string"
+  label       = "Inline images"
+  description = "Each image part the HTML shows by its Content-ID, as the asset id, a space and the Content-ID, so View original shows it."
+  hidden      = true
+}
+
+field converter {
+  kind        = "int"
+  label       = "Body conversion"
+  description = "The version of the import's conversion that wrote the body: 2 converts the HTML, 1 is an older body kept because it was edited."
+  hidden      = true
+}
+
+field images_pending {
+  kind        = "bool"
+  label       = "Images pending"
+  description = "Some remote images of the body are not downloaded yet; the next Gmail sync fetches them."
+  hidden      = true
+}
+
+field inbox_catch_up {
+  kind        = "string"
+  label       = "Catch-up run"
+  description = "The run of Mark older processed that last set Processed. A write that changes it sends nothing to Gmail."
+  hidden      = true
+}
+
+handler "after_update" {
+  script        = "google_mail"
+  allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings"]
+}
+
+handler "after_delete" {
+  script        = "google_mail"
+  allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_trashed"]
+}
+
+template default {
+  tab "Email" {
+    columns {
+      column {
+        slot "from"
+        slot "processed"
+        slot "to"
+        slot "cc"
+      }
+      column {
+        slot "sent"
+        slot "thread"
+        slot "labels"
+      }
+    }
+    slot "body"
+    slot "attachments"
+  }
+  tab "Original" {
+    slot "html"
+  }
+}
+
+template card {
+  tab "Card" {
+    slot "title"
+    slot "from_raw"
+    slot "processed"
+    slot "sent"
+    slot "snippet"
+  }
+}
+
+list_page {
+  view      = "details"
+  sort      = "sent desc"
+  page_size = 50
+}

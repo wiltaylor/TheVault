@@ -215,10 +215,19 @@ impl Api {
     }
 
     fn notifications(&self) -> Vec<Value> {
+        // These assertions concern Gmail handlers, not the independently shipped classifier's
+        // missing-account warning (the fixture intentionally configures Google only).
         expect(self.req("GET", "/api/notifications").send().unwrap(), 200)["items"]
             .as_array()
             .unwrap()
-            .clone()
+            .iter()
+            .filter(|n| {
+                !n["source"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("classifier_config:"))
+            })
+            .cloned()
+            .collect()
     }
 
     /// Mark every email processed with the inbox's Mark older processed, and let the handlers run.
