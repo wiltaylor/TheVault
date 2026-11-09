@@ -882,6 +882,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
                       >
                         <HistoryIcon />
                       </button>
+                      <SendToAgentButton notes={[n().id]} disabled={busy()} />
                       <button
                         type="button"
                         class="icon-button archive-button"
@@ -1274,7 +1275,6 @@ function NoteAgents(props: { id: string; disabled: boolean }) {
   return (
     <>
       <AgentRobots threads={threads()} />
-      <SendToAgentButton notes={[props.id]} disabled={props.disabled} />
     </>
   );
 }
