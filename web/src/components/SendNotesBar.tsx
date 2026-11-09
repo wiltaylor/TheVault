@@ -51,7 +51,7 @@ export function SelectBox(props: { selection: Selection; id: string; title: stri
 }
 
 /** "Select all on this page", and with notes selected, how many and "Send N notes to agent". */
-export function SendNotesBar(props: { selection: Selection; page: Accessor<readonly string[]> }) {
+export function SendNotesBar(props: { selection: Selection; page: Accessor<readonly string[]>; actions?: import("solid-js").JSX.Element }) {
   const count = () => props.selection.selected().length;
   const all = () => props.page().length > 0 && count() === props.page().length;
   const over = () => count() > MAX_NOTES;
@@ -83,6 +83,7 @@ export function SendNotesBar(props: { selection: Selection; page: Accessor<reado
         <span class="muted send-notes-cap" classList={{ error: over() }} role={over() ? "alert" : undefined}>
           {over() ? `One send takes at most ${MAX_NOTES} notes: select fewer.` : `Up to ${MAX_NOTES} notes at once`}
         </span>
+        {props.actions}
         <button type="button" class="primary send-notes-send" disabled={over()} onClick={() => setSending([...props.selection.selected()])}>
           Send {notesText(count())} to agent
         </button>

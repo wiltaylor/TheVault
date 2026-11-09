@@ -87,6 +87,18 @@ afterEach(() => {
 });
 
 describe("conditional tabs on the note page", () => {
+  it("puts one send-to-agent robot icon beside archive and delete", async () => {
+    const m = mount(TABS, {});
+    const send = await m.findByRole("button", { name: "Send to agent" });
+    expect(m.getAllByRole("button", { name: "Send to agent" })).toHaveLength(1);
+    expect(send).toHaveClass("icon-button");
+    expect(send).toHaveAttribute("title", "Send to agent");
+    expect(send.querySelector("svg.robot-glyph")).not.toBeNull();
+    expect(send.parentElement).toBe(m.getByRole("button", { name: "Archive" }).parentElement);
+    expect(send.parentElement).toBe(m.getByRole("button", { name: "Delete" }).parentElement);
+    fireEvent.click(send);
+    expect(await m.findByRole("dialog")).toHaveTextContent("Send this note to an agent");
+  });
   it("leaves out a tab whose when is false", async () => {
     const m = mount(TABS, { stage: "idea", done: false });
     await waitFor(() => expect(m.tabTitles()).toEqual(["Main", "Details", "Open"]));

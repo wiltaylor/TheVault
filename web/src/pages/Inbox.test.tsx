@@ -16,6 +16,7 @@ vi.mock("../inbox/load", () => ({ loadInbox, countInbox: vi.fn().mockResolvedVal
 vi.mock("@solidjs/router", () => ({ useNavigate: () => vi.fn() }));
 
 const { Inbox } = await import("./Inbox");
+const { api } = await import("../api");
 const { refreshAgents } = await import("../agents");
 const { resetDispatched } = await import("../dispatch");
 const { SOURCES } = await import("../inbox/sources");
@@ -62,6 +63,44 @@ afterEach(() => {
 const rowOf = (title: string) => screen.getByRole("link", { name: title }).closest("li")!;
 
 describe("the Inbox", () => {
+  it("sends a single card through its robot action", async () => {
+    dispatch.mockResolvedValue({ thread: { id: "01NEW" } });
+    render(() => <Inbox />);
+    await screen.findByRole("link", { name: "Roof quote" });
+    const button = within(rowOf("Roof quote")).getByRole("button", { name: "Send to agent" });
+    expect(button.querySelector("svg.robot-glyph")).not.toBeNull();
+    fireEvent.click(button);
+    fireEvent.input(screen.getByRole("textbox"), { target: { value: "File it" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByRole("status");
+    expect(dispatch).toHaveBeenCalledWith("clerk", ["01JN1"], "File it");
+  });
+
+  it.each(["archive", "delete"] as const)("bulk %s acts on two selected cards only", async (action) => {
+    loadInbox.mockResolvedValue({ items: items.map((i) => ({ ...i, source: SOURCES.find((s) => s.key === "messages")! })), total: 3 });
+    vi.spyOn(api, "note").mockImplementation(async (id) => ({ id, version: "v1", note: { fields: {}, blocks: [] } }) as Awaited<ReturnType<typeof api.note>>);
+    const archive = vi.spyOn(api, "archiveNote").mockResolvedValue({} as Awaited<ReturnType<typeof api.note>>);
+    const remove = vi.spyOn(api, "deleteNote").mockResolvedValue(undefined);
+    render(() => <Inbox />);
+    await screen.findByRole("link", { name: "Roof quote" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Roof quote" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Gutter invoice" }));
+    fireEvent.click(screen.getByRole("button", { name: action === "archive" ? "Archive selected" : "Delete selected" }));
+    const called = action === "archive" ? archive : remove;
+    await waitFor(() => expect(called).toHaveBeenCalledTimes(2));
+    expect(called).toHaveBeenNthCalledWith(1, "01JN1", "v1");
+    expect(called).toHaveBeenNthCalledWith(2, "01JN2", "v1");
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Roof quote" })).toBeNull());
+    expect(screen.getByRole("link", { name: "Tiles" })).toBeInTheDocument();
+  });
+
+  it("keeps bulk delete unavailable when mail is selected", async () => {
+    render(() => <Inbox />);
+    await screen.findByRole("link", { name: "Roof quote" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
+    expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Archive selected" })).toBeEnabled();
+  });
   it("shows each row's robots from one read for the page", async () => {
     render(() => <Inbox />);
     await screen.findByRole("link", { name: "Roof quote" });
