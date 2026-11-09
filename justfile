@@ -191,7 +191,7 @@ aur-release: (require-tool "makepkg") (require-tool "jq")
 [group('android')]
 android-build target='aarch64': (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
 	# Debug symbols make the APK about 500 MB; leave them out unless CARGO_PROFILE_DEV_DEBUG/STRIP say otherwise.
-	cd apps/android && CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}" CARGO_PROFILE_DEV_STRIP="${CARGO_PROFILE_DEV_STRIP:-symbols}" GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target {{target}}
+	cd apps/android && env -u CARGO_TARGET_DIR CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}" CARGO_PROFILE_DEV_STRIP="${CARGO_PROFILE_DEV_STRIP:-symbols}" GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target {{target}}
 
 # Run docs/android-manual-checks.md on a headless Android 15 emulator, and write the results to .scratch/emulator/RESULTS.generated.md; THEVAULT_APK tests another APK, a release APK too (its package id comes from the APK)
 [group('android')]
@@ -320,6 +320,8 @@ android-test: (require-tool "java") android-build
 	cargo build -p server --bin vault-server
 	export VAULT_SERVER_BIN="$server_target/debug/vault-server"
 	cd apps/android/src-tauri
+	# Tauri generates source-tree files: its output must stay checkout-local.
+	unset CARGO_TARGET_DIR
 	app_target=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
 	cargo test -p tauri-plugin-vault-device -p thevault-android
 	cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib

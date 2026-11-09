@@ -26,16 +26,18 @@ A card is ready for review when each recipe it needs exits 0.
 Terrarium sets `CARGO_TARGET_DIR=/src/terrarium/thevault/<agent>/target` on
 thevault-dev. This is outside the clean checkout and survives repeated checkouts
 for that worker. Keep it set for `just validate` and `just validate-android`.
-Android tests resolve the server and host plugin paths through `cargo metadata`,
-so both the configured output directory and Cargo's checkout-local defaults work.
+Android tests resolve the server and host plugin paths through `cargo metadata`.
+The server uses the configured output directory. Tauri app lint and Android build,
+lint and test commands unset `CARGO_TARGET_DIR` to keep path-sensitive generated
+output in each checkout's app workspace. Only root-workspace output is reused.
 `./dev` does not set this variable and keeps Cargo's default output directories.
 
 Only one build or validation may write a worker's cache at a time. Never point
 two agents at one writable target directory. Cargo separates host and Android
 target-triple output and tracks each workspace's packages and dependencies.
 Do not copy `apps/android/src-tauri/target` between checkout paths: Tauri build
-scripts generate files in the source tree. Use a stable checkout path when
-recreating a worker's clean checkout so those generated paths remain valid.
+scripts generate files in the source tree. Never override the app isolation with
+a shared Cargo configuration target-dir either.
 Keep `CARGO_BUILD_JOBS=8` or lower and run under `ionice -c3 nice -n19`.
 The cache belongs to the worker and can be removed with that worker's leftovers.
 

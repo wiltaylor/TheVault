@@ -36,7 +36,7 @@ app-fmt-check dir: (require-tool "cargo")
 # Each app's Tauri context embeds web/dist, so clippy needs the web client built
 [private]
 app-lint dir: (require-tool "cargo") web-build
-	cd {{dir}} && cargo clippy --workspace --all-targets -- -D warnings
+	cd {{dir}} && env -u CARGO_TARGET_DIR cargo clippy --workspace --all-targets -- -D warnings
 
 # Fail when a crate's tests/ holds a file its tests/main.rs does not declare: with autotests off, cargo would never build it
 [group('ci')]
