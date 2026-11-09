@@ -48,6 +48,7 @@ import { noteIdOf, retryGesture } from "./gesture.mjs";
 import { contactDiagnostic } from "./contact-diagnostic.mjs";
 import { logcatSinceArgs } from "./logcat.mjs";
 import { qrPng } from "./qr.mjs";
+import { ownedEmulatorGone, recoverReboot } from "./reboot.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -248,10 +249,31 @@ async function root() {
 }
 
 async function reboot() {
-  adbTry("reboot");
+  adb("reboot");
   await sleep(5_000);
-  await L.waitForDevice("adb reboot");
-  await until("boot", () => shellTry("getprop sys.boot_completed").trim() === "1", { timeout: 300_000, every: 1_000 });
+  await recoverReboot({
+    wait: async () => {
+      await L.waitForDevice("adb reboot");
+      await until("boot", () => shellTry("getprop sys.boot_completed").trim() === "1", { timeout: 300_000, every: 1_000 });
+    },
+    gone: () => {
+      const owner = join(repo, process.env.THEVAULT_EMULATOR_LOGS ?? "target/android-emulator", "owner.json");
+      const record = existsSync(owner) ? JSON.parse(readFileSync(owner, "utf8")) : null;
+      return ownedEmulatorGone(record, {
+        serial: process.env.ANDROID_SERIAL,
+        avd: process.env.THEVAULT_AVD ?? "thevault-api35",
+        home: process.env.ANDROID_AVD_HOME ?? `${process.env.HOME}/.android/avd`,
+      });
+    },
+    restart: async () => {
+      // Preserve the crash log before boot.sh opens emulator.log for the new process.
+      const dir = join(repo, process.env.THEVAULT_EMULATOR_LOGS ?? "target/android-emulator");
+      if (existsSync(join(dir, "emulator.log"))) copyFileSync(join(dir, "emulator.log"), join(logs, `emulator-before-recovery-${Date.now()}.log`));
+      execFileSync("bash", [join(repo, "apps/android/emulator/boot.sh"), "-writable-system"], {
+        cwd: repo, env: process.env, stdio: "inherit", timeout: 720_000,
+      });
+    },
+  });
   shellTry("input keyevent KEYCODE_WAKEUP");
   shellTry("wm dismiss-keyguard");
   await sleep(3_000);
