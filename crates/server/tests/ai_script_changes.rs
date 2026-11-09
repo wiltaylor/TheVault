@@ -24,6 +24,42 @@ const MODEL: &str = "claude-opus-5";
 const PHONE_FILE: &str = "handler \"sms_received\" {\n script = \"phone_test\"\n function = \"run\"\n}\n";
 
 #[test]
+fn device_file_thread_apply_uses_stored_body_and_sensitive_code_requires_session() {
+    for sensitive in [false, true] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.put_text("/api/device-files/android", "");
+        api.put_text("/api/agents/keeper", KEEPER);
+        let source = format!("fn run(event: Value) -> Result[(), string] {{\n Ok(())\n}}\n{}", if sensitive { "// contacts_upsert\n" } else { "" });
+        fake.push(AnthropicMessage::new().tool_use("phone_bundle", "propose_device_file_change", json!({"platform": "android", "wcl": PHONE_FILE, "scripts": [{"name": "phone_test", "source": source}]})));
+        fake.push(AnthropicMessage::text("Waiting for Apply."));
+        api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
+        api.advance("PT1S");
+        let threads = api.threads("keeper");
+        assert_eq!(threads[0]["pending"], 1, "{threads:?}");
+        let thread = threads[0]["id"].as_str().unwrap();
+        let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+        let p = read["proposals"][0]["data"].clone();
+        let write = api.token_of("bundle_phone", "write");
+        let mut forged = p.clone();
+        forged["after"] = json!("not WCL");
+        let (status, body) = api.apply_as(&write, &forged);
+        if sensitive {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+            assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
+            let login = api.client.post(api.server.url("/api/login")).json(&json!({"password": PASSWORD})).send().unwrap();
+            assert_eq!(login.status(), StatusCode::OK);
+            let cookie = login.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap();
+            let res = api.client.post(api.server.url("/api/ai/apply")).header("cookie", cookie).json(&p).send().unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "{}", res.text().unwrap());
+        } else {
+            assert_eq!(status, StatusCode::OK, "{body}");
+        }
+        assert_eq!(api.script("phone_test").as_deref(), Some(source.as_str()));
+    }
+}
+
+#[test]
 fn device_file_bundle_is_checked_atomic_and_stale() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

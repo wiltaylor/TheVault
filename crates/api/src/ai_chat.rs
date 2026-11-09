@@ -4808,6 +4808,7 @@ mod tests {
         let direct = Direct::of(confirm_of(&all_off), Scope::Admin);
         assert!(direct.covers("tool_proposal", &json!({})));
         assert!(!direct.covers("script_proposal", &json!({ "op": "change" })));
+        assert!(!direct.covers("device_file_proposal", &json!({})));
         assert!(!direct.covers("script_proposal", &json!({ "op": "delete" })));
         assert!(!direct.covers("task_proposal", &json!({ "op": "create" })));
         assert!(!direct.covers("task_proposal", &json!({ "op": "delete" })));
@@ -4836,6 +4837,8 @@ mod tests {
         };
         let chat = names(None);
         let trigger = names(Some(direct));
+        assert!(chat.iter().any(|n| n == "propose_device_file_change"));
+        assert!(!trigger.iter().any(|n| n == "propose_device_file_change"));
         for n in crate::ai_task_changes::PROPOSE_TOOLS {
             assert!(chat.iter().any(|m| m == n), "{n} in a chat");
             assert!(

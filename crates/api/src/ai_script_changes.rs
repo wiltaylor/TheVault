@@ -166,7 +166,7 @@ type Capability = (
     &'static [&'static str],
 );
 
-const CAPABILITIES: [Capability; 6] = [
+const CAPABILITIES: [Capability; 7] = [
     ("sms_send", "Send SMS", &["sms_send"], &[]),
     (
         "sms_read",
@@ -175,6 +175,7 @@ const CAPABILITIES: [Capability; 6] = [
         &[],
     ),
     ("calls_read", "Read calls", &["calls_list"], &[]),
+    ("contacts_read", "Read contacts", &["contacts_list", "contacts_get"], &[]),
     (
         "contacts_write",
         "Add or delete contacts",

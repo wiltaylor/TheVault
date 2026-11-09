@@ -74,11 +74,11 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
             .ok_or_else(|| invalid(format!("there is no script {name:?}")))?;
         let changing = current.as_deref() != Some(source);
         if changing {
-            for why in [
+            if let Some(why) = [
                 scripts::shared_paths_refused(w, &name, None),
                 scripts::sms_send_refused(&name, current.as_deref(), source),
                 scripts::device_command_refused(&name, current.as_deref(), source),
-            ].into_iter().flatten() {
+            ].into_iter().flatten().next() {
                 return Err(ApplyError::Refused(why));
             }
         }

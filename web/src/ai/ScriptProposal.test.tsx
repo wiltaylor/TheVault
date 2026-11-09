@@ -96,6 +96,38 @@ afterEach(() => {
 });
 
 describe("script proposals", () => {
+  it("shows and applies an atomic Android device file proposal", async () => {
+    aiApply.mockResolvedValue({ op: "device_file_change", platform: "android" });
+    const m = render(() => <ChatPanel />);
+    await ask(m);
+    const proposal = {
+      id: "phone_bundle", kind: "device_file", platform: "android", before: "", after: "handler sms_received {}",
+      requires_admin: true, proposer: "assistant", devices: [{ id: "phone", name: "My phone", settings: '{"commands":["send_sms"]}', health: null }],
+      snapshots: [{ ...CHANGE, device: { note: "Runs on your phone at its next sync, with no further prompt there.", platforms: ["android"], devices: [], can: [{ key: "sms_read", label: "Read all SMS, including codes", new: true }] } }],
+    };
+    live!.onEvent({ event: "device_file_proposal", data: proposal });
+    live!.end();
+    const card = await waitFor(() => m.getByRole("region", { name: "Proposed Android device file" }));
+    expect(card.textContent).toContain("signed-in admin");
+    expect(card.textContent).toContain("My phone");
+    expect(card.textContent).toContain("send_sms");
+    expect(card.textContent).toContain("New: Read all SMS");
+    fireEvent.click(within(card).getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(aiApply).toHaveBeenCalledWith(proposal));
+    await waitFor(() => expect(card.textContent).toContain("Applied."));
+  });
+
+  it("discards a device file proposal without writing", async () => {
+    const m = render(() => <ChatPanel />);
+    await ask(m);
+    live!.onEvent({ event: "device_file_proposal", data: { id: "discard_phone", kind: "device_file", platform: "android", before: "", after: "", snapshots: [], devices: [], requires_admin: false } });
+    live!.end();
+    const card = await waitFor(() => m.getByRole("region", { name: "Proposed Android device file" }));
+    fireEvent.click(within(card).getByRole("button", { name: "Discard" }));
+    expect(card.textContent).toContain("Discarded.");
+    expect(aiApply).not.toHaveBeenCalled();
+  });
+
   it("shows the diff, what runs the script with its grants and the any-host warning, and applies it", async () => {
     aiApply.mockResolvedValue({ op: "script_change", script_name: "stamp" });
     const m = render(() => <ChatPanel noteId={() => ""} />);
