@@ -26,7 +26,7 @@ futures-util = { workspace = true, features = ["std"] }
 embedded.workspace = true
 tempfile.workspace = true
 testkit.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
