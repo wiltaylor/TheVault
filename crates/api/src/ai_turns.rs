@@ -617,7 +617,8 @@ pub async fn apply(
     }
     let w = a.writer.clone();
     tokio::task::spawn_blocking(move || {
-        apply_as_agent(&w, author, event, &change, scope.allows(Scope::Admin))
+        let signed_in_admin = scope.allows(Scope::Admin) && matches!(author, Author::Session(_));
+        apply_as_agent(&w, author, event, &change, signed_in_admin)
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
