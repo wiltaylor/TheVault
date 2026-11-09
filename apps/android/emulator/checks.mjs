@@ -45,6 +45,7 @@ import * as L from "./lib.mjs";
 import { noteIdOf, retryGesture } from "./gesture.mjs";
 import { logcatSinceArgs } from "./logcat.mjs";
 import { qrPng } from "./qr.mjs";
+import { classifierNotes, classifierSynced, assertClassifierView } from "./classifier.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -832,6 +833,23 @@ async function main() {
     }, { timeout: 30_000 });
     const chooser = L.find(/ntfy/i);
     return ["pass", `One distributor (ntfy) is installed, so Android asked nothing${chooser ? " (a chooser was on screen)" : ""}. GET /api/devices shows push: ${dev.push} for ${dev.name}; ntfy endpoint on ${ntfyUrl}.`, [snap("16-after-open")]];
+  });
+
+  await check(58, async () => {
+    const evidence = [];
+    const synced = [];
+    for (const { type, fields } of classifierNotes) {
+      const created = await createNote(type, fields);
+      await foreground();
+      await until(`the ${type} classifier fields in the phone vault`, async () =>
+        classifierSynced(await local("GET", `/api/notes/${created.id}`), fields), { timeout: 60_000 });
+      const p = await page();
+      await p.goto(`http://vault.localhost/notes/${created.id}`);
+      await assertClassifierView(p, fields);
+      evidence.push(snap(`58-${type}-classifier`));
+      synced.push(`${type} ${created.id}: scam_probability=${fields.scam_probability}, communication_category=${fields.communication_category}`);
+    }
+    return ["pass", `Set directly on the home server without a model key; phone-local API and visible default template controls match: ${synced.join("; ")}.`, evidence];
   });
 
   // 7. A note created on the server reaches the app.
@@ -1664,6 +1682,17 @@ function writeReport() {
   for (const r of Object.values(results)) counts[r.status] = (counts[r.status] ?? 0) + 1;
   lines.push("", `Totals: ${Object.entries(counts).map(([k, v]) => `${labels[k] ?? k} ${v}`).join(", ")}.`, "");
   writeFileSync(join(out, "RESULTS.generated.md"), lines.join("\n"));
+  // Standard test evidence for `terrarium test push`, alongside the detailed JSON and shots.
+  const cases = Object.entries(TITLES).filter(([n]) => !only || only.has(Number(n)));
+  const tap = ["TAP version 13", `1..${cases.length}`];
+  for (const [i, [n, title]] of cases.entries()) {
+    const r = results[n];
+    const skip = r && ["na", "partial"].includes(r.status) ? ` # SKIP ${r.status}` : "";
+    const ok = r && r.status !== "fail";
+    tap.push(`${ok ? "ok" : "not ok"} ${i + 1} - Check ${n}: ${title.doing.replace(/[\r\n#]/g, " ")}${skip}`);
+    tap.push(`# ${(r?.note ?? "The run stopped before this check.").replace(/[\r\n]/g, " ")}`);
+  }
+  writeFileSync(join(out, "results.tap"), `${tap.join("\n")}\n`);
 }
 
 // Playwright's adb connection emits an unhandled error when adb restarts (a reboot, adb root);
