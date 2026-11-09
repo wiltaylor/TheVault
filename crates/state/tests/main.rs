@@ -4,6 +4,7 @@
 
 mod activity;
 mod changes;
+mod classifiers;
 mod commands;
 mod devices;
 mod gitsync;

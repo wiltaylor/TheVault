@@ -36,7 +36,7 @@ fn send(rb: RequestBuilder, status: u16) -> Value {
 }
 
 /// A paired phone: its id, its token, and the WebPush keys it decrypts with.
-struct Phone {
+pub(super) struct Phone {
     id: String,
     token: String,
     secret: SecretKey,
@@ -44,7 +44,7 @@ struct Phone {
 }
 
 impl Phone {
-    fn pair(server: &TestServer, name: &str, seed: u8) -> Phone {
+    pub(super) fn pair(server: &TestServer, name: &str, seed: u8) -> Phone {
         let out = send(
             Client::new()
                 .post(server.url("/api/devices/pair"))
@@ -59,7 +59,7 @@ impl Phone {
         }
     }
 
-    fn register(&self, server: &TestServer, endpoint: &str) {
+    pub(super) fn register(&self, server: &TestServer, endpoint: &str) {
         let p256dh = URL_SAFE_NO_PAD.encode(self.secret.public_key().to_encoded_point(false));
         let out = send(
             client(&self.token)
@@ -74,7 +74,7 @@ impl Phone {
         assert_eq!(out["push"], true);
     }
 
-    fn open(&self, body: &[u8]) -> Value {
+    pub(super) fn open(&self, body: &[u8]) -> Value {
         let plain = push::webpush::decrypt(&self.secret, &self.auth, body)
             .expect("the message decrypts with the device's keys");
         serde_json::from_slice(&plain).unwrap()

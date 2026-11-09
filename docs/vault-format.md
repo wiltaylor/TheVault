@@ -2861,15 +2861,43 @@ The notification links to the note, has source
 `classifier:<name>`, and uses the normal notification/push path.
 
 A committed create queues one attempt per matching classifier, in file-name order.
-HTTP runs outside the writer lock. All answers are checked before one optimistic
-note update. Invalid answers, invalid field values and concurrent edits leave that
+HTTP runs outside the writer lock. All answers are checked before one field-level optimistic
+note update under the writer lock. Unrelated edits are preserved. Invalid answers,
+invalid field values and edits to any target field since the create snapshot leave that
 classifier's fields unchanged. Each HTTP attempt leaves a sanitized AI trail line
 with classifier and note identifiers, never state text or credentials. Notification
 failure leaves the successful classification in place and logs a separate diagnostic.
-Updates, trash restores and restarts never reclassify. Failed attempts are not retried.
-Invalid definitions are logged once per file content until changed or the server restarts. The in-memory
-queue holds 256 creates: overflow is logged and skipped, and a server stop loses
-queued work. The classifier has no tools and treats note text only as untrusted state.
+Updates and trash restores never reclassify. Failed attempts are not retried.
+Invalid definitions are logged once per file content until changed or the server restarts.
+Committed create snapshots wait in `state.db`, without a 256-note burst limit. Restarts
+resume pending work, not a scan of existing notes. Each snapshot is removed before dispatch:
+a stop during a call can lose that in-flight attempt, but never replays it. A failure to
+persist pending work logs the affected note ids. Note commit and pending insertion are
+separate, so a crash between them can still lose dispatch. The classifier has no tools
+and treats note text only as untrusted state. Text can influence answer values. A low
+probability is not proof of safety.
+
+### Shipped scam classifier
+
+`classifiers/scam.wcl` runs on incoming `message` notes and `email` notes without
+`system/SENT` or `system/DRAFT` labels. It uses `typesafe/jev-1.13` through the default
+AI account. Set that account to OpenRouter in Settings > AI, or add `account` to the
+classifier to select your OpenRouter account. No key belongs in a classifier file.
+The input includes title, sender and recipients as written, snippet and body.
+
+Both shipped types gain optional `scam_probability` (float, probability of scam or
+phishing from 0 to 1) and `communication_category` (select: `scam`, `spam`, `marketing`,
+`personal`, `transactional`, `other`). Missing means unclassified. The label is the
+category field, not a Gmail label. At `scam_probability >= 0.8`, a successful write
+sends a notification through the normal encrypted phone-push path. Its static title is
+"Possible scam or phishing", with a note link and no message text in the push.
+
+Triage must skip and leave unprocessed notes at that threshold or with category `scam`,
+and mention skipped notes in its summary. A lower probability or a non-scam category is
+not proof of safety. The live `communications_triage` agent is user-owned, not shipped:
+its instruction change is a separate production handoff. Synthetic fixtures and fake
+answers test wiring and threshold behavior, not model accuracy on real messages.
+These additive fields need no bump beyond format 10 and ship with its compatible apps.
 
 The alpha endpoint returns one JSON document, including over chunked HTTP, not chat
 SSE. Unsupported framing fails without writing fields. The entire wire contract is

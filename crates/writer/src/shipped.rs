@@ -74,7 +74,12 @@ pub struct ShippedFile {
 /// (agents G6), then the built-in `wscript` skill (script-tools T5), then the `vault-queries` skill
 /// (TV-29), the `vault-notes` skill (TV-34), and the `vault-comms` and `vault-automation` skills
 /// (TV-35).
-pub const SHIPPED_FILES: [ShippedFile; 26] = [
+pub const SHIPPED_FILES: [ShippedFile; 27] = [
+    ShippedFile {
+        path: "classifiers/scam.wcl",
+        source: include_str!("../defaults/classifiers/scam.wcl"),
+        hashes: &["7a043583f102f4b0b900ee75c49e8aa4c54c8476a130ccb23c6e60d534f15090"],
+    },
     ShippedFile {
         path: "scripts/device_messages.ws",
         source: include_str!("../defaults/devices/device_messages.ws"),
@@ -304,6 +309,7 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
         hashes: &[
             "39a30bcfd3bd2e8dcaaa140fdee8041f80fc0cee9a9d9c58627906bad2fd4996",
             "adb916f9ad00124a1b30bed9035b4b35dc0b0f4347188b7d31496b8003367424",
+            "ef12c64ead8c0f189719942c5633c09fbbc0cbdc3e271c1e3a55dd8d6a16c0ff",
         ],
     },
     // Tasks, handlers, script tools and which agent tools need which switch (TV-35).
@@ -900,7 +906,7 @@ fn email_template(w: &Writer) -> Result<()> {
         "0011_email_template",
         EMAIL_TYPE,
         EMAIL_TYPE_FF793C6,
-        DEFAULT_EMAIL_TYPE,
+        include_str!("../defaults/old/email_before_scam.wcl"),
     )
 }
 
@@ -2642,10 +2648,13 @@ mod tests {
 
     #[test]
     fn the_shipped_files_are_the_default_device_file_and_scripts_then_the_google_sync() {
-        let mut paths: Vec<String> = crate::DEFAULT_DEVICE_SCRIPTS
-            .iter()
-            .map(|(name, _)| crate::defs::script_path(name))
-            .collect();
+        let mut paths: Vec<String> = vec!["classifiers/scam.wcl".to_owned()];
+        paths.extend(
+            crate::DEFAULT_DEVICE_SCRIPTS
+                .iter()
+                .map(|(name, _)| crate::defs::script_path(name))
+                .collect::<Vec<_>>(),
+        );
         paths.push(crate::device_file_path("android"));
         paths.push("scripts/google_calendar.ws".to_owned());
         paths.push("tasks/google_calendar.wcl".to_owned());

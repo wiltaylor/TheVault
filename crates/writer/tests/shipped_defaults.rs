@@ -885,11 +885,12 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
         generation(root).trim().parse::<u64>().unwrap(),
         before + 4 + 3 + 1
     );
-    // The message and call types 0.1.6 had gain only `processed`.
+    // Message gains classifier fields and processed. Call gains only processed.
     assert!(
-        done.fields_added
-            .iter()
-            .all(|(t, f)| t == "person" || ((t == "message" || t == "call") && f == "processed")),
+        done.fields_added.iter().all(|(t, f)| t == "person"
+            || ((t == "message" || t == "call") && f == "processed")
+            || (t == "message"
+                && matches!(f.as_str(), "scam_probability" | "communication_category"))),
         "{:?}",
         done.fields_added
     );
@@ -1559,12 +1560,16 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
     assert_eq!(
         added,
         [
+            ("email".to_owned(), "communication_category".to_owned()),
             ("email".to_owned(), "converter".to_owned()),
             ("email".to_owned(), "images_pending".to_owned()),
             ("email".to_owned(), "inbox_catch_up".to_owned()),
             ("email".to_owned(), "inline_images".to_owned()),
             ("email".to_owned(), "processed".to_owned()),
-            ("message".to_owned(), "processed".to_owned())
+            ("email".to_owned(), "scam_probability".to_owned()),
+            ("message".to_owned(), "communication_category".to_owned()),
+            ("message".to_owned(), "processed".to_owned()),
+            ("message".to_owned(), "scam_probability".to_owned())
         ]
     );
     // The type is the shipped one, its card included: `processed` sits where the shipped card
@@ -1646,6 +1651,8 @@ fn a_vault_card_template_gains_no_slot_when_the_vault_type_has_no_card() {
     assert_eq!(
         done.fields_added,
         [
+            ("email".to_owned(), "scam_probability".to_owned()),
+            ("email".to_owned(), "communication_category".to_owned()),
             ("email".to_owned(), "processed".to_owned()),
             ("email".to_owned(), "inline_images".to_owned()),
             ("email".to_owned(), "converter".to_owned()),

@@ -11,6 +11,7 @@ mod agent_calls;
 mod agent_runs;
 mod auth;
 mod changes;
+mod classifiers;
 mod commands;
 mod devices;
 mod events;
@@ -163,7 +164,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -601,7 +602,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=17 => {
+        0..=18 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -666,6 +667,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 17 {
                 tx.execute_batch(SCHEMA_V18)?;
+            }
+            if version <= 18 {
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS classifier_pending (id INTEGER PRIMARY KEY, payload TEXT NOT NULL);")?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

@@ -819,13 +819,21 @@ impl Writer {
         &self,
         id: &str,
         answers: &[(String, serde_json::Value)],
-        base: &str,
+        base: &[(String, serde_json::Value)],
         author: &Author,
     ) -> Result<Saved> {
         let _w = self.write_lock();
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
-        self.check_base(id, &type_name, &old, Some(base))?;
+        let mut note = doc_to_json(&Input::Wcl(old.clone()).parse(&note_path(&type_name, id))?);
+        for (field, _) in answers {
+            if !base
+                .iter()
+                .any(|(name, value)| name == field && note["fields"][field] == *value)
+            {
+                return Err(Error::BadRequest("Classifier target changed".into()));
+            }
+        }
         let definition = inner
             .schema
             .type_def(&type_name)
@@ -837,7 +845,6 @@ impl Writer {
                 ));
             }
         }
-        let mut note = doc_to_json(&Input::Wcl(old.clone()).parse(&note_path(&type_name, id))?);
         for (field, value) in answers {
             note["fields"][field] = value.clone();
         }
