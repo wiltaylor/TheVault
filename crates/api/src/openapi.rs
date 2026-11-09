@@ -13,6 +13,11 @@ use crate::required_scope;
 
 /// Every endpoint: method, path and a one-line summary.
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
+    (
+        "POST",
+        "/api/ai/decide",
+        "Tool-free typed decisions from {account?, model?, state, questions}; requires write scope",
+    ),
     ("GET", "/api/health", "Report that the server is up"),
     ("GET", "/api/openapi.json", "This listing of every endpoint"),
     (

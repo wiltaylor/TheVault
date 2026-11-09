@@ -360,6 +360,8 @@ export function AccountForm(props: {
   const [baseUrl, setBaseUrl] = createSignal(props.account?.base_url ?? "");
   const [key, setKey] = createSignal("");
   const [model, setModel] = createSignal(props.account?.model ?? "");
+  const initialDecisionsModel = props.account?.decisions_model ?? "";
+  const [decisionsModel, setDecisionsModel] = createSignal(initialDecisionsModel);
   const [windowText, setWindowText] = createSignal(props.account?.context?.window?.toString() ?? "");
   const [headers, setHeaders] = createSignal<HeaderRow[]>(
     (props.account?.headers ?? []).map(([n, v]) => ({ key: ++headerKeys, name: n, value: v })),
@@ -385,6 +387,7 @@ export function AccountForm(props: {
       name: name().trim(),
       base_url: isChatGpt() ? null : baseUrl().trim() || null,
       model: model().trim() || null,
+      ...(decisionsModel() !== initialDecisionsModel ? { decisions_model: decisionsModel().trim() || null } : {}),
       headers: compatible()
         ? headers()
             .filter((h) => h.name.trim())
@@ -504,6 +507,10 @@ export function AccountForm(props: {
             <div>
               <ModelField id={id("model")} account={editing() ?? null} value={model()} onChange={setModel} />
             </div>
+            <Show when={compatible()}>
+              <label for={id("decisions-model")}>Decisions model</label>
+              <input id={id("decisions-model")} placeholder="typesafe/jev-1.13" value={decisionsModel()} onInput={(e) => setDecisionsModel(e.currentTarget.value)} />
+            </Show>
             <label for={id("window")}>Context window, tokens</label>
             <input
               id={id("window")}

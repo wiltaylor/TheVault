@@ -284,6 +284,7 @@ fn account_json(
         "base_url": a.url(),
         "default_base_url": ai::default_base(a.kind),
         "model": a.model(),
+        "decisions_model": a.decisions_model(),
         "headers": a.headers,
         "context": a.context,
         "default_window": ai::default_window(a.kind),
@@ -409,6 +410,8 @@ pub struct AccountBody {
     base_url: Option<Option<String>>,
     #[serde(default, with = "double_option")]
     model: Option<Option<String>>,
+    #[serde(default, with = "double_option")]
+    decisions_model: Option<Option<String>>,
     #[serde(default)]
     headers: Option<Vec<HeaderPair>>,
     #[serde(default, with = "double_option")]
@@ -444,6 +447,7 @@ impl AccountBody {
                 kind,
                 base_url: text(self.base_url),
                 model: text(self.model),
+                decisions_model: text(self.decisions_model),
                 headers: self.headers,
                 context: self.context,
             },

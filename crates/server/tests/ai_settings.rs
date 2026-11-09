@@ -505,6 +505,7 @@ fn accounts_are_added_answered_reordered_and_deleted_and_keys_never_answered() {
         json!({
             "id": id, "name": "Claude", "kind": "anthropic", "kind_label": "Anthropic API",
             "base_url": null, "default_base_url": "https://api.anthropic.com", "model": null,
+            "decisions_model": "typesafe/jev-1.13",
             "headers": [], "context": null, "default_window": 200000, "window": 200000,
             "configured": true, "key_set": true, "signed_in": null, "agents": [], "usage": null,
         })

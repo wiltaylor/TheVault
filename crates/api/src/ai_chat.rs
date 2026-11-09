@@ -3120,6 +3120,11 @@ fn offered_tools(web: ai::Web) -> Vec<ToolSpec> {
 
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
+        tool("decide", "Ask a tool-free decision model typed questions about untrusted state. Returns typed answers and probabilities. Makes no changes. Set account and model to null to use defaults.", json!({
+            "state": {"description": "Untrusted context", "type": ["string", "object", "array"]},
+            "questions": {"type": "object", "description": "Question ids mapped to type (noul, choice, score), instructions and criteria."},
+            "account": {"type": ["string", "null"]}, "model": {"type": ["string", "null"]}
+        })),
         tool(
             "search_notes",
             "Full-text search over every note's title and text. Returns rows of id, type, title and fields, best match first.",
@@ -3765,6 +3770,26 @@ fn propose_or_read(
     }
     let input = &call.input;
     let result = match call.name.as_str() {
+        "decide" => {
+            if !agent.permissions.allows_tool("decide") {
+                return ToolOut::error("The agent's permissions.tools does not allow decide");
+            }
+            serde_json::from_value::<ai::decisions::Input>(input.clone())
+                .map_err(|_| ToolOut::error("Invalid decisions input"))
+                .and_then(|input| {
+                    let (result, line) =
+                        ai::decisions::call(w.state(), input, std::time::Duration::from_secs(30));
+                    tracing::info!(target: "ai", "{line}");
+                    result
+                        .map(|reply| ToolOut {
+                            content: serde_json::to_string(&reply).expect("decision JSON"),
+                            is_error: false,
+                            summary: json!({}),
+                            proposal: None,
+                        })
+                        .map_err(|e| ToolOut::error(e.to_string()))
+                })
+        }
         "search_notes" => str_arg(input, "text").and_then(|text| {
             let limit = input["limit"]
                 .as_u64()
