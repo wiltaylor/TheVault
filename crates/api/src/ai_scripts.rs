@@ -514,6 +514,9 @@ pub(crate) fn propose_change(
         .to_string();
         o
     })?;
+    if let Some(why) = state::proposed_secrets_refused(&tool.secrets) {
+        return Err(ToolOut::error(why));
+    }
     let before = w.read_tool(name).ok();
     let script_before = w.read_script(&tool.script).ok();
     let script_after = script_after.filter(|s| Some(*s) != script_before.as_deref());
@@ -660,7 +663,7 @@ pub(crate) fn propose_delete(
 /// writer's lock, with the write. Any of them changed since the card is 409 `stale`, and nothing is
 /// written: the tool's problems are compared with the card's, since a tool with problems is saved
 /// and not offered.
-pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
+pub(crate) fn apply_tool(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -723,6 +726,11 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(ApplyError::Refused(why));
         }
         // The compile check again, as the card showed it.
+        let tool =
+            ScriptTool::parse(name, after).map_err(|e| ApplyError::Invalid(e.to_string()))?;
+        if let Some(why) = state::proposed_secrets_refused(&tool.secrets) {
+            return Err(ApplyError::Refused(why));
+        }
         let checked = check_vault(w, h.as_deref(), name, after, script_after);
         if json!(checked.problems) != p["problems"] {
             return Err(stale(format!("the problems of the tool {name}")));
@@ -731,6 +739,9 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             return Err(runs_stale());
         }
         let (_, _, changes) = w.put_tool_changes(name, after, script_after, name_issues)?;
+        if let (Some(_), Some(s)) = (script_after, script) {
+            crate::ai_script_changes::require_phone_script_admin(w, s, script_after, admin)?;
+        }
         Ok(changes)
     })?;
     let op = if p["before"].is_string() {

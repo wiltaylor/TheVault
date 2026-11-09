@@ -990,6 +990,50 @@ fn run(params: Value) -> Result[Value, string] {
 }
 
 #[test]
+fn internal_secrets_are_refused_in_tool_proposals_and_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let events = api.one(
+        &fake,
+        None,
+        "propose_tool_change",
+        json!({"name": "greet", "wcl": GREET, "script_source": GREET_SCRIPT}),
+    );
+    let p = find(&events, "tool_proposal").unwrap().clone();
+    for name in [
+        "ai_accounts",
+        "ai_account_key_test",
+        "gitsync_token",
+        "brave_settings",
+        "google_refresh_token",
+    ] {
+        let wcl = format!("{GREET}\nsecrets = [\"{name}\"]\n");
+        let events = api.one(
+            &fake,
+            None,
+            "propose_tool_change",
+            json!({"name": "greet", "wcl": wcl, "script_source": GREET_SCRIPT}),
+        );
+        assert!(find(&events, "tool_proposal").is_none());
+        let (err, got) = last_result(&fake);
+        assert!(
+            err && got.to_string().contains("reserved for the server"),
+            "{got}"
+        );
+        let mut old = p.clone();
+        old["after"] = json!(wcl);
+        let (status, body) = api.apply_as(&api.token(), &old);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(
+            body.to_string().contains("reserved for the server"),
+            "{body}"
+        );
+    }
+    let (status, _) = api.send(reqwest::Method::GET, "/api/tools/greet", &api.token(), None);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[test]
 fn tool_changes_are_proposed_or_made_by_the_switch_and_admin_scope() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

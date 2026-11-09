@@ -403,11 +403,46 @@ pub(crate) fn on_phone(
         })
         .collect();
     Ok(Some(json!({
-        "note": PHONE_NOTE,
+        "note": if sensitive_phone_source(before, Some(after)) {
+            format!("{PHONE_NOTE} {PHONE_ADMIN_MESSAGE}")
+        } else {
+            PHONE_NOTE.to_owned()
+        },
         "platforms": platforms,
         "devices": devices,
         "can": can,
     })))
+}
+
+pub(crate) const PHONE_ADMIN_MESSAGE: &str = "A signed-in admin must apply this change because the current or proposed phone code contains SMS send or contact writes. A write token cannot apply it.";
+
+// Count bare names too, including imports, aliases, interpolation and comments. False positives
+// need an admin, rather than letting a different spelling hide a sensitive call.
+fn sensitive_phone_source(before: Option<&str>, after: Option<&str>) -> bool {
+    [before, after].into_iter().flatten().any(|source| {
+        words(source)
+            .iter()
+            .any(|word| matches!(*word, "sms_send" | "contacts_upsert" | "contacts_delete"))
+    })
+}
+
+/// Call under `commit_checked` for every proposal path that writes a script. Read the actual
+/// current script and device references, not the untrusted proposal's warning or before fields.
+pub(crate) fn require_phone_script_admin(
+    w: &Writer,
+    name: &str,
+    after: Option<&str>,
+    admin: bool,
+) -> Result<(), ApplyError> {
+    if !admin
+        && sensitive_phone_source(w.read_script(name).ok().as_deref(), after)
+        && w.script_runs_as(name, None)?
+            .iter()
+            .any(|u| u.kind == "device")
+    {
+        return Err(ApplyError::Refused(PHONE_ADMIN_MESSAGE.into()));
+    }
+    Ok(())
 }
 
 /// A refusal of a proposal, with the reason as the model reads it.
@@ -605,7 +640,7 @@ pub(crate) fn propose_delete(
 /// written. A delete is refused, 409 `script_in_use`, when something has started to run the script.
 /// A change is refused, 403 `not_permitted`, while a task has `read_paths` or `write_paths` and runs
 /// it (TV-87, as the proposal is).
-pub(crate) fn apply_script(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
+pub(crate) fn apply_script(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| schema::is_name(s))
@@ -623,6 +658,7 @@ pub(crate) fn apply_script(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     };
     let shown = &p["runs_as"];
     w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+        require_phone_script_admin(w, name, after, admin)?;
         if w.read_script(name).ok().as_deref() != before {
             return Err(ApplyError::Stale(format!(
                 "the script {name} changed since the proposal, so nothing was written"

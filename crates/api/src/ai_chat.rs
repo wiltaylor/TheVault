@@ -3639,6 +3639,17 @@ pub fn apply_change(
     event: &str,
     p: &Value,
 ) -> Result<Value, ApplyError> {
+    apply_change_with_admin(w, author, event, p, false)
+}
+
+/// `admin` is the authenticated Apply caller's scope, never the proposal's author or fields.
+pub(crate) fn apply_change_with_admin(
+    w: &Writer,
+    author: &Author,
+    event: &str,
+    p: &Value,
+    admin: bool,
+) -> Result<Value, ApplyError> {
     // A type, taxonomy or agent change is recorded as the author's (activity Y2).
     let _acting = writer::acting_as(author);
     let member = |name: &str| {
@@ -3685,13 +3696,13 @@ pub fn apply_change(
         return crate::ai_skill_changes::apply_skill(w, p);
     }
     if event == "tool_proposal" {
-        return crate::ai_scripts::apply_tool(w, p);
+        return crate::ai_scripts::apply_tool(w, p, admin);
     }
     if event == "script_proposal" {
-        return crate::ai_script_changes::apply_script(w, p);
+        return crate::ai_script_changes::apply_script(w, p, admin);
     }
     if event == "task_proposal" {
-        return crate::ai_task_changes::apply_task(w, p);
+        return crate::ai_task_changes::apply_task(w, p, admin);
     }
     if event != "proposal" {
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
