@@ -520,6 +520,18 @@ pub(crate) fn propose_change(
     let before = w.read_tool(name).ok();
     let script_before = w.read_script(&tool.script).ok();
     let script_after = script_after.filter(|s| Some(*s) != script_before.as_deref());
+    let mut phone = None;
+    if let Some(source) = script_after {
+        if let Some(why) = crate::ai_script_changes::sms_send_refused(
+            &tool.script, script_before.as_deref(), source,
+        ) {
+            return Err(ToolOut::error(why));
+        }
+        let uses = w.script_runs_as(&tool.script, None)
+            .map_err(|e| ToolOut::error(e.to_string()))?;
+        phone = crate::ai_script_changes::on_phone(w, &uses, script_before.as_deref(), source)
+            .map_err(|e| ToolOut::error(e.to_string()))?;
+    }
     if before.as_deref() == Some(after.as_str()) && script_after.is_none() {
         return Ok(out(
             json!({
@@ -558,6 +570,7 @@ pub(crate) fn propose_change(
         "proposed": true,
         "name": name,
         "exists": exists,
+        "device": phone,
         "problems": checked.problems,
         "runs_as": runs_as,
         "warnings": warnings,
@@ -582,6 +595,7 @@ pub(crate) fn propose_change(
         "script_exists": script_before.is_some(),
         "script_before": script_before,
         "script_after": script_after,
+        "device": phone,
         "script_delete": false,
         "problems": checked.problems,
         "runs_as": runs_as,
@@ -708,6 +722,17 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
             return Err(ApplyError::Refused(why));
         }
         // The compile check again, as the card showed it.
+        if let (Some(source), Some(s)) = (script_after, script) {
+            let before = w.read_script(s).ok();
+            if let Some(why) = crate::ai_script_changes::sms_send_refused(s, before.as_deref(), source) {
+                return Err(ApplyError::Refused(why));
+            }
+            let uses = w.script_runs_as(s, None)?;
+            let phone = crate::ai_script_changes::on_phone(w, &uses, before.as_deref(), source)?;
+            if phone.as_ref().unwrap_or(&Value::Null) != &p["device"] {
+                return Err(stale(format!("the phones that run the script {s}, or their switches")));
+            }
+        }
         let tool =
             ScriptTool::parse(name, after).map_err(|e| ApplyError::Invalid(e.to_string()))?;
         if let Some(why) = state::proposed_secrets_refused(&tool.secrets) {
