@@ -265,6 +265,32 @@ fn device_file_bundle_warns_about_sms_reads_and_sensitive_bindings() {
     );
 }
 
+#[test]
+fn device_file_bundle_checks_shared_roles_and_rejects_folder_access() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.seed_users();
+    api.put_text("/api/device-files/android", "");
+    let file = PHONE_FILE.replace("phone_test", "stamp");
+    let source = format!("{STAMP}\n");
+    let input = json!({"platform": "android", "wcl": file, "scripts": [{"name": "stamp", "source": source}]});
+    let events = api.one(&fake, "propose_device_file_change", input.clone());
+    let p = find(&events, "device_file_proposal").unwrap().clone();
+    api.put_text(
+        "/api/tasks/nightly",
+        &format!("{NIGHTLY}read_paths = [\"/srv/in\"]\n"),
+    );
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let events = api.one(&fake, "propose_device_file_change", input);
+    assert!(find(&events, "device_file_proposal").is_none());
+    assert!(last_result(&fake).1.to_string().contains("read_paths"));
+    api.put_text("/api/tasks/nightly", NIGHTLY);
+    let events = api.one(&fake, "propose_device_file_change", json!({"platform": "android", "wcl": file, "scripts": [{"name": "stamp", "source": format!("use device\n{STAMP}")}]}));
+    assert!(find(&events, "device_file_proposal").is_none());
+    assert!(last_result(&fake).1.to_string().contains("compile"));
+}
+
 /// Monday 2026-01-05, half past midnight UTC.
 const START: &str = "2026-01-05T00:30:00Z";
 

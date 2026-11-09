@@ -4,6 +4,16 @@ import { OnPhone } from "./ScriptProposalCard";
 import { DiffLines } from "./ToolProposalCard";
 import { type Part, useChatSession } from "./store";
 
+function commands(settings: string): string {
+  try {
+    const value: unknown = JSON.parse(settings);
+    const list = value && typeof value === "object" && "commands" in value ? value.commands : [];
+    return Array.isArray(list) ? list.filter((v): v is string => typeof v === "string").join(", ") || "none" : "none";
+  } catch {
+    return "not reported";
+  }
+}
+
 export function DeviceFileProposalCard(props: { part: Extract<Part, { kind: "device_file_proposal" }>; turn: number; index: number }) {
   const session = useChatSession();
   const p = () => props.part.proposal;
@@ -14,7 +24,8 @@ export function DeviceFileProposalCard(props: { part: Extract<Part, { kind: "dev
       <p class="muted">{`Proposed by ${p().proposer ?? "agent"}. Runs on your phone at its next sync, with no further prompt there.`}</p>
       <Show when={p().requires_admin}><p role="note">A signed-in admin must apply this change because the current or proposed phone code sends SMS or writes contacts.</p></Show>
       <DiffLines before={p().before} after={p().after} label="devices/android.wcl" />
-      <For each={p().devices}>{(d) => <p class="muted">{`${d.name}: settings ${d.settings}. Permission report: ${d.health ?? "not reported"}`}</p>}</For>
+      <p role="note">Editing a shipped device file or script stops its automatic replacement by future app upgrades. A bell notice reports newer defaults.</p>
+      <For each={p().devices}>{(d) => <p class="muted">{`${d.name}: enabled commands: ${commands(d.settings)}. Permission report: ${d.health ?? "not reported"}`}</p>}</For>
       <For each={p().snapshots}>{(s) => <div>
         <p><code>{`scripts/${s.name}.ws`}</code></p>
         <DiffLines before={s.before} after={s.after} label={s.name} />

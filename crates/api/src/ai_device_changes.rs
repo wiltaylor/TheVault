@@ -93,8 +93,8 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
             .or(current.as_deref())
             .ok_or_else(|| invalid(format!("there is no script {name:?}")))?;
         let changing = current.as_deref() != Some(source);
-        if changing {
-            if let Some(why) = [
+        if changing
+            && let Some(why) = [
                 scripts::shared_paths_refused(w, &name, None),
                 scripts::sms_send_refused(&name, current.as_deref(), source),
                 scripts::device_command_refused(&name, current.as_deref(), source),
@@ -102,9 +102,8 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
             .into_iter()
             .flatten()
             .next()
-            {
-                return Err(ApplyError::Refused(why));
-            }
+        {
+            return Err(ApplyError::Refused(why));
         }
         if file.scripts().contains(&name.as_str()) {
             let problems = w.script_problems_with_device(&name, source, Some(&file))?;
@@ -116,6 +115,9 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
         }
         admin |= scripts::sensitive_phone_source(current.as_deref(), Some(source));
         let uses = w.script_runs_as(&name, None)?;
+        let was_on_android = uses
+            .iter()
+            .any(|u| u.kind == "device" && u.name == "android");
         let (runs_before, _) = scripts::described(&uses);
         let mut proposed: Vec<_> = uses
             .into_iter()
@@ -152,7 +154,16 @@ fn checked(w: &Writer, source: &str, supplied: &Value) -> Result<Value, ApplyErr
             name: "android".into(),
             ..ScriptUse::default()
         });
-        let phone = scripts::on_phone(w, &phones, current.as_deref(), source)?;
+        let phone = scripts::on_phone(
+            w,
+            &phones,
+            if was_on_android {
+                current.as_deref()
+            } else {
+                None
+            },
+            source,
+        )?;
         snapshots.push(json!({"name": name, "before": current, "after": source,
             "runs_before": runs_before, "runs_as": runs_after, "warnings": warnings, "device": phone}));
     }

@@ -2931,6 +2931,12 @@ Skills sync to the apps like agent files, file by file, as change feed entries o
 
 ## Device files
 
+Agents may propose `devices/android.wcl` and its new or changed scripts together with
+`propose_device_file_change`. This is an atomic, checked proposal, never a direct write.
+Apply rechecks compilation, references, phone warnings and staleness. New SMS-send and device-command
+call sites are refused. Sensitive phone code requires a signed-in admin, not an API token.
+See [Agents that propose Android device files](ai-agents.md#agents-that-propose-android-device-files).
+
 `devices/<platform>.wcl` says what a paired device of the platform does with its device events, and which commands it accepts from server scripts (D5, D22). The platform is `linux` or `android`. Device events happen on the device and their handlers run there; note events and scheduled tasks stay on the server. A platform with no file runs no device handlers and accepts no commands.
 
 The file holds `handler` and `command` blocks and nothing else.
