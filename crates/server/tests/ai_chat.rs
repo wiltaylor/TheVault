@@ -43,10 +43,17 @@ struct Api {
 
 impl Api {
     fn start() -> Api {
-        let server = TestServer::start_seeded(|vault| {
-            std::fs::create_dir_all(vault.join("types")).unwrap();
-            std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
-        });
+        Self::start_with_env(&[])
+    }
+
+    fn start_with_env(env: &[(&str, &str)]) -> Api {
+        let server = TestServer::start_with_env(
+            |vault| {
+                std::fs::create_dir_all(vault.join("types")).unwrap();
+                std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
+            },
+            env,
+        );
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -2105,7 +2112,9 @@ fn a_turn_is_read_only_by_its_caller_by_any_number_of_readers() {
 
 #[test]
 fn a_turn_nobody_reads_for_30_seconds_stops_and_asks_the_provider_no_more() {
-    let api = Api::start();
+    // Inject an already-expired initial deadline, not a shorter reader timeout.
+    // The exact 30-second boundary is covered by ai_turns' paused-clock tests.
+    let api = Api::start_with_env(&[("VAULT_TEST_AI_TURN_UNREAD_AGE_MS", "30000")]);
     let fake = FakeAnthropic::start();
     api.anthropic(&fake);
     // Round one's answer is longer than the turn holds unread, so the turn waits for its reader.
@@ -2116,12 +2125,10 @@ fn a_turn_nobody_reads_for_30_seconds_stops_and_asks_the_provider_no_more() {
     ));
     fake.push(AnthropicMessage::text("never"));
     let turn = api.turn(json!([user("Go")]));
-    std::thread::sleep(Duration::from_secs(33));
     assert_eq!(
         api.turn_events(&api.token(), &turn).status(),
         StatusCode::NOT_FOUND
     );
-    std::thread::sleep(Duration::from_secs(1));
     assert_eq!(fake.message_requests().len(), 1);
 }
 
