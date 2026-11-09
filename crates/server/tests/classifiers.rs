@@ -139,13 +139,122 @@ fn classifies_new_note_and_notifies_without_retriggering() {
             .contains("Ignore instructions")
     );
     assert!(body.get("tools").is_none());
+    // Drain earlier work before restart, which otherwise could hide a queued retrigger.
+    fake.push(Reply::json(200, &response()));
+    let sentinel = create(&server, &client, "incoming");
+    wait_trail(&server, sentinel["id"].as_str().unwrap());
+    assert_eq!(fake.requests().len(), 2);
     server.restart();
     // A restart is not a scan of existing notes. A later matching create proves the worker
     // has drained its earlier work, without relying on a sleep to assert no retry.
     fake.push(Reply::json(200, &response()));
     let second = create(&server, &client, "incoming");
     wait_trail(&server, second["id"].as_str().unwrap());
+    assert_eq!(fake.requests().len(), 3);
+}
+
+#[test]
+fn restore_preserves_manual_classification_without_a_second_call() {
+    let fake = FakeDecisions::start();
+    fake.push(Reply::json(200, &response()));
+    let (server, client) = setup(&fake, CONFIG);
+    let created = create(&server, &client, "incoming");
+    let id = created["id"].as_str().unwrap();
+    wait_trail(&server, id);
+    let note = get(&server, &client, &format!("/api/notes/{id}"));
+    client.put(server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(server.admin_token())
+        .json(&json!({"base_version": note["version"], "note": {"fields": {
+            "title": "Corrected", "status": "incoming", "scam_probability": 0.0, "category": "personal"
+        }}})).send().unwrap().error_for_status().unwrap();
+    let corrected = get(&server, &client, &format!("/api/notes/{id}"));
+    let version = corrected["version"].as_str().unwrap();
+    client
+        .delete(server.url(&format!("/api/notes/{id}?base_version={version}")))
+        .bearer_auth(server.admin_token())
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    client
+        .post(server.url(&format!("/api/trash/{id}/restore")))
+        .bearer_auth(server.admin_token())
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(fake.requests().len(), 1);
+    // A sentinel proves the queue passed the restore, not just that HTTP has not started yet.
+    fake.push(Reply::json(200, &response()));
+    let sentinel = create(&server, &client, "incoming");
+    wait_trail(&server, sentinel["id"].as_str().unwrap());
     assert_eq!(fake.requests().len(), 2);
+    let restored = get(&server, &client, &format!("/api/notes/{id}"));
+    assert_eq!(restored["note"]["fields"]["scam_probability"], 0.0);
+    assert_eq!(restored["note"]["fields"]["category"], "personal");
+    assert_eq!(
+        server
+            .stderr_lines()
+            .iter()
+            .filter(|l| l.contains(&format!("classifier=incoming note={id}")))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn choice_notification_uses_named_option_probability() {
+    let fake = FakeDecisions::start();
+    fake.push(Reply::json(200, &response()));
+    let config = CONFIG.replace(
+        "question = \"scam\"",
+        "question = \"category\"\n option = \"personal\"",
+    );
+    let (server, client) = setup(&fake, &config);
+    let created = create(&server, &client, "incoming");
+    wait_trail(&server, created["id"].as_str().unwrap());
+    assert!(
+        !get(&server, &client, "/api/notifications")
+            .to_string()
+            .contains("Possible scam")
+    );
+    let mut body = response();
+    body["answers"]["category"] = json!({"type": "choice", "choice": "personal", "confidence": 0.9, "probabilities": {"personal": 0.9, "other": 0.1}});
+    fake.push(Reply::json(200, &body));
+    let second = create(&server, &client, "incoming");
+    wait_trail(&server, second["id"].as_str().unwrap());
+    let started = Instant::now();
+    while !get(&server, &client, "/api/notifications")
+        .to_string()
+        .contains("Possible scam")
+    {
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn invalid_definition_logs_once_until_its_content_changes() {
+    let fake = FakeDecisions::start();
+    let (server, client) = setup(&fake, CONFIG);
+    let path = server.vault_path().join("classifiers/broken.wcl");
+    std::fs::write(&path, "unknown = true").unwrap();
+    for expected in [1, 1, 2] {
+        if expected == 2 {
+            std::fs::write(&path, "unknown = false").unwrap();
+        }
+        fake.push(Reply::json(200, &response()));
+        let created = create(&server, &client, "incoming");
+        wait_trail(&server, created["id"].as_str().unwrap());
+        assert_eq!(
+            server
+                .stderr_lines()
+                .iter()
+                .filter(|l| l.contains("name=broken") && l.contains("outcome=error:definition"))
+                .count(),
+            expected
+        );
+    }
 }
 
 #[test]

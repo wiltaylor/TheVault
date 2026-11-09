@@ -33,7 +33,7 @@ fn response() -> Value {
         "answers": {
             "scam": {"type": "noul", "noul": 0.99},
             "category": {"type": "choice", "choice": "other", "confidence": 0.9, "probabilities": {"personal": 0.1, "other": 0.9}},
-            "priority": {"type": "score", "score": 0.8, "confidence": 0.8, "probabilities": {"0": 0.2, "1": 0.8}}
+            "priority": {"type": "score", "score": 1, "confidence": 0.8, "probabilities": {"0": 0.2, "1": 0.8}}
         }, "usage": {"input_tokens": 328, "output_tokens": 34}})
 }
 
@@ -142,6 +142,32 @@ fn invalid_request_makes_no_call() {
     );
     assert!(decisions::decide(&credential, &request, Duration::from_secs(2)).is_err());
     assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn score_bounds_and_optional_usage() {
+    for score in [-1.0, 0.0, 0.8, 1.0, 2.0] {
+        let (fake, credential, request) = setup();
+        let mut body = response();
+        body.as_object_mut().unwrap().remove("usage");
+        body["answers"]["priority"]["score"] = json!(score);
+        fake.push(Reply::json(200, &body));
+        let result = decisions::decide(&credential, &request, Duration::from_secs(2));
+        if score == 0.0 || score == 1.0 {
+            let reply = result.unwrap();
+            assert_eq!(reply.usage.input_tokens, 0);
+            assert_eq!(reply.usage.output_tokens, 0);
+            assert_eq!(
+                reply.answers["category"].notify_probability(Some("personal")),
+                Some(0.1)
+            );
+            assert_eq!(reply.answers["category"].notify_probability(None), None);
+            assert_eq!(reply.answers["priority"].notify_probability(None), None);
+        } else {
+            assert_eq!(result.unwrap_err().kind, ErrorKind::Invalid);
+        }
+        assert_eq!(fake.requests().len(), 1);
+    }
 }
 
 #[test]

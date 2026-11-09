@@ -68,11 +68,22 @@ impl Answer {
         }
     }
 
-    /// A notify threshold tests yes probability for noul, confidence for choice/score.
+    /// Yes probability for noul, confidence for choice/score.
     pub fn confidence(&self) -> f64 {
         match self {
             Self::Noul { noul } => *noul,
             Self::Choice { confidence, .. } | Self::Score { confidence, .. } => *confidence,
+        }
+    }
+
+    /// Notify only on a yes probability or a named choice, never on general confidence.
+    pub fn notify_probability(&self, option: Option<&str>) -> Option<f64> {
+        match (self, option) {
+            (Self::Noul { noul }, None) => Some(*noul),
+            (Self::Choice { probabilities, .. }, Some(option)) => {
+                probabilities.get(option).copied()
+            }
+            _ => None,
         }
     }
 }
@@ -82,10 +93,11 @@ pub struct Response {
     pub id: String,
     pub model: String,
     pub answers: BTreeMap<String, Answer>,
+    #[serde(default)]
     pub usage: TokenUsage,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -179,7 +191,7 @@ impl Request {
                             .all(|(k, p)| criteria.contains_key(k) && probability(*p))
                 }
                 (
-                    Question::Score { .. },
+                    Question::Score { criteria, .. },
                     Some(Answer::Score {
                         score,
                         confidence,
@@ -187,6 +199,9 @@ impl Request {
                     }),
                 ) => {
                     score.is_finite()
+                        && score.fract() == 0.0
+                        && *score >= 0.0
+                        && *score < criteria.len() as f64
                         && probability(*confidence)
                         && !probabilities.is_empty()
                         && probabilities.values().all(|p| probability(*p))

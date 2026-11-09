@@ -140,12 +140,6 @@ Android refuses an update whose `versionCode` is lower than the installed app's.
 
 ### Releasing a format change
 
-Classifier files (`classifiers/<name>.wcl`) require vault format 10. Publish app
-builds that support that folder with the server. Older apps stop at the format gate
-before pulling any classifiers and keep their queued writes. When matching builds
-cannot be published with the server, use the apps-first order below. Classifiers
-run only on the home server, never on a phone or desktop's embedded server.
-
 A release that adds an attribute to a type or a field, such as `labels` on a list field, ships type files that an older app has never seen. An app tolerates an attribute it does not know: it ignores it with a warning and keeps loading the type ([Attributes a reader does not know](vault-format.md#attributes-a-reader-does-not-know)). Apps from before that rule, 0.1.6 and earlier, refuse such a type file, and then refuse to open their vault on the next start.
 
 From 0.1.9 the apps update themselves before they sync with a newer server ([The app updates before it syncs](#the-app-updates-before-it-syncs)), so the server goes first:
@@ -158,6 +152,12 @@ Apps before 0.1.10 also refuse an attribute inside a template, which 0.1.10 tole
 Content block kinds are closed, so an app refuses a note holding a block kind it does not know. Apps at 0.1.10 and earlier do not know `toggle` and `admonition` ([toggle](vault-format.md#toggle), [admonition](vault-format.md#admonition)), so a vault whose notes use them needs apps from the release that added them, the first after 0.1.10, or later. Apps from 0.1.9 update themselves before they sync, so the server-first order above brings them up to date before they read such a note. Publish those builds with the server before anyone adds a toggle or a callout.
 
 Skills raised the vault format version to 3 ([Skills](vault-format.md#skills)): the feed carries `skills/` files, binary ones as base64, which an app at format 2 cannot write. Such an app refuses to sync with a server at format 3 and keeps its queued writes until it is updated. Apps from 0.1.9 update themselves first when the new builds are published, so publish them with the server, in the server-first order above.
+
+Classifier files (`classifiers/<name>.wcl`) require vault format 10. Publish app
+builds that support that folder with the server. Apps from 0.1.9 update themselves
+before the format check. Older apps that cannot update stop at the format gate
+before pulling any classifiers and keep their queued writes. Classifiers run only
+on the home server, never on a phone or desktop's embedded server.
 
 When the new builds cannot be published with the server, or a phone runs 0.1.8 or earlier, use the apps-first order instead:
 

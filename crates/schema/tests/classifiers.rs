@@ -28,6 +28,49 @@ fn reads_classifier() {
 }
 
 #[test]
+fn notification_requires_a_probability_not_confidence() {
+    let choice = CONFIG.replace(
+        "type = \"noul\"",
+        "type = \"choice\"\n criteria = { scam: \"Scam\", personal: \"Personal\" }",
+    );
+    assert!(Classifier::parse("incoming", &choice).is_err());
+    let choice = choice.replace("threshold = 0.8", "threshold = 0.8\n option = \"scam\"");
+    assert_eq!(
+        Classifier::parse("incoming", &choice)
+            .unwrap()
+            .notify
+            .unwrap()
+            .option
+            .as_deref(),
+        Some("scam")
+    );
+    assert!(
+        Classifier::parse(
+            "incoming",
+            &choice.replace("option = \"scam\"", "option = \"unknown\"")
+        )
+        .is_err()
+    );
+    assert!(
+        Classifier::parse(
+            "incoming",
+            &CONFIG.replace("threshold = 0.8", "threshold = 0.8\n option = \"scam\"")
+        )
+        .is_err()
+    );
+    assert!(
+        Classifier::parse(
+            "incoming",
+            &CONFIG.replace(
+                "type = \"noul\"",
+                "type = \"score\"\n criteria = [\"Low\", \"High\"]"
+            )
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn rejects_invalid_classifier_definitions() {
     for source in [
         CONFIG.replace("0.8", "1.8"),

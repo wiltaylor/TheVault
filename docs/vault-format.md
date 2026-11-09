@@ -2833,7 +2833,7 @@ notify {
 are nonempty lists of unique names. `where` is an optional query condition evaluated
 against the indexed note before the call. `account` is an optional AI account name,
 otherwise the default. A named account must exist. It must be `openai_compatible`,
-with the OpenRouter base `https://openrouter.ai/api/v1`. Credentials stay in Settings > AI,
+with a base URL ending in `/api/v1`, normally `https://openrouter.ai/api/v1`. Credentials stay in Settings > AI,
 never in the classifier file. `fields` selects only the top-level note fields and named
 content blocks sent as state. A missing content/field name supplies an empty list.
 
@@ -2845,7 +2845,7 @@ may be strings, records or lists. There are at most 64 questions:
 |------|----------|-------------------------|
 | `noul` | optional record with `true` and `false` descriptions | probability of yes, a float from 0 to 1 |
 | `choice` | record of at least two option names and descriptions | selected option name, a string |
-| `score` | list of at least two ordered level descriptions | numeric score |
+| `score` | list of at least two ordered level descriptions | integer level from 0 to the number of criteria minus 1 |
 
 The target fields must already exist with compatible types on each selected note type.
 `box` image-region questions are not supported by note classifiers. Unknown fields,
@@ -2853,8 +2853,11 @@ duplicate fields, unknown blocks and nested blocks are errors, not ignored optio
 
 The optional unlabelled `notify` block names one question, a `threshold` from 0 to 1,
 and a nonempty `title` of at most 200 characters. After a successful field write,
-it notifies when the question's yes probability (`noul`) or confidence (`choice`, `score`)
-is at least the threshold. The notification links to the note, has source
+it notifies when the question's yes probability (`noul`) is at least the threshold.
+For `choice`, `option = "<choice>"` is required and selects that option's probability,
+not the confidence of the winning answer. The option must be a criteria key.
+`noul` forbids `option`, and `score` notifications are unsupported.
+The notification links to the note, has source
 `classifier:<name>`, and uses the normal notification/push path.
 
 A committed create queues one attempt per matching classifier, in file-name order.
@@ -2863,7 +2866,8 @@ note update. Invalid answers, invalid field values and concurrent edits leave th
 classifier's fields unchanged. Each HTTP attempt leaves a sanitized AI trail line
 with classifier and note identifiers, never state text or credentials. Notification
 failure leaves the successful classification in place and logs a separate diagnostic.
-Updates and restarts never reclassify. Failed attempts are not retried. The in-memory
+Updates, trash restores and restarts never reclassify. Failed attempts are not retried.
+Invalid definitions are logged once per file content until changed or the server restarts. The in-memory
 queue holds 256 creates: overflow is logged and skipped, and a server stop loses
 queued work. The classifier has no tools and treats note text only as untrusted state.
 

@@ -314,6 +314,8 @@ pub struct Saved {
     /// For an update of a note whose type has an `after_update` handler, the canonical WCL the
     /// note held before it, so the handler can tell what changed (TV-25). `None` otherwise.
     pub previous: Option<String>,
+    /// A create event that restores an existing note, not a new note.
+    pub restored: bool,
     /// The author of this note's change when it is not the write's, such as a note a `before_*`
     /// handler staged, for the `after_*` handlers' argument (TV-25). `None` is the write's
     /// author. The other hooks hear the write's author, as before.
@@ -948,6 +950,7 @@ impl Writer {
                 version,
                 wcl: old,
                 previous: None,
+                restored: false,
                 author: None,
                 also: Vec::new(),
             });
@@ -1477,6 +1480,7 @@ impl Writer {
                         version,
                         wcl,
                         previous: None,
+                        restored: false,
                         author: None,
                         also: Vec::new(),
                     })
@@ -1588,6 +1592,7 @@ impl Writer {
                             _ => activity::NoteAct::Update,
                         }
                     };
+                    let restored = matches!(act, activity::NoteAct::Restore);
                     acts.push((by.clone(), act, id.clone()));
                     // The version below is not recorded yet, so the head is still the note as it
                     // was before this write, as for the person and Outbox changes above.
@@ -1620,6 +1625,7 @@ impl Writer {
                         version: v.token,
                         wcl: text,
                         previous,
+                        restored,
                         author: (by != author).then(|| by.clone()),
                         also: Vec::new(),
                     });
@@ -1636,6 +1642,7 @@ impl Writer {
                         version: entry.version,
                         wcl: entry.content,
                         previous: None,
+                        restored: false,
                         author: (by != author).then(|| by.clone()),
                         also: Vec::new(),
                     });

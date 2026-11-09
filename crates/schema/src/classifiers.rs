@@ -30,6 +30,7 @@ pub struct ClassifierQuestion {
 #[derive(Debug, Clone)]
 pub struct ClassifierNotify {
     pub question: String,
+    pub option: Option<String>,
     pub threshold: f64,
     pub title: String,
 }
@@ -122,7 +123,7 @@ impl Classifier {
                     if notify.is_some() || !block.labels.is_empty() {
                         return Err("Use at most one unlabelled notify block".into());
                     }
-                    check_fields(&block.body, &["question", "threshold", "title"])?;
+                    check_fields(&block.body, &["question", "option", "threshold", "title"])?;
                     let threshold = block
                         .body
                         .field("threshold")
@@ -135,6 +136,7 @@ impl Classifier {
                     }
                     notify = Some(ClassifierNotify {
                         question: text(&block.body, "question")?,
+                        option: optional_text(&block.body, "option")?,
                         threshold,
                         title,
                     });
@@ -145,11 +147,25 @@ impl Classifier {
         if questions.is_empty() || questions.len() > 64 {
             return Err("Use 1 to 64 questions".into());
         }
-        if notify
-            .as_ref()
-            .is_some_and(|n| !names.contains(&n.question))
-        {
-            return Err("Notify names an unknown question".into());
+        if let Some(rule) = &notify {
+            let question = questions
+                .iter()
+                .find(|q| q.name == rule.question)
+                .ok_or("Notify names an unknown question")?;
+            let valid = match question.kind.as_str() {
+                "noul" => rule.option.is_none(),
+                "choice" => rule.option.as_ref().is_some_and(|o| {
+                    question
+                        .criteria
+                        .as_ref()
+                        .and_then(Json::as_object)
+                        .is_some_and(|c| c.contains_key(o))
+                }),
+                _ => false,
+            };
+            if !valid {
+                return Err("Notify requires noul without option, or choice with a valid option; score is not supported".into());
+            }
         }
         Ok(Self {
             name: name.into(),

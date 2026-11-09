@@ -1,6 +1,7 @@
 //! Home-server-only, one-shot classification after a committed create. Never called by an app.
 //! The hook only queues snapshots. The worker reads definitions and calls HTTP outside locks.
 
+use std::collections::HashMap;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -8,6 +9,7 @@ use ai::{Accounts, AiError, Credentials, ErrorKind, decisions};
 use query::{BinOp, Expr, From, Lit, PageRequest, Query};
 use schema::{Classifier, Doc, Schema};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use state::Author;
 use writer::{Event, Hooks, Migration, NoteChange, Saved, ScriptRole, Writer};
 
@@ -35,11 +37,12 @@ impl Binding {
         std::thread::Builder::new()
             .name("classifiers".into())
             .spawn(move || {
+                let mut invalid = HashMap::new();
                 while let Ok(saved) = self.0.recv() {
                     let Some(writer) = writer.upgrade() else {
                         break;
                     };
-                    classify(&writer, &saved);
+                    classify(&writer, &saved, &mut invalid);
                 }
             })?;
         Ok(())
@@ -55,7 +58,10 @@ impl Hooks for ClassifierHooks {
     }
     fn after(&self, saved: &[Saved], author: &Author, schema: &Schema) {
         self.inner.after(saved, author, schema);
-        for note in saved.iter().filter(|s| s.event == Event::Create) {
+        for note in saved
+            .iter()
+            .filter(|s| s.event == Event::Create && !s.restored)
+        {
             if self.sender.try_send(note.clone()).is_err() {
                 eprintln!("classifier: note={} outcome=error:queue_full", note.id);
             }
@@ -78,7 +84,7 @@ impl Hooks for ClassifierHooks {
     }
 }
 
-fn classify(writer: &Writer, saved: &Saved) {
+fn classify(writer: &Writer, saved: &Saved, invalid: &mut HashMap<String, Option<[u8; 32]>>) {
     let Ok(entries) = std::fs::read_dir(writer.vault().root().join("classifiers")) else {
         eprintln!("classifier: note={} outcome=error:definitions", saved.id);
         return;
@@ -94,22 +100,30 @@ fn classify(writer: &Writer, saved: &Saved) {
         })
         .collect();
     names.sort();
+    invalid.retain(|name, _| names.contains(name));
     // Each classifier sees the original snapshot. Advance the optimistic base only after our
     // own successful write, allowing several classifiers without accepting concurrent edits.
     let mut base = saved.version.clone();
     for name in names {
-        let config = writer
+        let source = writer
             .vault()
             .read_text(&format!("classifiers/{name}.wcl"))
-            .ok()
-            .and_then(|s| Classifier::parse(&name, &s).ok());
+            .ok();
+        let fingerprint = source.as_ref().map(|s| Sha256::digest(s.as_bytes()).into());
+        let config = source
+            .as_ref()
+            .and_then(|s| Classifier::parse(&name, s).ok());
         let Some(config) = config else {
-            eprintln!(
-                "classifier: name={name} note={} outcome=error:definition",
-                saved.id
-            );
+            if invalid.get(&name) != Some(&fingerprint) {
+                invalid.insert(name.clone(), fingerprint);
+                tracing::warn!(target: "ai",
+                    "classifier: name={name} note={} outcome=error:definition",
+                    saved.id
+                );
+            }
             continue;
         };
+        invalid.remove(&name);
         if !config.types.contains(&saved.type_name) {
             continue;
         }
@@ -247,14 +261,16 @@ fn run(writer: &Writer, saved: &Saved, base: &str, config: &Classifier) -> Optio
             }
         }
     }
-    eprintln!(
+    tracing::info!(target: "ai",
         "{} classifier={} note={}",
         decisions::trail(&credential, &request, &result, began.elapsed()),
         config.name,
         saved.id
     );
     if let (Ok(response), Some(rule)) = (&result, &config.notify)
-        && response.answers[&rule.question].confidence() >= rule.threshold
+        && response.answers[&rule.question]
+            .notify_probability(rule.option.as_deref())
+            .is_some_and(|p| p >= rule.threshold)
     {
         let notification = state::NewNotification {
             title: rule.title.clone(),
