@@ -78,7 +78,7 @@ emulator-harness-deps: (require-tool "npm")
 # Test the Android emulator harness's helpers that need no device (TV-92, TV-66, TV-67)
 [group('ci')]
 emulator-harness-test: emulator-harness-deps (require-tool "node")
-	node --test apps/android/emulator/gesture.test.mjs apps/android/emulator/logcat.test.mjs apps/android/emulator/qr.test.mjs apps/android/emulator/classifier.test.mjs apps/android/emulator/reboot.test.mjs
+	node --test apps/android/emulator/gesture.test.mjs apps/android/emulator/logcat.test.mjs apps/android/emulator/qr.test.mjs apps/android/emulator/classifier.test.mjs apps/android/emulator/reboot.test.mjs apps/android/emulator/contact-diagnostic.test.mjs
 
 # Test the release train's scripts: the version calculation, the Android versionCode, how dpkg, rpm and pacman sort the package versions, the image tags and stamping (docs/releasing.md)
 [group('ci')]
