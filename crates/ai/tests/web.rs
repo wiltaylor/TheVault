@@ -17,6 +17,54 @@ fn guarded() -> Fetcher {
     Fetcher::exempting(vec![ip("127.0.0.2")], Duration::from_secs(10))
 }
 
+#[test]
+fn blocking_guard_refuses_literals_dns_and_environment_proxies() {
+    // Environment belongs to the child, never to the shared test process.
+    if std::env::var_os("TV104_PROXY_CHILD").is_none() {
+        let proxy = testkit::StandIn::start();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "web::blocking_guard_refuses_literals_dns_and_environment_proxies",
+                "--nocapture",
+            ])
+            .env("TV104_PROXY_CHILD", "1")
+            .env("HTTP_PROXY", proxy.url(""))
+            .env("HTTPS_PROXY", proxy.url(""))
+            .env("ALL_PROXY", proxy.url(""))
+            .env("NO_PROXY", "")
+            .env("http_proxy", proxy.url(""))
+            .env("https_proxy", proxy.url(""))
+            .env("all_proxy", proxy.url(""))
+            .env("no_proxy", "")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{output:?}");
+        assert!(stdout.contains("running 1 test\n"), "{stdout}");
+        assert!(stdout.contains("1 passed; 0 failed"), "{stdout}");
+        assert!(proxy.requests().is_empty(), "guarded client used a proxy");
+        return;
+    }
+    let client = ai::web::guarded_blocking_client();
+    for url in [
+        "http://127.1/",
+        "http://[::1]/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://169.254.169.254/",
+    ] {
+        assert!(ai::web::local_literal(&url.parse().unwrap()), "{url}");
+    }
+    for url in ["http://localhost/", "https://localhost/"] {
+        let e = client
+            .get(url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .unwrap_err();
+        assert!(ai::web::is_local_error(&e), "{url}: {e:?}");
+    }
+}
+
 #[tokio::test]
 async fn the_rule_refuses_local_addresses_and_fetch_private_lifts_it() {
     let web = FakeWeb::start();

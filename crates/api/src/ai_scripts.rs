@@ -4,7 +4,7 @@
 //! - `run_script { code, function, args }` compiles `code` and calls its `function` (`main`
 //!   unless named) with `args`, JSON text of an array. It is offered only to an agent whose file
 //!   sets `permissions { scripts { run_code = true } }`, which only an admin writes, and runs with
-//!   the vault functions and the `ai` module, `http` to any host only when the agent may read web
+//!   the vault functions and the `ai` module, `http` to public hosts only when the agent may read web
 //!   pages (`permissions.web.read`), no secret (TV-99), no `fs` directories, five minutes. Its
 //!   changes are made at once as the agent.
 //! - `run_saved_script`, `run_task`, `list_scripts` and `list_tasks` run the vault's own scripts
@@ -99,7 +99,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
 pub fn run_script_spec() -> ToolSpec {
     spec_of(
         RUN_SCRIPT,
-        "Run wscript code on the vault: `code` is a whole wscript unit (with its `use` lines), and its function `function` (`main` when null) is called with `args`, each element arriving as a `Value` parameter (declare them `name: Value`). It runs with full access to the vault: every vault function and the ai module, and http to any host only when you may read web pages. It reads no secret: a script tool or a task names the secrets it may read. It runs for up to 5 minutes and 50 million instructions. Changes are made at once, as you, and recorded in history. Use it for bulk changes and lookups the other tools cannot do; read the wscript skill (use_skill wscript) before writing code, and do a dry run that changes nothing first. Answers the function's return value as JSON, its log (vault::log, print), the time it took and the instructions it used, or the compile or run-time error to fix.",
+        "Run wscript code on the vault: `code` is a whole wscript unit (with its `use` lines), and its function `function` (`main` when null) is called with `args`, each element arriving as a `Value` parameter (declare them `name: Value`). It runs with full access to the vault: every vault function and the ai module, and http to public hosts only when you may read web pages. Local addresses require a user tool or task that names the host, or ai_settings.fetch_private. It reads no secret: a script tool or a task names the secrets it may read. It runs for up to 5 minutes and 50 million instructions. Changes are made at once, as you, and recorded in history. Use it for bulk changes and lookups the other tools cannot do; read the wscript skill (use_skill wscript) before writing code, and do a dry run that changes nothing first. Answers the function's return value as JSON, its log (vault::log, print), the time it took and the instructions it used, or the compile or run-time error to fix.",
         json!({
             "code": { "type": "string", "description": "The whole wscript unit." },
             "function": { "type": ["string", "null"], "description": "The function to call; null for main." },
@@ -395,6 +395,7 @@ fn code_job(agent: &Agent, input: &Value) -> Result<(Job, Value), Ran> {
     job.args = args;
     // Hosts only when the agent may read web pages, and no secret: a script tool or a task
     // names the secrets it may read (TV-99 D1, D2).
+    job.public_only = true;
     job.allow_domains = if agent.permissions.web.read {
         vec!["*".to_owned()]
     } else {
@@ -798,12 +799,14 @@ mod tests {
         assert_eq!(job.timeout, Some(Duration::from_secs(300)));
         assert_eq!(CODE_TIMEOUT, Duration::from_secs(5 * 60));
         assert_eq!(job.allow_domains, ["*"]);
+        assert!(job.public_only);
         assert!(job.secrets.is_empty());
         // Without web.read the run reaches no host.
         let mut no_web = Agent::new("scripter");
         no_web.permissions.web.read = false;
         let (job, _) = code_job(&no_web, &input).unwrap();
         assert!(job.allow_domains.is_empty());
+        assert!(job.public_only);
         assert!(job.secrets.is_empty());
         assert!(job.read_paths.is_empty() && job.write_paths.is_empty());
         assert_eq!(job.author, Some(Author::Agent("scripter".into())));
