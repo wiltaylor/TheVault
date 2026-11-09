@@ -45,6 +45,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
 import { noteIdOf, retryGesture } from "./gesture.mjs";
+import { contactDiagnostic } from "./contact-diagnostic.mjs";
 import { logcatSinceArgs } from "./logcat.mjs";
 import { qrPng } from "./qr.mjs";
 
@@ -1294,18 +1295,15 @@ async function main() {
   await sleep(2_000);
   let bob;
   await check(35, async () => {
+    // THEVAULT_CONTACT_DIAGNOSTIC=1 records slow capture state without a foreground nudge.
     bob = addContact("Bob Builder", "+16502530002");
     const findBob = async () => (await people()).find((x) => x.note.fields.title === "Bob Builder");
     let p;
     if (process.env.THEVAULT_CONTACT_DIAGNOSTIC === "1") {
-      try {
-        p = await until("a person for the contact (no nudge)", findBob, { timeout: 30_000, every: 1_000 });
-      } catch {
+      p = await contactDiagnostic(findBob, until, () => {
         saveLog("35-at-30s");
         writeFileSync(join(logs, "35-at-30s-jobs.txt"), shellTry("dumpsys jobscheduler"));
-        // Keep activity state unchanged: arrival here must not be attributed to a foreground sync.
-        p = await until("a person for the contact (still no nudge)", findBob, { timeout: 90_000, every: 1_000 });
-      }
+      });
     } else {
       p = await capturedUntil("a person for the contact", findBob);
     }
