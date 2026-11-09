@@ -428,12 +428,19 @@ A saved script, `scripts/<name>.ws`, is shared: every type handler, task, device
 - Apply needs `admin`. From a phone, a `write` token applies only a proposal that waits in an agent's thread, as the thread holds it. **Exception: a signed-in admin must apply any change to a script named by a device file when either its current or proposed source contains `sms_send`, `contacts_upsert` or `contacts_delete`.** This includes keeping an existing send while changing its number, text or callers, and removing a sensitive call. Any API token, including an admin-scoped one, gets 403 even for the stored thread proposal. The check also covers script source written by tool and task proposals and is repeated under the write lock against the current source and device files, regardless of the phone's switches. Names in comments and strings count conservatively too. Reading SMS alone keeps the usual Apply rules. A script changed since the proposal is not written (409 `stale`). The activity log records the apply with the agent that proposed it.
 - A trigger's run is not offered these tools, as nobody would see the proposal. A chat, a call from a note and a dispatch are, and the proposal waits in the thread.
 
-### Agents that propose Android device files
+### Agents that propose device files
 
 `get_device_file {platform: "android"}` reads the current phone file.
 `propose_device_file_change {platform: "android", wcl, scripts: [{name, source}]}`
 proposes its replacement and any new or changed scripts in one atomic commit. Each supplied
-script must be named by the proposed file. No delete or Linux proposal is offered.
+script must be named by the proposed file. Both tools also accept `platform: "linux"`,
+which includes the desktop app. There is no separate `desktop` platform. No delete is offered.
+Linux uses the same device-file vocabulary and shared `device` module names, not separate
+SMS-send or contact-write equivalents. Guards do not assume that a paired device can execute
+every call: new `sms_send` and `vault::device_command` sites and bindings are refused on
+both platforms. Sensitive code on either platform requires a signed-in admin at Apply.
+Warnings name the platform and its paired devices. Linux cards describe paired devices
+rather than claiming the code runs on a phone.
 
 The card shows file and script diffs, proposed script uses, paired phones and their switches,
 enabled commands and reported permissions, and phone capabilities. SMS reads warn that they
