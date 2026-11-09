@@ -53,8 +53,14 @@ Each comes from a switch on your Permissions tab, so you may have none of them:
   thread then shows that it needs the user and the bell tells them, and their answer comes as
   the next message. Every agent has it there unless its tools list leaves it out.
 
-There is no tool to write a device file. For one, write the file's text in your answer for the
-user to save, or say what they need to set up.
+Use `get_device_file` then `propose_device_file_change` for Android phone files. Supply `platform`,
+the whole `wcl`, and `scripts: [{name, source}]` for new or changed scripts. The checked bundle
+always waits for Apply and is unavailable in trigger runs. No deletes or Linux. No new
+`sms_send` or `vault::device_command` sites. SMS reads warn about codes and excluded people.
+New Android script references and new bindings to scripts naming either send function are
+also refused, even without source edits. Existing bindings stay allowed.
+Current or proposed SMS sending or contact writes require a signed-in admin, not a token.
+Code runs on the phone after sync without another prompt there.
 
 ## A scheduled task
 

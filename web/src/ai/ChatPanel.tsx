@@ -47,6 +47,7 @@ import { TypeProposalCard } from "./TypeProposalCard";
 import { outboxItemHref } from "../outbox/model";
 import { SkillProposalCard, skillHref } from "./SkillProposalCard";
 import { ToolProposalCard, toolHref } from "./ToolProposalCard";
+import { DeviceFileProposalCard } from "./DeviceFileProposalCard";
 import { ScriptProposalCard } from "./ScriptProposalCard";
 import { TaskProposalCard } from "./TaskProposalCard";
 import { RUNNING_POLL_MS, hasNewReply, lastTurnEvent, turnEnded, turnsChanged, viewThread } from "./running";
@@ -1524,6 +1525,7 @@ function PartView(props: { part: Part; parts: readonly Part[]; turn: number; ind
         <Match when={props.part.kind === "memory_proposal" && props.part}>{(p) => <MemoryProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "skill_proposal" && props.part}>{(p) => <SkillProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "tool_proposal" && props.part}>{(p) => <ToolProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "device_file_proposal" && props.part}>{(p) => <DeviceFileProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "script_proposal" && props.part}>{(p) => <ScriptProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "task_proposal" && props.part}>{(p) => <TaskProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "applied" && props.part}>{(p) => <AppliedCard applied={p().applied} />}</Match>

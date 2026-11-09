@@ -425,8 +425,35 @@ A saved script, `scripts/<name>.ws`, is shared: every type handler, task, device
 
   The list reads the new source at the most (a `device` function's name counts anywhere, in a comment or a string too, as a string's `{expr}` hole is code) and the current source at the least (only `device::f` and `vault::f` outside comments), so an item is never missed or wrongly shown as kept. A change to the devices or their switches after the card makes Apply answer 409 `stale`.
 - **No new SMS send from an agent** (TV-72 policy P-a). A change that adds a call to `device::sms_send` is refused, at the proposal and again at Apply: the new source may name `sms_send` no more times than the current source calls `device::sms_send`. Every mention counts, in comments and strings too, and taking the function as a value (`let f = device::sms_send`) or importing it (`use device::sms_send`) counts as a call. A change that keeps the current calls is allowed, and the card shows the send. Tell the user the change to make, and the user makes it in the editor. This holds whatever runs the script.
-- Apply needs `admin`. From a phone, a `write` token applies only a proposal that waits in an agent's thread, as the thread holds it. **Exception: a signed-in admin must apply any change to a script named by a device file when either its current or proposed source contains `sms_send`, `contacts_upsert` or `contacts_delete`.** This includes keeping an existing send while changing its number, text or callers, and removing a sensitive call. A write token gets 403 even for the stored thread proposal. The check also covers script source written by tool and task proposals and is repeated under the write lock against the current source and device files, regardless of the phone's switches. Names in comments and strings count conservatively too. Reading SMS alone keeps the usual Apply rules. A script changed since the proposal is not written (409 `stale`). The activity log records the apply with the agent that proposed it.
+- Apply needs `admin`. From a phone, a `write` token applies only a proposal that waits in an agent's thread, as the thread holds it. **Exception: a signed-in admin must apply any change to a script named by a device file when either its current or proposed source contains `sms_send`, `contacts_upsert` or `contacts_delete`.** This includes keeping an existing send while changing its number, text or callers, and removing a sensitive call. Any API token, including an admin-scoped one, gets 403 even for the stored thread proposal. The check also covers script source written by tool and task proposals and is repeated under the write lock against the current source and device files, regardless of the phone's switches. Names in comments and strings count conservatively too. Reading SMS alone keeps the usual Apply rules. A script changed since the proposal is not written (409 `stale`). The activity log records the apply with the agent that proposed it.
 - A trigger's run is not offered these tools, as nobody would see the proposal. A chat, a call from a note and a dispatch are, and the proposal waits in the thread.
+
+### Agents that propose Android device files
+
+`get_device_file {platform: "android"}` reads the current phone file.
+`propose_device_file_change {platform: "android", wcl, scripts: [{name, source}]}`
+proposes its replacement and any new or changed scripts in one atomic commit. Each supplied
+script must be named by the proposed file. No delete or Linux proposal is offered.
+
+The card shows file and script diffs, proposed script uses, paired phones and their switches,
+enabled commands and reported permissions, and phone capabilities. SMS reads warn that they
+include codes and excluded people. Editing shipped scripts stops automatic upgrades. The
+Outbox warning identifies code that handles approved sends. Code runs after sync with no
+further phone prompt.
+
+Apply always waits for the user. Trigger runs never receive this tool. The server rechecks
+the closed event and command names, script existence, compilation in every proposed role,
+shared-folder refusal, and the bans on new `sms_send` and `vault::device_command` sites.
+Current or proposed sensitive phone code requires a signed-in admin. Tokens may otherwise
+apply only the copy stored in a thread. A changed device file, script, script use, or phone
+settings makes the proposal stale (409). Nothing is partially written.
+
+With the shipped `android.wcl`, `device_messages` contains SMS sending, so almost every
+device-file proposal needs a signed-in admin, even a WCL-only change. A stored thread copy
+does not let an API token bypass this requirement. Adding an existing script to Android is
+checked as new code. New handler or command bindings to scripts naming `sms_send` or
+`device_command` are refused, including a different event, command, script or function.
+Existing bindings remain allowed. Agents send SMS only through Outbox drafts.
 
 ### Agents that propose scheduled tasks
 
