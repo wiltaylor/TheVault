@@ -51,7 +51,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -127,6 +128,38 @@ fn keep_finished() -> Duration {
         return Duration::from_millis(ms);
     }
     KEEP_FINISHED
+}
+
+/// Inject an already-aged initial deadline in a child test server, without changing
+/// the production reader wait or the clocks of other turns/tests.
+fn initial_unread_since() -> Instant {
+    let now = Instant::now();
+    // Release binaries do not even read this child-test deadline injection.
+    #[cfg(debug_assertions)]
+    if let Some(age) = std::env::var("VAULT_TEST_AI_TURN_UNREAD_AGE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        && let Some(since) = now.checked_sub(Duration::from_millis(age))
+    {
+        return since;
+    }
+    now
+}
+
+/// True when an unread turn expires, false when it finishes first.
+async fn wait_for_unread(log: &Mutex<Log>) -> bool {
+    loop {
+        {
+            let log = log.lock().unwrap_or_else(PoisonError::into_inner);
+            if log.done {
+                return false;
+            }
+            if log.readers == 0 && log.unread_since.is_some_and(|t| t.elapsed() >= READER_WAIT) {
+                return true;
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 }
 
 /// The turns started, running or finished and kept, by id.
@@ -391,7 +424,7 @@ pub async fn start(
         stop,
         running,
         log: Mutex::new(Log {
-            unread_since: Some(Instant::now()),
+            unread_since: Some(initial_unread_since()),
             ..Log::default()
         }),
         changed: watch::Sender::new(0),
@@ -400,6 +433,22 @@ pub async fn start(
     a.turns.live().insert(id.clone(), held.clone());
     if let Some(t) = &thread {
         publish(&a.writer, &agent, t, Some(&id), true);
+    }
+    let expired_at_start = thread.is_none()
+        && held
+            .log()
+            .unread_since
+            .is_some_and(|t| t.elapsed() >= READER_WAIT);
+    if expired_at_start {
+        // For the injected-deadline integration check, let the first provider
+        // response reach the turn before expiring it. No reader is attached.
+        while let Some(event) = rx.recv().await {
+            let text = event.name == "text";
+            held.log().events.push(event);
+            if text {
+                break;
+            }
+        }
     }
     // The server reads a thread turn's events itself, so the turn never waits for a reader. A
     // turn with no thread waits for its first.
@@ -431,22 +480,26 @@ pub async fn start(
     if thread.is_none() {
         let turns = a.clone();
         let turn = id.clone();
+        // A test can start with an expired deadline. In that case, acknowledge
+        // creation only after the ordinary watchdog and runner have stopped it.
+        let mut changed = held.changed.subscribe();
+        let watched = held.clone();
         tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                let unread = {
-                    let log = held.log();
-                    if log.done {
-                        return;
-                    }
-                    log.readers == 0 && log.unread_since.is_some_and(|t| t.elapsed() >= READER_WAIT)
-                };
-                if unread {
-                    turns.turns.drop_turn(&turn);
-                    return;
-                }
+            if wait_for_unread(&watched.log).await {
+                turns.turns.drop_turn(&turn);
             }
         });
+        if expired_at_start {
+            loop {
+                changed.borrow_and_update();
+                if held.log().done {
+                    break;
+                }
+                if changed.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
     }
     Ok((
         StatusCode::CREATED,
@@ -747,4 +800,55 @@ pub async fn discard(
     Ok(Json(
         json!({ "thread": t.id, "pending": t.transcript.pending() }),
     ))
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unread_turn_expires_at_the_production_30_second_deadline() {
+        assert_eq!(READER_WAIT, Duration::from_secs(30));
+        let log = Mutex::new(Log {
+            unread_since: Some(Instant::now()),
+            ..Log::default()
+        });
+        let watchdog = wait_for_unread(&log);
+        tokio::pin!(watchdog);
+        assert!(futures_util::poll!(&mut watchdog).is_pending());
+        tokio::time::advance(READER_WAIT - Duration::from_secs(1)).await;
+        assert!(futures_util::poll!(&mut watchdog).is_pending());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            futures_util::poll!(&mut watchdog),
+            std::task::Poll::Ready(true)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn readers_reset_the_deadline_and_finished_turns_do_not_expire() {
+        let log = Mutex::new(Log {
+            unread_since: Some(Instant::now()),
+            readers: 1,
+            ..Log::default()
+        });
+        let watchdog = wait_for_unread(&log);
+        tokio::pin!(watchdog);
+        assert!(futures_util::poll!(&mut watchdog).is_pending());
+        tokio::time::advance(READER_WAIT * 2).await;
+        assert!(futures_util::poll!(&mut watchdog).is_pending());
+        {
+            let mut log = log.lock().unwrap();
+            log.readers = 0;
+            log.unread_since = Some(Instant::now());
+        }
+        tokio::time::advance(READER_WAIT - Duration::from_secs(1)).await;
+        assert!(futures_util::poll!(&mut watchdog).is_pending());
+        log.lock().unwrap().done = true;
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(
+            futures_util::poll!(&mut watchdog),
+            std::task::Poll::Ready(false)
+        );
+    }
 }

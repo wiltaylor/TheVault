@@ -10,7 +10,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder};
@@ -411,6 +412,27 @@ impl Home {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn moving_transfers_outlive_the_default_timeout_but_stalled_ones_stop() {
+        let stall = Timeouts::default().stall;
+        assert_eq!(stall, Duration::from_secs(60));
+        let progress = Progress::new();
+        let watchdog = stalled(&progress, stall, 0);
+        tokio::pin!(watchdog);
+        assert!(futures_util::poll!(&mut watchdog).is_pending());
+        // Four minutes in total, but never a full stall window without progress.
+        for _ in 0..8 {
+            tokio::time::advance(Duration::from_secs(30)).await;
+            assert!(futures_util::poll!(&mut watchdog).is_pending());
+            progress.touch();
+        }
+        assert!(progress.start.elapsed() > Timeouts::default().request);
+        tokio::time::advance(stall - Duration::from_secs(1)).await;
+        assert!(futures_util::poll!(&mut watchdog).is_pending());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(futures_util::poll!(&mut watchdog).is_ready());
+    }
 
     #[test]
     fn an_upload_body_is_a_stream_of_small_blocks_not_the_file() {
