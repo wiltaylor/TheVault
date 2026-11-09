@@ -391,8 +391,13 @@ impl State {
                  WHERE seq IN ({THREAD_PRUNE_ROWS}) GROUP BY note_id ORDER BY note_id"
             ))?;
             stmt.query_map(params![keep, Option::<String>::None], |r| {
-                Ok(ThreadHistoryPrune { note_id: r.get(0)?, rows: r.get(1)?, bytes: r.get(2)? })
-            })?.collect::<rusqlite::Result<Vec<_>>>()?
+                Ok(ThreadHistoryPrune {
+                    note_id: r.get(0)?,
+                    rows: r.get(1)?,
+                    bytes: r.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
         };
         if apply {
             tx.execute(

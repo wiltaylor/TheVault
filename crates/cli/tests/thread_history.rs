@@ -11,16 +11,30 @@ fn prune_is_opt_in_and_reports_content_bytes() {
     let state = state::State::open(&path, None).unwrap();
     for id in ["thread", "email"] {
         for _ in 0..10 {
-            state.record_version(id, "email", &state::Author::Token("test".into()), "é").unwrap();
+            state
+                .record_version(id, "email", &state::Author::Token("test".into()), "é")
+                .unwrap();
         }
     }
-    rusqlite::Connection::open(&path).unwrap().execute(
-        "UPDATE versions SET note_type = 'agent_thread' WHERE note_id = 'thread'", [],
-    ).unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE versions SET note_type = 'agent_thread' WHERE note_id = 'thread'",
+            [],
+        )
+        .unwrap();
     let run = |args: &[&str]| {
         let out = Command::new(env!("CARGO_BIN_EXE_vault"))
-            .arg("--vault").arg(dir.path()).args(args).output().unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            .arg("--vault")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         serde_json::from_slice::<Value>(&out.stdout).unwrap()
     };
     let preview = run(&["prune-thread-history", "--keep", "3"]);

@@ -908,13 +908,16 @@ fn run(cli: Cli) -> Result<Value, Fail> {
         Command::Reindex => local::reindex(vault),
         Command::PruneThreadHistory { keep, apply } => {
             let state = local::open_state(vault)?;
-            let report = state.prune_thread_history(keep, apply)
+            let report = state
+                .prune_thread_history(keep, apply)
                 .map_err(Fail::from_display("state"))?;
             let rows: u64 = report.iter().map(|r| r.rows).sum();
             let bytes: u64 = report.iter().map(|r| r.bytes).sum();
-            Ok(json!({ "apply": apply, "keep": keep, "rows": rows, "bytes": bytes,
-                "threads": report.iter().map(|r| json!({"id": r.note_id, "rows": r.rows, "bytes": r.bytes})).collect::<Vec<_>>() }))
-        },
+            Ok(
+                json!({ "apply": apply, "keep": keep, "rows": rows, "bytes": bytes,
+                "threads": report.iter().map(|r| json!({"id": r.note_id, "rows": r.rows, "bytes": r.bytes})).collect::<Vec<_>>() }),
+            )
+        }
         Command::Backup { out, include_key } => backup::backup(vault, &out, include_key),
         Command::RestoreBackup { archive, dir } => backup::restore(&archive, &dir),
         Command::VersionCompare { a, b } => version_compare(&a, &b),
