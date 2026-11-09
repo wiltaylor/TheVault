@@ -27,6 +27,7 @@ tokio.workspace = true
 writer.workspace = true
 
 [dev-dependencies]
+sync.workspace = true
 ai.workspace = true
 base64.workspace = true
 clients.workspace = true

@@ -3864,7 +3864,9 @@ fn propose_or_read(
         "propose_tool_change" => crate::ai_scripts::propose_change(w, agent, &call.id, input),
         "propose_tool_delete" => crate::ai_scripts::propose_delete(w, agent, &call.id, input),
         "get_device_file" => crate::ai_device_changes::get(w, input),
-        "propose_device_file_change" => crate::ai_device_changes::propose(w, agent, &call.id, input),
+        "propose_device_file_change" => {
+            crate::ai_device_changes::propose(w, agent, &call.id, input)
+        }
         "get_script" => crate::ai_script_changes::get(w, input),
         "propose_script_change" => {
             crate::ai_script_changes::propose_change(w, agent, &call.id, input)
