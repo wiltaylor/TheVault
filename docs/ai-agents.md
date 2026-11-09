@@ -428,6 +428,26 @@ A saved script, `scripts/<name>.ws`, is shared: every type handler, task, device
 - Apply needs `admin`. From a phone, a `write` token applies only a proposal that waits in an agent's thread, as the thread holds it. **Exception: a signed-in admin must apply any change to a script named by a device file when either its current or proposed source contains `sms_send`, `contacts_upsert` or `contacts_delete`.** This includes keeping an existing send while changing its number, text or callers, and removing a sensitive call. A write token gets 403 even for the stored thread proposal. The check also covers script source written by tool and task proposals and is repeated under the write lock against the current source and device files, regardless of the phone's switches. Names in comments and strings count conservatively too. Reading SMS alone keeps the usual Apply rules. A script changed since the proposal is not written (409 `stale`). The activity log records the apply with the agent that proposed it.
 - A trigger's run is not offered these tools, as nobody would see the proposal. A chat, a call from a note and a dispatch are, and the proposal waits in the thread.
 
+### Agents that propose Android device files
+
+`get_device_file {platform: "android"}` reads the current phone file.
+`propose_device_file_change {platform: "android", wcl, scripts: [{name, source}]}`
+proposes its replacement and any new or changed scripts in one atomic commit. Each supplied
+script must be named by the proposed file. No delete or Linux proposal is offered.
+
+The card shows file and script diffs, proposed script uses, paired phones and their switches,
+enabled commands and reported permissions, and phone capabilities. SMS reads warn that they
+include codes and excluded people. Editing shipped scripts stops automatic upgrades. The
+Outbox warning identifies code that handles approved sends. Code runs after sync with no
+further phone prompt.
+
+Apply always waits for the user. Trigger runs never receive this tool. The server rechecks
+the closed event and command names, script existence, compilation in every proposed role,
+shared-folder refusal, and the bans on new `sms_send` and `vault::device_command` sites.
+Current or proposed sensitive phone code requires a signed-in admin. Tokens may otherwise
+apply only the copy stored in a thread. A changed device file, script, script use, or phone
+settings makes the proposal stale (409). Nothing is partially written.
+
 ### Agents that propose scheduled tasks
 
 A scheduled task, `tasks/<name>.wcl`, runs its script unattended and again and again, as the task, with the hosts and secrets its file gives it. So an agent's change to one always waits for your Apply, whatever its confirmation switches say, and there is no switch to turn that off (TV-32 decision Q2).

@@ -139,6 +139,16 @@ pub(crate) fn apply(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyEr
     if p["platform"] != "android" { return Err(invalid("Only Android is supported")); }
     let after = p["after"].as_str().ok_or_else(|| invalid("missing device file"))?;
     w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+        if json!(w.read_device_file("android").ok()) != p["before"] {
+            return Err(ApplyError::Stale("The device file changed. Propose it again.".into()));
+        }
+        for s in p["snapshots"].as_array().ok_or_else(|| invalid("missing snapshots"))? {
+            let name = s["name"].as_str().ok_or_else(|| invalid("missing script name"))?;
+            if json!(w.read_script(name).ok()) != s["before"]
+                || scripts::described(&w.script_runs_as(name, None)?).0 != s["runs_before"] {
+                return Err(ApplyError::Stale("A script or its uses changed. Propose it again.".into()));
+            }
+        }
         let now = checked(w, after, &p["scripts"])?;
         if now["requires_admin"] == true && !admin {
             return Err(ApplyError::Refused(scripts::PHONE_ADMIN_MESSAGE.into()));
