@@ -224,6 +224,21 @@ pub fn decide(
     timeout: Duration,
 ) -> Result<Response, AiError> {
     request.validate()?;
+    let url = endpoint(credential)?;
+    let body =
+        serde_json::to_vec(request).map_err(|_| AiError::invalid("Invalid decisions request"))?;
+    if body.len() as u64 > MAX_BYTES {
+        return Err(AiError::invalid("Decisions request is too large"));
+    }
+    call(credential, request, timeout, url, body)
+}
+
+/// Check local account compatibility without making a provider call.
+pub fn validate_credential(credential: &Credential) -> Result<(), AiError> {
+    endpoint(credential).map(|_| ())
+}
+
+fn endpoint(credential: &Credential) -> Result<reqwest::Url, AiError> {
     if credential.kind != Kind::OpenAiCompatible {
         return Err(AiError::invalid(
             "Decisions require an OpenAI-compatible account",
@@ -239,11 +254,16 @@ pub fn decide(
     }
     let root = url.path().trim_end_matches('/').trim_end_matches("/v1");
     url.set_path(&format!("{root}/alpha/decisions"));
-    let body =
-        serde_json::to_vec(request).map_err(|_| AiError::invalid("Invalid decisions request"))?;
-    if body.len() as u64 > MAX_BYTES {
-        return Err(AiError::invalid("Decisions request is too large"));
-    }
+    Ok(url)
+}
+
+fn call(
+    credential: &Credential,
+    request: &Request,
+    timeout: Duration,
+    url: reqwest::Url,
+    body: Vec<u8>,
+) -> Result<Response, AiError> {
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)

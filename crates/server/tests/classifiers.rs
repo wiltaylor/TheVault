@@ -10,6 +10,8 @@ fn shipped_scam_fixture_labels_and_encrypted_phone_pushes_follow_threshold() {
     let fixtures: Vec<Value> = serde_json::from_str(include_str!("fixtures/scam.json")).unwrap();
     let fake = FakeDecisions::start();
     let (server, client) = setup(&fake, CONFIG);
+    let stamp = create(&server, &client, "outgoing");
+    let recent = stamp["note"]["fields"]["created"].as_str().unwrap();
     let service = testkit::StandIn::start();
     service.route("/scam", Reply::text(201, ""));
     let phone = super::push::Phone::pair(&server, "Classifier fixture phone", 42);
@@ -35,7 +37,7 @@ fn shipped_scam_fixture_labels_and_encrypted_phone_pushes_follow_threshold() {
         let kind = fixture["type"].as_str().unwrap();
         let res = client.post(server.url(&format!("/api/notes?type={kind}")))
             .bearer_auth(server.admin_token()).json(&json!({"note":{"fields":{
-                "title":"Synthetic fixture", "direction":"in", "channel":"sms", "snippet":fixture["text"]
+                "title":"Synthetic fixture", "direction":"in", "channel":"sms", "snippet":fixture["text"], "sent":recent
             }, "blocks":[{"kind":"content", "labels":["body"], "fields":{}, "blocks":[{"kind":"paragraph", "labels":[], "fields":{"text":fixture["text"]}, "blocks":[]}]}]}}))
             .send().unwrap().error_for_status().unwrap().json::<Value>().unwrap();
         let id = res["id"].as_str().unwrap();
@@ -104,7 +106,7 @@ fn shipped_scam_fixture_labels_and_encrypted_phone_pushes_follow_threshold() {
     }
     assert_eq!(fake.requests().len(), fixtures.len());
     // Outgoing SMS and sent/draft email must not call the classifier.
-    for (kind, fields) in [
+    for (kind, mut fields) in [
         (
             "message",
             json!({"title":"Outgoing fixture", "direction":"out", "channel":"sms"}),
@@ -118,6 +120,7 @@ fn shipped_scam_fixture_labels_and_encrypted_phone_pushes_follow_threshold() {
             json!({"title":"Draft fixture", "labels":["system/DRAFT"]}),
         ),
     ] {
+        fields["sent"] = json!(recent);
         client
             .post(server.url(&format!("/api/notes?type={kind}")))
             .bearer_auth(server.admin_token())
@@ -127,10 +130,112 @@ fn shipped_scam_fixture_labels_and_encrypted_phone_pushes_follow_threshold() {
             .error_for_status()
             .unwrap();
     }
+    let historical = client.post(server.url("/api/notes?type=email")).bearer_auth(server.admin_token())
+        .json(&json!({"note":{"fields":{"title":"Old incoming scam fixture", "sent":"2000-01-01T00:00:00Z"}}}))
+        .send().unwrap().error_for_status().unwrap().json::<Value>().unwrap();
     fake.push(Reply::json(200, &response()));
     let sentinel = create(&server, &client, "incoming");
     wait_trail(&server, sentinel["id"].as_str().unwrap());
     assert_eq!(fake.requests().len(), fixtures.len() + 1);
+    let old = get(
+        &server,
+        &client,
+        &format!("/api/notes/{}", historical["id"].as_str().unwrap()),
+    );
+    assert!(old["note"]["fields"].get("scam_probability").is_none());
+    assert!(
+        !get(&server, &client, "/api/notifications")
+            .to_string()
+            .contains(historical["id"].as_str().unwrap())
+    );
+}
+
+#[test]
+fn unrelated_types_are_not_persisted_while_a_classifier_is_busy() {
+    let fake = FakeDecisions::start();
+    fake.push(Reply::json(200, &response()).delay(Duration::from_secs(2)));
+    let (server, client) = setup(&fake, CONFIG);
+    let first = create(&server, &client, "incoming");
+    let began = Instant::now();
+    while fake.requests().is_empty() {
+        assert!(began.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    client
+        .post(server.url("/api/notes?type=fleeting"))
+        .bearer_auth(server.admin_token())
+        .json(&json!({"note":{"fields":{"title":"Unrelated private fixture"}}}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let state = state::State::open(&server.vault_path().join(".vault/state.db"), None).unwrap();
+    assert_eq!(state.take_classification().unwrap(), None);
+    wait_trail(&server, first["id"].as_str().unwrap());
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[test]
+fn configuration_warning_is_deduplicated_across_notes_and_restart_then_recovers() {
+    let fake = FakeDecisions::start();
+    let missing = CONFIG.replace("account = \"router\"", "account = \"missing_account\"");
+    let (mut server, client) = setup(&fake, &missing);
+    for index in 0..3 {
+        if index == 2 {
+            server.restart();
+        }
+        let note = create(&server, &client, "incoming");
+        let marker = format!(
+            "name=incoming note={} outcome=error:",
+            note["id"].as_str().unwrap()
+        );
+        let lines = server.stderr_lines_when(|lines| lines.iter().any(|l| l.contains(&marker)));
+        assert!(lines.iter().any(|l| l.contains(&marker)));
+        let notifications = get(&server, &client, "/api/notifications");
+        assert_eq!(
+            notifications["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|n| n["source"] == "classifier_config:incoming")
+                .count(),
+            1
+        );
+    }
+    assert!(fake.requests().is_empty());
+    std::fs::write(server.vault_path().join("classifiers/incoming.wcl"), CONFIG).unwrap();
+    fake.push(Reply::json(200, &response()));
+    let recovered = create(&server, &client, "incoming");
+    wait_trail(&server, recovered["id"].as_str().unwrap());
+    assert_eq!(
+        get(
+            &server,
+            &client,
+            &format!("/api/notes/{}", recovered["id"].as_str().unwrap())
+        )["note"]["fields"]["scam_probability"],
+        0.95
+    );
+    std::fs::write(
+        server.vault_path().join("classifiers/incoming.wcl"),
+        missing,
+    )
+    .unwrap();
+    let again = create(&server, &client, "incoming");
+    let marker = format!(
+        "name=incoming note={} outcome=error:",
+        again["id"].as_str().unwrap()
+    );
+    server.stderr_lines_when(|lines| lines.iter().any(|l| l.contains(&marker)));
+    let notifications = get(&server, &client, "/api/notifications");
+    assert_eq!(
+        notifications["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["source"] == "classifier_config:incoming")
+            .count(),
+        2
+    );
 }
 
 const CONFIG: &str = r#"

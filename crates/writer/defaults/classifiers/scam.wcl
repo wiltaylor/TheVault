@@ -1,5 +1,5 @@
 types  = ["email", "message"]
-where  = "(type == \"email\" && !under(labels, \"system/SENT\") && !under(labels, \"system/DRAFT\")) || (type == \"message\" && direction == \"in\")"
+where  = "((type == \"email\" && !under(labels, \"system/SENT\") && !under(labels, \"system/DRAFT\")) || (type == \"message\" && direction == \"in\")) && sent >= now() - days(2)"
 model  = "typesafe/jev-1.13"
 fields = ["title", "from_raw", "to_raw", "snippet", "body"]
 
