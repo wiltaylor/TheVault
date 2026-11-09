@@ -17,6 +17,8 @@
 //                           process lives 20 s after launch, shows onboarding, and no FATAL EXCEPTION
 //                           of the app is in logcat then or at the end of the run
 //   THEVAULT_PERIODIC_WAIT  minutes to wait for the 15-minute background work (default 17)
+//   THEVAULT_CONTACT_DIAGNOSTIC  1: check 35 saves capture/job state at 30 s, then waits up to
+//                           120 s total without a foreground nudge (diagnosis, not timing proof)
 //   THEVAULT_UPDATE_APK     the newer APK check 49 publishes first, with THEVAULT_UPDATE_VERSION its
 //                           version (default: built here, the same app one patch version up, with
 //                           the versionCode scripts/release/version-code.sh gives that version)
@@ -43,8 +45,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as L from "./lib.mjs";
 import { noteIdOf, retryGesture } from "./gesture.mjs";
+import { contactDiagnostic } from "./contact-diagnostic.mjs";
 import { logcatSinceArgs } from "./logcat.mjs";
 import { qrPng } from "./qr.mjs";
+import { classifierNotes, classifierSynced, assertClassifierView } from "./classifier.mjs";
+import { ownedEmulatorGone, recoverReboot } from "./reboot.mjs";
+import { resultsTap } from "./report.mjs";
 
 const { repo, PKG, MAIN, SHARE, DEBUGGABLE, MESSAGES, NTFY, sleep, until, shell, shellTry, adb, adbTry, emu } = L;
 
@@ -245,10 +251,31 @@ async function root() {
 }
 
 async function reboot() {
-  adbTry("reboot");
+  adb("reboot");
   await sleep(5_000);
-  await L.waitForDevice("adb reboot");
-  await until("boot", () => shellTry("getprop sys.boot_completed").trim() === "1", { timeout: 300_000, every: 1_000 });
+  await recoverReboot({
+    wait: async () => {
+      await L.waitForDevice("adb reboot");
+      await until("boot", () => shellTry("getprop sys.boot_completed").trim() === "1", { timeout: 300_000, every: 1_000 });
+    },
+    gone: () => {
+      const owner = join(repo, process.env.THEVAULT_EMULATOR_LOGS ?? "target/android-emulator", "owner.json");
+      const record = existsSync(owner) ? JSON.parse(readFileSync(owner, "utf8")) : null;
+      return ownedEmulatorGone(record, {
+        serial: process.env.ANDROID_SERIAL,
+        avd: process.env.THEVAULT_AVD ?? "thevault-api35",
+        home: process.env.ANDROID_AVD_HOME ?? `${process.env.HOME}/.android/avd`,
+      });
+    },
+    restart: async () => {
+      // Preserve the crash log before boot.sh opens emulator.log for the new process.
+      const dir = join(repo, process.env.THEVAULT_EMULATOR_LOGS ?? "target/android-emulator");
+      if (existsSync(join(dir, "emulator.log"))) copyFileSync(join(dir, "emulator.log"), join(logs, `emulator-before-recovery-${Date.now()}.log`));
+      execFileSync("bash", [join(repo, "apps/android/emulator/boot.sh"), "-writable-system"], {
+        cwd: repo, env: process.env, stdio: "inherit", timeout: 720_000,
+      });
+    },
+  });
   shellTry("input keyevent KEYCODE_WAKEUP");
   shellTry("wm dismiss-keyguard");
   await sleep(3_000);
@@ -834,6 +861,23 @@ async function main() {
     return ["pass", `One distributor (ntfy) is installed, so Android asked nothing${chooser ? " (a chooser was on screen)" : ""}. GET /api/devices shows push: ${dev.push} for ${dev.name}; ntfy endpoint on ${ntfyUrl}.`, [snap("16-after-open")]];
   });
 
+  await check(58, async () => {
+    const evidence = [];
+    const synced = [];
+    for (const { type, fields } of classifierNotes) {
+      const created = await createNote(type, fields);
+      await foreground();
+      await until(`the ${type} classifier fields in the phone vault`, async () =>
+        classifierSynced(await local("GET", `/api/notes/${created.id}`), fields), { timeout: 60_000 });
+      const p = await page();
+      await p.goto(`http://vault.localhost/notes/${created.id}`);
+      await assertClassifierView(p, fields);
+      evidence.push(snap(`58-${type}-classifier`));
+      synced.push(`${type} ${created.id}: scam_probability=${fields.scam_probability}, communication_category=${fields.communication_category}`);
+    }
+    return ["pass", `Set directly on the home server without a model key; phone-local API and visible default template controls match: ${synced.join("; ")}.`, evidence];
+  });
+
   // 7. A note created on the server reaches the app.
   await check(7, async () => {
     const created = await createNote("note", { title: "Made in the web app" });
@@ -1292,8 +1336,18 @@ async function main() {
   await sleep(2_000);
   let bob;
   await check(35, async () => {
+    // THEVAULT_CONTACT_DIAGNOSTIC=1 records slow capture state without a foreground nudge.
     bob = addContact("Bob Builder", "+16502530002");
-    const p = await capturedUntil("a person for the contact", async () => (await people()).find((x) => x.note.fields.title === "Bob Builder"));
+    const findBob = async () => (await people()).find((x) => x.note.fields.title === "Bob Builder");
+    let p;
+    if (process.env.THEVAULT_CONTACT_DIAGNOSTIC === "1") {
+      p = await contactDiagnostic(findBob, until, () => {
+        saveLog("35-at-30s");
+        writeFileSync(join(logs, "35-at-30s-jobs.txt"), shellTry("dumpsys jobscheduler"));
+      });
+    } else {
+      p = await capturedUntil("a person for the contact", findBob);
+    }
     const ok = phonesOf(p).includes("+16502530002");
     return [ok ? "pass" : "fail", `Person ${p.id} "${p.note.fields.title}", phones ${JSON.stringify(phonesOf(p))}.`, []];
   });
@@ -1643,7 +1697,7 @@ async function main() {
   record(5, "na", "Not possible in the emulator: the emulator's camera shows a virtual scene, so there is no way to hold a QR code up to it.", []);
 }
 
-function writeReport() {
+function writeReport(completed) {
   const run = existsSync(join(out, "run.json")) ? JSON.parse(readFileSync(join(out, "run.json"), "utf8")) : {};
   const labels = { pass: "Pass", fail: "Fail", na: "Not possible in emulator", partial: "Partial" };
   const lines = [
@@ -1664,14 +1718,18 @@ function writeReport() {
   for (const r of Object.values(results)) counts[r.status] = (counts[r.status] ?? 0) + 1;
   lines.push("", `Totals: ${Object.entries(counts).map(([k, v]) => `${labels[k] ?? k} ${v}`).join(", ")}.`, "");
   writeFileSync(join(out, "RESULTS.generated.md"), lines.join("\n"));
+  // Standard test evidence for `terrarium test push`, alongside the detailed JSON and shots.
+  writeFileSync(join(out, "results.tap"), resultsTap(TITLES, results, { only, completed }));
 }
 
 // Playwright's adb connection emits an unhandled error when adb restarts (a reboot, adb root);
 // the next page() reconnects, so log it rather than lose the run.
 process.on("uncaughtException", (e) => console.error(`ignored: ${e.message}`));
 
+let completed = false;
 try {
   await main();
+  completed = true;
 } catch (e) {
   console.error(`run stopped: ${e.stack ?? e}`);
   process.exitCode = 1;
@@ -1696,7 +1754,7 @@ try {
     }
   } catch {}
   await pw?.device.close().catch(() => {});
-  writeReport();
+  writeReport(completed);
   for (const c of children) await L.stop(c);
   const failed = Object.values(results).filter((r) => r.status === "fail").length;
   console.log(`${Object.keys(results).length} checks recorded, ${failed} failed; see ${join(out, "RESULTS.generated.md")}`);

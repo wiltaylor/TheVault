@@ -85,6 +85,7 @@ Wait a few seconds after each one, then look in the web app.
 | 34 | Restart the phone, then open the app. | No message or call from checks 29 to 33 appears twice. |
 | 51 | Delete the `message` note of the SMS from check 29 in the web app. In the app, open Settings > Devices, and under **This device** choose **SMS and MMS messages**, **Last 7 days**, then tap **Import from phone**. | Progress shows per kind, then "Import finished." with how many were found, how many new notes were made and how many were already in the vault. The deleted SMS has a `message` note again, exactly one. No other message appears twice. |
 | 52 | Under **This device**, turn off the SMS permission in Android's App info first, then tap **Import from phone** with messages chosen. Then tap **Check for new messages and calls now**. | The import does not start. The page says Android has not given TheVault READ_SMS and offers **Open the permission step**, which opens the capture setup. The check reports how many new items it found. |
+| 58 | On the home server create an email with `scam_probability=0.91`, `communication_category=scam` and a message with `scam_probability=0.12`, `communication_category=personal`, without a model key. Open each on the phone. | Both exact fields reach the phone-local API and the default note template shows their values in its probability and category controls. |
 
 ## Contacts
 
