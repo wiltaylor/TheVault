@@ -320,6 +320,9 @@ pub(crate) fn propose_change(
             }),
         )
     })?;
+    if let Some(why) = state::proposed_secrets_refused(&def.secrets) {
+        return Err(ToolOut::error(why));
+    }
     let before = w.read_task(name).ok();
     if let Some(why) = paths_refused(&def, before.as_deref().is_some_and(|b| has_paths(name, b))) {
         return Err(refused(
@@ -329,6 +332,21 @@ pub(crate) fn propose_change(
     }
     let script_before = w.read_script(&def.script).ok();
     let script_after = script_given.filter(|src| Some(*src) != script_before.as_deref());
+    let mut phone = None;
+    if let Some(source) = script_after {
+        if let Some(why) = crate::ai_script_changes::sms_send_refused(
+            &def.script,
+            script_before.as_deref(),
+            source,
+        ) {
+            return Err(ToolOut::error(why));
+        }
+        let uses = w
+            .script_runs_as(&def.script, None)
+            .map_err(|e| ToolOut::error(e.to_string()))?;
+        phone = crate::ai_script_changes::on_phone(w, &uses, script_before.as_deref(), source)
+            .map_err(|e| ToolOut::error(e.to_string()))?;
+    }
     if before.as_deref() == Some(after.as_str()) && script_after.is_none() {
         return Ok(out(
             json!({
@@ -340,6 +358,18 @@ pub(crate) fn propose_change(
     }
     if script_after.is_some()
         && let Some(why) = shared_paths_refused(w, &def.script, Some(name))
+    {
+        return Err(refused(
+            why,
+            json!({ "message": "The task was not proposed." }),
+        ));
+    }
+    if let Some(source) = script_after
+        && let Some(why) = crate::ai_script_changes::device_command_refused(
+            &def.script,
+            script_before.as_deref(),
+            source,
+        )
     {
         return Err(refused(
             why,
@@ -371,6 +401,7 @@ pub(crate) fn propose_change(
         "proposed": true,
         "name": name,
         "exists": exists,
+        "device": phone,
         "schedule_text": def.schedule_text(),
         "next_runs": next,
         "paused": def.paused,
@@ -390,6 +421,7 @@ pub(crate) fn propose_change(
         "script_exists": script_before.is_some(),
         "script_before": script_before,
         "script_after": script_after,
+        "device": phone,
         "task": task_json(&def),
         "next_runs": next,
         "runs_as": runs_as,
@@ -455,7 +487,7 @@ fn apply_error(e: scheduler::Error) -> ApplyError {
 /// must still compile as the task runs it, and what else runs the script must be as the card
 /// showed it. A task file with `fs` paths is refused, and so is a new script source that another
 /// run with `fs` paths shares (TV-32 Q3, TV-71 review F1).
-pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
+pub(crate) fn apply_task(w: &Writer, p: &Value, admin: bool) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| schema::is_name(s))
@@ -496,12 +528,47 @@ pub(crate) fn apply_task(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
         if let Some(why) = paths_refused(&def, false) {
             return Err(ApplyError::Refused(why));
         }
+        if let Some(why) = state::proposed_secrets_refused(&def.secrets) {
+            return Err(ApplyError::Refused(why));
+        }
         let script_before = w.read_script(&def.script).ok();
+        if let Some(source) = script_after {
+            if let Some(why) = crate::ai_script_changes::sms_send_refused(
+                &def.script,
+                script_before.as_deref(),
+                source,
+            ) {
+                return Err(ApplyError::Refused(why));
+            }
+            let uses = w.script_runs_as(&def.script, None)?;
+            let phone =
+                crate::ai_script_changes::on_phone(w, &uses, script_before.as_deref(), source)?;
+            if phone.as_ref().unwrap_or(&Value::Null) != &p["device"] {
+                return Err(stale(
+                    "the phones that run the script, or their switches, changed",
+                ));
+            }
+            crate::ai_script_changes::require_phone_script_admin(
+                w,
+                &def.script,
+                script_after,
+                admin,
+            )?;
+        }
         if script_before.as_deref() != p["script_before"].as_str() {
             return Err(stale(&format!("the script {} changed", def.script)));
         }
         if script_after.is_some()
             && let Some(why) = shared_paths_refused(w, &def.script, Some(name))
+        {
+            return Err(ApplyError::Refused(why));
+        }
+        if let Some(source) = script_after
+            && let Some(why) = crate::ai_script_changes::device_command_refused(
+                &def.script,
+                script_before.as_deref(),
+                source,
+            )
         {
             return Err(ApplyError::Refused(why));
         }

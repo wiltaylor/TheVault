@@ -1,7 +1,8 @@
 //! S1 with the fake Anthropic provider: agents and wscript (script-tools T1 to T7, T10).
 //!
 //! `run_script` reports compile and run-time errors, results and logs, updates many notes in one
-//! run, reaches any host and every secret, and is offered only to an agent with `run_code`,
+//! run, reaches a host only with `web.read` and reads no secret (TV-99), and is offered only to an
+//! agent with `run_code`,
 //! which an agent cannot grant without an admin. Script tools are parsed and checked, offered
 //! with their schema when valid and allowed, called with a params map, bounded by their hosts
 //! and secrets, proposed and deleted under the `tools` switch and admin scope, and managed through
@@ -485,33 +486,126 @@ fn main(dry_run: Value) -> Result[int, string] {
 }
 
 #[test]
-fn run_script_reaches_any_host_and_reads_every_secret() {
+fn run_script_reaches_lan_only_with_fetch_private_and_reads_no_secret() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("scripter", SCRIPTER);
     api.secret("weather_key", "k-123");
     let web = StandIn::start();
     web.route("/forecast", Reply::text(200, "sunny"));
+    let url = web.url("/forecast");
+
+    // Agent-granted HTTP refuses local literals and names before any request (TV-104).
     let code = r#"use http
-use secrets
 
 fn main(url: Value) -> Result[string, string] {
-    let key = secrets::get("weather_key")?
-    let r = http::get(url.as_string().unwrap(), #{ "authorization": key })?
+    let r = http::get(url.as_string().unwrap(), #{})?
     Ok(r.body)
+}
+"#;
+    for url in [
+        url.clone(),
+        url.replace("127.0.0.1", "localhost"),
+        "http://[::1]/".into(),
+        "http://10.0.0.1/".into(),
+        "http://192.168.1.1/".into(),
+        "http://169.254.169.254/".into(),
+        "http://[fd00::1]/".into(),
+        "http://[::ffff:127.0.0.1]/".into(),
+        "http://127.1/".into(),
+    ] {
+        api.one(
+            &fake,
+            Some("scripter"),
+            "run_script",
+            json!({ "code": code, "function": null, "args": json!([url]).to_string() }),
+        );
+        let (err, out) = last_result(&fake);
+        assert!(err, "{out}");
+        assert!(out.to_string().contains(ai::web::LOCAL_NETWORK), "{out}");
+    }
+    assert!(web.requests().is_empty());
+    api.secret("ai_settings", r#"{"fetch_private":true}"#);
+    api.one(
+        &fake,
+        Some("scripter"),
+        "run_script",
+        json!({ "code": code, "function": null, "args": json!([url]).to_string() }),
+    );
+    let (err, out) = last_result(&fake);
+    assert!(!err, "{out}");
+    assert_eq!(out["result"], "sunny");
+    assert_eq!(web.requests()[0].header("authorization"), None);
+
+    // No secret is read, even one the vault holds (TV-99 D1, A1).
+    let code = r#"use secrets
+
+fn main() -> Result[string, string] {
+    secrets::get("weather_key")
 }
 "#;
     api.one(
         &fake,
         Some("scripter"),
         "run_script",
+        json!({ "code": code, "function": null, "args": null }),
+    );
+    let (err, out) = last_result(&fake);
+    assert!(err, "{out}");
+    assert!(out.to_string().contains("reads no secrets"), "{out}");
+    assert!(!out.to_string().contains("k-123"), "{out}");
+
+    // Nor is one written: the probe name does not exist yet, so its absence shows nothing was
+    // written.
+    let code = r#"use secrets
+
+fn main() -> Result[(), string] {
+    secrets::set("tv99_probe", "x")
+}
+"#;
+    api.one(
+        &fake,
+        Some("scripter"),
+        "run_script",
+        json!({ "code": code, "function": null, "args": null }),
+    );
+    let (err, out) = last_result(&fake);
+    assert!(err, "{out}");
+    assert!(out.to_string().contains("reads no secrets"), "{out}");
+    let names = api.get("/api/secrets");
+    assert!(!names.to_string().contains("tv99_probe"), "{names}");
+}
+
+#[test]
+fn run_script_without_web_read_reaches_no_host() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "offline",
+        "label = \"Offline\"\n\npermissions {\n  web {\n    read = false\n  }\n\n  scripts {\n    run_code = true\n  }\n}\n",
+    );
+    let web = StandIn::start();
+    web.route("/forecast", Reply::text(200, "sunny"));
+    let code = r#"use http
+
+fn main(url: Value) -> Result[string, string] {
+    let r = http::get(url.as_string().unwrap(), #{})?
+    Ok(r.body)
+}
+"#;
+    api.one(
+        &fake,
+        Some("offline"),
+        "run_script",
         json!({ "code": code, "function": null, "args": json!([web.url("/forecast")]).to_string() }),
     );
     let (err, out) = last_result(&fake);
-    assert!(!err, "{out}");
-    assert_eq!(out["result"], "sunny");
-    let req = &web.requests()[0];
-    assert_eq!(req.header("authorization"), Some("k-123"));
+    assert!(err, "{out}");
+    assert!(
+        out.to_string().contains("not on this script's allowlist"),
+        "{out}"
+    );
+    assert!(web.requests().is_empty());
 }
 
 #[test]
@@ -869,6 +963,17 @@ fn run(params: Value) -> Result[Value, string] {
         r[3].1
     );
 
+    // User-file wildcards retain LAN access too, even when called by an agent.
+    api.tool("fetch", &wcl.replace(&web.host(), "*"), Some(script));
+    api.calls(
+        &fake,
+        None,
+        &[("fetch", json!({ "what": "http", "url": web.url("/data") }))],
+    );
+    let r = results(&fake);
+    assert!(!r[0].0, "{}", r[0].1);
+    assert_eq!(r[0].1["result"], "fetched");
+
     // An agent with a tools list is offered only the tools it names.
     api.agent(
         "plain",
@@ -916,6 +1021,50 @@ fn run(params: Value) -> Result[Value, string] {
         "permissions {\n  tools = [\"use_skill\", \"brand-kit__fill\"]\n}\n",
     );
     assert!(status.is_success(), "{body}");
+}
+
+#[test]
+fn internal_secrets_are_refused_in_tool_proposals_and_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let events = api.one(
+        &fake,
+        None,
+        "propose_tool_change",
+        json!({"name": "greet", "wcl": GREET, "script_source": GREET_SCRIPT}),
+    );
+    let p = find(&events, "tool_proposal").unwrap().clone();
+    for name in [
+        "ai_accounts",
+        "ai_account_key_test",
+        "gitsync_token",
+        "brave_settings",
+        "google_refresh_token",
+    ] {
+        let wcl = format!("{GREET}\nsecrets = [\"{name}\"]\n");
+        let events = api.one(
+            &fake,
+            None,
+            "propose_tool_change",
+            json!({"name": "greet", "wcl": wcl, "script_source": GREET_SCRIPT}),
+        );
+        assert!(find(&events, "tool_proposal").is_none());
+        let (err, got) = last_result(&fake);
+        assert!(
+            err && got.to_string().contains("reserved for the server"),
+            "{got}"
+        );
+        let mut old = p.clone();
+        old["after"] = json!(wcl);
+        let (status, body) = api.apply_as(&api.token(), &old);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(
+            body.to_string().contains("reserved for the server"),
+            "{body}"
+        );
+    }
+    let (status, _) = api.send(reqwest::Method::GET, "/api/tools/greet", &api.token(), None);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[test]

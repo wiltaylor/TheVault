@@ -3,7 +3,7 @@
 //! `run_saved_script`, `run_task`, `list_scripts` and `list_tasks` are offered only to an agent
 //! with `permissions.scripts.run_saved` or `run_code`, which implies it, and never to a `read`
 //! caller's turn. A saved script's function runs with the call's arguments as the agent, reaching
-//! the web only when the agent may read web pages and secrets only when it may run its own code.
+//! the web only when the agent may read web pages, and reading no secret (TV-99).
 //! A task runs as its Run now button runs it, with its own capabilities: a short one answers its
 //! outcome and log, a long one that it started. An agent cannot grant the switch without an
 //! admin. Every run is an `ai.script` activity entry with the version that ran.
@@ -359,6 +359,27 @@ fn run_saved_script_calls_a_function_with_its_args_as_the_agent() {
     web.route("/forecast", Reply::text(200, "sunny"));
     let url = web.url("/forecast");
 
+    for url in [
+        url.clone(),
+        url.replace("127.0.0.1", "localhost"),
+        "http://[::1]/".into(),
+        "http://10.0.0.1/".into(),
+        "http://192.168.1.1/".into(),
+        "http://169.254.169.254/".into(),
+        "http://[fd00::1]/".into(),
+        "http://[::ffff:127.0.0.1]/".into(),
+        "http://127.1/".into(),
+    ] {
+        api.calls(&fake, Some("saver"), &[("run_saved_script",
+            json!({ "script": "helpers", "function": "fetch", "args": json!([url]).to_string() }))]);
+        let r = results(&fake);
+        let (err, out) = r.last().unwrap();
+        assert!(err, "{out}");
+        assert!(out.to_string().contains(ai::web::LOCAL_NETWORK), "{out}");
+    }
+    assert!(web.requests().is_empty());
+    api.secret("ai_settings", r#"{"fetch_private":true}"#);
+
     api.calls(
         &fake,
         Some("saver"),
@@ -448,7 +469,7 @@ fn run_saved_script_calls_a_function_with_its_args_as_the_agent() {
     assert!(r[0].0, "{}", r[0].1);
     assert_eq!(web.requests().len(), before);
 
-    // With Run wscript code, it reads every secret, as run_script does.
+    // With Run wscript code too, it still reads no secret (TV-99 D3): the refusal names the routes.
     api.calls(
         &fake,
         Some("scripter"),
@@ -458,8 +479,13 @@ fn run_saved_script_calls_a_function_with_its_args_as_the_agent() {
         )],
     );
     let r = results(&fake);
-    assert!(!r[0].0, "{}", r[0].1);
-    assert_eq!(r[0].1["result"], "k-123");
+    assert!(r[0].0, "{}", r[0].1);
+    assert!(
+        r[0].1.to_string().contains("reads no secrets"),
+        "{}",
+        r[0].1
+    );
+    assert!(!r[0].1.to_string().contains("k-123"), "{}", r[0].1);
 
     // Each run is logged with the script's hash and the generation it was read at.
     let log = api.get("/api/activity?kind=ai.script&limit=50");
@@ -537,6 +563,18 @@ fn run_task_runs_it_as_its_run_now_button_does_and_answers_the_log() {
     let runs = api.get("/api/tasks/tally/runs");
     assert_eq!(runs["runs"][0]["id"], run_id, "{runs}");
     assert_eq!(runs["runs"][0]["outcome"], "succeeded");
+
+    // A user task's wildcard keeps LAN access too, including through run_task.
+    api.task("tally", "label = \"Tally\"\nschedule = \"0 0 1 1 *\"\nscript = \"tally\"\nallow_domains = [\"*\"]\n");
+    api.calls(
+        &fake,
+        Some("offline"),
+        &[("run_task", json!({ "name": "tally" }))],
+    );
+    let r = results(&fake);
+    assert!(!r[0].0, "{}", r[0].1);
+    assert_eq!(r[0].1["result"]["outcome"], "succeeded");
+    assert_eq!(r[0].1["log"], "tallied pong\n");
 
     // list_tasks reads it back.
     api.calls(&fake, Some("offline"), &[("list_tasks", json!({}))]);
@@ -761,9 +799,15 @@ fn run_saved_script_refuses_the_built_in_handler_scripts() {
             r[i].1
         );
     }
-    // A user's own script is not on the list, so it still runs for this agent.
-    assert!(!r[3].0, "{}", r[3].1);
-    assert_eq!(r[3].1["result"], "k-123", "{}", r[3].1);
+    // A user's own script is not on the list, so it still runs for this agent; but a saved
+    // script run reads no secret (TV-99 D3), so its secret read is refused.
+    assert!(r[3].0, "{}", r[3].1);
+    assert!(
+        r[3].1.to_string().contains("reads no secrets"),
+        "{}",
+        r[3].1
+    );
+    assert!(!r[3].1.to_string().contains("k-123"), "{}", r[3].1);
     // The refusal is the same for an agent without run_code.
     api.calls(
         &fake,

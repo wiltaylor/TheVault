@@ -367,7 +367,19 @@ fn finish_writes_the_settings_keeping_the_endpoints_the_start_used() {
             ],
         })
     );
-    assert_eq!(api.secrets(), SECRETS);
+    // Finish unpauses the shipped sync tasks, which may already have stored their state.
+    // Check every connection secret without racing those background writes.
+    let connection_secrets: Vec<_> = api
+        .secrets()
+        .into_iter()
+        .filter(|name| {
+            !matches!(
+                name.as_str(),
+                "google_gmail_state" | "google_calendar_state"
+            )
+        })
+        .collect();
+    assert_eq!(connection_secrets, SECRETS);
     // The shipped Google tasks are unpaused.
     let status = api.status();
     assert_eq!(status["gmail"]["paused"], false, "{status}");

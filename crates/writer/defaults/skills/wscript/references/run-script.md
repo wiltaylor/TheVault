@@ -15,9 +15,11 @@
 - The function's return value becomes the tool result as JSON. Return `Result[T, string]` and
   `Err(message)` is reported as a failed run with that message. Unit returns `null`.
 - `vault::log`, `print` and `println` go to the run's log, which comes back with the result.
-- The run has every module: `vault`, `http` to any host, `ai`, `secrets` (any secret by name),
-  `json`, `math`, `regex`, `value`, and `fs` without any path. It writes straight to the vault as
+- The run has the modules `vault`, `http` (to public hosts when the agent may read web pages, else
+  none), `ai`, `json`, `math`, `regex`, `value`, and `secrets`, which reads no secret: a script
+  tool or a task names the secrets it may read. It has `fs` without any path. It writes straight to the vault as
   the agent, without a proposal, and every run is recorded with the code's hash.
+- Local addresses require a user tool or task that names the host, unless `ai_settings.fetch_private` lifts the rule. Agent HTTP uses no proxy while guarded.
 - The time limit is 5 minutes and the instruction limit 50 million (`limits-and-errors.md`).
 
 The result looks like `{ ok: true, result, log, duration_ms, instructions }`. A failure has
@@ -103,8 +105,7 @@ An agent with the **Run saved scripts and tasks** switch (`permissions.scripts.r
 - `run_saved_script { script, function, args }` calls `function` of that script with `args`,
   JSON text of an array, exactly as `run_script` calls its entry function: each argument a
   `Value`, the same result and the same 5 minutes. Its changes are made at once, as the agent.
-  `http` reaches any host only when the agent may read web pages, and `secrets` reads secrets
-  only when the agent has `run_code`. A saved script with no entry function for the call
+  `http` reaches public hosts only when the agent may read web pages, and `secrets` reads no secret. A saved script with no entry function for the call
   answers `entry`; a missing script answers `not_found`.
 - `list_tasks` answers each scheduled task, `tasks/<name>.wcl`, with its schedule, script, and
   latest run.

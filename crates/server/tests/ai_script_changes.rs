@@ -7,6 +7,9 @@
 //! handler, task and tool with its grants, and a warning for a run that reaches any host, which
 //! the tool proposal carries too. Apply needs admin, or the copy waiting in the thread of a call
 //! from a note; a script changed since gives 409 stale; a discard writes nothing.
+//!
+//! A change to a script that a device file runs shows where and what it can do on the phone, and
+//! one that adds a call to `device::sms_send` is refused at propose and at Apply (TV-98).
 
 use std::ffi::OsStr;
 use std::time::Duration;
@@ -14,7 +17,7 @@ use std::time::Duration;
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, Response};
 use serde_json::{Value, json};
-use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount, TestServer};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, PASSWORD, TestAccount, TestServer};
 
 const MODEL: &str = "claude-opus-5";
 
@@ -65,6 +68,57 @@ fn call(params: Value) -> Value {
 "#;
 
 const NIGHTLY: &str = "schedule = \"0 3 * * *\"\ntimezone = \"Europe/London\"\nscript = \"stamp\"\nallow_domains = [\"api.example.com\"]\nsecrets = [\"api_key\"]\npaused = true\n";
+
+#[test]
+fn device_commands_are_refused_for_script_task_and_tool_proposals_and_apply() {
+    for (tool, kind, name, wcl) in [
+        ("propose_script_change", "script_proposal", "stamp", ""),
+        ("propose_task_change", "task_proposal", "nightly", NIGHTLY),
+        ("propose_tool_change", "tool_proposal", "echo", ECHO),
+    ] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.seed_users();
+        let added = format!(
+            "use vault\n{STAMP}\nfn send(params: Value) -> Result[Value, string] {{\n    vault::device_command(\"phone\", \"send_sms\", params)\n}}\n"
+        );
+        let input = |source: &str| {
+            if kind == "script_proposal" {
+                json!({ "name": name, "source": source })
+            } else {
+                json!({ "name": name, "wcl": wcl, "script_source": source })
+            }
+        };
+        let events = api.one(&fake, tool, input(&added));
+        assert!(find(&events, kind).is_none(), "{events:?}");
+        let (err, got) = last_result(&fake);
+        assert!(err && got.to_string().contains("draft_sms"), "{got}");
+        let kept = format!("{STAMP}\n");
+        let events = api.one(&fake, tool, input(&kept));
+        let mut proposal = find(&events, kind)
+            .unwrap_or_else(|| panic!("{events:?}"))
+            .clone();
+        let field = if kind == "script_proposal" {
+            "after"
+        } else {
+            "script_after"
+        };
+        proposal[field] = json!(added);
+        let (status, body) = api.apply_as(&api.token(), &proposal);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(body.to_string().contains("draft_sms"), "{body}");
+        assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+
+        // Existing command sites may be kept, including in handler/task/tool scripts.
+        api.ok("PUT", "/api/scripts/stamp", json!({ "source": added }));
+        let changed = format!("{added}\n");
+        let events = api.one(&fake, tool, input(&changed));
+        let proposal = find(&events, kind).unwrap_or_else(|| panic!("{events:?}"));
+        let (status, body) = api.apply_as(&api.token(), proposal);
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
+    }
+}
 
 const ECHO: &str = "description = \"Echo the parameters.\"\nscript = \"stamp\"\nfunction = \"call\"\nallow_domains = [\"echo.example.com\"]\n";
 
@@ -140,6 +194,7 @@ impl Api {
             "GET" => self.client.get(url),
             "POST" => self.client.post(url),
             "PUT" => self.client.put(url),
+            "PATCH" => self.client.patch(url),
             m => panic!("{m}"),
         }
         .bearer_auth(token);
@@ -225,6 +280,29 @@ impl Api {
         );
         assert_eq!(res.status(), StatusCode::OK);
         read_events(res)
+    }
+
+    /// Pair an Android phone named `name` with its switches `settings`: its id.
+    fn phone(&self, name: &str, settings: Value) -> String {
+        let res = self
+            .client
+            .post(self.server.url("/api/devices/pair"))
+            .json(&json!({ "password": PASSWORD, "name": name, "platform": "android" }))
+            .send()
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let paired: Value = res.json().unwrap();
+        let id = paired["device_id"].as_str().unwrap().to_owned();
+        self.set_switches(&id, settings);
+        id
+    }
+
+    fn set_switches(&self, id: &str, settings: Value) {
+        self.ok(
+            "PATCH",
+            &format!("/api/devices/{id}"),
+            json!({ "settings": settings }),
+        );
     }
 
     fn apply_as(&self, token: &str, change: &Value) -> (StatusCode, Value) {
@@ -762,4 +840,355 @@ fn a_script_change_is_refused_while_a_task_with_folders_runs_it_at_propose_and_a
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"], "not_permitted");
     assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+}
+
+/// The device file that runs `device_messages` for an incoming SMS and for the Outbox's send.
+const ANDROID: &str = "handler \"sms_received\" {\n  script = \"device_messages\"\n}\n\ncommand \"send_sms\" {\n  script = \"device_messages\"\n}\n";
+
+const PHONE_NOTE: &str = "Runs on your phone at its next sync, with no further prompt there.";
+
+#[test]
+fn tool_and_task_phone_sources_show_warnings_and_refuse_added_sms_send() {
+    for (kind, name, wcl) in [("tool", "echo", ECHO), ("task", "nightly", NIGHTLY)] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.seed_users();
+        api.put_text(
+            "/api/device-files/android",
+            "handler \"sms_received\" {\n script = \"stamp\"\n function = \"after_update\"\n}\n",
+        );
+        let pixel = api.phone("Pixel", json!({ "sms_send": true }));
+        let changed = format!("{STAMP}\n// vault::patch\n");
+        let method = format!("propose_{kind}_change");
+        let event = format!("{kind}_proposal");
+        let events = api.one(
+            &fake,
+            &method,
+            json!({ "name": name, "wcl": wcl, "script_source": changed }),
+        );
+        let p = find(&events, &event)
+            .unwrap_or_else(|| panic!("{events:?}"))
+            .clone();
+        assert_eq!(p["device"]["note"], PHONE_NOTE, "{p}");
+        assert_eq!(p["device"]["platforms"], json!(["android"]));
+        assert_eq!(p["device"]["devices"][0]["name"], "Pixel");
+        assert_eq!(p["device"]["devices"][0]["sms_send"], true);
+        assert_eq!(can(&p["device"]), [("notes_write".to_owned(), true)]);
+        let (err, got) = last_result(&fake);
+        assert!(!err, "{got}");
+        assert_eq!(got["device"], p["device"]);
+
+        // Mentions count even in comments, so this still compiles as a tool/task.
+        let forbidden = format!("{changed}\n// device::sms_send\n");
+        let events = api.one(
+            &fake,
+            &method,
+            json!({ "name": name, "wcl": wcl, "script_source": forbidden }),
+        );
+        assert!(find(&events, &event).is_none(), "{events:?}");
+        let (err, got) = last_result(&fake);
+        assert!(err, "{got}");
+        assert!(
+            got["error"]
+                .as_str()
+                .unwrap()
+                .contains("may not add a call to device::sms_send"),
+            "{got}"
+        );
+        let mut forged = p.clone();
+        forged["script_after"] = json!(forbidden);
+        let (status, body) = api.apply_as(&api.token(), &forged);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "not_permitted");
+        assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+
+        api.set_switches(&pixel, json!({ "sms_send": false }));
+        let (status, body) = api.apply_as(&api.token(), &p);
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"], "stale");
+        assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+        let events = api.one(
+            &fake,
+            &method,
+            json!({ "name": name, "wcl": wcl, "script_source": changed }),
+        );
+        let p = find(&events, &event).unwrap();
+        let (status, body) = api.apply_as(&api.token(), p);
+        assert!(status.is_success(), "{status}: {body}");
+        assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
+    }
+}
+
+/// The `key` and `new` of each item of a card's "This code can" list.
+fn can(device: &Value) -> Vec<(String, bool)> {
+    device["can"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["key"].as_str().unwrap().to_owned(), c["new"] == true))
+        .collect()
+}
+
+#[test]
+fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_can_do() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/device-files/android", ANDROID);
+    let pixel = api.phone(
+        "Pixel",
+        json!({ "commands": ["send_sms"], "sms_send": true }),
+    );
+    api.phone("Tablet", json!({ "contacts_write": true }));
+    let current = api.script("device_messages").unwrap();
+    // The new code reads an SMS from the phone's store: a new item. It keeps the one send.
+    let changed = format!(
+        "{current}\nfn peek() -> Result[Value, string] {{\n    device::sms_get(\"x\")\n}}\n"
+    );
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "device_messages", "source": changed }),
+    );
+    let p = find(&events, "script_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    let d = &p["device"];
+    assert!(d["note"].as_str().unwrap().starts_with(PHONE_NOTE), "{p}");
+    assert!(
+        d["note"]
+            .as_str()
+            .unwrap()
+            .contains("signed-in admin must apply"),
+        "{p}"
+    );
+    assert_eq!(d["platforms"], json!(["android"]));
+    let devices: Vec<(String, bool, bool)> = d["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["name"].as_str().unwrap().to_owned(),
+                d["sms_send"] == true,
+                d["contacts_write"] == true,
+            )
+        })
+        .collect();
+    assert_eq!(
+        devices,
+        [
+            ("Pixel".to_owned(), true, false),
+            ("Tablet".to_owned(), false, true)
+        ]
+    );
+    let items = can(d);
+    for kept in ["sms_send", "notifications", "notes_write"] {
+        assert!(items.contains(&(kept.to_owned(), false)), "{kept}: {d}");
+    }
+    assert!(items.contains(&("sms_read".to_owned(), true)), "{d}");
+    assert!(
+        !items
+            .iter()
+            .any(|(k, _)| k == "calls_read" || k == "contacts_write"),
+        "{d}"
+    );
+    assert!(
+        d["can"].as_array().unwrap().iter().any(
+            |c| c["label"] == "Read all SMS, including the codes and people that capture skips"
+        ),
+        "{d}"
+    );
+    // The model reads the same.
+    let (err, got) = last_result(&fake);
+    assert!(!err, "{got}");
+    assert_eq!(got["device"], *d);
+
+    // The Pixel's SMS send is turned off after the card: Apply answers stale, nothing is written.
+    api.set_switches(
+        &pixel,
+        json!({ "commands": ["send_sms"], "sms_send": false }),
+    );
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "stale");
+    assert_eq!(
+        api.script("device_messages").as_deref(),
+        Some(current.as_str())
+    );
+
+    // Proposed again, the card shows the switch as it is now and applies.
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "device_messages", "source": changed }),
+    );
+    let p = find(&events, "script_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    assert_eq!(p["device"]["devices"][0]["sms_send"], false, "{p}");
+    let (status, body) = api.apply_as(&api.token(), &p);
+    assert!(status.is_success(), "{status}: {body}");
+    assert_eq!(
+        api.script("device_messages").as_deref(),
+        Some(changed.as_str())
+    );
+}
+
+#[test]
+fn a_script_that_no_device_file_runs_has_no_phone_block() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.seed_users();
+    let changed = STAMP.replace(
+        "Ok(())\n}\n\nfn after",
+        "let x = 1\n    Ok(())\n}\n\nfn after",
+    );
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "stamp", "source": changed }),
+    );
+    let p = find(&events, "script_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+    assert!(p["device"].is_null(), "{p}");
+}
+
+#[test]
+fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_is_unchanged() {
+    for mode in [
+        "kept_send",
+        "removed_send",
+        "new_contacts",
+        "old_contacts",
+        "plain",
+    ] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.put_text("/api/device-files/android", ANDROID);
+        api.put_text("/api/agents/keeper", KEEPER);
+        let original = api.script("device_messages").unwrap();
+        let plain = original.replace(
+            "device::sms_send(to, text_of(payload, \"body\"))",
+            "Err(\"sending disabled\")",
+        );
+        let (current, changed) = match mode {
+            "kept_send" => (original.clone(), format!("{original}\n")),
+            "removed_send" => (original.clone(), plain.clone()),
+            // Comments count conservatively too, so even aliases or unusual formatting cannot
+            // turn a scanner ambiguity into a write-token grant.
+            "new_contacts" => (plain.clone(), format!("{plain}\n// contacts_upsert\n")),
+            "old_contacts" => (format!("{plain}\n// contacts_delete\n"), plain.clone()),
+            _ => (plain.clone(), format!("{plain}\n")),
+        };
+        api.ok(
+            "PUT",
+            "/api/scripts/device_messages",
+            json!({ "source": current }),
+        );
+        fake.push(AnthropicMessage::new().tool_use(
+            "toolu_phone",
+            "propose_script_change",
+            json!({ "name": "device_messages", "source": changed }),
+        ));
+        fake.push(AnthropicMessage::text("Waiting."));
+        api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
+        api.advance("PT1S");
+        let threads = api.threads("keeper");
+        assert_eq!(threads[0]["pending"], 1, "{mode}: {threads:?}");
+        let thread = threads[0]["id"].as_str().unwrap();
+        let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+        let p = read["proposals"][0]["data"].clone();
+        let write = api.token_of("phone", "write");
+        let (status, body) = api.apply_as(&write, &p);
+        if mode == "plain" {
+            assert_eq!(status, StatusCode::OK, "{mode}: {body}");
+        } else {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
+            assert!(body.to_string().contains("signed-in admin"), "{body}");
+            assert_eq!(
+                api.script("device_messages").as_deref(),
+                Some(current.as_str())
+            );
+            let (status, body) = api.apply_as(&api.token(), &p);
+            assert_eq!(status, StatusCode::OK, "{mode}: {body}");
+        }
+        assert_eq!(
+            api.script("device_messages").as_deref(),
+            Some(changed.as_str())
+        );
+    }
+}
+
+#[test]
+fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/device-files/android", ANDROID);
+    api.phone(
+        "Pixel",
+        json!({ "commands": ["send_sms"], "sms_send": true }),
+    );
+    let current = api.script("device_messages").unwrap();
+    let forward = format!(
+        "{current}\nfn forward() -> Result[Value, string] {{\n    device::sms_send(\"+15550100\", \"x\")\n}}\n"
+    );
+
+    // A second call site is refused at the proposal, and nothing is written (policy P-a).
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "device_messages", "source": forward }),
+    );
+    assert!(find(&events, "script_proposal").is_none(), "{events:?}");
+    let (err, got) = last_result(&fake);
+    assert!(err, "{got}");
+    let why = got["error"].as_str().unwrap();
+    assert!(
+        why.contains("may not add a call to device::sms_send to script \"device_messages\""),
+        "{got}"
+    );
+    assert!(why.contains("calls it 1 times"), "{got}");
+    assert!(why.contains("names sms_send 2 times"), "{got}");
+
+    // Taking the function as a value is a call site too (TV-72 R9).
+    let alias = format!(
+        "{current}\nfn later() -> Result[(), string] {{\n    let f = device::sms_send\n    Ok(())\n}}\n"
+    );
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "device_messages", "source": alias }),
+    );
+    assert!(find(&events, "script_proposal").is_none(), "{events:?}");
+    assert!(last_result(&fake).0);
+
+    // A change that keeps the one call is proposed.
+    let kept = format!("{current}\n");
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({ "name": "device_messages", "source": kept }),
+    );
+    let p = find(&events, "script_proposal")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone();
+
+    // The same card with the new call put into its body is refused at Apply, 403, and nothing is
+    // written.
+    let mut forged = p.clone();
+    forged["after"] = json!(forward);
+    let (status, body) = api.apply_as(&api.token(), &forged);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("device::sms_send")),
+        "{body}"
+    );
+    assert_eq!(
+        api.script("device_messages").as_deref(),
+        Some(current.as_str())
+    );
 }

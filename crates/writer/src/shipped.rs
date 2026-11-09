@@ -256,6 +256,8 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
             "69675d6ec974a5bb2f55142299fbae7946e1296ade8e1f2ad96acbb389becd92",
             "d351063bdf8e46878bf8e5690b33137cb717731a1e42900481e17309167c1ebb",
             "7a8701563c3a169a52400bdebaab7df5952a72bc5e40874515a0c3f0d7b4edd8",
+            "dcbe632ba83ae9d579fa68beb89a8697b678f57b6864192daf95bc303311dfae",
+            "b88ea326a55d87fce37728b85cf59c4c94a4ea62a89a8a76d89b87f96a08684e",
         ],
     },
     ShippedFile {
@@ -264,6 +266,8 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
         hashes: &[
             "ad3f94423ec6b73bccb0bf40c946dd5fba9ada0d5a4ffae45d2ca9c5a7b5f03a",
             "3e486d526fe9a55dc83d3c5d09081af3e844559d2b4265da14ea3ed951b40404",
+            "6c5ac832c14d0a7ca06c2ce78aa2e7574eccd977c9addf3dc360413dc79504be",
+            "144f895e4767ba5c4dace10fda02e98975a7b66d995f96f45088b18ef52eb54b",
         ],
     },
     ShippedFile {
@@ -313,6 +317,7 @@ pub const SHIPPED_FILES: [ShippedFile; 26] = [
             "78cb113d1012c640121c41d832bf2fecda87c8bdc8df07f5d069e3866a0e3ae9",
             "175e50580784f65ebafd57ba29f93d5f9cc337797c541230cabd6b5737bfa8e6",
             "f1fed517f21acfb29055488446fde1c28b5d1f7e4513416388d25fbf200f3740",
+            "3a98b243180c03d8da4f5ba5cc9ba6757c690b902adb79bf698a6d757d99b953",
         ],
     },
 ];

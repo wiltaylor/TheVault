@@ -1007,3 +1007,14 @@
   margin: 0;
   padding-left: 1rem;
 }
+
+/* Where a phone script runs and what it can do there (TV-98). */
+.ai-on-phone-note {
+  margin: 0.25rem 0;
+  padding: 0.25rem 0.5rem;
+  border-left: 3px solid var(--danger, #c0392b);
+}
+
+.ai-runs-as .ai-new {
+  color: var(--danger, #c0392b);
+}
