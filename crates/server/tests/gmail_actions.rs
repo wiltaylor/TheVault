@@ -71,7 +71,7 @@ impl Api {
         for id in messages {
             google.add_message(mail(id));
         }
-        let server = TestServer::start();
+        let server = TestServer::start_with_args(|_| {}, &[std::ffi::OsStr::new("--test-clock"), std::ffi::OsStr::new("2026-11-10T12:00:00Z")]);
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -313,6 +313,7 @@ fn delete_trashes_and_restore_untrashes_the_message_in_gmail() {
     let mut untrash = trash("one");
     untrash.action = "untrash".to_owned();
     assert_eq!(api.google.mail_actions(), [trash("one"), untrash]);
+    assert_eq!(api.server.secret_json("google_gmail_trashed"), json!([]));
     assert_eq!(api.emails().len(), 2);
 }
 
@@ -504,7 +505,7 @@ fn a_ref_the_handler_cannot_remember_still_trashes_and_notifies() {
     let api = Api::start(&["one"], &[MODIFY_SCOPE]);
     let one = api.email("one");
     let email = api.file("types/email.wcl");
-    let without = email.replacen(", \"google_gmail_trashed\"]", "]", 1);
+    let without = email.replace(", \"google_gmail_trashed\"]", "]");
     assert_ne!(without, email);
     // The type has notes, so the change is planned, then applied with the plan's token.
     let plan = expect(
@@ -635,7 +636,7 @@ fn interactive_agents_need_the_gmail_switch_for_archive_and_trash() {
         fake.push(AnthropicMessage::new().tool_use("edit", "propose_edit", json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()})));
         fake.push(AnthropicMessage::new().tool_use("delete", "propose_delete", json!({"id": two})));
         fake.push(AnthropicMessage::text("Done."));
-        let response = api.req("POST", "/api/ai/chat").json(&json!({"agent": "clerk", "messages": [{"role": "user", "content": "Process one and delete two."}]})).send().unwrap();
+        let response = api.req("POST", "/api/ai/chat").json(&json!({"agent": "clerk", "messages": [{"role": "user", "content": [{"type": "text", "text": "Process one and delete two."}]}]})).send().unwrap();
         assert_eq!(response.status(), 200);
         let stream = response.text().unwrap();
         assert!(stream.contains("event: applied"), "{stream}");
@@ -656,6 +657,39 @@ fn failed_restore_keeps_the_vault_copy_and_reports_google_failure() {
     let failed = api.server.settle_handlers();
     assert_eq!(failed.len(), 1, "{failed:?}");
     assert!(failed[0].contains("untrash"), "{failed:?}");
+    assert_eq!(api.server.secret_json("google_gmail_trashed"), json!(["one"]));
     assert_eq!(api.note(&one)["note"]["fields"]["gmail_ref"], "one");
     assert!(api.notifications().iter().any(|n| n["title"] == "Gmail did not untrash an email"));
+}
+
+#[test]
+fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
+    for mention in [false, true] {
+        let api = Api::start(&["one", "two"], &[MODIFY_SCOPE]);
+        let fake = FakeAnthropic::start();
+        for (name, value) in AiSeed::new().account(TestAccount::anthropic(&fake).model("claude-opus-5")).secrets() {
+            expect(api.req("PUT", &format!("/api/secrets/{name}")).json(&json!({"value": value})).send().unwrap(), 200);
+        }
+        let trigger = if mention { "trigger asked { mention = true\n}" } else { "trigger changed { on = [\"update\"]\n type = \"email\"\n prompt = \"Process mail.\"\n}" };
+        expect(api.req("PUT", "/api/agents/clerk").body(format!("label = \"Clerk\"\npermissions {{ gmail_actions = true\n confirm {{ notes = false\n delete = false\n }}\n}}\n{trigger}\n")).send().unwrap(), 200);
+        let one = api.email("one");
+        let two = api.email("two");
+        if mention {
+            expect(api.req("POST", "/api/notes?type=note").json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000001)"}}]}]}})).send().unwrap(), 200);
+        } else {
+            api.edit(&one, json!({"title": "Changed"}));
+        }
+        let mut note = api.note(&one);
+        note["note"]["fields"]["processed"] = json!(true);
+        fake.push(AnthropicMessage::new().tool_use("edit", "propose_edit", json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()})));
+        fake.push(AnthropicMessage::new().tool_use("delete", "propose_delete", json!({"id": two})));
+        fake.push(AnthropicMessage::text("Done."));
+        expect(api.req("POST", "/api/test/clock").json(&json!({"advance": "PT40S"})).send().unwrap(), 200);
+        api.settle();
+        assert_eq!(fake.message_requests().len(), 3, "mention={mention}");
+        assert_eq!(api.note(&one)["note"]["fields"]["processed"], true);
+        assert_eq!(api.emails().len(), 1);
+        assert!(api.google.mail_actions().is_empty(), "mention={mention}");
+        assert!(api.server.secret_json("google_gmail_trashed").is_null());
+    }
 }

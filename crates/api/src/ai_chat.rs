@@ -2230,6 +2230,8 @@ impl Turn {
                 // unattended origin (including mentions) keep the ordinary agent author.
                 let author = if !self.unattended && setup.agent.permissions.gmail_actions {
                     Author::AgentMail(setup.agent.name.clone())
+                } else if matches!(self.author, Author::Agent(_)) {
+                    self.author.clone()
                 } else {
                     Author::Agent(setup.agent.name.clone())
                 };

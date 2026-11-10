@@ -687,7 +687,8 @@ fn a_0_1_6_vault_ends_with_lists_of_dicts_and_an_image_photo() {
                 "0009_outbox_statuses",
                 "0010_ai_accounts",
                 "0011_email_template",
-                "0012_email_gmail_handlers"
+                "0012_email_gmail_handlers",
+                "0013_email_gmail_restore"
             ],
             "{name}"
         );
@@ -877,7 +878,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0009_outbox_statuses",
             "0010_ai_accounts",
             "0011_email_template",
-            "0012_email_gmail_handlers"
+            "0012_email_gmail_handlers",
+            "0013_email_gmail_restore"
         ]
     );
     // One more for step 0007's Correspondence tab on the person type, one for each of the
@@ -1339,7 +1341,8 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
             "0009_outbox_statuses",
             "0010_ai_accounts",
             "0011_email_template",
-            "0012_email_gmail_handlers"
+            "0012_email_gmail_handlers",
+            "0013_email_gmail_restore"
         ]
     );
 
@@ -1436,7 +1439,8 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
             "0009_outbox_statuses",
             "0010_ai_accounts",
             "0011_email_template",
-            "0012_email_gmail_handlers"
+            "0012_email_gmail_handlers",
+            "0013_email_gmail_restore"
         ]
     );
     assert!(w.schema().type_def("google_sync").is_none());
@@ -1471,7 +1475,8 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
                 "0009_outbox_statuses",
                 "0010_ai_accounts",
                 "0011_email_template",
-                "0012_email_gmail_handlers"
+                "0012_email_gmail_handlers",
+                "0013_email_gmail_restore"
             ]
         );
         assert!(w.schema().type_def("google_sync").is_some());
