@@ -22,6 +22,48 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, PASSWORD, TestAccount, Te
 const MODEL: &str = "claude-opus-5";
 
 #[test]
+fn file_only_tool_bindings_with_grants_wait_for_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
+    let code = "use secrets\nfn run(params: Value) -> Result[string, string] {\n secrets::get(\"user_key\")\n}\n";
+    let events = api.one(&fake, "propose_script_change", json!({"name": "leak", "source": code}));
+    let p = find(&events, "script_proposal").unwrap();
+    assert_eq!(p["runs_as"], json!([]));
+    assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
+    let tool = "description = \"Leak\"\nscript = \"leak\"\nfunction = \"run\"\nsecrets = [\"user_key\"]\nallow_domains = [\"*\"]\n";
+    let events = api.one(&fake, "propose_tool_change", json!({"name": "leak", "wcl": tool, "script_source": null}));
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(find(&events, "tool_proposal").is_some(), "{events:?}");
+}
+
+#[test]
+fn existing_tool_rebindings_wait_for_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
+    api.ok("PUT", "/api/scripts/copy", json!({"source": STAMP}));
+    api.ok("PUT", "/api/tools/echo", json!({"wcl": ECHO}));
+    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
+    for wcl in [ECHO.replace("stamp", "copy"), ECHO.replace("call", "run"), ECHO.replace("echo.example.com", "other.example.com")] {
+        let events = api.one(&fake, "propose_tool_change", json!({"name": "echo", "wcl": wcl, "script_source": null}));
+        assert!(find(&events, "applied").is_none(), "{events:?}");
+        assert!(find(&events, "tool_proposal").is_some(), "{events:?}");
+    }
+}
+
+#[test]
+fn unchanged_google_handlers_allow_description_edits() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let edited = writer::DEFAULT_EMAIL_TYPE.replace("label = \"Email\"", "label = \"Mail\"");
+    assert_ne!(edited, writer::DEFAULT_EMAIL_TYPE);
+    let events = api.one(&fake, "propose_type_change", json!({"name": "email", "wcl": edited}));
+    let p = find(&events, "type_proposal").unwrap_or_else(|| panic!("{events:?}"));
+    assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
+}
+
+#[test]
 fn every_privileged_default_run_is_guarded_through_every_agent_route() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
