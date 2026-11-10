@@ -17,7 +17,7 @@
 //!   `{id, title, origin, last_activity, pending, archived, running, turn, started_ms}`:
 //!   `running` says a turn runs on the thread now, `turn` is its id in the turns form (null for a
 //!   trigger's run) and `started_ms` when it started (agents G17).
-//! - `POST /api/agents/{name}/threads` (read) takes `{title?}` and creates a thread, 201 with the
+//! - `POST /api/agents/{name}/threads` (write) takes `{title?}` and creates a thread, 201 with the
 //!   thread.
 //! - `GET /api/agents/{name}/threads/{id}` (read): the thread with its `messages`, `steps` and
 //!   `proposals`, and `running`, `turn` and `started_ms` as the list has them, its `notes`, its
@@ -729,11 +729,9 @@ pub fn create_with(
     if !notes.is_empty() {
         doc["fields"]["notes"] = json!(notes);
     }
-    let saved = w.create(
-        THREAD_TYPE,
-        &Input::Json(doc),
-        &Author::Agent(agent.to_owned()),
-    )?;
+    let saved = w
+        .agent_thread_runtime()
+        .create(&Input::Json(doc), &Author::Agent(agent.to_owned()))?;
     Thread::read(w, &saved.id)
 }
 
@@ -754,7 +752,12 @@ pub fn save(
         let by = author
             .cloned()
             .unwrap_or_else(|| Author::Agent(t.agent.clone()));
-        match w.update(id, &Input::Json(t.to_doc(label)), Some(&t.version), &by) {
+        match w.agent_thread_runtime().update(
+            id,
+            &Input::Json(t.to_doc(label)),
+            Some(&t.version),
+            &by,
+        ) {
             Ok(_) => return Thread::read(w, id),
             Err(e @ writer::Error::Conflict { .. }) => last = Some(e),
             Err(e) => return Err(e.into()),

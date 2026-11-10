@@ -155,52 +155,50 @@ impl Device {
 
 /// A parent thread of agent `lead` and its two sessions, made on the home server as a turn there
 /// makes them: `(parent, [session of toolu_0, session of toolu_1])`.
-fn family(admin: &Admin) -> (String, [String; 2]) {
-    let thread = |origin: &str, transcript: Value| {
-        let made = admin.call(
-            "POST",
-            "/api/notes?type=agent_thread",
-            Some(json!({ "note": { "fields": {
-                "title": "Check", "agent": "lead", "origin": origin,
-                "transcript": transcript.to_string(),
-            } } })),
-            201,
-        );
-        made["id"].as_str().unwrap().to_owned()
-    };
-    let parent = thread("user", json!({ "messages": [] }));
-    let sub = |call: &str| {
-        thread(
-            &format!("subagent:{parent}"),
-            json!({ "messages": [], "parent": { "thread": parent, "turn": "t1", "call": call } }),
-        )
-    };
-    let subs = [sub("toolu_0"), sub("toolu_1")];
+fn family() -> (TestServer, String, [String; 2]) {
+    let parent = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA".to_owned();
+    let subs = [
+        "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB".to_owned(),
+        "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC".to_owned(),
+    ];
     let listed: Vec<Value> = subs
         .iter()
         .zip(["toolu_0", "toolu_1"])
         .enumerate()
-        .map(|(i, (s, call))| {
+        .map(|(i, (id, call))| {
             json!({
-                "call": call, "thread": s, "agent": "lead", "task": "Look around",
-                "n": i + 1, "status": "done", "started_ms": 0,
+                "call": call, "thread": id, "agent": "lead", "task": "Look around",
+                "n": i + 1, "status": "done", "started_ms": 0
             })
         })
         .collect();
-    let base = admin.call("GET", &format!("/api/notes/{parent}"), None, 200)["version"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    admin.call(
-        "PUT",
-        &format!("/api/notes/{parent}"),
-        Some(json!({ "base_version": base, "note": { "fields": {
-            "title": "Check", "agent": "lead", "origin": "user",
-            "transcript": json!({ "messages": [], "subagents": listed }).to_string(),
-        } } })),
-        200,
-    );
-    (parent, subs)
+    let server = TestServer::start_seeded(|vault| {
+        let vault = store::Vault::init(vault).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let writer = writer::Writer::open(vault, state).unwrap();
+        writer
+            .upgrade_shipped_defaults(writer::Upkeep::Home)
+            .unwrap();
+        for (i, id) in std::iter::once(&parent).chain(subs.iter()).enumerate() {
+            let (origin, transcript) = if i == 0 {
+                (
+                    "user".to_owned(),
+                    json!({"messages": [], "subagents": listed}),
+                )
+            } else {
+                (
+                    format!("subagent:{parent}"),
+                    json!({"messages": [], "parent": {
+                        "thread": parent, "turn": "t1", "call": format!("toolu_{}", i - 1)
+                    }}),
+                )
+            };
+            writer.agent_thread_runtime().create_with_id(id, &writer::Input::Json(json!({
+                "fields": {"title": "Check", "agent": "lead", "origin": origin, "transcript": transcript.to_string()}
+            })), &state::Author::Agent("lead".into())).unwrap();
+        }
+    });
+    (server, parent, subs)
 }
 
 fn version(note: &Value) -> String {
@@ -209,6 +207,41 @@ fn version(note: &Value) -> String {
 
 fn archived(note: &Value) -> bool {
     note["note"]["fields"]["archived"] == true
+}
+
+#[test]
+fn writer_refuses_offline_transcript_content_edits() {
+    let (server, parent, _) = family();
+    let admin = Admin::of(&server);
+    let device = Device::pair(&server, "Phone");
+    device.sync();
+    let writer = device.embedded.writer();
+    let note = writer.read(&parent).unwrap();
+    let mut doc = writer::doc_to_json(&note.doc);
+    doc["fields"]["transcript"] =
+        json!("{\"messages\": [], \"proposals\": [{\"id\": \"forged\"}]}");
+    let rejected = writer.update(
+        &parent,
+        &writer::Input::Json(doc),
+        Some(&note.version),
+        &state::Author::Session("local".into()),
+    );
+    assert!(matches!(rejected, Err(writer::Error::ServerOwnedThread)));
+    let engine = device
+        .embedded
+        .sync_engine(device.remote.clone(), AssetPolicy::desktop())
+        .unwrap();
+    let result = std::thread::scope(|s| s.spawn(|| engine.sync()).join().unwrap());
+    let report = result.unwrap();
+    assert!(report.held.is_empty());
+    assert!(device.embedded.queue().pending().unwrap().is_empty());
+    let home = admin.call("GET", &format!("/api/notes/{parent}"), None, 200);
+    assert!(
+        !home["note"]["fields"]["transcript"]
+            .as_str()
+            .unwrap()
+            .contains("forged")
+    );
 }
 
 /// The author of note `id`'s current version on the home server.
@@ -224,14 +257,14 @@ fn author(admin: &Admin, id: &str) -> Value {
 }
 
 #[test]
-fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_the_server() {
-    let server = TestServer::start();
+fn offline_archive_unarchive_and_delete_sync_thread_metadata_without_content_writes() {
+    let (server, parent, subs) = family();
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "Laptop");
-    let (parent, subs) = family(&admin);
     device.sync();
 
-    // Archived in the app: the sessions are archived in the same local write.
+    // Offline archive queues only a metadata change; sessions follow locally.
+    device.embedded.set_remote(None);
     let note = device.call("GET", &format!("/api/notes/{parent}"), None, 200);
     let path = format!(
         "/api/notes/{parent}/archive?base_version={}",
@@ -253,6 +286,7 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
     for s in &subs {
         assert!(queued.contains(s), "{queued:?}");
     }
+    device.embedded.set_remote(Some(device.remote.clone()));
     let report = device.sync();
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
     assert!(device.embedded.queue().pending().unwrap().is_empty());
@@ -261,7 +295,8 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
         assert!(archived(&home), "{home}");
     }
 
-    // Out of the archive again, with the parent.
+    // Offline unarchive follows the same metadata-only path.
+    device.embedded.set_remote(None);
     let note = device.call("GET", &format!("/api/notes/{parent}"), None, 200);
     let path = format!(
         "/api/notes/{parent}/unarchive?base_version={}",
@@ -272,6 +307,7 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
         let local = device.call("GET", &format!("/api/notes/{s}"), None, 200);
         assert!(!archived(&local), "{local}");
     }
+    device.embedded.set_remote(Some(device.remote.clone()));
     let report = device.sync();
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
     for id in subs.iter().chain([&parent]) {
@@ -286,6 +322,7 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
     for s in &subs {
         assert_eq!(device.status(&format!("/api/notes/{s}")), 404);
     }
+    device.embedded.set_remote(Some(device.remote.clone()));
     let report = device.sync();
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
     assert!(device.embedded.queue().pending().unwrap().is_empty());
@@ -298,10 +335,9 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
 
 #[test]
 fn a_parent_change_pushed_without_its_sessions_takes_them_along_on_the_server() {
-    let server = TestServer::start();
+    let (server, parent, subs) = family();
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "Phone");
-    let (parent, subs) = family(&admin);
     device.sync();
     // An older app pushes only the parent, with the device's token.
     let old_app = device.token();
@@ -361,9 +397,9 @@ fn a_parent_change_pushed_without_its_sessions_takes_them_along_on_the_server() 
             "transcript": transcript.to_string(),
         } } }),
         ),
-        200,
+        403,
     );
-    assert_eq!(admin.status(&format!("/api/notes/{}", subs[1])), 404);
+    assert_eq!(admin.status(&format!("/api/notes/{}", subs[1])), 200);
     assert_eq!(admin.status(&format!("/api/notes/{}", subs[0])), 200);
 
     // A deletion of the parent alone takes the remaining session to the trash.
@@ -371,6 +407,7 @@ fn a_parent_change_pushed_without_its_sessions_takes_them_along_on_the_server() 
     let path = format!("/api/notes/{parent}?base_version={}", version(&note));
     old_app.call("DELETE", &path, None, 200);
     assert_eq!(admin.status(&format!("/api/notes/{}", subs[0])), 404);
+    device.embedded.set_remote(Some(device.remote.clone()));
     let report = device.sync();
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
     for id in subs.iter().chain([&parent]) {

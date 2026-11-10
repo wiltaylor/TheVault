@@ -590,15 +590,15 @@ fn the_draft_tools_need_write_and_follow_the_tools_list() {
     api.agent("reader", READER);
 
     let read = api.token_of("viewer", "read");
-    api.one_as(
-        &read,
-        &fake,
-        None,
-        "draft_email",
-        email_input(json!(["ann@example.com"])),
-    );
-    let r = last_result(&fake, true);
-    assert!(r["error"].as_str().unwrap().contains("write"), "{r}");
+    let response = api
+        .client
+        .post(api.server.url("/api/ai/chat"))
+        .bearer_auth(&read)
+        .json(&json!({}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
     let outbox = api.send("POST", "/api/query", json!({ "query": "from outbox" }));
     assert_eq!(outbox["total"], 0, "{outbox}");
 
