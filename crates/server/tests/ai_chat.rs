@@ -279,12 +279,12 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
         "You chose slate, see [Roof decision](/notes/{id})."
     )));
 
-    // A read token may chat (ai D15).
+    // A write token may chat.
     let res = api
         .client
         .post(api.server.url("/api/tokens"))
         .bearer_auth(api.token())
-        .json(&json!({ "name": "reader", "scope": "read" }))
+        .json(&json!({ "name": "reader", "scope": "write" }))
         .send()
         .unwrap();
     assert_eq!(res.status(), StatusCode::CREATED);
@@ -1899,72 +1899,21 @@ fn with_types_confirmation_off_a_template_change_is_applied_through_the_planned_
 }
 
 #[test]
-fn a_read_caller_only_proposes_and_a_write_caller_has_the_agents_rights() {
+fn a_write_callers_direct_changes_cannot_exceed_write_scope() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     api.anthropic(&fake);
     api.confirm(serde_json::from_str(ALL_OFF).unwrap());
-    let reader = api.token_of("reader", "read");
-    let (id, version) = api.memo("Groceries", "Milk");
-    let calls = [
-        (
-            "propose_edit",
-            json!({ "id": id, "base_version": version, "note": memo_doc("Groceries", "Eggs").to_string() }),
-            "proposal",
-        ),
-        (
-            "propose_create",
-            json!({ "type": "memo", "note": memo_doc("New", "x").to_string() }),
-            "proposal",
-        ),
-        (
-            "propose_archive",
-            json!({ "id": id, "archived": true }),
-            "proposal",
-        ),
-        ("propose_delete", json!({ "id": id }), "proposal"),
-        (
-            "propose_type_change",
-            json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
-            "type_proposal",
-        ),
-    ];
-    for (tool, input, event) in calls.clone() {
-        let fake = FakeAnthropic::start();
-        api.anthropic(&fake);
-        api.confirm(serde_json::from_str(ALL_OFF).unwrap());
-        let events = api.propose_as(&reader, &fake, tool, input);
-        assert_eq!(
-            shape(&events),
-            ["tool", event, "tool_result", "text", "done"],
-            "{tool}: {events:?}"
-        );
-        assert!(
-            result_json(&fake, false)["message"]
-                .as_str()
-                .unwrap()
-                .contains("awaits the user"),
-            "{tool}"
-        );
-    }
-    assert_eq!(api.note(&id)["version"], version.as_str());
-    assert_eq!(api.memos().len(), 1);
-    assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
-
-    // A write token's turn, such as an app's, has the agent's own rights (agents G4): the
-    // Assistant may change types, so with the switch off the type change is made.
     let writer = api.token_of("writer", "write");
-    let (tool, input, _) = calls[4].clone();
-    let fake = FakeAnthropic::start();
-    api.anthropic(&fake);
-    api.confirm(serde_json::from_str(ALL_OFF).unwrap());
-    let events = api.propose_as(&writer, &fake, tool, input);
-    assert_eq!(
-        shape(&events),
-        ["tool", "applied", "tool_result", "text", "done"],
-        "{events:?}"
+    let events = api.propose_as(
+        &writer,
+        &fake,
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
     );
-    assert!(api.type_wcl("memo").unwrap().contains("tab \"Details\""));
+    assert!(shape(&events).contains(&"type_proposal"), "{events:?}");
+    assert!(!shape(&events).contains(&"applied"), "{events:?}");
+    assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
 }
 
 // The turns form and the apply route (ai D23).
@@ -2046,7 +1995,7 @@ fn a_turn_started_with_post_turns_streams_the_same_events_as_post_chat() {
     let posted = api.chat(sent.clone());
 
     push_search_then_answer(&fake);
-    let reader = api.token_of("reader", "read");
+    let reader = api.token_of("reader", "write");
     let (status, v) = api.start_turn(&reader, json!({ "messages": sent }));
     assert_eq!(status, StatusCode::CREATED, "{v}");
     let turn = v["turn"].as_str().unwrap();
@@ -2104,7 +2053,9 @@ fn a_turn_is_read_only_by_its_caller_by_any_number_of_readers() {
     api.anthropic(&fake);
     fake.push(AnthropicMessage::text(&"slow ".repeat(40)).delay(Duration::from_millis(20)));
     let turn = api.turn(json!([user("Go")]));
-    let other = api.token_of("other", "read");
+    let other = api.token_of("other", "write");
+    let reader = api.token_of("reader-stop", "read");
+    assert_eq!(api.stop_turn(&reader, &turn), StatusCode::FORBIDDEN);
     assert_eq!(
         api.turn_events(&other, &turn).status(),
         StatusCode::NOT_FOUND
@@ -2187,8 +2138,8 @@ fn a_fifth_running_turn_for_one_caller_is_refused() {
     let (status, v) = api.start_turn(&api.token(), json!({ "messages": [user("Go")] }));
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
     assert_eq!(v["error"], "too_many_turns");
-    // Another caller has turns of its own.
-    let other = api.token_of("other", "read");
+    // Another writer has turns of its own.
+    let other = api.token_of("other", "write");
     let (status, _) = api.start_turn(&other, json!({ "messages": [user("Go")] }));
     assert_eq!(status, StatusCode::CREATED);
     // A stopped turn makes room.

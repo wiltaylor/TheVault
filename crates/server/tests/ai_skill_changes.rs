@@ -631,36 +631,23 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     assert_eq!(r["applied"], true);
     assert!(r["message"].as_str().unwrap().contains("use_skill"), "{r}");
 
-    // A read token's turn only proposes, whatever the switch says, and a write token's apply of a
-    // proposal no thread holds is refused.
-    let read = api.token_of("reader", "read");
-    let write = api.token_of("phone", "write");
-    fake.push(AnthropicMessage::new().tool_use(
-        "toolu_d",
-        "propose_skill_delete",
-        json!({ "name": "pdf-tools" }),
-    ));
-    fake.push(AnthropicMessage::text("Proposed."));
-    let events = api.chat_as(&read, json!({ "messages": [user("Delete it.")] }));
-    let p = last(&events, "skill_proposal").clone();
-    let (status, body) = api.apply_as(&write, &p);
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"], "needs_admin");
-    assert_eq!(body["message"], "Apply skill changes in the web app.");
-    assert_eq!(api.status("/api/skills/pdf-tools"), StatusCode::OK);
-
-    // A write token's turn, such as an app's, has the agent's own rights (agents G4): the
-    // Assistant may change skills, so with the switch off the delete is made.
-    fake.push(AnthropicMessage::new().tool_use(
-        "toolu_w",
-        "propose_skill_delete",
-        json!({ "name": "pdf-tools" }),
-    ));
-    fake.push(AnthropicMessage::text("Deleted."));
-    let events = api.chat_as(&write, json!({ "messages": [user("Delete it.")] }));
-    assert!(find(&events, "skill_proposal").is_none(), "{events:?}");
-    assert_eq!(last(&events, "applied")["op"], "skill_delete");
-    assert_eq!(api.status("/api/skills/pdf-tools"), StatusCode::NOT_FOUND);
+    // A write caller cannot inherit the agent's admin scope, even with confirmation off.
+    for (name, scope) in [("phone", "write"), ("agent-chat", "admin")] {
+        let write = api.token_of(name, scope);
+        fake.push(AnthropicMessage::new().tool_use(
+            "toolu_d",
+            "propose_skill_delete",
+            json!({ "name": "pdf-tools" }),
+        ));
+        fake.push(AnthropicMessage::text("Proposed."));
+        let events = api.chat_as(&write, json!({ "messages": [user("Delete it.")] }));
+        let p = last(&events, "skill_proposal").clone();
+        assert!(find(&events, "applied").is_none(), "{events:?}");
+        let (status, body) = api.apply_as(&write, &p);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "needs_admin");
+        assert_eq!(api.status("/api/skills/pdf-tools"), StatusCode::OK);
+    }
 }
 
 #[test]

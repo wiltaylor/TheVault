@@ -319,9 +319,8 @@ fn saved_scripts_and_tasks_are_offered_only_with_run_saved_or_run_code() {
             assert!(!offered.contains(&"run_script".to_owned()));
         }
     }
-    // A run's changes are made at once, so a `read` caller's turn is offered none; a `write`
-    // caller's (an app's) has the agent's own scope.
-    for (scope, offers) in [("read", false), ("write", true)] {
+    // Script calls are offered to writers and admins within the agent's permissions.
+    for (scope, offers) in [("write", true), ("admin", true)] {
         let token = api.token_of(&format!("caller_{scope}"), scope);
         let offered = api.offered_to(&fake, &token, Some("saver"));
         assert_eq!(
