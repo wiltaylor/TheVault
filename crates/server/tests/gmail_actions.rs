@@ -672,6 +672,11 @@ fn interactive_agents_need_the_gmail_switch_for_archive_and_trash() {
                 vec![]
             }
         );
+        if !allowed {
+            api.google.set_history_not_found(true);
+            api.run_gmail();
+            assert_eq!(api.emails().len(), 1, "a local-only agent delete must survive a Gmail relist");
+        }
     }
 }
 
