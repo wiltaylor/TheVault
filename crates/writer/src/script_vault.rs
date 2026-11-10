@@ -101,9 +101,9 @@ fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
         })
         .map_err(err)?;
     if agent_reading() {
-        let before = rows.len();
         rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
-        OMITTED.with(|n| n.set(n.get() + before - rows.len()));
+        // Never reveal whether a particular reference set contains held notes.
+        OMITTED.with(|n| n.set(1));
     }
     Ok(rows)
 }
