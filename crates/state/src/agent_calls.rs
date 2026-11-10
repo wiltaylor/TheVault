@@ -36,6 +36,14 @@ impl State {
         )? == 1)
     }
 
+    /// Whether a reserved id belongs elsewhere. Observing a copy must not poison it.
+    pub fn agent_call_bound_elsewhere(&self, call: &str, note: &str, agent: &str) -> Result<bool> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_call_ids WHERE call=?1 AND (note<>?2 OR agent<>?3))",
+            params![call, note, agent], |r| r.get(0),
+        )?)
+    }
+
     /// Records call `call` of `agent` from note `note`, answered by `thread`. Answers false, and
     /// changes nothing, when the call is recorded already.
     pub fn record_agent_call(
@@ -59,6 +67,9 @@ impl State {
         let changed = self
             .conn()
             .execute("DELETE FROM agent_calls WHERE call = ?1", [call])?;
+        if changed == 1 {
+            self.conn().execute("UPDATE agent_call_ids SET used=0 WHERE call=?1", [call])?;
+        }
         Ok(changed == 1)
     }
 

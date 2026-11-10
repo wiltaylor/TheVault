@@ -550,9 +550,11 @@ impl Scheduler {
         let mut plan = self.plan();
         for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
             let deleting = plan.agents.deleting.remove(&s.id);
-            // Only an editor session can commit a call. A later untrusted write
-            // must also cancel a pending scan of the same note.
+            // Scan the latest version, including refusals for agent-written calls.
             plan.agents.mentions.remove(&s.id);
+            if s.event != Event::Delete {
+                plan.agents.mentions.insert(s.id.clone(), s.type_name.clone());
+            }
             if matches!(author, Author::Agent(_)) {
                 continue;
             }
@@ -561,12 +563,6 @@ impl Scheduler {
                 Event::Update => "update",
                 Event::Delete => "delete",
             };
-            // A saved note is read for calls committed in it (agents G19).
-            if s.event != Event::Delete {
-                plan.agents
-                    .mentions
-                    .insert(s.id.clone(), s.type_name.clone());
-            }
             plan.agents.heard.push(Heard {
                 op,
                 id: s.id.clone(),
@@ -707,9 +703,6 @@ impl Scheduler {
         let Ok(Some(version)) = self.writer.state().version(id, &note.version) else {
             return Vec::new();
         };
-        if matches!(version.author, Author::Agent(_)) {
-            return Vec::new();
-        }
         let found = mentions::calls(&note.doc);
         if found.is_empty() {
             return Vec::new();
@@ -742,7 +735,11 @@ impl Scheduler {
                     }
                 }
             };
-            if !state.consume_agent_call(&call.call, id, &call.agent).unwrap_or(false) {
+            if state.agent_call_bound_elsewhere(&call.call, id, &call.agent).unwrap_or(true) {
+                continue;
+            }
+            if matches!(version.author, Author::Agent(_))
+                || !state.consume_agent_call(&call.call, id, &call.agent).unwrap_or(false) {
                 record(None);
                 continue;
             }

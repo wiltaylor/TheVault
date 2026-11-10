@@ -838,7 +838,7 @@ impl Api {
     }
 
     /// A memo whose body calls `agent` with call id `call`.
-    fn call_note(&self, agent: &str, call: &str) {
+    fn call_note(&self, agent: &str, _call: &str) {
         let login = self
             .client
             .post(self.server.url("/api/login"))
@@ -852,12 +852,21 @@ impl Api {
             .split(';')
             .next()
             .unwrap();
+        let saved: Value = self.client.post(self.server.url("/api/notes?type=memo"))
+            .header("cookie", cookie)
+            .json(&json!({ "note": { "fields": { "title": "Ask" } } }))
+            .send().unwrap().error_for_status().unwrap().json().unwrap();
+        let issued: Value = self.client.post(self.server.url("/api/agents/calls"))
+            .header("cookie", cookie)
+            .json(&json!({ "note": saved["id"], "agent": agent }))
+            .send().unwrap().error_for_status().unwrap().json().unwrap();
+        let call = issued["call"].as_str().unwrap();
         let text = format!("[@Keeper tidy the script.](agent:{agent}?call={call})");
         let response = self
             .client
-            .post(self.server.url("/api/notes?type=memo"))
+            .put(self.server.url(&format!("/api/notes/{}", saved["id"].as_str().unwrap())))
             .header("cookie", cookie)
-            .json(&json!({ "note": {
+            .json(&json!({ "base_version": saved["version"], "note": {
                 "fields": { "title": "Ask" },
                 "blocks": [{ "kind": "content", "labels": ["body"], "blocks": [
                     { "kind": "paragraph", "fields": { "text": text } },

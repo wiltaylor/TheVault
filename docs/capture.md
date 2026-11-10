@@ -34,7 +34,7 @@ Each drawing shows as a small preview in the dialog, and its **×** removes it b
 
 With an agent chosen, **Save** adds one more paragraph to the end of the note's body: a call to the agent, `@<Agent> Process this capture`, linked as `agent:<name>?call=<id>` with a new call id. The toast says "Saved and sent to <Agent>". The server answers the call once, as it answers any call written in a note: the agent runs with the note's text as its context, and the note is not changed. The link shows in the note as a chip that opens the agent's thread.
 
-The dialog remembers the choice on each device, so the next capture is sent to the same agent until you choose **No one**. In the apps the list comes from the home server. With no connection the app still saves the call, and the server answers it when the note syncs.
+The dialog remembers the choice on each device, so the next capture is sent to the same agent until you choose **No one**. In the apps the list comes from the home server. A call needs a connection to obtain a server-issued id bound to the saved note and agent. Offline, the capture is saved to the inbox without a call and the dialog explains that calling needs a connection. Retrying uses that saved capture rather than creating a duplicate. Once issued, the call runs when the note syncs, provided the unused id has not expired after 24 hours.
 
 ## Sharing to TheVault on Android
 

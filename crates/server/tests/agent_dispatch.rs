@@ -186,6 +186,27 @@ impl Api {
             .unwrap();
         assert!(response.status().is_success());
         let v: Value = response.json().unwrap();
+        let id = v["id"].as_str().unwrap();
+        let mut text: Vec<String> = paragraphs.iter().map(|p| (*p).to_owned()).collect();
+        let mut changed = false;
+        for p in &mut text {
+            if let Some((_, rest)) = p.split_once("agent:") {
+                let (agent, tail) = rest.split_once("?call=").unwrap();
+                let old = tail.split(')').next().unwrap().to_owned();
+                let issued: Value = self.client.post(self.server.url("/api/agents/calls"))
+                    .header("cookie", cookie).json(&json!({ "note": id, "agent": agent }))
+                    .send().unwrap().error_for_status().unwrap().json().unwrap();
+                *p = p.replace(&old, issued["call"].as_str().unwrap());
+                changed = true;
+            }
+        }
+        if changed {
+            let refs: Vec<&str> = text.iter().map(String::as_str).collect();
+            self.client.put(self.server.url(&format!("/api/notes/{id}")))
+                .header("cookie", cookie)
+                .json(&json!({ "note": note_json(title, &refs), "base_version": v["version"] }))
+                .send().unwrap().error_for_status().unwrap();
+        }
         v["id"].as_str().unwrap().to_owned()
     }
 

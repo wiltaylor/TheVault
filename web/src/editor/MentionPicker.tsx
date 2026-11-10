@@ -341,6 +341,7 @@ export function MentionPicker(props: SolidNodeViewProps) {
           onKeyDown={onKeyDown}
         />
       </Show>
+      <Show when={asking() && error()}><span class="error">{error()}</span></Show>
       <Show when={!asking() && (choices().length > 0 || error() || hint())}>
         <span class="mention-results" id="mention-results" role="listbox" data-node-view-interactive>
           <Show when={error()}>

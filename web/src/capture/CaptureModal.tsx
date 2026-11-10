@@ -127,7 +127,7 @@ export function CaptureModal() {
         catch { throw new Error("Saved to inbox. Calling an agent needs a connection to your server."); }
         call = { agent: agent.name, label: agentLabel(agent), call: issued.call };
       }
-      const saved = await api.updateNote(retained.id, captureDoc(type(), text(), ids, new Date(), { drawings: drawings(), call }), retained.version);
+      const saved = call ? await api.updateNote(retained.id, captureDoc(type(), text(), ids, new Date(), { drawings: drawings(), call }), retained.version) : retained;
       retained = saved;
       const title = saved.note.fields.title;
       if (typeof title === "string") knowTitle(saved.id, title, saved.type);

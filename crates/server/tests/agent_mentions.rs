@@ -197,6 +197,21 @@ impl Api {
         );
     }
 
+    fn issue(&self, id: &str, agent: &str) -> String {
+        self.send("POST", "/api/agents/calls", json!({ "note": id, "agent": agent }))["call"]
+            .as_str().unwrap().to_owned()
+    }
+
+    fn called_note(&self, title: &str, text: &str, agent: &str, before: &[&str]) -> (String, String, String) {
+        let id = self.note("memo", title, before);
+        let issued = self.issue(&id, agent);
+        let asked = call(text, agent, &issued);
+        let mut paragraphs = before.to_vec();
+        paragraphs.push(&asked);
+        self.save(&id, title, &paragraphs);
+        (id, asked, issued)
+    }
+
     /// The text of each paragraph of note `id`'s body.
     fn paragraphs(&self, id: &str) -> Vec<String> {
         let note = self.get(&format!("/api/notes/{id}"));
@@ -267,7 +282,7 @@ fn a_pushed_message_call_starts_no_run() {
         "an imported message must not call an agent"
     );
     assert!(fake.message_requests().is_empty());
-    assert_eq!(api.status(&format!("/api/agents/calls/{CALL}")), 404);
+    assert_eq!(api.status(&format!("/api/agents/calls/{CALL}")), 200);
 }
 
 #[test]
@@ -293,7 +308,7 @@ fn imported_types_cannot_call_agents_even_when_a_session_saves_them() {
         assert!(fake.message_requests().is_empty(), "{type_name}");
         assert_eq!(
             api.status(&format!("/api/agents/calls/{CALL}")),
-            404,
+            200,
             "{type_name}"
         );
     }
@@ -318,7 +333,7 @@ fn a_token_write_cannot_call_an_agent_in_an_editor_note() {
     api.advance("PT1S");
     assert!(api.threads("helper").is_empty());
     assert!(fake.message_requests().is_empty());
-    assert_eq!(api.status(&format!("/api/agents/calls/{CALL2}")), 404);
+    assert_eq!(api.status(&format!("/api/agents/calls/{CALL2}")), 200);
 }
 
 /// A call of `agent` with link text `text` and call id `call`, as the editor commits it.
@@ -347,13 +362,74 @@ fn call(text: &str, agent: &str, call: &str) -> String {
 }
 
 #[test]
+fn only_sessions_and_paired_device_write_tokens_can_issue_calls() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("helper", "label = \"Helper\"\n");
+    let id = api.note("memo", "App editor", &[]);
+    for (name, scope) in [("reader", "read"), ("writer", "write"), ("agent-helper", "write")] {
+        let token = api.send("POST", "/api/tokens", json!({ "name": name, "scope": scope }));
+        let response = api.client.post(api.server.url("/api/agents/calls"))
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .json(&json!({ "note": id, "agent": "helper" })).send().unwrap();
+        assert_eq!(response.status().as_u16(), 403, "{name}");
+    }
+    let response = api.client.post(api.server.url("/api/agents/calls"))
+        .bearer_auth(api.server.admin_token())
+        .json(&json!({ "note": id, "agent": "helper" })).send().unwrap();
+    assert_eq!(response.status().as_u16(), 403);
+    let paired: Value = api.client.post(api.server.url("/api/devices/pair"))
+        .json(&json!({ "password": testkit::PASSWORD, "name": "Phone", "platform": "android" }))
+        .send().unwrap().error_for_status().unwrap().json().unwrap();
+    let token = paired["token"].as_str().unwrap();
+    let issued: Value = api.client.post(api.server.url("/api/agents/calls"))
+        .bearer_auth(token).json(&json!({ "note": id, "agent": "helper" }))
+        .send().unwrap().error_for_status().unwrap().json().unwrap();
+    let asked = call("@Helper from the app", "helper", issued["call"].as_str().unwrap());
+    let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
+    api.client.put(api.server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(token).json(&json!({ "note": note_json("App editor", &[&asked]), "base_version": version }))
+        .send().unwrap().error_for_status().unwrap();
+    fake.push(AnthropicMessage::text("App call answered."));
+    api.advance("PT1S");
+    assert_eq!(api.threads("helper").len(), 1);
+    api.save(&id, "App editor changed", &[&asked]);
+    api.advance("PT1S");
+    assert_eq!(fake.message_requests().len(), 1);
+}
+
+#[test]
+fn issued_calls_are_note_and_agent_bound_and_expire() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("helper", "label = \"Helper\"\n");
+    api.agent("owl", OWL);
+    let id = api.note("memo", "Original", &[]);
+    let issued = api.issue(&id, "helper");
+    let asked = call("@Helper request", "helper", &issued);
+    api.note("memo", "Copy", &[&asked]);
+    api.save(&id, "Original", &[&call("@Night owl request", "owl", &issued)]);
+    api.advance("PT1S");
+    assert!(fake.message_requests().is_empty());
+    api.save(&id, "Original", &[&asked]);
+    fake.push(AnthropicMessage::text("Only original."));
+    api.advance("PT1S");
+    assert_eq!(fake.message_requests().len(), 1);
+    let expired = api.issue(&id, "helper");
+    api.advance("PT24H");
+    api.save(&id, "Expired", &[&call("@Helper too late", "helper", &expired)]);
+    api.advance("PT1S");
+    assert_eq!(fake.message_requests().len(), 1);
+    assert!(api.get(&format!("/api/agents/calls/{expired}"))["thread"].is_null());
+}
+
+#[test]
 fn a_committed_call_starts_one_run_and_leaves_the_note_as_it_was() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
     assert_eq!(api.status(&format!("/api/agents/calls/{CALL}")), 404);
-    let asked = call("@Clerk please list what to buy.", "clerk", CALL);
-    let id = api.note("memo", "Roof", &["Gutters are full.", &asked]);
+    let (id, asked, issued) = api.called_note("Roof", "@Clerk please list what to buy.", "clerk", &["Gutters are full."]);
     let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
     fake.push(AnthropicMessage::text("Ladder, gloves."));
     api.advance("PT1S");
@@ -389,14 +465,14 @@ fn a_committed_call_starts_one_run_and_leaves_the_note_as_it_was() {
         ["Gutters are full.".to_owned(), asked.clone()]
     );
     assert_eq!(
-        api.get(&format!("/api/agents/calls/{CALL}")),
+        api.get(&format!("/api/agents/calls/{issued}")),
         json!({ "agent": "clerk", "note": id, "thread": thread, "running": false })
     );
 
     // Saving again, editing the call's text, or the call in another note calls no one.
     api.save(&id, "Roof", &["Gutters are full.", &asked, "Bought them."]);
     api.advance("PT1S");
-    let edited = call("@Clerk list what to buy, and where.", "clerk", CALL);
+    let edited = call("@Clerk list what to buy, and where.", "clerk", &issued);
     api.save(&id, "Roof", &[&edited]);
     api.advance("PT1S");
     api.note("memo", "Copy", &[&edited]);
@@ -431,11 +507,7 @@ fn a_call_written_by_the_agent_itself_calls_no_one() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
-    api.note(
-        "memo",
-        "Roof",
-        &[&call("@Clerk start a memo for the gutters.", "clerk", CALL)],
-    );
+    let (source, _, _) = api.called_note("Roof", "@Clerk start a memo for the gutters.", "clerk", &[]);
     // The run writes a memo that calls the agent again, as the agent: that calls no one (G11).
     let again = call("@Clerk look at this later.", "clerk", CALL2);
     let memo = note_json("Gutters", &[&again]);
@@ -457,7 +529,11 @@ fn a_call_written_by_the_agent_itself_calls_no_one() {
         "the agent's own call starts nothing"
     );
     assert_eq!(api.threads("clerk").len(), 1);
-    assert_eq!(api.status(&format!("/api/agents/calls/{CALL2}")), 404);
+    assert_eq!(api.status(&format!("/api/agents/calls/{CALL2}")), 200);
+    let planted = rows.iter().find(|r| r["title"] == "Gutters").unwrap()["id"].as_str().unwrap();
+    api.save(planted, "Gutters corrected", &[&again, "Unrelated edit"]);
+    api.advance("PT1S");
+    assert_eq!(api.threads("clerk").len(), 1, "agent-planted calls stay refused after session edits: {source}");
 }
 
 #[test]
@@ -466,12 +542,15 @@ fn two_calls_in_one_note_start_two_runs() {
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
     api.agent("owl", OWL);
-    let id = api.note(
-        "memo",
+    let id = api.note("memo", "Plan", &[]);
+    let issued = api.issue(&id, "clerk");
+    let issued2 = api.issue(&id, "owl");
+    api.save(
+        &id,
         "Plan",
         &[
-            &format!("{} and the rest.", call("@Clerk split this", "clerk", CALL)),
-            &call("@Night owl check the dates", "owl", CALL2),
+            &format!("{} and the rest.", call("@Clerk split this", "clerk", &issued)),
+            &call("@Night owl check the dates", "owl", &issued2),
         ],
     );
     api.advance("PT1S");
@@ -528,11 +607,7 @@ fn an_agent_with_no_mention_trigger_is_called_too() {
     let api = Api::start(&fake);
     // No trigger at all: the agent answers a call from any type through the implicit trigger.
     api.agent("helper", "label = \"Helper\"\n");
-    let id = api.note(
-        "memo",
-        "Shed",
-        &[&call("@Helper what paint lasts outdoors?", "helper", CALL)],
-    );
+    let (id, _, _) = api.called_note("Shed", "@Helper what paint lasts outdoors?", "helper", &[]);
     fake.push(AnthropicMessage::text("Oil-based enamel."));
     api.advance("PT1S");
 
@@ -570,11 +645,7 @@ fn a_call_runs_on_the_agents_own_model_whatever_the_chat_box_chose() {
     let events = res.text().unwrap();
     assert!(events.contains("event: done"), "{events}");
     // A call from a note runs on the agent's own model.
-    api.note(
-        "memo",
-        "Shed",
-        &[&call("@Helper what paint lasts outdoors?", "helper", CALL)],
-    );
+    api.called_note("Shed", "@Helper what paint lasts outdoors?", "helper", &[]);
     fake.push(AnthropicMessage::text("Oil-based enamel."));
     api.advance("PT1S");
     let models: Vec<Value> = fake
@@ -603,8 +674,7 @@ fn a_call_keeps_a_change_its_switch_asks_for_as_a_proposal_and_makes_the_rest() 
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("keeper", KEEPER);
-    let asked = call("@Keeper retitle this and archive it.", "keeper", CALL);
-    let id = api.note("memo", "Roof", &["Gutters are full.", &asked]);
+    let (id, asked, _) = api.called_note("Roof", "@Keeper retitle this and archive it.", "keeper", &["Gutters are full."]);
     let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
     // The edit's switch is off, the archive's is on.
     fake.push(AnthropicMessage::new().tool_use(
