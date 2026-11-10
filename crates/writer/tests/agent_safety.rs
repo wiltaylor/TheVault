@@ -85,7 +85,7 @@ fn review3_member_write_cost_with_large_safety_state() {
         let began = std::time::Instant::now();
         for _ in 0..10 {
             let note = w.read(&member.id).unwrap();
-            w.update(&member.id, &Input::Json(writer::doc_to_json(&note.doc)), None, &actor).unwrap();
+            w.update(&member.id, &Input::Json(writer::doc_to_json(&note.doc)), Some(&note.version), &actor).unwrap();
         }
         eprintln!("member write large={large}: {:?} per write", began.elapsed()/10);
     }
