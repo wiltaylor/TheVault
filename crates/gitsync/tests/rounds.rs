@@ -42,11 +42,33 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     let commit = git.commit_tree(&tree, "old peer transcript fixture").unwrap();
     git.force_push(&commit, &layout.branch()).unwrap();
 
+    // This vault's own old published branch also held a thread. Removing its export must
+    // remove only the repo copy, never the live local thread or its version.
+    let info = b.get("/api/sync/info");
+    let own_vault = s(&info["vault_id"]);
+    let own_layout = Layout::new(&key, own_vault);
+    let own_note = b.note(own).unwrap();
+    let own_version = own_note["version"].clone();
+    let own_text = s(&own_note["wcl"]);
+    let mut old_manifest = Manifest::new(Named { vault_id: own_vault.into(), name: "B".into() });
+    old_manifest.notes.push(gitsync::NoteEntry {
+        id: own.into(), note_type: "agent_thread".into(), origin: own_vault.into(),
+        hash: gitsync::pack::sha256_hex(own_text.as_bytes()), path: own_layout.note(own), assets: vec![],
+    });
+    old_manifest.types.push(gitsync::DefEntry { name: "agent_thread".into(), path: own_layout.type_def("agent_thread") });
+    let mut old_files = BTreeMap::new();
+    old_files.insert(own_layout.note(own), gitsync::pack::seal_note(&key, "agent_thread", own_text.as_bytes()));
+    old_files.insert(own_layout.type_def("agent_thread"), key.seal(s(&thread_type["wcl"]).as_bytes()));
+    old_files.insert(own_layout.manifest(), old_manifest.seal(&key));
+    let old_tree = git.write_tree(&old_files).unwrap();
+    let old_commit = git.commit_tree(&old_tree, "old local export fixture").unwrap();
+    git.force_push(&old_commit, &own_layout.branch()).unwrap();
+
     let report = b.sync();
     assert!(ids(&report, "created").is_empty(), "{report}");
     assert!(report["warnings"].as_array().unwrap().is_empty(), "{report}");
     assert!(b.note(incoming).is_none());
-    assert!(b.note(own).is_some());
+    assert_eq!(b.note(own).unwrap()["version"], own_version);
     assert!(b.note(&memo_id).is_some());
     assert_eq!(report["published"], 1, "{report}");
     let again = b.sync();
