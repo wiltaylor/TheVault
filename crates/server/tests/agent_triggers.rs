@@ -444,6 +444,23 @@ fn safety_trigger_backfill_excludes_held_notes() {
     assert!(chat.message_requests().is_empty());
 }
 
+#[test]
+fn safety_delete_of_held_note_does_not_enqueue_its_content() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    api.agent("reader", "label = \"Reader\"\ntrigger removed { on = [\"delete\"] type = \"email\" prompt = \"Read the removed note.\" }\n");
+    decisions.push(safety_reply("prompt_injection"));
+    let note = safety_note(&api);
+    let id = note["id"].as_str().unwrap();
+    assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
+    let response = api.request("DELETE", &format!("/api/notes/{id}"), None);
+    assert!(response.status().is_success());
+    api.advance("PT31S");
+    assert!(chat.message_requests().is_empty());
+    assert!(api.get("/api/agents/reader/runs")["runs"].as_array().unwrap().is_empty());
+}
+
 fn safety_wait(api: &Api, id: &str) -> Value {
     let began = std::time::Instant::now();
     loop {

@@ -587,7 +587,7 @@ pub async fn run_route(
     // reads and writes enforce the same held-note rules as internal agents.
     let by = if crate::auth::is_agent_token(&by) {
         let Author::Token(name) = by else { unreachable!() };
-        Author::Agent(format!("token:{name}"))
+        Author::Agent(name)
     } else {
         by
     };
