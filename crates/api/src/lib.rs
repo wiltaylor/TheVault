@@ -67,7 +67,6 @@
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod activity;
-mod attempt_limits;
 mod agent_files;
 mod agent_memory;
 mod agent_runs;
@@ -98,6 +97,7 @@ mod ai_turns;
 mod ai_web;
 mod apps;
 mod assets;
+mod attempt_limits;
 mod auth;
 mod batch;
 mod brave;
@@ -566,7 +566,10 @@ pub fn router(
         app = app.merge(desktop);
     }
     app.layer(middleware::from_fn_with_state(sessions, auth::authenticate))
-        .layer(middleware::from_fn_with_state(limits, attempt_limits::check))
+        .layer(middleware::from_fn_with_state(
+            limits,
+            attempt_limits::check,
+        ))
 }
 
 /// Builds the router for every `/api` route with no credentials checked: every request acts as

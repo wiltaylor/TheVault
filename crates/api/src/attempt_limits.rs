@@ -92,7 +92,9 @@ impl Limits {
                 // Reject duplicate headers rather than guessing which one a proxy wrote.
                 let mut values = headers.get_all(p.header).iter();
                 let value = values.next()?.to_str().ok()?;
-                if values.next().is_some() { return None; }
+                if values.next().is_some() {
+                    return None;
+                }
                 if p.header == "x-forwarded-for" {
                     // Caddy appends its immediate client, so ignore the untrusted prefix.
                     value.rsplit(',').next()

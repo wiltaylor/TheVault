@@ -213,9 +213,22 @@ fn cloudflare_and_global_budget_keep_a_clean_address_available() {
     };
     assert_eq!(attempt("198.51.100.1").status(), 429);
     assert_eq!(attempt("198.51.100.200").status(), 200);
-    let notifications: serde_json::Value = client.get(server.url("/api/notifications"))
-        .bearer_auth(server.admin_token()).send().unwrap().json().unwrap();
-    assert_eq!(notifications["items"].as_array().unwrap().iter().filter(|n| n["source"] == "server:auth").count(), 1);
+    let notifications: serde_json::Value = client
+        .get(server.url("/api/notifications"))
+        .bearer_auth(server.admin_token())
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        notifications["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["source"] == "server:auth")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -223,13 +236,53 @@ fn successful_pairing_resets_password_failures() {
     let server = TestServer::start();
     let client = Client::new();
     for _ in 0..4 {
-        assert_eq!(check(&server, &client, "/api/login", json!({"password":"wrong"}), "").status(), 401);
+        assert_eq!(
+            check(
+                &server,
+                &client,
+                "/api/login",
+                json!({"password":"wrong"}),
+                ""
+            )
+            .status(),
+            401
+        );
     }
-    assert_eq!(check(&server, &client, "/api/devices/pair", json!({"password":testkit::PASSWORD, "name":"Phone", "platform":"android"}), "").status(), 201);
+    assert_eq!(
+        check(
+            &server,
+            &client,
+            "/api/devices/pair",
+            json!({"password":testkit::PASSWORD, "name":"Phone", "platform":"android"}),
+            ""
+        )
+        .status(),
+        201
+    );
     for _ in 0..4 {
-        assert_eq!(check(&server, &client, "/api/login", json!({"password":"wrong"}), "").status(), 401);
+        assert_eq!(
+            check(
+                &server,
+                &client,
+                "/api/login",
+                json!({"password":"wrong"}),
+                ""
+            )
+            .status(),
+            401
+        );
     }
-    assert_eq!(check(&server, &client, "/api/login", json!({"password":testkit::PASSWORD}), "").status(), 200);
+    assert_eq!(
+        check(
+            &server,
+            &client,
+            "/api/login",
+            json!({"password":testkit::PASSWORD}),
+            ""
+        )
+        .status(),
+        200
+    );
 }
 
 #[test]
