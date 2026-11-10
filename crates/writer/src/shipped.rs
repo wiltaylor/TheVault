@@ -698,6 +698,11 @@ fn dicts_not_labels(w: &Writer) -> Result<()> {
 /// step `0009_outbox_statuses` replaces.
 const OUTBOX_TYPE_3A489B0: &str = include_str!("../defaults/old/outbox_3a489b0.wcl");
 
+// Historical template upgrades run before additive field seeding. Keep their target pinned,
+// so the later RSVP/delete slots are added only after their fields exist (TV-136).
+const OUTBOX_BEFORE_CALENDAR_REVIEW: &str =
+    include_str!("../defaults/old/outbox_before_calendar_review.wcl");
+
 /// The `status` options of the `outbox` type before outbox X14.
 const OLD_OUTBOX_STATUSES: [&str; 7] = [
     "draft", "review", "approved", "sending", "sent", "failed", "rejected",
@@ -812,7 +817,7 @@ fn outbox_statuses(w: &Writer) -> Result<()> {
     }
     let path = type_path(name);
     let old: Source = store::parse_data_only(OUTBOX_TYPE_3A489B0, &path)?;
-    let shipped: Source = store::parse_data_only(DEFAULT_OUTBOX_TYPE, &path)?;
+    let shipped: Source = store::parse_data_only(OUTBOX_BEFORE_CALENDAR_REVIEW, &path)?;
     let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
     let status_field = |i: &Item| block(i, "field").and_then(label) == Some("status");
     let Some(at) = item_at(&ast, &status_field) else {
@@ -895,7 +900,7 @@ fn outbox_template(w: &Writer) -> Result<()> {
         "0008_outbox_template",
         OUTBOX_TYPE,
         OUTBOX_TYPE_5E81292,
-        DEFAULT_OUTBOX_TYPE,
+        OUTBOX_BEFORE_CALENDAR_REVIEW,
     )
 }
 
