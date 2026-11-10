@@ -8,6 +8,7 @@ import { callStatus, callTarget } from "../agentCalls";
 import { AGENT_ICON, agents } from "../agents";
 import { RunningMark } from "../ai/RunningMark";
 import { TypeIcon } from "./Icon";
+import { useThisNote } from "../views/thisNote";
 
 /** The icon of agent `name`, as the agent list has it. */
 export function AgentCallIcon(props: { agent: string }) {
@@ -20,8 +21,9 @@ export function AgentCallIcon(props: { agent: string }) {
 }
 
 /** What became of call `call`: running, still sending, or not run; nothing once it is answered and done. */
-export function AgentCallState(props: { call: string }) {
-  const status = () => callStatus(props.call);
+export function AgentCallState(props: { call: string; note?: string }) {
+  const note = props.note ?? useThisNote();
+  const status = () => callStatus(props.call, note);
   return (
     <Switch>
       <Match when={status().running}>
@@ -43,14 +45,15 @@ export function AgentCallState(props: { call: string }) {
 
 /** The chip, outside the editor: a link to the call's thread around `children`, the link text. */
 export function AgentCallChip(props: { agent: string; call: string; children: JSX.Element }) {
+  const note = useThisNote();
   return (
     <a
       class="agent-call"
-      href={callTarget(props.agent, props.call)}
+      href={callTarget(props.agent, props.call, note)}
       data-testid="agent-call"
       data-agent={props.agent}
       data-call={props.call}
-      data-state={callStatus(props.call).state}
+      data-state={callStatus(props.call, note).state}
     >
       <AgentCallIcon agent={props.agent} />
       <span class="agent-call-text">{props.children}</span>

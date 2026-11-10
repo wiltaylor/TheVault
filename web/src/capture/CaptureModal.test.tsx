@@ -2,10 +2,12 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createNote = vi.fn();
+const updateNote = vi.fn();
+const issueAgentCall = vi.fn();
 const agentsList = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, createNote, agents: agentsList } };
+  return { ...real, api: { ...real.api, createNote, updateNote, issueAgentCall, agents: agentsList } };
 });
 const appInfo = vi.fn(async () => null as { platform?: string } | null);
 vi.mock("../inApp", () => ({ appInfo }));
@@ -55,6 +57,9 @@ function setCamera(stream: MediaStream | null) {
 const saved = (id: string, title = "x") => ({ id, type: "fleeting", version: "v1", wcl: "", note: { fields: { title }, blocks: [] } });
 
 beforeEach(async () => {
+  let n = 0;
+  issueAgentCall.mockImplementation(async () => ({ call: `01JB8Z4K2MQ7V3X9T5R6W8Y2Z${n++}` }));
+  updateNote.mockImplementation(async (id, note) => ({ ...saved(id), note }));
   URL.createObjectURL = vi.fn(() => "blob:x");
   URL.revokeObjectURL = vi.fn();
   localStorage.clear();
@@ -304,7 +309,7 @@ describe("Send to", () => {
     expect(localStorage.getItem(SEND_TO_KEY)).toBe("clerk");
     fireEvent.click(m.save());
     await waitFor(() => expect(closeCapture).toHaveBeenCalled());
-    const body = createNote.mock.calls[0]![1].blocks[0].blocks;
+    const body = updateNote.mock.calls[0]![1].blocks[0].blocks;
     expect(body).toHaveLength(2);
     expect(body[0].fields.text).toBe("Fix the gate");
     expect(body[1].kind).toBe("paragraph");
@@ -318,9 +323,9 @@ describe("Send to", () => {
     expect(select(again).value).toBe("clerk");
     again.type("Again");
     fireEvent.click(again.save());
-    await waitFor(() => expect(createNote).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(updateNote).toHaveBeenCalledTimes(2));
     const first = /call=([0-9A-Z]{26})/.exec(body[1].fields.text)![1];
-    const second = /call=([0-9A-Z]{26})/.exec(createNote.mock.calls[1]![1].blocks[0].blocks[1].fields.text)![1];
+    const second = /call=([0-9A-Z]{26})/.exec(updateNote.mock.calls[1]![1].blocks[0].blocks[1].fields.text)![1];
     expect(second).not.toBe(first);
   });
 
@@ -334,5 +339,21 @@ describe("Send to", () => {
     await waitFor(() => expect(closeCapture).toHaveBeenCalled());
     expect(createNote.mock.calls[0]![1].blocks[0].blocks).toHaveLength(1);
     expect(showToast).toHaveBeenCalledWith("Saved to inbox", expect.anything());
+  });
+
+  it("retains the saved capture offline and retries without creating a duplicate", async () => {
+    createNote.mockResolvedValue(saved("N8", "Offline"));
+    issueAgentCall.mockRejectedValueOnce(new Error("offline"));
+    const m = mount();
+    m.type("Offline");
+    fireEvent.change(select(m), { target: { value: "clerk" } });
+    fireEvent.click(m.save());
+    expect(await m.findByText("Saved to inbox. Calling an agent needs a connection to your server.")).toBeVisible();
+    expect(closeCapture).not.toHaveBeenCalled();
+    expect(updateNote).not.toHaveBeenCalled();
+    fireEvent.click(m.save());
+    await waitFor(() => expect(closeCapture).toHaveBeenCalled());
+    expect(createNote).toHaveBeenCalledTimes(1);
+    expect(issueAgentCall).toHaveBeenLastCalledWith("N8", "clerk");
   });
 });

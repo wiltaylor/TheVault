@@ -338,6 +338,7 @@ fn build() -> Built {
         )
         .delete("/api/skills/{name}/files/{*path}", skills::delete_file)
         .get("/api/agents/calls/{call}", agent_runs::call)
+        .post("/api/agents/calls", agent_runs::issue_call)
         .get("/api/agents/{name}/runs", agent_runs::list)
         .post("/api/agents/{name}/dispatch", ai_dispatch::dispatch)
         .get("/api/dispatched", ai_dispatch::list)

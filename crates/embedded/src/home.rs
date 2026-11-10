@@ -294,6 +294,9 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     }
     // Agent triggers run only on the home server (agents G10), so their runs are read there, and
     // so are the calls of agents it answered (agents G19).
+    if path == "/api/agents/calls" && method == Method::POST {
+        return Route::Forward;
+    }
     if get
         && path
             .strip_prefix("/api/agents/calls/")
@@ -990,6 +993,7 @@ mod tests {
         assert_eq!(route(&get, "/api/tasks/noop/runs"), Route::Forward);
         assert_eq!(route(&get, "/api/agents/triage/runs"), Route::Forward);
         assert_eq!(route(&get, "/api/agents/calls/01J"), Route::Forward);
+        assert_eq!(route(&post, "/api/agents/calls"), Route::Forward);
         assert_eq!(route(&get, "/api/tasks/noop/runs/7"), Route::Forward);
         assert_eq!(route(&post, "/api/tasks/noop/run"), Route::Forward);
         assert_eq!(route(&Method::PUT, "/api/tasks/noop"), Route::Local);
