@@ -36,6 +36,25 @@ template default {
 const MODEL: &str = "claude-opus-5";
 const PLAN_MODEL: &str = "gpt-5.5";
 
+#[test]
+fn external_agent_token_cannot_drive_another_agents_chat() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake);
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None)
+        .unwrap();
+    let code = state.create_agent_code("external", state::Scope::Write, 60_000).unwrap();
+    let (_, token) = state.redeem_agent_code(&code.code).unwrap().unwrap();
+    fake.push(AnthropicMessage::text("Turn ran as Assistant."));
+    let res = api.client.post(api.server.url("/api/ai/chat"))
+        .bearer_auth(&token)
+        .json(&json!({"agent": "assistant", "messages": [{"role": "user", "content": "Run."}]}))
+        .send().unwrap();
+    let status = res.status();
+    let body = res.text().unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
 struct Api {
     server: TestServer,
     client: Client,
