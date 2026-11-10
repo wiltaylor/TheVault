@@ -462,3 +462,20 @@ fn agent_token_owns_only_its_drafts_and_legacy_admin_cannot_grant() {
             .is_success()
     );
 }
+
+#[test]
+fn p10_legacy_admin_agent_token_cannot_change_ai_accounts() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let agent = install(&server, &admin, "cli", "admin");
+    let account = json!({ "name": "test", "kind": "openai_compatible", "base_url": "http://127.0.0.1:9/v1", "model": "m" });
+    let (_, made) = body(admin.post(server.url("/api/integrations/ai/accounts")).json(&account).send().unwrap());
+    let id = made["account"]["id"].as_str().or(made["id"].as_str()).unwrap();
+    let statuses = [
+        agent.post(server.url("/api/integrations/ai/accounts")).json(&account).send().unwrap().status(),
+        agent.put(server.url("/api/integrations/ai/default")).json(&json!({ "id": id })).send().unwrap().status(),
+        agent.put(server.url(&format!("/api/integrations/ai/accounts/{id}"))).json(&account).send().unwrap().status(),
+        agent.put(server.url(&format!("/api/integrations/ai/accounts/{id}/key"))).json(&json!({ "key": "fixture" })).send().unwrap().status(),
+    ];
+    assert!(statuses.iter().all(|status| status.as_u16() == 403), "{statuses:?}");
+}

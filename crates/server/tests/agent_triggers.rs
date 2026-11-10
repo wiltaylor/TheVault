@@ -399,7 +399,7 @@ fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it()
     let api = Api::start(&fake);
     api.agent("helper", HELPER);
     api.agent("boss", BOSS);
-    // Unattended runs are not offered admin proposal tools. A fabricated call is refused.
+    // The run is offered the agent change tool, and proposes a grant of run saved scripts.
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_g",
         "propose_agent_change",
@@ -410,7 +410,7 @@ fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it()
     api.advance("PT31S");
     assert_eq!(fake.message_requests().len(), 2);
     assert!(
-        !tool_names(&fake, 0).contains(&"propose_agent_change".to_owned()),
+        tool_names(&fake, 0).contains(&"propose_agent_change".to_owned()),
         "{:?}",
         tool_names(&fake, 0)
     );
@@ -422,7 +422,7 @@ fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it()
         result["content"]
             .as_str()
             .unwrap()
-            .contains("there is no tool named"),
+            .contains("the change was not proposed"),
         "{result}"
     );
     // Nothing waits in the thread, and the helper is unchanged.
