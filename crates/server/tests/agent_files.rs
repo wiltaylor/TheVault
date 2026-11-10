@@ -193,7 +193,14 @@ fn browser_secret_grants_require_owner_and_reconfirmation_after_recreation() {
             .unwrap(),
         StatusCode::CREATED,
     );
-    let external = expect(api.client.post(api.server.url("/api/agent-codes/redeem")).json(&json!({"code": code["code"]})).send().unwrap(), StatusCode::CREATED)["token"]
+    let external = expect(
+        api.client
+            .post(api.server.url("/api/agent-codes/redeem"))
+            .json(&json!({"code": code["code"]}))
+            .send()
+            .unwrap(),
+        StatusCode::CREATED,
+    )["token"]
         .as_str()
         .unwrap()
         .to_owned();
