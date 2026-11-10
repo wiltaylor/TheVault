@@ -674,7 +674,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS classifier_pending (id INTEGER PRIMARY KEY, payload TEXT NOT NULL);")?;
             }
             if version <= 19 {
-                tx.execute_batch("CREATE TABLE agent_call_ids (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, principal TEXT NOT NULL, expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0); CREATE TABLE agent_call_refusals (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, created_ms INTEGER NOT NULL);")?;
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_call_ids (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, principal TEXT NOT NULL, expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS agent_call_refusals (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, created_ms INTEGER NOT NULL);")?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
