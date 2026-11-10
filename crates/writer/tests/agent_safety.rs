@@ -9,6 +9,12 @@ fn open(dir: &std::path::Path) -> Writer {
 fn open_key(dir: &std::path::Path, key: Option<state::SecretKey>) -> Writer {
     std::fs::create_dir_all(dir.join("types")).unwrap();
     std::fs::write(dir.join("types/email.wcl"), "label = \"Email\"\nfield link { kind = \"reference\" target = \"email\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    if dir.join("types/email_thread.wcl").exists() {
+        let path = dir.join("types/email.wcl");
+        let mut definition = std::fs::read_to_string(&path).unwrap();
+        definition.push_str("field thread { kind = \"reference\" target = \"email_thread\" }\n");
+        std::fs::write(path, definition).unwrap();
+    }
     let vault = store::Vault::init(dir).unwrap();
     let state = state::State::open(&vault.server_dir().join("state.db"), key).unwrap();
     Writer::open(vault, state).unwrap()
@@ -174,9 +180,11 @@ fn review4_deleted_first_member_rebinds_existing_member() {
                 &actor,
             )
             .unwrap();
-        let hash = w.agent_safety(&member.id).unwrap().fingerprint;
-        w.finish_agent_safety(&member.id, &hash, "allowed", "allow")
-            .unwrap();
+        if title == "First" {
+            let hash = w.agent_safety(&member.id).unwrap().fingerprint;
+            w.finish_agent_safety(&member.id, &hash, "allowed", "allow")
+                .unwrap();
+        }
         members.push(member);
     }
     let hash = w.agent_safety(&parent.id).unwrap().fingerprint;
@@ -184,6 +192,10 @@ fn review4_deleted_first_member_rebinds_existing_member() {
         .unwrap();
     assert!(w.agent_may_read(&parent.id));
     w.delete(&members[0].id, Some(&members[0].version), &actor)
+        .unwrap();
+    assert!(!w.agent_may_read(&parent.id), "Second member is still held");
+    let hash = w.agent_safety(&members[1].id).unwrap().fingerprint;
+    w.finish_agent_safety(&members[1].id, &hash, "allowed", "allow")
         .unwrap();
     assert!(w.agent_may_read(&parent.id));
     w.delete(&members[1].id, Some(&members[1].version), &actor)

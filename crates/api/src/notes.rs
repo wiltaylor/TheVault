@@ -266,9 +266,13 @@ pub async fn create(
 
 pub async fn read(
     State(w): Shared,
+    Caller(author): Caller,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    if crate::auth::is_agent_token(&author) && !w.agent_may_read(&id) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "held", "Note is unavailable to agents"));
+    }
     let (note, safety) = blocking(w, move |w| {
         let note = w.read(&id)?;
         let safety = if w.state().meta("agent_safety.activation_ms")?.is_some() {
