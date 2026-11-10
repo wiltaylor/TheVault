@@ -413,7 +413,12 @@ fn newly_enabled_bare_sender_keeps_items_in_review() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("new_sender", SENDER);
-    api.one(&fake, Some("new_sender"), "draft_email", email_input(json!(["anyone@example.com"])));
+    api.one(
+        &fake,
+        Some("new_sender"),
+        "draft_email",
+        email_input(json!(["anyone@example.com"])),
+    );
     let result = last_result(&fake, false);
     assert_eq!(result["status"], "draft", "{result}");
 }
@@ -424,7 +429,12 @@ fn kelvin_sign_recipient_does_not_match_ascii_allowlist() {
     let api = Api::start(&fake);
     let source = SENDER.replace("send_without_review = true", "send_without_review = true\n conditions { recipients = [\"k@example.com\"]\n email = true\n daily_cap = 2\n }");
     api.agent("sender", &source);
-    api.one(&fake, Some("sender"), "draft_email", email_input(json!(["\u{212a}@example.com"])));
+    api.one(
+        &fake,
+        Some("sender"),
+        "draft_email",
+        email_input(json!(["\u{212a}@example.com"])),
+    );
     let result = last_result(&fake, false);
     assert_eq!(result["status"], "draft", "{result}");
 }
@@ -454,6 +464,22 @@ fn restricted_sender_keeps_unlisted_recipients_in_review() {
     assert_eq!(result["status"], "draft", "{result}");
     let fields = api.fields(result["id"].as_str().unwrap());
     assert_eq!(fields["status"], "draft", "{fields}");
+}
+
+#[test]
+fn get_agent_redacts_other_agents_recipient_conditions() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let source = SENDER.replace("tools = [", "tools = [\"get_agent\", ").replace("send_without_review = true", "send_without_review = true\n conditions { recipients = [\"private@example.com\"]\n email = true\n daily_cap = 2\n }");
+    api.agent("sender", &source);
+    api.agent("clerk", &CLERK.replace("tools = [", "tools = [\"get_agent\", "));
+    api.one(&fake, Some("clerk"), "get_agent", json!({"name": "sender"}));
+    let other = last_result(&fake, false);
+    assert!(!other.to_string().contains("private@example.com"), "{other}");
+    assert!(!other["wcl"].as_str().unwrap().contains("conditions"));
+    api.one(&fake, Some("sender"), "get_agent", json!({"name": "sender"}));
+    let own = last_result(&fake, false);
+    assert!(own.to_string().contains("private@example.com"), "{own}");
 }
 
 #[test]

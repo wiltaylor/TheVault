@@ -19,7 +19,11 @@ fn open(root: &Path) -> Writer {
     .unwrap();
     let w = Writer::open(vault, state).unwrap();
     std::fs::create_dir_all(root.join("agents")).unwrap();
-    std::fs::write(root.join("agents/sender.wcl"), "label = \"Sender\"\n\npermissions {\n outbox {\n send_without_review = true\n }\n}\n").unwrap();
+    std::fs::write(
+        root.join("agents/sender.wcl"),
+        "label = \"Sender\"\n\npermissions {\n outbox {\n send_without_review = true\n }\n}\n",
+    )
+    .unwrap();
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     w.put_agent("drafter", "label = \"Drafter\"\n", |_| Vec::new())
         .unwrap();
@@ -36,15 +40,26 @@ fn open(root: &Path) -> Writer {
 fn only_preupgrade_names_get_legacy_limits_and_saving_conditions_revokes_them() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    assert_eq!(w.state().meta("outbox-legacy:sender").unwrap().as_deref(), Some("true"));
+    assert_eq!(
+        w.state().meta("outbox-legacy:sender").unwrap().as_deref(),
+        Some("true")
+    );
     let bare = "permissions { outbox { send_without_review = true\n }\n }";
     w.put_agent("new_sender", bare, |_| Vec::new()).unwrap();
     let id = create(&w, &agent("new_sender"), email(json!({"status": "ready"}))).unwrap();
     assert_eq!(status(&w, &id), "draft");
     assert!(w.read_agent("new_sender").unwrap().contains("conditions"));
-    w.put_agent("sender", "permissions { outbox { send_without_review = true\n conditions {}\n }\n }", |_| Vec::new()).unwrap();
+    w.put_agent(
+        "sender",
+        "permissions { outbox { send_without_review = true\n conditions {}\n }\n }",
+        |_| Vec::new(),
+    )
+    .unwrap();
     w.put_agent("sender", bare, |_| Vec::new()).unwrap();
-    assert_eq!(w.state().meta("outbox-legacy:sender").unwrap().as_deref(), Some("false"));
+    assert_eq!(
+        w.state().meta("outbox-legacy:sender").unwrap().as_deref(),
+        Some("false")
+    );
     let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
     assert_eq!(status(&w, &id), "draft");
 }
@@ -93,6 +108,11 @@ fn explicit_send_conditions_check_every_recipient_and_kind() {
     assert_eq!(status(&w, &id), "ready");
     let id = create(&w, &agent("sender"), json!({"fields": {"kind": "sms", "title": "SMS", "phone": "+1 (555) 123-4567", "status": "ready"}})).unwrap();
     assert_eq!(status(&w, &id), "ready");
+    assert_eq!(fields(&w, &id)["phone"], "+15551234567");
+    for phone in ["0015551234567", "+1+555+123+4567"] {
+        let id = create(&w, &agent("sender"), json!({"fields": {"kind": "sms", "title": "SMS", "phone": phone, "status": "ready"}})).unwrap();
+        assert_eq!(status(&w, &id), "draft");
+    }
 }
 
 #[test]
@@ -156,21 +176,51 @@ fn owner_retry_reports_limits_and_event_rsvp_checks_organiser_and_result() {
     edit(&w, &id, &user(), json!({"status": "draft"})).unwrap();
     assert!(refused(edit(&w, &id, &user(), json!({"status": "ready"}))).contains("daily limit"));
     edit(&w, &id, &user(), json!({"cc": ["bad@example.com"]})).unwrap();
-    assert!(refused(edit(&w, &id, &user(), json!({"status": "ready"}))).contains("recipient not on"));
-    edit(&w, &id, &user(), json!({"kind": "event", "event": null, "result": event.id, "my_response": "accepted"})).unwrap();
-    assert!(refused(edit(&w, &id, &user(), json!({"status": "ready"}))).contains("recipient not on"));
+    assert!(
+        refused(edit(&w, &id, &user(), json!({"status": "ready"}))).contains("recipient not on")
+    );
+    edit(
+        &w,
+        &id,
+        &user(),
+        json!({"kind": "event", "event": null, "result": event.id, "my_response": "accepted"}),
+    )
+    .unwrap();
+    assert!(
+        refused(edit(&w, &id, &user(), json!({"status": "ready"}))).contains("recipient not on")
+    );
 }
 
 #[test]
 fn device_can_narrow_but_cannot_broaden_send_conditions() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    let (device, _) = w.state().pair_device(&state::NewDevice { name: "Phone", platform: "android", capabilities: "{}", settings: "{}" }).unwrap();
+    let (device, _) = w
+        .state()
+        .pair_device(&state::NewDevice {
+            name: "Phone",
+            platform: "android",
+            capabilities: "{}",
+            settings: "{}",
+        })
+        .unwrap();
     let source = "permissions { outbox { send_without_review = true\n conditions { recipients = [\"ann@example.com\"]\n email = true\n daily_cap = 2\n }\n }\n }";
     w.put_agent("sender", source, |_| Vec::new()).unwrap();
     let _acting = writer::acting_as(&Author::Token(device.token_id));
-    assert!(w.put_agent("sender", &source.replace("daily_cap = 2", "daily_cap = 3"), |_| Vec::new()).is_err());
-    w.put_agent("sender", &source.replace("daily_cap = 2", "daily_cap = 1"), |_| Vec::new()).unwrap();
+    assert!(
+        w.put_agent(
+            "sender",
+            &source.replace("daily_cap = 2", "daily_cap = 3"),
+            |_| Vec::new()
+        )
+        .is_err()
+    );
+    w.put_agent(
+        "sender",
+        &source.replace("daily_cap = 2", "daily_cap = 1"),
+        |_| Vec::new(),
+    )
+    .unwrap();
 }
 
 #[test]

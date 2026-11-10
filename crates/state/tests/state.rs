@@ -48,6 +48,9 @@ fn outbox_admission_is_atomic_and_survives_reopen() {
         state.outbox_deadline("next").unwrap(),
         Some(DAY_MS + 300_000)
     );
+    assert!(state.prune_outbox_limits(10 * DAY_MS).unwrap() > 0);
+    assert_eq!(state.outbox_deadline("next").unwrap(), None);
+    assert_eq!(state.meta("outbox-cap:sender:0").unwrap(), None);
 }
 
 struct TestClock(AtomicI64);

@@ -607,17 +607,29 @@ impl State {
     pub fn prune_outbox_limits(&self, now: i64) -> Result<usize> {
         let cutoff = now.saturating_sub(7 * 86_400_000);
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT key,value FROM meta WHERE key LIKE 'outbox-delay:%' OR key LIKE 'outbox-cap:%'")?;
+        let mut stmt = conn.prepare(
+            "SELECT key,value FROM meta WHERE key LIKE 'outbox-delay:%' OR key LIKE 'outbox-cap:%'",
+        )?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         let mut expired = Vec::new();
         for row in rows {
             let (key, value) = row?;
-            let old = if key.starts_with("outbox-delay:") { value.parse::<i64>().is_ok_and(|v| v < cutoff) }
-                else { key.rsplit(':').next().and_then(|s| s.parse::<i64>().ok()).is_some_and(|day| day < cutoff.div_euclid(86_400_000)) };
-            if old { expired.push(key); }
+            let old = if key.starts_with("outbox-delay:") {
+                value.parse::<i64>().is_ok_and(|v| v < cutoff)
+            } else {
+                key.rsplit(':')
+                    .next()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .is_some_and(|day| day < cutoff.div_euclid(86_400_000))
+            };
+            if old {
+                expired.push(key);
+            }
         }
         drop(stmt);
-        for key in &expired { conn.execute("DELETE FROM meta WHERE key=?1", [key])?; }
+        for key in &expired {
+            conn.execute("DELETE FROM meta WHERE key=?1", [key])?;
+        }
         Ok(expired.len())
     }
 

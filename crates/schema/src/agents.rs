@@ -342,9 +342,14 @@ impl Outbox {
             && (self.conditions.is_none()
                 || (other.conditions.is_some()
                     && theirs.recipients.iter().all(|r| {
-                        own.recipients
-                            .iter()
-                            .any(|a| send_recipient_key(a, false).zip(send_recipient_key(r, false)).is_some_and(|(a, r)| a == r) || send_recipient_key(a, true).zip(send_recipient_key(r, true)).is_some_and(|(a, r)| a == r))
+                        own.recipients.iter().any(|a| {
+                            send_recipient_key(a, false)
+                                .zip(send_recipient_key(r, false))
+                                .is_some_and(|(a, r)| a == r)
+                                || send_recipient_key(a, true)
+                                    .zip(send_recipient_key(r, true))
+                                    .is_some_and(|(a, r)| a == r)
+                        })
                     })))
     }
 
@@ -366,9 +371,15 @@ pub fn send_recipient_key(value: &str, sms: bool) -> Option<String> {
         return (value.is_ascii() && value.contains('@')).then(|| value.to_ascii_lowercase());
     }
     let rest = value.strip_prefix('+')?;
-    if !rest.chars().all(|c| c.is_ascii_digit() || " -().".contains(c)) { return None; }
+    if !rest
+        .chars()
+        .all(|c| c.is_ascii_digit() || " -().".contains(c))
+    {
+        return None;
+    }
     let digits: String = rest.chars().filter(char::is_ascii_digit).collect();
-    (digits.len() >= 8 && digits.len() <= 15 && !digits.starts_with('0')).then(|| format!("+{digits}"))
+    (digits.len() >= 8 && digits.len() <= 15 && !digits.starts_with('0'))
+        .then(|| format!("+{digits}"))
 }
 
 impl Outbox {

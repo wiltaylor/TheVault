@@ -234,7 +234,9 @@ impl Writer {
         let mut recipients: Vec<_> = fields.iter().flat_map(|f| strings(doc, f)).collect();
         // Event updates may keep the original attendees. Those recipients are part of the grant.
         if kind == "event"
-            && let Some(event) = text(doc, "event").filter(|s| !s.is_empty()).or_else(|| text(doc, "result").filter(|s| !s.is_empty()))
+            && let Some(event) = text(doc, "event")
+                .filter(|s| !s.is_empty())
+                .or_else(|| text(doc, "result").filter(|s| !s.is_empty()))
         {
             let existing = schema::is_ulid(event)
                 .then(|| std::fs::read_to_string(self.vault.root().join(note_path("event", event))))
@@ -258,22 +260,36 @@ impl Writer {
                             && recipient_key(r, kind).is_some()
                     })
                 }));
-        let invalid_phone = kind == "sms" && text(doc, "phone").and_then(|p| recipient_key(p, kind)).is_none();
-        let denied = if !enabled { Some("this kind is not enabled for this agent") }
-            else if !allowed || invalid_phone { Some("recipient not on this agent's list") }
-            else if !self.state.reserve_outbox(
-                name,
-                id,
-                self.now_ms(),
-                limits.daily_cap,
-                limits.cancel_delay_minutes * 60_000,
-            )? { Some("over this agent's daily limit") } else { None };
+        let invalid_phone = kind == "sms"
+            && text(doc, "phone")
+                .and_then(|p| recipient_key(p, kind))
+                .is_none();
+        let denied = if !enabled {
+            Some("this kind is not enabled for this agent")
+        } else if !allowed || invalid_phone {
+            Some("recipient not on this agent's list")
+        } else if !self.state.reserve_outbox(
+            name,
+            id,
+            self.now_ms(),
+            limits.daily_cap,
+            limits.cancel_delay_minutes * 60_000,
+        )? {
+            Some("over this agent's daily limit")
+        } else {
+            None
+        };
         if let Some(message) = denied {
             if matches!(author, Author::Session(_) | Author::Token(_)) {
-                return Err(Error::Invalid(Invalid { file: note_path("outbox", id), issues: vec![Issue::new("status", message)] }));
+                return Err(Error::Invalid(Invalid {
+                    file: note_path("outbox", id),
+                    issues: vec![Issue::new("status", message)],
+                }));
             }
             set(doc, "status", "draft");
-        } else if kind == "sms" && let Some(phone) = text(doc, "phone").and_then(|p| recipient_key(p, kind)) {
+        } else if kind == "sms"
+            && let Some(phone) = text(doc, "phone").and_then(|p| recipient_key(p, kind))
+        {
             set(doc, "phone", &phone);
         }
         Ok(())

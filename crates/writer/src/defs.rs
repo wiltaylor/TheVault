@@ -845,8 +845,14 @@ impl Writer {
     pub fn agent(&self, name: &str) -> Result<Agent> {
         let text = self.read_agent(name)?;
         let mut agent = Agent::parse(name, &text).map_err(Error::Invalid)?;
-        if agent.permissions.outbox.send_without_review && agent.permissions.outbox.conditions.is_none()
-            && self.state.meta(&format!("outbox-legacy:{name}"))?.as_deref() != Some("true") {
+        if agent.permissions.outbox.send_without_review
+            && agent.permissions.outbox.conditions.is_none()
+            && self
+                .state
+                .meta(&format!("outbox-legacy:{name}"))?
+                .as_deref()
+                != Some("true")
+        {
             agent.permissions.outbox.conditions = Some(schema::OutboxConditions::default());
         }
         Ok(agent)
@@ -901,14 +907,24 @@ impl Writer {
         let _w = self.write_lock();
         let mut inner = self.lock();
         let (mut text, mut agent) = self.plan_agent(&inner, name, source, check)?;
-        if agent.permissions.outbox.send_without_review && agent.permissions.outbox.conditions.is_none()
-            && self.state.meta(&format!("outbox-legacy:{name}"))?.as_deref() != Some("true") {
+        if agent.permissions.outbox.send_without_review
+            && agent.permissions.outbox.conditions.is_none()
+            && self
+                .state
+                .meta(&format!("outbox-legacy:{name}"))?
+                .as_deref()
+                != Some("true")
+        {
             agent.permissions.outbox.conditions = Some(schema::OutboxConditions::default());
             text = agent.to_wcl();
         }
         if let Some(Author::Token(token)) = crate::activity::acting()
-            && self.state.device_for_token(&token)?.is_some() {
-            let previous = self.agent(name).map(|a| a.permissions.outbox).unwrap_or_default();
+            && self.state.device_for_token(&token)?.is_some()
+        {
+            let previous = self
+                .agent(name)
+                .map(|a| a.permissions.outbox)
+                .unwrap_or_default();
             let mut previous_limits = previous.clone();
             previous_limits.send_without_review = true;
             if previous_limits.conditions.is_none() && !previous.send_without_review {
@@ -916,14 +932,23 @@ impl Writer {
             }
             let mut proposed_limits = agent.permissions.outbox.clone();
             proposed_limits.send_without_review = true;
-            if !previous.allows(&agent.permissions.outbox) || !previous_limits.allows(&proposed_limits) {
-                return Err(Error::Invalid(Invalid { file: agent_path(name), issues: vec![Issue::new("permissions.outbox", "a device may narrow send conditions but not broaden them")] }));
+            if !previous.allows(&agent.permissions.outbox)
+                || !previous_limits.allows(&proposed_limits)
+            {
+                return Err(Error::Invalid(Invalid {
+                    file: agent_path(name),
+                    issues: vec![Issue::new(
+                        "permissions.outbox",
+                        "a device may narrow send conditions but not broaden them",
+                    )],
+                }));
             }
         }
         let generation = self.commit(vec![Change::write(agent_path(name), text.as_bytes())])?;
         inner.index.advance(generation)?;
         if agent.permissions.outbox.conditions.is_some() {
-            self.state.set_meta(&format!("outbox-legacy:{name}"), "false")?;
+            self.state
+                .set_meta(&format!("outbox-legacy:{name}"), "false")?;
         }
         Ok((text, agent))
     }
@@ -994,7 +1019,8 @@ impl Writer {
         }
         let generation = self.commit(vec![Change::delete(agent_path(name))])?;
         inner.index.advance(generation)?;
-        self.state.set_meta(&format!("outbox-legacy:{name}"), "false")?;
+        self.state
+            .set_meta(&format!("outbox-legacy:{name}"), "false")?;
         Ok(())
     }
 
