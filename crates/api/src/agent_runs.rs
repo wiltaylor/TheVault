@@ -336,7 +336,7 @@ mod call_issuer_tests {
         ));
         for (author, scope, paired) in [
             (Author::Agent("assistant".into()), Scope::Write, true),
-            (Author::Token("agent-assistant".into()), Scope::Write, true),
+            (Author::Agent("agent-assistant".into()), Scope::Write, true),
             (Author::Token("device-phone".into()), Scope::Read, true),
             (Author::Token("api".into()), Scope::Write, false),
             (Author::Token("api".into()), Scope::Admin, false),
