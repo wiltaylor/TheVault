@@ -23,6 +23,16 @@ use crate::{Invalid, Issue, Schema};
 /// cannot be deleted or disabled.
 pub const ASSISTANT_AGENT: &str = "assistant";
 
+/// Imported content can never commit an agent call, even after an editor save.
+pub const AGENT_CALL_EXCLUDED_TYPES: &[&str] = &[
+    "email",
+    "message",
+    "call",
+    "conversation",
+    "event",
+    "email_thread",
+];
+
 /// The providers an agent file from before AI accounts may name in `provider` (accounts A6). It
 /// reads as the account the migration made for that provider; the home server rewrites it to
 /// `account` on start.
@@ -1309,13 +1319,3 @@ impl Reader<'_> {
         })
     }
 }
-/// Imported content can never commit an agent call, even after an editor save.
-pub const AGENT_CALL_EXCLUDED_TYPES: &[&str] = &[
-    "email",
-    "message",
-    "call",
-    "conversation",
-    "event",
-    "email_thread",
-];
-
