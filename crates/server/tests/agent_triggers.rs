@@ -284,6 +284,87 @@ fn safety_rest_read_route_inventory() {
     );
 }
 
+fn held_write_fixture(api: &Api) -> Value {
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
+        "title":"Held write fixture", "from_raw":"PRIVATE_HELD_WRITE_MARKER",
+        "sent":"2000-01-01T00:00:00Z"
+    }}}));
+    safety_wait(api, note["id"].as_str().unwrap());
+    api.get(&format!("/api/notes/{}", note["id"].as_str().unwrap()))
+}
+
+#[test]
+fn review6_upsert_returns_held_note_text() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("prompt_injection"));
+    held_write_fixture(&api);
+    let token = api.external_agent_token();
+    for dry_run in [true, false] {
+        let response = api.client.post(api.server.url("/api/upsert"))
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .json(&json!({"type":"email", "key":"title", "dry_run":dry_run,
+                "note":{"fields":{"title":"Held write fixture"}}})).send().unwrap();
+        let body = response.text().unwrap();
+        assert!(!body.contains("PRIVATE_HELD_WRITE_MARKER"), "{body}");
+        assert!(body.contains("held"), "{body}");
+    }
+}
+
+#[test]
+fn review6_batch_returns_held_note_text() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("prompt_injection"));
+    let note = held_write_fixture(&api);
+    let token = api.external_agent_token();
+    for op in ["update", "delete"] {
+        let mut item = json!({"op":op,"id":note["id"],"base_version":"wrong"});
+        if op == "update" { item["note"] = json!({"fields":{"title":"Replacement"}}); }
+        let response = api.client.post(api.server.url("/api/batch"))
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .json(&json!({"dry_run":true,"ops":[item]})).send().unwrap();
+        let body = response.text().unwrap();
+        assert!(!body.contains("PRIVATE_HELD_WRITE_MARKER"), "{body}");
+        assert!(body.contains("held"), "{body}");
+    }
+}
+
+#[test]
+fn review6_batch_writes_to_held_note() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("prompt_injection"));
+    let note = held_write_fixture(&api);
+    let token = api.external_agent_token();
+    let response = api.client.post(api.server.url("/api/batch"))
+        .bearer_auth(token["secret"].as_str().unwrap())
+        .json(&json!({"dry_run":true,"ops":[{"op":"delete","id":note["id"],"base_version":note["version"]}]}))
+        .send().unwrap();
+    assert!(!response.status().is_success());
+    assert!(response.text().unwrap().contains("held"));
+}
+
+#[test]
+fn review6_trash_restore_returns_held_note_text() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("prompt_injection"));
+    let note = held_write_fixture(&api);
+    let id = note["id"].as_str().unwrap();
+    let version = note["version"].as_str().unwrap();
+    assert!(api.request("DELETE", &format!("/api/notes/{id}?base_version={version}"), None).status().is_success());
+    let token = api.external_agent_token();
+    let response = api.client.post(api.server.url(&format!("/api/trash/{id}/restore")))
+        .bearer_auth(token["secret"].as_str().unwrap()).json(&json!({})).send().unwrap();
+    assert_eq!(response.status(), 403);
+    assert!(!response.text().unwrap().contains("PRIVATE_HELD_WRITE_MARKER"));
+}
+
 fn safety_note(api: &Api) -> Value {
     api.send(
         "POST",
