@@ -48,7 +48,7 @@ fn external_agent_token_cannot_drive_another_agents_chat() {
     fake.push(AnthropicMessage::text("Turn ran as Assistant."));
     let res = api.client.post(api.server.url("/api/ai/chat"))
         .bearer_auth(&token)
-        .json(&json!({"agent": "assistant", "messages": [{"role": "user", "content": "Run."}]}))
+        .json(&json!({"agent": "assistant", "messages": [{"role": "user", "content": [{"type": "text", "text": "Run."}]}]}))
         .send().unwrap();
     let status = res.status();
     let body = res.text().unwrap();
