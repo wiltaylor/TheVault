@@ -565,15 +565,24 @@ fn login_schema_upgrades_from_19_20_and_either_21_layout() {
         state.set_secret("plain", "made-up-string").unwrap();
         drop(state);
         let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
-        conn.execute_batch("DROP TRIGGER string_namespace; DROP TABLE login_secrets;").unwrap();
+        conn.execute_batch("DROP TRIGGER string_namespace; DROP TABLE login_secrets;")
+            .unwrap();
         conn.pragma_update(None, "user_version", version).unwrap();
         if old_login_table {
             conn.execute_batch("CREATE TABLE login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);").unwrap();
         }
         drop(conn);
         let state = open_with_key(&dir, key);
-        assert_eq!(state.get_secret("plain").unwrap().as_deref(), Some("made-up-string"));
-        let login = state::LoginSecret { username: "test-user".into(), password: "made-up-password".into(), totp_seed: None, origins: vec![] };
+        assert_eq!(
+            state.get_secret("plain").unwrap().as_deref(),
+            Some("made-up-string")
+        );
+        let login = state::LoginSecret {
+            username: "test-user".into(),
+            password: "made-up-password".into(),
+            totp_seed: None,
+            origins: vec![],
+        };
         state.set_login_secret("site", &login).unwrap();
         assert_eq!(state.list_login_secrets().unwrap()[0].username, "test-user");
         assert!(state.set_secret("site", "cannot change kind").is_err());
