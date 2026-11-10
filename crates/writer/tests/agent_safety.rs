@@ -368,7 +368,7 @@ fn round3_agent_query_keeps_sql_plan_on_large_index() {
         // Nonmatching rows have deliberately invalid bodies. A Rust scan decodes them
         // and fails, whereas the SQL planner reads only the selected page's bodies.
         index.connection().execute_batch("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<3000)
-            INSERT INTO notes(id,type,title,data) SELECT 'probe-' || x,'email','Other','invalid-json' FROM n").unwrap();
+            INSERT INTO notes(id,type,path,title,flagged,archived,data) SELECT 'probe-' || x,'email','unused','Other',0,0,'invalid-json' FROM n").unwrap();
         index.connection().execute("UPDATE notes SET data='invalid-json' WHERE id=?1", [&held.id]).unwrap();
     });
     let _acting = writer::acting_as(&Author::Agent("reader".into()));
