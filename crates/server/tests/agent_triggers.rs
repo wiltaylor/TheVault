@@ -194,6 +194,55 @@ fn burst_over_the_hourly_limit_eventually_runs_every_note_once() {
 }
 
 #[test]
+fn a_debouncing_event_survives_a_server_restart() {
+    let fake = FakeAnthropic::start();
+    let mut api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    let (id, _) = api.memo("Before restart", "open");
+    api.server.restart();
+    fake.push(AnthropicMessage::text("Done."));
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 1);
+    assert!(first_user_text(&fake, 0).contains(&id));
+    api.advance("PT1H");
+    assert_eq!(fake.message_requests().len(), 1);
+}
+
+#[test]
+fn backfill_requires_a_session_and_a_preview_and_skips_records_and_nonmatches() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let (older, _) = api.memo("Older", "open");
+    let (newest, _) = api.memo("Newest", "open");
+    api.memo("Closed", "closed");
+    api.agent("clerk", CLERK);
+    let path = "/api/agents/clerk/triggers/opened/backfill";
+    let denied = api.request("POST", path, Some(json!({"limit": 1})));
+    assert_eq!(denied.status(), 403);
+    let login = api.client.post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD})).send().unwrap();
+    assert!(login.status().is_success());
+    let cookie = login.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned();
+    let post = |body: Value| api.client.post(api.server.url(path))
+        .header(reqwest::header::COOKIE, &cookie).json(&body).send().unwrap();
+    let invalid = post(json!({"preview": "not-issued"}));
+    assert_eq!(invalid.status(), 400);
+    let preview: Value = post(json!({"limit": 1})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(preview["count"], 2);
+    assert_eq!(preview["selected"], 1);
+    fake.push(AnthropicMessage::text("Done."));
+    let confirmed: Value = post(json!({"preview": preview["preview"]})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(confirmed["queued"], 1);
+    assert_eq!(post(json!({"preview": preview["preview"]})).status(), 400);
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 1);
+    assert!(first_user_text(&fake, 0).contains(&newest));
+    assert!(!first_user_text(&fake, 0).contains(&older));
+    let preview: Value = post(json!({"limit": 1000})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(preview["count"], 1, "a queued or completed note has a record");
+}
+
+#[test]
 fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

@@ -476,6 +476,21 @@ impl Scheduler {
         if let Err(e) = self.writer.state().recover_trigger_jobs() {
             eprintln!("recovering trigger queue: {e}");
         }
+        if let Ok(events) = self.writer.state().trigger_events() {
+            for payload in events {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { continue };
+                let op = match v["op"].as_str() { Some("create") => "create", Some("update") => "update", Some("delete") => "delete", _ => continue };
+                let deleting = v["deleting"].as_object().map(|_| Deleting {
+                    title: v["deleting"]["title"].as_str().unwrap_or("").to_owned(),
+                    matched: serde_json::from_value(v["deleting"]["matched"].clone()).unwrap_or_default(),
+                });
+                self.plan().agents.heard.push(Heard {
+                    op, id: v["id"].as_str().unwrap_or("").to_owned(),
+                    type_name: v["type"].as_str().unwrap_or("").to_owned(),
+                    at: v["at"].as_i64().unwrap_or(0), deleting,
+                });
+            }
+        }
         if self.runner.set(runner).is_ok() {
             if let Err(e) = self.writer.state().end_interrupted_agent_runs() {
                 eprintln!("agent runs left running: {e}");
@@ -573,6 +588,13 @@ impl Scheduler {
                 Event::Update => "update",
                 Event::Delete => "delete",
             };
+            let payload = serde_json::json!({
+                "op": op, "id": s.id, "type": s.type_name, "at": at,
+                "deleting": deleting.as_ref().map(|d| serde_json::json!({"title": d.title, "matched": d.matched})),
+            }).to_string();
+            if let Err(e) = self.writer.state().save_trigger_event(&s.id, at, &payload) {
+                eprintln!("persisting trigger event: {e}");
+            }
             plan.agents.heard.push(Heard {
                 op,
                 id: s.id.clone(),
@@ -638,7 +660,9 @@ impl Scheduler {
         for id in called {
             called_runs.extend(self.mention_jobs(&id, now, &mut tell));
         }
+        let mut processed = Vec::new();
         for e in events {
+            processed.push(e.note.clone());
             let title = match e.op {
                 "delete" => e.title.clone(),
                 _ => {
@@ -673,6 +697,9 @@ impl Scheduler {
             .collect();
         for job in jobs {
             self.persist_trigger(&job, now);
+        }
+        for note in processed {
+            let _ = self.writer.state().acknowledge_trigger_event(&note, now - DEBOUNCE_MS);
         }
         let state = self.writer.state();
         match state.due_trigger_jobs(now) {

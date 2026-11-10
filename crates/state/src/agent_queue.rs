@@ -14,6 +14,7 @@ CREATE TABLE trigger_jobs (
 CREATE INDEX trigger_jobs_due ON trigger_jobs(status, due_ms);
 CREATE TABLE trigger_queue_drops (agent TEXT PRIMARY KEY, count INTEGER NOT NULL, notified_ms INTEGER);
 CREATE TABLE trigger_backfill_previews (id TEXT PRIMARY KEY, principal TEXT NOT NULL, agent TEXT NOT NULL, trigger TEXT NOT NULL, payload TEXT NOT NULL, expires_ms INTEGER NOT NULL);
+CREATE TABLE trigger_events (note TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, payload TEXT NOT NULL);
 ";
 
 #[derive(Debug, Clone)]
@@ -91,7 +92,7 @@ mod tests {
             let path = dir.path().join("state.db");
             let s = State::open(&path, None).unwrap();
             let run = s.start_agent_run("clerk", "opened").unwrap();
-            s.conn().execute_batch("DROP TABLE trigger_jobs; DROP TABLE trigger_queue_drops; DROP TABLE trigger_backfill_previews;").unwrap();
+            s.conn().execute_batch("DROP TABLE trigger_jobs; DROP TABLE trigger_queue_drops; DROP TABLE trigger_backfill_previews; DROP TABLE trigger_events;").unwrap();
             if version == 19 { s.conn().execute_batch("DROP TABLE agent_call_ids; DROP TABLE agent_call_refusals;").unwrap(); }
             s.conn().pragma_update(None, "user_version", version).unwrap();
             drop(s);
@@ -111,6 +112,21 @@ pub struct TriggerQueueStats {
 }
 
 impl State {
+    pub fn save_trigger_event(&self, note: &str, at: i64, payload: &str) -> Result<()> {
+        self.conn().execute("INSERT INTO trigger_events VALUES (?1,?2,?3) ON CONFLICT(note) DO UPDATE SET at_ms=excluded.at_ms,payload=excluded.payload", params![note,at,payload])?;
+        Ok(())
+    }
+
+    pub fn trigger_events(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT payload FROM trigger_events ORDER BY at_ms,note")?;
+        Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn acknowledge_trigger_event(&self, note: &str, before: i64) -> Result<()> {
+        self.conn().execute("DELETE FROM trigger_events WHERE note=?1 AND at_ms<=?2", params![note,before])?;
+        Ok(())
+    }
     pub fn preview_trigger_backfill(&self, principal: &str, agent: &str, trigger: &str, payload: &str) -> Result<String> {
         let id = self.new_ulid().to_string();
         self.conn().execute("INSERT INTO trigger_backfill_previews VALUES (?1,?2,?3,?4,?5,?6)", params![id,principal,agent,trigger,payload,self.now()+600_000])?;

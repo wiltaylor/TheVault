@@ -291,7 +291,7 @@ pub async fn backfill(
             let payload = w.state().confirm_trigger_backfill(preview, &principal, &name, &trigger)?.ok_or_else(|| bad("preview expired or already used".to_owned()))?;
             let notes: Vec<(String,String)> = serde_json::from_str(&payload).map_err(|e| bad(e.to_string()))?;
             let queued = scheduler.trigger_backfill(&name, &trigger, &notes).map_err(bad)?;
-            Ok(Json(json!({ "queued": queued })))
+            Ok::<_, ApiError>(Json(json!({ "queued": queued })))
         } else {
             let limit = body["limit"].as_u64().filter(|n| (1..=1000).contains(n)).ok_or_else(|| bad("limit must be 1 to 1000".to_owned()))? as usize;
             let mut notes = scheduler.trigger_backfill_candidates(&name, &trigger).map_err(bad)?;
