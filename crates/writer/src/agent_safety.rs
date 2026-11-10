@@ -161,6 +161,27 @@ fn same_image_rendering(old: &serde_json::Value, next: &serde_json::Value) -> bo
     old == next
 }
 
+#[cfg(test)]
+mod rendering_tests {
+    use super::same_image_rendering;
+    use serde_json::json;
+
+    #[test]
+    fn image_fields_other_than_asset_remain_evidence() {
+        let a = json!({"kind":"image","fields":{"asset":"a","alt":"alt","caption":"caption","width":100}});
+        let mut b = a.clone();
+        b["fields"]["asset"] = json!("b");
+        assert!(same_image_rendering(&a, &b));
+        for field in ["alt", "caption", "width", "custom"] {
+            let mut changed = b.clone();
+            changed["fields"][field] = json!("changed");
+            assert!(!same_image_rendering(&a, &changed), "{field}");
+        }
+        let paragraph = json!({"kind":"paragraph","fields":{"text":"image"}});
+        assert!(!same_image_rendering(&a, &paragraph));
+    }
+}
+
 impl Writer {
     pub fn incoming_agent_note(&self, kind: &str, doc: &Doc) -> bool {
         if matches!(kind, "event" | "event_series")

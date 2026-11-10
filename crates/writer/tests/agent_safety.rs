@@ -3,10 +3,14 @@ use state::Author;
 use writer::{Input, Writer};
 
 fn open(dir: &std::path::Path) -> Writer {
+    open_key(dir, None)
+}
+
+fn open_key(dir: &std::path::Path, key: Option<state::SecretKey>) -> Writer {
     std::fs::create_dir_all(dir.join("types")).unwrap();
     std::fs::write(dir.join("types/email.wcl"), "label = \"Email\"\nfield link { kind = \"reference\" target = \"email\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
     let vault = store::Vault::init(dir).unwrap();
-    let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+    let state = state::State::open(&vault.server_dir().join("state.db"), key).unwrap();
     Writer::open(vault, state).unwrap()
 }
 
@@ -17,6 +21,30 @@ fn create(w: &Writer, title: &str) -> writer::Saved {
         &Author::Session("owner".into()),
     )
     .unwrap()
+}
+
+#[test]
+fn round5_own_google_event_is_exempt_independent_of_calendar() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open_key(dir.path(), Some(state::SecretKey::generate()));
+    w.state().set_secret(writer::google::ACCOUNT, "owner@example.test").unwrap();
+    for kind in ["event", "event_series"] {
+        for calendar in ["primary", "team@group.calendar.google.com"] {
+            let doc = Input::Json(serde_json::json!({"fields":{"organiser":"owner@example.test","calendar":calendar,"google_ref":"event"}})).parse("event.wcl").unwrap();
+            assert!(!w.incoming_agent_note(kind, &doc));
+        }
+    }
+}
+
+#[test]
+fn round5_missing_safety_index_row_is_excluded() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let note = create(&w, "Hidden");
+    w.state().forget_agent_safety_index(&note.id).unwrap();
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    assert_eq!(w.query_page("from email select title", 10, None).unwrap()["total"], 0);
 }
 
 #[test]
@@ -93,6 +121,8 @@ fn review4_deleted_first_member_rebinds_existing_member() {
     assert!(w.agent_may_read(&parent.id));
     w.delete(&members[0].id, Some(&members[0].version), &actor).unwrap();
     assert!(w.agent_may_read(&parent.id));
+    w.delete(&members[1].id, Some(&members[1].version), &actor).unwrap();
+    assert!(w.agent_may_read(&parent.id), "No live members: own decision stands");
 }
 
 #[test]
