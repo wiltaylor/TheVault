@@ -234,11 +234,19 @@ impl Writer {
         let inner = &mut *inner;
         install(inner, schema)?;
         for update in &updates {
-            if let Update::Put { id, type_name, doc, .. } = update {
+            if let Update::Put {
+                id, type_name, doc, ..
+            } = update
+            {
                 self.refresh_agent_safety_index(id, type_name, doc)?;
             }
         }
         inner.index.update(&inner.schema, &updates)?;
+        for update in &updates {
+            if let Update::Put { id, .. } = update {
+                self.refresh_safety_parents(id)?;
+            }
+        }
         inner.index.advance(generation)?;
         self.announce(&saved, &|_| None);
         Ok((plan, saved))

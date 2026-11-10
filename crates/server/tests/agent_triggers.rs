@@ -170,21 +170,38 @@ fn safety_wait(api: &Api, id: &str) -> Value {
 
 #[test]
 fn safety_derived_titles_wait_for_their_first_member_even_after_own_allow() {
-    for (kind, member_kind, field) in [("email_thread", "email", "thread"), ("conversation", "message", "conversation")] {
+    for (kind, member_kind, field) in [
+        ("email_thread", "email", "thread"),
+        ("conversation", "message", "conversation"),
+    ] {
         let decisions = testkit::FakeDecisions::start();
         let chat = FakeAnthropic::start();
         let api = safety_setup(&chat, &decisions, "router");
         decisions.push(safety_reply("allow"));
-        let parent = api.send("POST", &format!("/api/notes?type={kind}"), json!({"note":{"fields":{"title":"PRIVATE_DERIVED_TITLE"}}}));
+        let parent = api.send(
+            "POST",
+            &format!("/api/notes?type={kind}"),
+            json!({"note":{"fields":{"title":"PRIVATE_DERIVED_TITLE"}}}),
+        );
         let id = parent["id"].as_str().unwrap();
         let held = safety_wait(&api, id);
         assert_eq!(held["agent_safety"]["status"], "held", "{held}");
         assert_eq!(held["agent_safety"]["reason"], "awaiting_first_member");
         decisions.push(safety_reply("prompt_injection"));
-        let member = api.send("POST", &format!("/api/notes?type={member_kind}"), json!({"note":{"fields":{"title":"PRIVATE_DERIVED_TITLE",field:id}}}));
+        let member = api.send(
+            "POST",
+            &format!("/api/notes?type={member_kind}"),
+            json!({"note":{"fields":{"title":"PRIVATE_DERIVED_TITLE",field:id}}}),
+        );
         let member_id = member["id"].as_str().unwrap();
-        assert_eq!(safety_wait(&api, member_id)["agent_safety"]["status"], "held");
-        assert_eq!(api.get(&format!("/api/notes/{id}"))["agent_safety"]["status"], "held");
+        assert_eq!(
+            safety_wait(&api, member_id)["agent_safety"]["status"],
+            "held"
+        );
+        assert_eq!(
+            api.get(&format!("/api/notes/{id}"))["agent_safety"]["status"],
+            "held"
+        );
         assert_eq!(decisions.requests().len(), 2);
     }
 }

@@ -46,7 +46,15 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
         if page.cursor.is_none() && excluded.as_ref().is_some_and(|ids| !ids.is_empty()) {
             // Only totals cross this boundary, never the unfiltered row content.
             ctx.excluded_notes = None;
-            let all = query::run(q, &ctx, &query::PageRequest { cursor: None, size: 1 }).map_err(err)?;
+            let all = query::run(
+                q,
+                &ctx,
+                &query::PageRequest {
+                    cursor: None,
+                    size: 1,
+                },
+            )
+            .map_err(err)?;
             OMITTED.with(|n| n.set(n.get() + all.total.saturating_sub(result.total)));
         }
         Ok(result)
@@ -265,7 +273,9 @@ impl Vault for Writer {
 
     fn restore(&self, id: &str, author: &Author) -> Result<Json, String> {
         check_agent_write(self, id, author)?;
-        self.restore_from_trash(id, author).map(|s| agent_saved(self, s, author)).map_err(err)
+        self.restore_from_trash(id, author)
+            .map(|s| agent_saved(self, s, author))
+            .map_err(err)
     }
 
     fn set_archived(&self, id: &str, archived: bool, author: &Author) -> Result<Json, String> {

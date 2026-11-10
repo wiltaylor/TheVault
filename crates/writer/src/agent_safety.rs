@@ -124,14 +124,27 @@ impl Writer {
     /// Gmail messages are immutable by Gmail id. Only the trusted sync task may carry a
     /// decision across a local rendering change of that same message. This is not an
     /// editable note flag and is never available to an agent/session write.
-    pub(crate) fn carry_safety_conversion(&self, id: &str, kind: &str, next: &Doc, actor: &state::Author) -> Result<()> {
-        if kind != "email" || !matches!(actor, state::Author::Task(name) if name == "google_gmail") {
+    pub(crate) fn carry_safety_conversion(
+        &self,
+        id: &str,
+        kind: &str,
+        next: &Doc,
+        actor: &state::Author,
+    ) -> Result<()> {
+        if kind != "email" || !matches!(actor, state::Author::Task(name) if name == "google_gmail")
+        {
             return Ok(());
         }
-        let Some(old) = self.state().head(id)? else { return Ok(()); };
-        let Ok(old) = Doc::parse(&old.content, "previous email") else { return Ok(()); };
+        let Some(old) = self.state().head(id)? else {
+            return Ok(());
+        };
+        let Ok(old) = Doc::parse(&old.content, "previous email") else {
+            return Ok(());
+        };
         let source = old.field("gmail_ref").and_then(schema::Value::as_str);
-        if source.is_none_or(str::is_empty) || source != next.field("gmail_ref").and_then(schema::Value::as_str) {
+        if source.is_none_or(str::is_empty)
+            || source != next.field("gmail_ref").and_then(schema::Value::as_str)
+        {
             return Ok(());
         }
         let without_rendering = |doc: &Doc| {
@@ -145,28 +158,51 @@ impl Writer {
             }
             value
         };
-        if without_rendering(&old) != without_rendering(next) { return Ok(()); }
+        if without_rendering(&old) != without_rendering(next) {
+            return Ok(());
+        }
         let before = fingerprint(kind, &old);
         let after = fingerprint(kind, next);
-        if before == after { return Ok(()); }
-        let Some(raw) = self.state().meta(&format!("agent_safety.note.{id}"))? else { return Ok(()); };
-        let Ok(mut safety) = serde_json::from_str::<Safety>(&raw) else { return Ok(()); };
-        if safety.fingerprint != before { return Ok(()); }
-        self.state().set_meta(&format!("agent_safety.conversion.{id}.{before}"), &after)?;
+        if before == after {
+            return Ok(());
+        }
+        let Some(raw) = self.state().meta(&format!("agent_safety.note.{id}"))? else {
+            return Ok(());
+        };
+        let Ok(mut safety) = serde_json::from_str::<Safety>(&raw) else {
+            return Ok(());
+        };
+        if safety.fingerprint != before {
+            return Ok(());
+        }
+        self.state()
+            .set_meta(&format!("agent_safety.conversion.{id}.{before}"), &after)?;
         safety.fingerprint = after;
         // Preserve held/pending as well as clearance. No new arrival is emitted here.
-        self.state().set_agent_safety_result(id, &serde_json::to_string(&safety).expect("safety"), safety.allowed())?;
+        self.state().set_agent_safety_result(
+            id,
+            &serde_json::to_string(&safety).expect("safety"),
+            safety.allowed(),
+        )?;
         Ok(())
     }
     fn safety_member_cleared(&self, id: &str) -> Result<bool> {
-        let Some(member) = self.state().meta(&format!("agent_safety.member.{id}"))? else { return Ok(false); };
+        let Some(member) = self.state().meta(&format!("agent_safety.member.{id}"))? else {
+            return Ok(false);
+        };
         Ok(self.state().indexed_agent_note_allowed(&member)?)
     }
 
     /// The first committed member is pinned in server state, not editable reference fields.
     pub(crate) fn bind_safety_member(&self, id: &str, kind: &str, doc: &Doc) -> Result<()> {
-        if self.state().meta("agent_safety.activation_ms")?.is_none() { return Ok(()); }
-        let field = match kind { "email" => "thread", "message" => "conversation", _ => return Ok(()) };
+        if self.state().meta("agent_safety.activation_ms")?.is_none() {
+            return Ok(());
+        }
+        let field = match kind {
+            "email" => "thread",
+            "message" => "conversation",
+            _ => return Ok(()),
+        };
         if let Some(parent) = doc.field(field).and_then(schema::Value::as_str) {
             self.state().bind_agent_safety_member(parent, id)?;
         }
@@ -175,11 +211,22 @@ impl Writer {
 
     pub(crate) fn refresh_safety_parents(&self, member: &str) -> Result<()> {
         for parent in self.state().agent_safety_parents(member)? {
-            let Some(raw) = self.state().meta(&format!("agent_safety.note.{parent}"))? else { continue; };
-            let Ok(safety) = serde_json::from_str::<Safety>(&raw) else { continue; };
-            let indexed = self.state().indexed_agent_safety()?.into_iter().find(|(id, _, _)| id == &parent);
-            let Some((_, hash, _)) = indexed else { continue; };
-            let allowed = safety.fingerprint == hash && safety.allowed()
+            let Some(raw) = self.state().meta(&format!("agent_safety.note.{parent}"))? else {
+                continue;
+            };
+            let Ok(safety) = serde_json::from_str::<Safety>(&raw) else {
+                continue;
+            };
+            let indexed = self
+                .state()
+                .indexed_agent_safety()?
+                .into_iter()
+                .find(|(id, _, _)| id == &parent);
+            let Some((_, hash, _)) = indexed else {
+                continue;
+            };
+            let allowed = safety.fingerprint == hash
+                && safety.allowed()
                 && (safety.status == "released" || self.safety_member_cleared(&parent)?);
             self.state().index_agent_safety(&parent, &hash, !allowed)?;
             if allowed {
@@ -234,15 +281,28 @@ impl Writer {
         let until = until.map(parse).transpose()?;
         let held = self.state().held_agent_note_ids()?;
         let cached = self.state().indexed_agent_safety()?;
-        let notes = self.read_index(|index, _| {
-            let mut stmt = index.connection().prepare("SELECT id,type,created FROM notes WHERE (?1 IS NULL OR type=?1)")?;
-            stmt.query_map([kind], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))))?
+        let notes = self
+            .read_index(|index, _| {
+                let mut stmt = index
+                    .connection()
+                    .prepare("SELECT id,type,created FROM notes WHERE (?1 IS NULL OR type=?1)")?;
+                stmt.query_map([kind], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        (r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?),
+                    ))
+                })?
                 .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()
-        }).map_err(index::Error::from)?;
+            })
+            .map_err(index::Error::from)?;
         let mut out = Vec::new();
         for (id, hash, stored) in cached {
-            if !held.contains(&id) { continue; }
-            let Some((type_name, created)) = notes.get(&id) else { continue; };
+            if !held.contains(&id) {
+                continue;
+            }
+            let Some((type_name, created)) = notes.get(&id) else {
+                continue;
+            };
             let date = created
                 .as_deref()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
@@ -251,13 +311,24 @@ impl Writer {
             {
                 continue;
             }
-            let mut safety = stored.and_then(|v| serde_json::from_str::<Safety>(&v).ok()).unwrap_or(Safety {
-                status: "held".into(), reason: "unclassified".into(), fingerprint: hash.clone(),
-            });
+            let mut safety = stored
+                .and_then(|v| serde_json::from_str::<Safety>(&v).ok())
+                .unwrap_or(Safety {
+                    status: "held".into(),
+                    reason: "unclassified".into(),
+                    fingerprint: hash.clone(),
+                });
             if safety.fingerprint != hash {
-                safety = Safety { status: "held".into(), reason: "content_changed".into(), fingerprint: hash };
+                safety = Safety {
+                    status: "held".into(),
+                    reason: "content_changed".into(),
+                    fingerprint: hash,
+                };
             }
-            if safety.status == "allowed" && matches!(type_name.as_str(), "email_thread" | "conversation") && !self.safety_member_cleared(&id)? {
+            if safety.status == "allowed"
+                && matches!(type_name.as_str(), "email_thread" | "conversation")
+                && !self.safety_member_cleared(&id)?
+            {
                 safety.status = "held".into();
                 safety.reason = "awaiting_first_member".into();
             }
@@ -271,12 +342,18 @@ impl Writer {
     pub fn activate_agent_safety(&self) -> Result<()> {
         if self.state().meta("agent_safety.index_ready")?.as_deref() == Some("1") {
             for (id, _, stored) in self.state().indexed_agent_safety()? {
-                if let Some(mut safety) = stored.and_then(|v| serde_json::from_str::<Safety>(&v).ok())
-                    && safety.status == "pending" && !self.state().classification_queued(&id)?
+                if let Some(mut safety) =
+                    stored.and_then(|v| serde_json::from_str::<Safety>(&v).ok())
+                    && safety.status == "pending"
+                    && !self.state().classification_queued(&id)?
                 {
                     safety.status = "held".into();
                     safety.reason = "unclassified".into();
-                    self.state().set_agent_safety_result(&id, &serde_json::to_string(&safety).expect("safety"), false)?;
+                    self.state().set_agent_safety_result(
+                        &id,
+                        &serde_json::to_string(&safety).expect("safety"),
+                        false,
+                    )?;
                 }
             }
             return Ok(());
@@ -365,7 +442,10 @@ impl Writer {
         if let Some(stored) = stored {
             if let Ok(safety) = serde_json::from_str::<Safety>(&stored) {
                 if safety.fingerprint == hash {
-                    if matches!(kind, "email_thread" | "conversation") && safety.status == "allowed" && !self.safety_member_cleared(id)? {
+                    if matches!(kind, "email_thread" | "conversation")
+                        && safety.status == "allowed"
+                        && !self.safety_member_cleared(id)?
+                    {
                         return Ok(result("held", "awaiting_first_member"));
                     }
                     return Ok(safety);
@@ -450,8 +530,15 @@ impl Writer {
         let mut equivalent = hash.to_owned();
         // Bound corrupt state/chains. Only the trusted conversion path records these edges.
         for _ in 0..32 {
-            if equivalent == current { break; }
-            let Some(next) = self.state().meta(&format!("agent_safety.conversion.{id}.{equivalent}"))? else { break; };
+            if equivalent == current {
+                break;
+            }
+            let Some(next) = self
+                .state()
+                .meta(&format!("agent_safety.conversion.{id}.{equivalent}"))?
+            else {
+                break;
+            };
             equivalent = next;
         }
         if current != equivalent || (status == "released" && current != hash) {
@@ -473,7 +560,10 @@ impl Writer {
         self.state().set_agent_safety_result(
             id,
             &serde_json::to_string(&safety).expect("safety"),
-            safety.allowed() && (status == "released" || !matches!(note.type_name.as_str(), "email_thread" | "conversation") || self.safety_member_cleared(id)?),
+            safety.allowed()
+                && (status == "released"
+                    || !matches!(note.type_name.as_str(), "email_thread" | "conversation")
+                    || self.safety_member_cleared(id)?),
         )?;
         self.refresh_safety_parents(id)?;
         if let Some(wake) = self

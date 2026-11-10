@@ -1680,7 +1680,10 @@ impl Writer {
             }
         }
         for s in &saved {
-            if s.event == Event::Create && !s.restored && let Ok(doc) = Doc::parse(&s.wcl, "safety member") {
+            if s.event == Event::Create
+                && !s.restored
+                && let Ok(doc) = Doc::parse(&s.wcl, "safety member")
+            {
                 self.bind_safety_member(&s.id, &s.type_name, &doc)?;
             }
             if s.restored

@@ -273,7 +273,12 @@ fn review_index_excludes_many_held_notes_without_reading_their_files() {
     assert_eq!(w.state().held_agent_note_ids().unwrap().len(), 64);
     // Startup and the user's inventory must also use the persisted safety index.
     w.activate_agent_safety().unwrap();
-    assert_eq!(w.held_agent_notes(Some("email"), None, None, None).unwrap().len(), 64);
+    assert_eq!(
+        w.held_agent_notes(Some("email"), None, None, None)
+            .unwrap()
+            .len(),
+        64
+    );
     let _acting = writer::acting_as(&Author::Agent("test".into()));
     let rows = w.query_page("from email select title", 100, None).unwrap();
     assert_eq!(rows["total"], 1);
@@ -323,17 +328,36 @@ fn round3_agent_write_cannot_return_or_change_held_note_reached_through_ref() {
     let w = open(dir.path());
     w.activate_agent_safety().unwrap();
     let hidden = create(&w, "PRIVATE_INJECTION_TEXT");
-    let visible = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Reviewed", "link":hidden.id}})), &Author::Session("owner".into())).unwrap();
+    let visible = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Reviewed", "link":hidden.id}})),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
     let hash = w.agent_safety(&visible.id).unwrap().fingerprint;
-    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow").unwrap();
+    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow")
+        .unwrap();
     let actor = Author::Agent("reader".into());
     let _acting = writer::acting_as(&actor);
-    let reference = w.get(&visible.id).unwrap()["note"]["fields"]["link"].as_str().unwrap().to_owned();
+    let reference = w.get(&visible.id).unwrap()["note"]["fields"]["link"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(w.get(&reference).is_err());
     let result = script_core::Vault::set_archived(&w, &reference, true, &actor);
     assert!(result.is_err(), "agent write leaked held note: {result:?}");
     assert_eq!(w.read(&hidden.id).unwrap().version, hidden.version);
-    assert!(script_core::Vault::update(&w, &reference, serde_json::json!({"fields":{"title":"overwrite"}}), &hidden.version, &actor).is_err());
+    assert!(
+        script_core::Vault::update(
+            &w,
+            &reference,
+            serde_json::json!({"fields":{"title":"overwrite"}}),
+            &hidden.version,
+            &actor
+        )
+        .is_err()
+    );
     assert!(script_core::Vault::delete(&w, &reference, &hidden.version, &actor).is_err());
     assert!(script_core::Vault::restore(&w, &reference, &actor).is_err());
     assert_eq!(w.read(&hidden.id).unwrap().version, hidden.version);
@@ -345,16 +369,26 @@ fn round3_agent_create_returns_only_receipt_for_held_content() {
     let w = open(dir.path());
     w.activate_agent_safety().unwrap();
     let actor = Author::Agent("reader".into());
-    let result = script_core::Vault::create(&w, "email", serde_json::json!({"fields":{"title":"Unreviewed"}}), &actor).unwrap();
+    let result = script_core::Vault::create(
+        &w,
+        "email",
+        serde_json::json!({"fields":{"title":"Unreviewed"}}),
+        &actor,
+    )
+    .unwrap();
     assert_eq!(result["held"], true);
     assert!(result.get("note").is_none());
 }
 
 #[test]
 fn round3_unknown_google_series_organiser_is_incoming() {
-    let doc = Input::Json(serde_json::json!({"fields":{"organiser":"", "google_ref":"google-id"}})).parse("notes/event_series/test.wcl").unwrap();
+    let doc = Input::Json(serde_json::json!({"fields":{"organiser":"", "google_ref":"google-id"}}))
+        .parse("notes/event_series/test.wcl")
+        .unwrap();
     assert!(writer::agent_safety::incoming("event_series", &doc));
-    let local = Input::Json(serde_json::json!({"fields":{"organiser":""}})).parse("notes/event_series/test.wcl").unwrap();
+    let local = Input::Json(serde_json::json!({"fields":{"organiser":""}}))
+        .parse("notes/event_series/test.wcl")
+        .unwrap();
     assert!(!writer::agent_safety::incoming("event_series", &local));
 }
 
@@ -366,7 +400,8 @@ fn round3_agent_query_keeps_sql_plan_on_large_index() {
     let held = create(&w, "Hidden");
     let visible = create(&w, "Visible");
     let hash = w.agent_safety(&visible.id).unwrap().fingerprint;
-    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow").unwrap();
+    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow")
+        .unwrap();
     w.read_index(|index, _| {
         // Nonmatching rows have deliberately invalid bodies. A Rust scan decodes them
         // and fails, whereas the SQL planner reads only the selected page's bodies.
@@ -375,7 +410,13 @@ fn round3_agent_query_keeps_sql_plan_on_large_index() {
         index.connection().execute("UPDATE notes SET data='invalid-json' WHERE id=?1", [&held.id]).unwrap();
     });
     let _acting = writer::acting_as(&Author::Agent("reader".into()));
-    let page = w.query_page("from email where title == \"Visible\" select title", 10, None).unwrap();
+    let page = w
+        .query_page(
+            "from email where title == \"Visible\" select title",
+            10,
+            None,
+        )
+        .unwrap();
     assert_eq!(page["total"], 1);
     assert!(page.to_string().contains("Visible"));
 }
@@ -388,14 +429,25 @@ fn round3_omission_count_is_scoped_to_the_query() {
     create(&w, "Hidden");
     let visible = create(&w, "Visible");
     let hash = w.agent_safety(&visible.id).unwrap().fingerprint;
-    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow").unwrap();
+    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow")
+        .unwrap();
     let _acting = writer::acting_as(&Author::Agent("reader".into()));
     w.take_agent_omissions();
     w.query_page("from email select title", 10, None).unwrap();
     assert_eq!(w.take_agent_omissions(), 1);
-    w.query_page("from email where title == \"Visible\" select title", 10, None).unwrap();
+    w.query_page(
+        "from email where title == \"Visible\" select title",
+        10,
+        None,
+    )
+    .unwrap();
     assert_eq!(w.take_agent_omissions(), 0);
-    w.query_page("from email where title == \"Missing\" select title", 10, None).unwrap();
+    w.query_page(
+        "from email where title == \"Missing\" select title",
+        10,
+        None,
+    )
+    .unwrap();
     assert_eq!(w.take_agent_omissions(), 0);
 }
 
@@ -405,25 +457,58 @@ fn round3_conversion_preserves_pending_and_cleared_same_message_only() {
         let dir = tempfile::tempdir().unwrap();
         let w = open(dir.path());
         w.activate_agent_safety().unwrap();
-        let body = |text: &str| Input::Json(serde_json::json!({"fields":{"title":"Same message", "gmail_ref":"immutable-id"},"blocks":[{"kind":"content","labels":["body"],"blocks":[{"kind":"paragraph","fields":{"text":text}}]}]}));
-        let note = w.create("email", &body("Image placeholder"), &Author::Task("google_gmail".into())).unwrap();
+        let body = |text: &str| {
+            Input::Json(
+                serde_json::json!({"fields":{"title":"Same message", "gmail_ref":"immutable-id"},"blocks":[{"kind":"content","labels":["body"],"blocks":[{"kind":"paragraph","fields":{"text":text}}]}]}),
+            )
+        };
+        let note = w
+            .create(
+                "email",
+                &body("Image placeholder"),
+                &Author::Task("google_gmail".into()),
+            )
+            .unwrap();
         let old = w.agent_safety(&note.id).unwrap().fingerprint;
         if pending {
             let n = w.read(&note.id).unwrap();
             w.register_agent_safety(&note.id, "email", &n.doc).unwrap();
         } else {
-            w.finish_agent_safety(&note.id, &old, "allowed", "allow").unwrap();
+            w.finish_agent_safety(&note.id, &old, "allowed", "allow")
+                .unwrap();
         }
-        let converted = w.update(&note.id, &body("Completed image rendering"), Some(&note.version), &Author::Task("google_gmail".into())).unwrap();
+        let converted = w
+            .update(
+                &note.id,
+                &body("Completed image rendering"),
+                Some(&note.version),
+                &Author::Task("google_gmail".into()),
+            )
+            .unwrap();
         if pending {
             assert_eq!(w.agent_safety(&note.id).unwrap().status, "pending");
-            assert!(w.finish_agent_safety(&note.id, &old, "allowed", "allow").unwrap());
+            assert!(
+                w.finish_agent_safety(&note.id, &old, "allowed", "allow")
+                    .unwrap()
+            );
         }
         assert!(w.agent_may_read(&note.id));
-        assert!(!w.release_agent_safety(&note.id, &old, &Author::Session("owner".into())).unwrap());
-        w.update(&note.id, &body("Untrusted content edit"), Some(&converted.version), &Author::Session("owner".into())).unwrap();
+        assert!(
+            !w.release_agent_safety(&note.id, &old, &Author::Session("owner".into()))
+                .unwrap()
+        );
+        w.update(
+            &note.id,
+            &body("Untrusted content edit"),
+            Some(&converted.version),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
         assert!(!w.agent_may_read(&note.id));
-        assert!(!w.finish_agent_safety(&note.id, &old, "allowed", "allow").unwrap());
+        assert!(
+            !w.finish_agent_safety(&note.id, &old, "allowed", "allow")
+                .unwrap()
+        );
     }
 }
 
@@ -434,41 +519,113 @@ fn round3_type_migration_refreshes_held_query_index() {
     w.activate_agent_safety().unwrap();
     let target = create(&w, "Target");
     let actor = Author::Session("owner".into());
-    let note = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Migrated", "link":target.id}})), &actor).unwrap();
+    let note = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Migrated", "link":target.id}})),
+            &actor,
+        )
+        .unwrap();
     let hash = w.agent_safety(&note.id).unwrap().fingerprint;
-    w.finish_agent_safety(&note.id, &hash, "allowed", "allow").unwrap();
+    w.finish_agent_safety(&note.id, &hash, "allowed", "allow")
+        .unwrap();
     let source = w.read_type("email").unwrap();
-    let change = writer::TypeChange { wcl: source.replace("field link", "field related"), renames: std::collections::BTreeMap::from([("link".into(), "related".into())]), migration: None };
+    let change = writer::TypeChange {
+        wcl: source.replace("field link", "field related"),
+        renames: std::collections::BTreeMap::from([("link".into(), "related".into())]),
+        migration: None,
+    };
     let plan = w.plan_type_change("email", &change).unwrap();
-    w.apply_type_change("email", &change, &plan.token, &actor).unwrap();
+    w.apply_type_change("email", &change, &plan.token, &actor)
+        .unwrap();
     assert_eq!(w.agent_safety(&note.id).unwrap().reason, "content_changed");
     assert!(w.state().held_agent_note_ids().unwrap().contains(&note.id));
     let _acting = writer::acting_as(&Author::Agent("reader".into()));
-    assert_eq!(w.query_page("from email select title", 10, None).unwrap()["total"], 0);
+    assert_eq!(
+        w.query_page("from email select title", 10, None).unwrap()["total"],
+        0
+    );
 }
 
 #[test]
 fn round3_derived_email_thread_title_is_held_with_first_message() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();
-    std::fs::write(dir.path().join("types/email_thread.wcl"), "label = \"Thread\"\ntemplate default { tab Main { slot title } }\n").unwrap();
+    std::fs::write(
+        dir.path().join("types/email_thread.wcl"),
+        "label = \"Thread\"\ntemplate default { tab Main { slot title } }\n",
+    )
+    .unwrap();
     let w = open(dir.path());
     w.activate_agent_safety().unwrap();
     let actor = Author::Session("owner".into());
-    let thread = w.create("email_thread", &Input::Json(serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT"}})), &actor).unwrap();
-    let email = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT", "thread":thread.id}})), &actor).unwrap();
-    assert!(!w.agent_may_read(&thread.id), "derived unclassified subject reached an agent");
+    let thread = w
+        .create(
+            "email_thread",
+            &Input::Json(serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT"}})),
+            &actor,
+        )
+        .unwrap();
+    let email = w
+        .create(
+            "email",
+            &Input::Json(
+                serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT", "thread":thread.id}}),
+            ),
+            &actor,
+        )
+        .unwrap();
+    assert!(
+        !w.agent_may_read(&thread.id),
+        "derived unclassified subject reached an agent"
+    );
     let hash = w.agent_safety(&thread.id).unwrap().fingerprint;
-    w.finish_agent_safety(&thread.id, &hash, "allowed", "allow").unwrap();
-    assert!(!w.agent_may_read(&thread.id), "thread cleared before its first message");
-    assert!(w.state().held_agent_note_ids().unwrap().contains(&thread.id));
-    assert_eq!(w.agent_safety(&thread.id).unwrap().reason, "awaiting_first_member");
+    w.finish_agent_safety(&thread.id, &hash, "allowed", "allow")
+        .unwrap();
+    assert!(
+        !w.agent_may_read(&thread.id),
+        "thread cleared before its first message"
+    );
+    assert!(
+        w.state()
+            .held_agent_note_ids()
+            .unwrap()
+            .contains(&thread.id)
+    );
+    assert_eq!(
+        w.agent_safety(&thread.id).unwrap().reason,
+        "awaiting_first_member"
+    );
     let hash = w.agent_safety(&email.id).unwrap().fingerprint;
-    w.finish_agent_safety(&email.id, &hash, "allowed", "allow").unwrap();
+    w.finish_agent_safety(&email.id, &hash, "allowed", "allow")
+        .unwrap();
     assert!(w.agent_may_read(&thread.id));
-    assert!(!w.state().held_agent_note_ids().unwrap().contains(&thread.id));
-    assert!(w.state().agent_safety_clearances().unwrap().contains(&thread.id));
-    w.update(&email.id, &Input::Json(serde_json::json!({"fields":{"title":"Changed untrusted subject", "thread":thread.id}})), Some(&email.version), &actor).unwrap();
+    assert!(
+        !w.state()
+            .held_agent_note_ids()
+            .unwrap()
+            .contains(&thread.id)
+    );
+    assert!(
+        w.state()
+            .agent_safety_clearances()
+            .unwrap()
+            .contains(&thread.id)
+    );
+    w.update(
+        &email.id,
+        &Input::Json(
+            serde_json::json!({"fields":{"title":"Changed untrusted subject", "thread":thread.id}}),
+        ),
+        Some(&email.version),
+        &actor,
+    )
+    .unwrap();
     assert!(!w.agent_may_read(&thread.id));
-    assert!(w.state().held_agent_note_ids().unwrap().contains(&thread.id));
+    assert!(
+        w.state()
+            .held_agent_note_ids()
+            .unwrap()
+            .contains(&thread.id)
+    );
 }
