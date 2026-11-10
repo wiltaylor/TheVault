@@ -18,7 +18,7 @@ fn token_kinds_migrate_from_19_20_22_and_23_without_losing_credentials() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("state.db");
         let state = State::open(&path, None).unwrap();
-        let credentials: Vec<_> = ["agent-old", "device-old", "plain"]
+        let credentials: Vec<_> = ["agent-old", "device-old", "plain", "Agent-Upper", "DEVICE-x"]
             .into_iter()
             .map(|name| state.create_token(name, Scope::Admin).unwrap().1)
             .collect();
@@ -29,15 +29,56 @@ fn token_kinds_migrate_from_19_20_22_and_23_without_losing_credentials() {
         conn.pragma_update(None, "user_version", version).unwrap();
         drop(conn);
         let state = State::open(&path, None).unwrap();
-        for (secret, kind) in credentials.iter().zip(["agent", "device", "user"]) {
+        for (secret, kind) in credentials.iter().zip(["agent", "device", "user", "agent", "device"]) {
             let token = state.authenticate_token(secret).unwrap().unwrap();
             assert_eq!(token.kind, kind);
-            assert_eq!(token.scope, Scope::Admin);
+            assert_eq!(token.scope, if kind == "agent" { Scope::Write } else { Scope::Admin });
         }
         drop(state);
         let state = State::open(&path, None).unwrap();
-        assert_eq!(state.list_tokens().unwrap().len(), 3);
+        assert_eq!(state.list_tokens().unwrap().len(), 5);
     }
+}
+
+#[test]
+fn outbox_admission_is_atomic_and_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let state = Arc::new(State::open(&path, None).unwrap());
+    let threads: Vec<_> = (0..32)
+        .map(|i| {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                state
+                    .reserve_outbox("sender", &i.to_string(), 1000, 20, 300_000)
+                    .unwrap()
+            })
+        })
+        .collect();
+    let admitted = threads
+        .into_iter()
+        .map(|t| usize::from(t.join().unwrap()))
+        .sum::<usize>();
+    assert_eq!(admitted, 20);
+    drop(state);
+    let state = State::open(&path, None).unwrap();
+    assert!(
+        !state
+            .reserve_outbox("sender", "extra", 2000, 20, 300_000)
+            .unwrap()
+    );
+    assert!(
+        state
+            .reserve_outbox("sender", "next", DAY_MS, 20, 300_000)
+            .unwrap()
+    );
+    assert_eq!(
+        state.outbox_deadline("next").unwrap(),
+        Some(DAY_MS + 300_000)
+    );
+    assert!(state.prune_outbox_limits(10 * DAY_MS, |_| false).unwrap() > 0);
+    assert_eq!(state.outbox_deadline("next").unwrap(), None);
+    assert_eq!(state.meta("outbox-cap:sender:0").unwrap(), None);
 }
 
 struct TestClock(AtomicI64);

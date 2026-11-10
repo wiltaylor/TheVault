@@ -716,6 +716,8 @@ export interface AgentSubagents {
 export interface AgentOutbox {
   /** The agent's drafts are created ready and sent at once, without waiting in Draft. */
   send_without_review: boolean;
+  conditions_hidden?: boolean;
+  conditions?: { recipients: string[]; email: boolean; sms: boolean; event: boolean; daily_cap: number; cancel_delay_minutes: number };
 }
 
 /**

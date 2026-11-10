@@ -419,7 +419,23 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0013_email_gmail_restore",
         run: email_gmail_restore,
     },
+    UpgradeStep {
+        id: "0014_outbox_legacy_limits",
+        run: outbox_legacy_limits,
+    },
 ];
+
+fn outbox_legacy_limits(w: &Writer) -> Result<()> {
+    for (name, source) in w.definitions("agents")? {
+        if let Ok(agent) = schema::Agent::parse(&name, &source)
+            && agent.permissions.outbox.send_without_review
+            && agent.permissions.outbox.conditions.is_none()
+        {
+            w.state.set_meta(&format!("outbox-legacy:{name}"), "true")?;
+        }
+    }
+    Ok(())
+}
 
 /// On every start of the home server (types T6): every field of every type file that says
 /// `multiple = true` says it as a list instead, `kind = "list"` with `items` its old kind, the
@@ -2259,6 +2275,7 @@ impl Writer {
                 lists_not_multiple(self)?;
                 // Likewise an agent file naming a provider of before accounts.
                 agents_name_accounts(self)?;
+                self.refresh_outbox_legacy()?;
                 steps
             }
             Upkeep::Device => Vec::new(),

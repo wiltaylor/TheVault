@@ -623,7 +623,7 @@ describe("the Permissions tab", () => {
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
     fireEvent.click(p.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(putAgent).toHaveBeenCalled());
-    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true });
+    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true, conditions: { recipients: [], email: false, sms: false, event: false, daily_cap: 0, cancel_delay_minutes: 5 } });
   });
 
   it("shows the switch on for an agent that sends without review", async () => {
@@ -632,6 +632,27 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByRole("switch", { name: "Send from the Outbox without review" })).toBeChecked();
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
+    expect(p.getByText(/Legacy limits, set conditions/)).toBeTruthy();
+  });
+
+  it("does not show legacy limits when conditions are hidden", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, outbox: { send_without_review: true, conditions_hidden: true } } }));
+    await open();
+    const p = await tab("Permissions");
+    expect(p.queryByText(/Legacy limits, set conditions/)).toBeNull();
+  });
+
+  it("saves explicit strict send conditions without losing them when toggled", async () => {
+    await open();
+    const p = await tab("Permissions");
+    fireEvent.click(p.getByRole("button", { name: "Set send conditions" }));
+    fireEvent.input(p.getByLabelText(/Recipients \(one address/), { target: { value: "ann@example.com" } });
+    fireEvent.click(p.getByLabelText("email", { exact: true }));
+    fireEvent.input(p.getByLabelText("Daily cap"), { target: { value: "2" } });
+    fireEvent.click(p.getByRole("switch", { name: "Send from the Outbox without review" }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true, conditions: { recipients: ["ann@example.com"], email: true, sms: false, event: false, daily_cap: 2, cancel_delay_minutes: 5 } });
   });
 
   it("offers all skills by default, and saves a chosen list from the vault's skills", async () => {

@@ -120,12 +120,15 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), json!(v)))
         .collect();
-    let outbox: serde_json::Map<String, Value> = p
+    let mut outbox: serde_json::Map<String, Value> = p
         .outbox
         .switches()
         .into_iter()
         .map(|(k, v)| (k.to_owned(), json!(v)))
         .collect();
+    if let Some(c) = &p.outbox.conditions {
+        outbox.insert("conditions".into(), json!(c));
+    }
     let scripts: serde_json::Map<String, Value> = p
         .scripts
         .switches()
@@ -277,6 +280,7 @@ fn agent_response(
     agent: &Agent,
     wcl: String,
     account: Option<String>,
+    conditions_hidden: bool,
 ) -> Response {
     let mut out = agent_json(agent);
     out["account"] = json!(account);
@@ -287,29 +291,42 @@ fn agent_response(
         .map(crate::error::issue_json)
         .collect();
     out["warnings"] = json!(warnings);
+    if conditions_hidden {
+        out["permissions"]["outbox"]["conditions_hidden"] = json!(true);
+    }
     text_or_json(headers, wcl, out)
 }
 
 /// `GET /api/agents/{name}`.
 pub async fn read(
     State(w): Shared,
+    Caller(by): Caller,
+    axum::Extension(crate::auth::GrantedScope(scope)): axum::Extension<crate::auth::GrantedScope>,
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // A file that does not parse is a 400 `invalid` with its issues and its text, so the File
     // tab can show it to be fixed.
-    let (wcl, agent, account) = blocking(w, move |w| {
-        let wcl = w.read_agent(&name)?;
-        let agent = Agent::parse(&name, &wcl).map_err(|e| {
-            let mut err = ApiError::from(writer::Error::Invalid(e));
-            err.body["wcl"] = json!(wcl);
+    let (wcl, agent, account, hidden) = blocking(w, move |w| {
+        let full = matches!(by, state::Author::Session(_))
+            || (scope.allows(state::Scope::Admin) && !crate::auth::is_agent_token(&by));
+        let mut wcl = w.read_agent(&name)?;
+        let mut agent = w.agent(&name).map_err(|e| {
+            let mut err = ApiError::from(e);
+            if full {
+                err.body["wcl"] = json!(wcl);
+            }
             err
         })?;
+        let hidden = !full && agent.permissions.outbox.conditions.take().is_some();
+        if hidden {
+            wcl = agent.to_wcl();
+        }
         let account = crate::ai_settings::agent_account_name(w, &agent);
-        Ok::<_, ApiError>((wcl, agent, account))
+        Ok::<_, ApiError>((wcl, agent, account, hidden))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl, account))
+    Ok(agent_response(&headers, &agent, wcl, account, hidden))
 }
 
 /// The JSON body of `PUT /api/agents/{name}`: `wcl`, or the form `GET` answers. `name`, `kind`,
@@ -354,7 +371,7 @@ pub struct PermissionsForm {
     #[serde(default)]
     web: BTreeMap<String, bool>,
     #[serde(default)]
-    outbox: BTreeMap<String, bool>,
+    outbox: OutboxForm,
     /// Browser automation (browser B6); absent is off.
     #[serde(default)]
     browser: bool,
@@ -369,6 +386,16 @@ pub struct PermissionsForm {
     /// Sub agents (subagents U2); absent is off.
     #[serde(default)]
     subagents: Option<SubagentsForm>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct OutboxForm {
+    #[serde(default)]
+    send_without_review: bool,
+    conditions: Option<schema::OutboxConditions>,
+    #[serde(default, rename = "conditions_hidden")]
+    _conditions_hidden: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -441,14 +468,8 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
             ));
         }
     }
-    for (k, on) in f.permissions.outbox {
-        if !p.outbox.set(&k, on) {
-            issues.push(Issue::new(
-                format!("permissions.outbox.{k}"),
-                "is not a switch",
-            ));
-        }
-    }
+    p.outbox.send_without_review = f.permissions.outbox.send_without_review;
+    p.outbox.conditions = f.permissions.outbox.conditions;
     for (k, on) in f.permissions.scripts {
         if !p.scripts.set(&k, on) {
             issues.push(Issue::new(
@@ -566,7 +587,7 @@ pub async fn put(
         Ok::<_, ApiError>((wcl, agent, account))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl, account))
+    Ok(agent_response(&headers, &agent, wcl, account, false))
 }
 
 /// `DELETE /api/agents/{name}`.

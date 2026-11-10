@@ -1450,6 +1450,7 @@ impl Writer {
             }
         }
         if outbox {
+            self.limit_outbox(id, &mut doc, old_doc.as_ref(), author)?;
             self.check_outbox(ty, &path, &doc, old_doc.as_ref(), author)?;
         }
         let archived = archived.unwrap_or_else(|| old_doc.as_ref().is_some_and(note::is_archived));

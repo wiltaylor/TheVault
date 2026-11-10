@@ -571,6 +571,87 @@ impl State {
         Ok(())
     }
 
+    /// Atomically reserve a UTC-day send admission and persist its cancellation deadline.
+    /// Reservations are never refunded, including cancellation or a later failed note write.
+    pub fn reserve_outbox(
+        &self,
+        agent: &str,
+        id: &str,
+        now: i64,
+        cap: i64,
+        delay_ms: i64,
+    ) -> Result<bool> {
+        use rusqlite::{OptionalExtension, params};
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let key = format!("outbox-cap:{agent}:{}", now.div_euclid(86_400_000));
+        let count: Option<String> = tx
+            .query_row("SELECT value FROM meta WHERE key=?1", [&key], |r| r.get(0))
+            .optional()?;
+        let count = count.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        if count >= cap {
+            return Ok(false);
+        }
+        tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, (count + 1).to_string()])?;
+        tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("outbox-delay:{id}"), now.saturating_add(delay_ms).to_string()])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Durable, server-owned earliest dispatch time for an unattended Outbox item.
+    pub fn outbox_deadline(&self, id: &str) -> Result<Option<i64>> {
+        Ok(self
+            .meta(&format!("outbox-delay:{id}"))?
+            .map(|s| s.parse().unwrap_or(i64::MAX)))
+    }
+
+    /// Forget daily counters and cancellation deadlines older than seven days.
+    pub fn prune_outbox_limits(
+        &self,
+        now: i64,
+        keep_deadline: impl Fn(&str) -> bool,
+    ) -> Result<usize> {
+        let cutoff = now.saturating_sub(7 * 86_400_000);
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT key,value FROM meta WHERE key LIKE 'outbox-delay:%' OR key LIKE 'outbox-cap:%'",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut expired = Vec::new();
+        for row in rows {
+            let (key, value) = row?;
+            let old = if let Some(id) = key.strip_prefix("outbox-delay:") {
+                value.parse::<i64>().is_ok_and(|v| v < cutoff) && !keep_deadline(id)
+            } else {
+                key.rsplit(':')
+                    .next()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .is_some_and(|day| day < cutoff.div_euclid(86_400_000))
+            };
+            if old {
+                expired.push(key);
+            }
+        }
+        drop(stmt);
+        for key in &expired {
+            conn.execute("DELETE FROM meta WHERE key=?1", [key])?;
+        }
+        Ok(expired.len())
+    }
+
+    /// Pre-upgrade agent names whose legacy grant has not been revoked.
+    pub fn legacy_outbox_agents(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT key FROM meta WHERE key LIKE 'outbox-legacy:%' AND value='true'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|k| k.strip_prefix("outbox-legacy:").map(str::to_owned))
+            .collect())
+    }
+
     /// The live events of this vault's changes, for open clients (D4).
     pub fn events(&self) -> &Events {
         &self.events
@@ -685,8 +766,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                     |r| r.get(0),
                 )?;
                 if !has_token_kind {
-                    tx.execute_batch("ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','device','agent')); UPDATE tokens SET kind = CASE WHEN substr(name,1,6) = 'agent-' THEN 'agent' WHEN substr(name,1,7) = 'device-' THEN 'device' ELSE 'user' END;")?;
+                    tx.execute_batch("ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','device','agent')); UPDATE tokens SET kind = CASE WHEN lower(substr(name,1,6)) = 'agent-' THEN 'agent' WHEN lower(substr(name,1,7)) = 'device-' THEN 'device' ELSE 'user' END;")?;
                 }
+                tx.execute("UPDATE tokens SET scope='write' WHERE kind='agent' AND scope='admin'", [])?;
             }
             if version <= 21 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
