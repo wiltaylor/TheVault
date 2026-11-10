@@ -18,6 +18,15 @@ fn gmail_actions_are_opt_in_and_round_trip() {
     assert!(on.to_wcl().contains("gmail_actions"));
 }
 
+#[test]
+fn browser_secrets_round_trip_only_with_browser_enabled() {
+    let source = "permissions {\n browser = true\n browser_secrets = [\"example_login\"]\n}\n";
+    let agent = Agent::parse("clerk", source).unwrap();
+    assert!(agent.to_wcl().contains("browser_secrets = [\"example_login\"]"));
+    assert!(Agent::parse("clerk", "permissions {\n browser_secrets = [\"example_login\"]\n}\n").is_err());
+    assert!(!Agent::parse("clerk", "").unwrap().to_wcl().contains("browser_secrets"));
+}
+
 const FULL: &str = r#"label         = "Inbox triage"
 description   = "Files new email."
 icon          = "bot"
