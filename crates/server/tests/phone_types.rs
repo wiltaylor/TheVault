@@ -186,7 +186,12 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
     assert_eq!(conversation["builtin"], true);
     assert_eq!(
         field_names(conversation),
-        ["agent_safety_reason", "participants", "channel", "thread_ref"]
+        [
+            "agent_safety_reason",
+            "participants",
+            "channel",
+            "thread_ref"
+        ]
     );
     assert_eq!(field(conversation, "participants")["target"], "person");
     assert_eq!(field(conversation, "participants")["multiple"], true);
