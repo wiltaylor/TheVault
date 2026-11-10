@@ -40,6 +40,18 @@ fn user() -> Author {
     Author::Session("test".into())
 }
 
+#[test]
+fn gmail_capability_does_not_bypass_calendar_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let agent = Author::AgentMail("drafter".into());
+    for fields in [json!({"title": "Invite", "attendees_raw": ["ann@example.com"]}), json!({"title": "Invite", "send_updates": "all"})] {
+        assert!(matches!(w.create("event", &Input::Json(json!({"fields": fields})), &agent), Err(Error::Rejected(_))));
+    }
+    let event = w.create("event", &Input::Json(json!({"fields": {"title": "Imported", "google_ref": "g1"}})), &user()).unwrap();
+    assert!(matches!(w.delete(&event.id, Some(&event.version), &agent), Err(Error::Rejected(_))));
+}
+
 fn agent(name: &str) -> Author {
     Author::Agent(name.into())
 }
