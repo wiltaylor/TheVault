@@ -2054,7 +2054,7 @@ fn a_turn_is_read_only_by_its_caller_by_any_number_of_readers() {
         api.turn_events(&other, &turn).status(),
         StatusCode::NOT_FOUND
     );
-    assert_eq!(api.stop_turn(&other, &turn), StatusCode::NOT_FOUND);
+    assert_eq!(api.stop_turn(&other, &turn), StatusCode::FORBIDDEN);
     let first = api.turn_events(&api.token(), &turn);
     assert_eq!(first.status(), StatusCode::OK);
     let second = api.turn_events(&api.token(), &turn);
@@ -2132,8 +2132,8 @@ fn a_fifth_running_turn_for_one_caller_is_refused() {
     let (status, v) = api.start_turn(&api.token(), json!({ "messages": [user("Go")] }));
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
     assert_eq!(v["error"], "too_many_turns");
-    // Another caller has turns of its own.
-    let other = api.token_of("other", "read");
+    // Another writer has turns of its own.
+    let other = api.token_of("other", "write");
     let (status, _) = api.start_turn(&other, json!({ "messages": [user("Go")] }));
     assert_eq!(status, StatusCode::CREATED);
     // A stopped turn makes room.

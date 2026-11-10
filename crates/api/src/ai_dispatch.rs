@@ -212,6 +212,7 @@ fn refused(e: DispatchRefused, agent: &str) -> ApiError {
 pub async fn dispatch(
     State(w): State<Arc<Writer>>,
     Path(name): Path<String>,
+    axum::Extension(crate::auth::GrantedScope(scope)): axum::Extension<crate::auth::GrantedScope>,
     Json(b): Json<Dispatch>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let request = b.request.trim().to_owned();
@@ -236,6 +237,7 @@ pub async fn dispatch(
                 &ids,
                 &title(&request, &notes),
                 &prompt(&request, &notes),
+                scope,
             )
             .map_err(|e| refused(e, &agent.name))?;
         agent_threads::Thread::read(w, &thread)

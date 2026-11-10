@@ -24,8 +24,8 @@
 //! check a change and hand it to the user (ai D14, D18, D20, D31, agents
 //! G20; an agent change is also checked against the turn's agent, `crate::ai_agents`). When
 //! the agent's permissions turn a kind's confirmation off and the turn's scope allows the write
-//! (`write` for notes, `admin` for types, taxonomies, agents and skills; a `write` caller's turn
-//! has the agent's own scope, [`change_scope`]), the tool makes
+//! (`write` for notes, `admin` for types, taxonomies, agents and skills; [`change_scope`]
+//! caps direct changes at both the caller's and agent's scopes), the tool makes
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
 //! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
@@ -245,6 +245,7 @@ pub(crate) async fn run_unattended(
     thread: &str,
     prompt: &str,
     waits: crate::ai_retry::Waits,
+    caller_scope: Option<Scope>,
 ) -> Unattended {
     let report: Report = Arc::default();
     let retry = CapacityRetry::new(waits, w.clone(), thread, report.clone());
@@ -268,7 +269,7 @@ pub(crate) async fn run_unattended(
     let started = start_with(
         w,
         author,
-        unattended_scope(agent),
+        change_scope(caller_scope.unwrap_or_else(|| unattended_scope(agent)), agent),
         body,
         never,
         Some((report.clone(), retry)),

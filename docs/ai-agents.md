@@ -567,7 +567,7 @@ Only the call that failed is made again, with the same request. The tools the ru
 | `POST /api/agents/{name}/dispatch` | write | Sends notes to the agent from `{ notes, request }`: one thread of origin `dispatch` and one run on it, 202 `{ thread }`. 400 for an empty request, no notes, more than 100, a note sent twice, a note that is missing or in the trash, or one of a type the agent may not read; 404 for a missing or disabled agent; 429 `too_many_runs` past the agent's run limits; 503 `no_agent_runs` on a server that runs no agents |
 | `GET /api/dispatched` | read | The threads of origin `dispatch` and `mention` of every agent, newest activity first: `{ threads: [{ id, agent, title, origin, notes, state, pending, question, last_activity, running, turn, started_ms }] }`, filtered by `?notes=<id>,<id>` and `?state=active\|needs_you\|done` |
 | `GET /api/agents/{name}/threads` | read | The agent's threads, newest activity first, each with `archived`; archived threads only with `?archived=true` |
-| `POST /api/agents/{name}/threads` | read | Starts a thread from `{ title? }` |
+| `POST /api/agents/{name}/threads` | write | Starts a thread from `{ title? }` |
 | `GET /api/agents/{name}/threads/{id}` | read | A thread with its messages, steps and proposals |
 | `PATCH /api/agents/{name}/threads/{id}` | write | Renames a thread from `{ title }` |
 | `DELETE /api/agents/{name}/threads/{id}` | write | Moves a thread to the trash |

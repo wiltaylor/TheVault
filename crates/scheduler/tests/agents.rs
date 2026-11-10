@@ -89,7 +89,7 @@ impl AgentRunner for Fake {
         Ok(format!("thread{}", t.len()))
     }
 
-    fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str) -> TurnReport {
+    fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str, _scope: Option<state::Scope>) -> TurnReport {
         let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
         self.most.fetch_max(now, Ordering::SeqCst);
         std::thread::sleep(*self.delay.lock().unwrap());
@@ -813,7 +813,7 @@ fn notes_sent_to_an_agent_run_once_on_a_dispatch_thread_about_them() {
     let notes = vec!["01JB8Z4K2MQ7V3X9T5R6W8Y2ZB".to_owned()];
     let thread = r
         .scheduler
-        .dispatch("clerk", &notes, "Tidy: Roof", "Tidy them.")
+        .dispatch("clerk", &notes, "Tidy: Roof", "Tidy them.", state::Scope::Admin)
         .unwrap();
     r.fake.wait_turns(1);
     assert_eq!(
@@ -845,7 +845,7 @@ fn notes_sent_to_an_agent_run_once_on_a_dispatch_thread_about_them() {
     }
     // An agent the scheduler does not run is refused, with no thread opened.
     assert_eq!(
-        r.scheduler.dispatch("nobody", &[], "t", "p"),
+        r.scheduler.dispatch("nobody", &[], "t", "p", state::Scope::Admin),
         Err(scheduler::DispatchRefused::NoAgent)
     );
     assert_eq!(r.fake.threads.lock().unwrap().len(), 1);
@@ -859,11 +859,11 @@ fn a_dispatch_past_the_queue_or_the_hourly_limit_is_refused_and_opens_no_thread(
     let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
     for i in 0..room {
         r.scheduler
-            .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+            .dispatch("clerk", &[], &format!("Run {i}"), "Go.", state::Scope::Admin)
             .unwrap();
     }
     assert_eq!(
-        r.scheduler.dispatch("clerk", &[], "One more", "Go."),
+        r.scheduler.dispatch("clerk", &[], "One more", "Go.", state::Scope::Admin),
         Err(scheduler::DispatchRefused::QueueFull)
     );
     assert_eq!(r.fake.threads.lock().unwrap().len(), room);
@@ -872,11 +872,11 @@ fn a_dispatch_past_the_queue_or_the_hourly_limit_is_refused_and_opens_no_thread(
     // Nothing queued was dropped; now the hour's runs run out.
     for i in room..scheduler::MAX_PER_HOUR {
         r.scheduler
-            .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+            .dispatch("clerk", &[], &format!("Run {i}"), "Go.", state::Scope::Admin)
             .unwrap();
     }
     assert_eq!(
-        r.scheduler.dispatch("clerk", &[], "Over", "Go."),
+        r.scheduler.dispatch("clerk", &[], "Over", "Go.", state::Scope::Admin),
         Err(scheduler::DispatchRefused::OverLimit)
     );
     r.fake.wait_turns(scheduler::MAX_PER_HOUR);
@@ -896,7 +896,7 @@ fn a_full_queue_keeps_its_dispatch_runs_when_a_trigger_run_comes() {
     for i in 0..room {
         sent.push(
             r.scheduler
-                .dispatch("any", &[], &format!("Run {i}"), "Go.")
+                .dispatch("any", &[], &format!("Run {i}"), "Go.", state::Scope::Admin)
                 .unwrap(),
         );
     }
@@ -933,7 +933,7 @@ fn a_dispatch_takes_the_place_of_a_trigger_run_waiting_in_a_full_queue() {
         }
         let sent = r
             .scheduler
-            .dispatch("any", &[], "Sent", "Go.")
+            .dispatch("any", &[], "Sent", "Go.", state::Scope::Admin)
             .expect("a trigger run gives way to a dispatch");
         r.fake.hold.store(false, Ordering::SeqCst);
         sent
@@ -952,7 +952,7 @@ fn a_call_refused_by_a_full_queue_is_not_recorded_and_the_next_save_asks_again()
     let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
     for i in 0..room {
         r.scheduler
-            .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+            .dispatch("clerk", &[], &format!("Run {i}"), "Go.", state::Scope::Admin)
             .unwrap();
     }
     let text = format!(
