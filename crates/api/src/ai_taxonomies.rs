@@ -146,7 +146,7 @@ fn renames_arg(input: &Value) -> Result<(Vec<Value>, BTreeMap<String, String>), 
 }
 
 /// The renames of a proposal as the writer takes them.
-fn renames_of(p: &Value) -> Result<BTreeMap<String, String>, ApplyError> {
+pub(crate) fn renames_of(p: &Value) -> Result<BTreeMap<String, String>, ApplyError> {
     let mut map = BTreeMap::new();
     for r in p["renames"].as_array().into_iter().flatten() {
         match (r["from"].as_str(), r["to"].as_str()) {
@@ -261,7 +261,9 @@ pub(crate) fn apply_taxonomy(w: &Writer, author: &Author, p: &Value) -> Result<V
         )));
     }
     if p["op"] == "delete" {
-        w.delete_taxonomy(name)?;
+        w.delete_taxonomy_checked(name, |w| {
+            crate::ai_chat::authorize_proposal(w, author, "taxonomy_proposal", p)
+        })?;
         return Ok(json!({ "op": "taxonomy_delete", "taxonomy_name": name, "notes": 0 }));
     }
     let after = p["after"]
@@ -269,7 +271,9 @@ pub(crate) fn apply_taxonomy(w: &Writer, author: &Author, p: &Value) -> Result<V
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
     let renames = renames_of(p)?;
-    let (_, saved) = w.put_taxonomy(name, after, &renames, author)?;
+    let (_, saved) = w.put_taxonomy_checked(name, after, &renames, author, |w| {
+        crate::ai_chat::authorize_proposal(w, author, "taxonomy_proposal", p)
+    })?;
     let op = if before.is_some() {
         "taxonomy_change"
     } else {
