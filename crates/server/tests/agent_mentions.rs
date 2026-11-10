@@ -493,6 +493,25 @@ fn issued_calls_are_note_and_agent_bound_and_expire() {
 }
 
 #[test]
+fn a_write_token_cannot_deliver_a_session_issued_call() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("helper", "label = \"Helper\"\n");
+    let id = api.note("memo", "Editor", &[]);
+    let issued = api.issue(&id, "helper");
+    let token = api.send("POST", "/api/tokens", json!({ "name": "external-writer", "scope": "write" }));
+    let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
+    api.client.put(api.server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(token["secret"].as_str().unwrap())
+        .json(&json!({ "base_version": version, "note": note_json("Hijacked", &[&call("@Helper attacker request", "helper", &issued)]) }))
+        .send().unwrap().error_for_status().unwrap();
+    fake.push(AnthropicMessage::text("Must not run."));
+    api.advance("PT1S");
+    assert!(fake.message_requests().is_empty(), "an API token cannot deliver an owner's reserved call");
+    assert!(api.threads("helper").is_empty());
+}
+
+#[test]
 fn an_agent_overwrite_refuses_a_pending_editor_call() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
