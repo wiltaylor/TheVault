@@ -127,6 +127,10 @@ fn strings(doc: &Doc, name: &str) -> Vec<String> {
     }
 }
 
+fn recipient_key(value: &str, kind: &str) -> Option<String> {
+    schema::send_recipient_key(value, kind == "sms")
+}
+
 impl ItemChange {
     pub(crate) fn new(id: &str, author: &Author, old: Option<&Doc>, doc: &Doc) -> ItemChange {
         ItemChange {
@@ -175,6 +179,140 @@ fn drafted_title(label: &str, count: usize) -> String {
 }
 
 impl Writer {
+    /// Apply admission limits under the writer's write lock. Refused automatic sends stay drafts.
+    pub(crate) fn limit_outbox(
+        &self,
+        id: &str,
+        doc: &mut Doc,
+        old: Option<&Doc>,
+        author: &Author,
+    ) -> Result<()> {
+        if text(doc, "status") == Some("sending")
+            && old.is_some_and(|d| text(d, "status") == Some("ready"))
+            && self
+                .state
+                .outbox_deadline(id)?
+                .is_some_and(|at| self.now_ms() < at)
+        {
+            return Err(Error::Invalid(Invalid {
+                file: note_path("outbox", id),
+                issues: vec![Issue::new("status", "cancellation delay has not elapsed")],
+            }));
+        }
+        if text(doc, "status") != Some("ready")
+            || old.is_some_and(|d| text(d, "status") == Some("ready"))
+        {
+            return Ok(());
+        }
+        let name = match author {
+            Author::Agent(n) | Author::AgentMail(n) => n.as_str(),
+            Author::Session(_) | Author::Token(_) if self.state.outbox_deadline(id)?.is_some() => {
+                text(doc, "drafted_by").unwrap_or("")
+            }
+            _ => return Ok(()),
+        };
+        let Ok(agent) = self.agent(name) else {
+            return Ok(());
+        };
+        let policy = &agent.permissions.outbox;
+        if !policy.send_without_review {
+            return Ok(());
+        }
+        let limits = policy.limits();
+        let kind = text(doc, "kind").unwrap_or("email");
+        let enabled = match kind {
+            "email" => limits.email,
+            "sms" => limits.sms,
+            "event" => limits.event,
+            _ => false,
+        };
+        let fields: &[&str] = match kind {
+            "sms" => &["phone"],
+            "event" => &["attendees_raw"],
+            _ => &["to", "cc", "bcc"],
+        };
+        let mut recipients: Vec<_> = fields.iter().flat_map(|f| strings(doc, f)).collect();
+        // Event updates may keep the original attendees. Those recipients are part of the grant.
+        if kind == "event"
+            && let Some(event) = text(doc, "event")
+                .filter(|s| !s.is_empty())
+                .or_else(|| text(doc, "result").filter(|s| !s.is_empty()))
+        {
+            let existing = schema::is_ulid(event)
+                .then(|| std::fs::read_to_string(self.vault.root().join(note_path("event", event))))
+                .and_then(|r| r.ok())
+                .and_then(|s| Input::Wcl(s).parse("event").ok());
+            if let Some(note) = existing {
+                recipients.extend(strings(&note, "attendees_raw"));
+                recipients.extend(strings(&note, "organiser"));
+            } else {
+                set(doc, "status", "draft");
+                return Ok(());
+            }
+        }
+        let allowed = policy.conditions.is_none()
+            || (!recipients.is_empty()
+                && recipients.iter().all(|r| {
+                    limits.recipients.iter().any(|a| {
+                        recipient_key(a, kind) == recipient_key(r, kind)
+                            && recipient_key(r, kind).is_some()
+                    })
+                }));
+        let invalid_phone = kind == "sms"
+            && text(doc, "phone")
+                .and_then(|p| recipient_key(p, kind))
+                .is_none();
+        let invalid_email =
+            kind == "email" && recipients.iter().any(|r| recipient_key(r, kind).is_none());
+        let denied = if !enabled {
+            Some("this kind is not enabled for this agent")
+        } else if !allowed || invalid_phone || invalid_email {
+            Some("recipient not on this agent's list")
+        } else if !self.state.reserve_outbox(
+            name,
+            id,
+            self.now_ms(),
+            limits.daily_cap,
+            limits.cancel_delay_minutes * 60_000,
+        )? {
+            Some("over this agent's daily limit")
+        } else {
+            None
+        };
+        if let Some(message) = denied {
+            if matches!(author, Author::Session(_) | Author::Token(_)) {
+                return Err(Error::Invalid(Invalid {
+                    file: note_path("outbox", id),
+                    issues: vec![Issue::new("status", message)],
+                }));
+            }
+            set(doc, "status", "draft");
+        } else if kind == "sms"
+            && let Some(phone) = text(doc, "phone").and_then(|p| recipient_key(p, kind))
+        {
+            set(doc, "phone", &phone);
+        } else if kind == "email" {
+            for name in ["to", "cc", "bcc"] {
+                let values = strings(doc, name);
+                if values.is_empty() {
+                    continue;
+                }
+                let Some(normalized) = values
+                    .iter()
+                    .map(|v| recipient_key(v, "email").map(Value::Str))
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    // Even legacy sends must have unambiguous ASCII address keys.
+                    set(doc, "status", "draft");
+                    return Ok(());
+                };
+                doc.fields.retain(|(n, _)| n != name);
+                doc.fields.push((name.to_owned(), Value::List(normalized)));
+            }
+        }
+        Ok(())
+    }
+
     /// The bell notifications for committed Outbox writes (outbox X10). A notification that
     /// cannot be stored is logged, never failing the write.
     pub(crate) fn outbox_notifications(&self, items: &[ItemChange]) {
@@ -433,6 +571,11 @@ impl Writer {
     /// removed is logged and left for the next sweep.
     pub fn sweep_outbox(&self, now_ms: i64) -> usize {
         use script_core::Vault as _;
+        if let Err(e) = self.state.prune_outbox_limits(now_ms, |id| {
+            self.vault.root().join(note_path("outbox", id)).is_file()
+        }) {
+            eprintln!("outbox: could not prune expired send limits: {e}");
+        }
         let rows = match self.query(
             &format!(
                 "from {} include archived where status == \"sending\"",

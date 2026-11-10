@@ -165,6 +165,7 @@ export function Outbox() {
                     devices={devices() ?? []}
                     onReady={() => void move(r, "ready", "Sending")}
                     onRetry={() => void move(r, "ready", "Sending again", { error: undefined })}
+                    onCancel={() => void move(r, "draft", "Cancelled send")}
                     onDelete={() => void remove(r)}
                   />
                 )}
@@ -211,6 +212,7 @@ function OutboxItem(props: {
   devices: readonly Device[];
   onReady: () => void;
   onRetry: () => void;
+  onCancel: () => void;
   onDelete: () => void;
 }) {
   const [note] = createResource(
@@ -280,6 +282,9 @@ function OutboxItem(props: {
         </Show>
       </div>
       <div class="inbox-actions">
+        <Show when={status() === "ready"}>
+          <button type="button" onClick={props.onCancel}>Cancel send</button>
+        </Show>
         <Show when={status() === "draft"}>
           <button type="button" class="primary" onClick={props.onReady}>
             Ready

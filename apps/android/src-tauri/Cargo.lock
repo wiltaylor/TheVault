@@ -4528,6 +4528,7 @@ dependencies = [
  "chrono-tz",
  "croner",
  "query-syntax",
+ "serde",
  "serde_json",
  "store",
  "thiserror 2.0.21",
