@@ -30,7 +30,8 @@ fn doc(origin: &str, transcript: &Value) -> Input {
 }
 
 fn thread(w: &Writer, origin: &str, transcript: Value) -> Saved {
-    w.agent_thread_runtime().create(&doc(origin, &transcript), &author())
+    w.agent_thread_runtime()
+        .create(&doc(origin, &transcript), &author())
         .unwrap()
 }
 
@@ -55,7 +56,8 @@ fn family(w: &Writer) -> (Saved, [String; 2]) {
     };
     let subs = [sub("toolu_0"), sub("toolu_1")];
     let parent = w
-        .agent_thread_runtime().update(
+        .agent_thread_runtime()
+        .update(
             &parent.id,
             &doc(
                 "user",
@@ -151,7 +153,8 @@ fn dropping_a_call_from_the_parent_deletes_that_calls_session() {
     let w = open(dir.path());
     let (parent, subs) = family(&w);
     let saved = w
-        .agent_thread_runtime().update(
+        .agent_thread_runtime()
+        .update(
             &parent.id,
             &doc("user", &listing(&[("toolu_0", &subs[0])])),
             Some(&parent.version),
@@ -163,7 +166,8 @@ fn dropping_a_call_from_the_parent_deletes_that_calls_session() {
     assert!(w.read(&subs[1]).is_err());
     // A write that keeps the list leaves the sessions alone.
     let saved = w
-        .agent_thread_runtime().update(
+        .agent_thread_runtime()
+        .update(
             &parent.id,
             &doc("user", &listing(&[("toolu_0", &subs[0])])),
             Some(&saved.version),
