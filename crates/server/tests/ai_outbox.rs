@@ -406,6 +406,33 @@ fn the_draft_tools_create_drafts_resolving_people() {
 }
 
 #[test]
+fn restricted_sender_keeps_unlisted_recipients_in_review() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let restricted = SENDER.replace(
+        "send_without_review = true",
+        r#"send_without_review = true
+    conditions {
+      recipients = ["ann@example.com"]
+      email = true
+      daily_cap = 2
+      cancel_delay_minutes = 5
+    }"#,
+    );
+    api.agent("sender", &restricted);
+    api.one(
+        &fake,
+        Some("sender"),
+        "draft_email",
+        email_input(json!(["unlisted@example.com"])),
+    );
+    let result = last_result(&fake, false);
+    assert_eq!(result["status"], "draft", "{result}");
+    let fields = api.fields(result["id"].as_str().unwrap());
+    assert_eq!(fields["status"], "draft", "{fields}");
+}
+
+#[test]
 fn only_an_agent_with_send_without_review_drafts_approved_items() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
