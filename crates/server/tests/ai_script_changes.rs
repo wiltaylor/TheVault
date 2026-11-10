@@ -37,6 +37,14 @@ fn privileged_script_sources_are_read_only_for_agents() {
         assert!(find(&events, "script_proposal").is_none(), "{name}: {events:?}");
         assert!(last_result(&fake).0, "{name} must be refused");
         assert_eq!(api.script(name).as_deref(), Some(before.as_str()));
+        let wcl = format!("description = \"Attempt\"\nscript = \"{name}\"\nfunction = \"run\"\n");
+        let events = api.one(&fake, "propose_tool_change", json!({
+            "name": "attempt", "wcl": wcl, "script_source": format!("{before}\n// agent edit\n")
+        }));
+        assert!(find(&events, "tool_proposal").is_none(), "{name}");
+        assert!(last_result(&fake).1.to_string().contains("read-only"), "{name}");
+        api.one(&fake, "propose_script_delete", json!({"name": name}));
+        assert!(last_result(&fake).1.to_string().contains("read-only"), "{name}");
     }
 }
 

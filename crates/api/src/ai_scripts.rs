@@ -632,6 +632,11 @@ pub(crate) fn propose_delete(
     let takes = w
         .tool_delete_takes_script(name)
         .map_err(|e| ToolOut::error(e.to_string()))?;
+    if let Some(s) = &takes
+        && let Some(why) = crate::ai_script_changes::shipped_script_refused(s)
+    {
+        return Err(refused(why));
+    }
     let script = ScriptTool::parse(name, &before).ok().map(|t| t.script);
     let script_before = takes.as_deref().and_then(|s| w.read_script(s).ok());
     let runs_as = script
@@ -705,6 +710,11 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
                 return Err(stale(format!("the tool {name} or its script")));
             }
             let (changes, script_deleted) = w.delete_tool_changes(name)?;
+            if let Some(s) = &script_deleted
+                && let Some(why) = crate::ai_script_changes::shipped_script_refused(s)
+            {
+                return Err(ApplyError::Refused(why));
+            }
             if runs_changed(w) {
                 return Err(runs_stale());
             }
