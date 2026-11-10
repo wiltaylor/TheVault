@@ -17,6 +17,7 @@ mod agent_script_notifications;
 mod agent_threads;
 mod agent_triggers;
 mod agents;
+mod review_probes;
 mod ai_agents;
 mod ai_browser;
 mod ai_chat;
