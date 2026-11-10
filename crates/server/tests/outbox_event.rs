@@ -285,7 +285,6 @@ fn writer_enforces_calendar_author_and_outbox_boundary() {
         ("attendees", json!([])),
         ("my_response", json!("accepted")),
         ("status", json!("cancelled")),
-        ("snapshot", json!({ "my_response": "declined" })),
         ("etag", json!("forged")),
         ("google_ref", json!("another-event")),
         ("send_updates", json!("all")),
@@ -306,6 +305,17 @@ fn writer_enforces_calendar_author_and_outbox_boundary() {
     }
     assert!(matches!(
         w.delete(&made.id, Some(&made.version), &agent),
+        Err(writer::Error::Rejected(_))
+    ));
+    let mut forged_snapshot = body.clone();
+    forged_snapshot["blocks"] = json!([{ "kind": "dict", "labels": ["snapshot"], "fields": { "my_response": "declined" } }]);
+    assert!(matches!(
+        w.update(
+            &made.id,
+            &writer::Input::Json(forged_snapshot),
+            Some(&made.version),
+            &agent
+        ),
         Err(writer::Error::Rejected(_))
     ));
     for author in [

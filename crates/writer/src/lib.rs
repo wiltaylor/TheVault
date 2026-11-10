@@ -1798,13 +1798,20 @@ impl Writer {
                     "attendees_raw",
                     "my_response",
                     "status",
-                    "snapshot",
                     "etag",
                     "google_ref",
                 ]
                 .into_iter()
                 .any(|name| field(next, name) != field(old.as_ref(), name));
-            if sensitive || (google && change.event == Event::Delete) {
+            let snapshots = |doc: Option<&schema::Doc>| {
+                doc.into_iter()
+                    .flat_map(|d| d.blocks.iter())
+                    .filter(|b| b.kind == "dict" && b.label() == Some("snapshot"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            let forged_snapshot = next.is_some() && snapshots(next) != snapshots(old.as_ref());
+            if sensitive || forged_snapshot || (google && change.event == Event::Delete) {
                 return Err(Error::Rejected(
                     "agent calendar attendees, RSVP, cancellation and Google deletes require an Outbox item of kind event".into(),
                 ));
