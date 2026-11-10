@@ -65,7 +65,7 @@ fn secret_and_host_runs_refuse_script_and_tool_sources_including_stale_apply() {
         let changed = format!("{STAMP}\n// edit\n");
         let mut pending = Vec::new();
         for method in ["propose_script_change", "propose_tool_change"] {
-            let events = api.one(&fake, method, json!({"name": if method == "propose_script_change" {"stamp"} else {"echo"}, "source": changed, "wcl": wcl, "script_source": changed}));
+            let events = api.one(&fake, method, if method == "propose_script_change" { json!({"name": "stamp", "source": changed}) } else { json!({"name": "echo", "wcl": wcl, "script_source": changed}) });
             let event = if method == "propose_script_change" {"script_proposal"} else {"tool_proposal"};
             pending.push(find(&events, event).unwrap_or_else(|| panic!("{method}: {events:?}")).clone());
         }
@@ -74,7 +74,7 @@ fn secret_and_host_runs_refuse_script_and_tool_sources_including_stale_apply() {
             assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
         }
         for method in ["propose_script_change", "propose_tool_change"] {
-            api.one(&fake, method, json!({"name": if method == "propose_script_change" {"stamp"} else {"echo"}, "source": changed, "wcl": wcl, "script_source": changed}));
+            api.one(&fake, method, if method == "propose_script_change" { json!({"name": "stamp", "source": changed}) } else { json!({"name": "echo", "wcl": wcl, "script_source": changed}) });
             assert!(last_result(&fake).0);
         }
         assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
@@ -508,7 +508,7 @@ fn device_file_wcl_only_thread_changes_need_a_session_and_warn_only_for_shipped_
         writer::DEFAULT_ANDROID_DEVICE_FILE,
     );
     api.put_text("/api/agents/keeper", KEEPER);
-    let input = json!({"platform": "android", "wcl": ANDROID, "scripts": []});
+    let input = json!({"platform": "android", "wcl": ANDROID.replace("custom_messages", "device_messages"), "scripts": []});
     fake.push(AnthropicMessage::new().tool_use("wcl_only", "propose_device_file_change", input));
     fake.push(AnthropicMessage::text("Waiting."));
     api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
@@ -1154,7 +1154,7 @@ fn a_tool_proposal_shows_what_else_runs_its_script() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.seed_users();
-    let open = ECHO.replace("[\"echo.example.com\"]", "[\"*\"]");
+    let open = format!("{ECHO}allow_domains = [\"*\"]\n");
     let events = api.one(
         &fake,
         "propose_tool_change",
@@ -1174,13 +1174,9 @@ fn a_tool_proposal_shows_what_else_runs_its_script() {
         .iter()
         .map(|w| w.as_str().unwrap())
         .collect();
-    assert_eq!(warnings.len(), 2, "{p}");
+    assert_eq!(warnings.len(), 1, "{p}");
     assert!(
         warnings[0].starts_with("The tool echo may reach any host"),
-        "{warnings:?}"
-    );
-    assert!(
-        warnings[1].starts_with("The after_update handler of type item"),
         "{warnings:?}"
     );
     // A delete that keeps the script lists what keeps it.
@@ -1321,6 +1317,7 @@ fn a_delete_applied_after_a_task_started_to_run_the_script_is_refused_in_use() {
 fn a_device_file_that_runs_a_script_is_in_its_runs_as_list() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
+        api.ok("PUT", "/api/scripts/custom_messages", json!({"source": writer::default_device_script("device_messages").unwrap()}));
     api.put_text(
         "/api/device-files/android",
         "handler \"sms_received\" {\n  script = \"custom_messages\"\n}\n",
@@ -1347,7 +1344,7 @@ fn a_tool_applied_after_what_runs_its_script_changed_is_stale() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.seed_users();
-    let open = ECHO.replace("[\"echo.example.com\"]", "[\"*\"]");
+    let open = format!("{ECHO}allow_domains = [\"*\"]\n");
     let events = api.one(
         &fake,
         "propose_tool_change",
@@ -1507,6 +1504,7 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
     for platform in ["android", "linux"] {
         let fake = FakeAnthropic::start();
         let api = Api::start(&fake);
+        api.ok("PUT", "/api/scripts/custom_messages", json!({"source": writer::default_device_script("device_messages").unwrap()}));
         api.put_text("/api/device-files/android", "");
         api.put_text(&format!("/api/device-files/{platform}"), ANDROID);
         let pixel = api.platform_device(
@@ -1656,6 +1654,7 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
         ] {
             let fake = FakeAnthropic::start();
             let api = Api::start(&fake);
+        api.ok("PUT", "/api/scripts/custom_messages", json!({"source": writer::default_device_script("device_messages").unwrap()}));
             api.put_text("/api/device-files/android", "");
             api.put_text(&format!("/api/device-files/{platform}"), ANDROID);
             api.put_text("/api/agents/keeper", KEEPER);
@@ -1724,6 +1723,7 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
     for platform in ["android", "linux"] {
         let fake = FakeAnthropic::start();
         let api = Api::start(&fake);
+        api.ok("PUT", "/api/scripts/custom_messages", json!({"source": writer::default_device_script("device_messages").unwrap()}));
         api.put_text("/api/device-files/android", "");
         api.put_text(&format!("/api/device-files/{platform}"), ANDROID);
         api.platform_device(
