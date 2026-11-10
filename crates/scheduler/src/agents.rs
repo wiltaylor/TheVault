@@ -557,7 +557,7 @@ impl Scheduler {
                     .mentions
                     .insert(s.id.clone(), s.type_name.clone());
             }
-            if matches!(author, Author::Agent(_)) {
+            if matches!(author, Author::Agent(_) | Author::AgentMail(_)) {
                 continue;
             }
             let op = match s.event {
@@ -1161,7 +1161,7 @@ impl Hooks for TriggerHooks {
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<(), String> {
         self.inner.before(change, author)?;
         if change.event == Event::Delete
-            && !matches!(author, Author::Agent(_))
+            && !matches!(author, Author::Agent(_) | Author::AgentMail(_))
             && let Some(s) = self.scheduler()
         {
             s.before_delete(&change.id, &change.type_name);

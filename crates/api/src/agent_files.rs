@@ -141,6 +141,7 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         "web": web,
         "outbox": outbox,
         "browser": p.browser,
+        "gmail_actions": p.gmail_actions,
         "skills": p.skills,
         "scripts": scripts,
         "subagents": {
@@ -347,6 +348,8 @@ pub struct PermissionsForm {
     /// Browser automation (browser B6); absent is off.
     #[serde(default)]
     browser: bool,
+    #[serde(default)]
+    gmail_actions: bool,
     /// The skills offered (skills S6); absent is every valid skill.
     #[serde(default)]
     skills: Option<Vec<String>>,
@@ -408,6 +411,7 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
     p.tools = f.permissions.tools;
     p.types = f.permissions.types;
     p.browser = f.permissions.browser;
+    p.gmail_actions = f.permissions.gmail_actions;
     p.skills = f.permissions.skills;
     for (k, on) in f.permissions.confirm {
         if !p.confirm.set(&k, on) {

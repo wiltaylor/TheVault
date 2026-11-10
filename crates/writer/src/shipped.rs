@@ -191,6 +191,8 @@ pub const SHIPPED_FILES: [ShippedFile; 27] = [
         hashes: &[
             "3529e9ee6cc6f41423d02c8564525badb2c1e6987eeca704b95973b73df7dd6e",
             "9bc72d0981a46efd7e3915fdf88103d8e42e00fc85af0bb9f3a53d69ee1365cd",
+            "4c23a158e244825fa3d8e14782d8c0d0397467a2961e85590203ae53956cbd0d",
+            "58b14fe863c28eb3937a035f48465ea2182b1c8b4007520b9dc0150917e31164",
         ],
     },
     // The Google Calendar write-back, named by the shipped `event` type's handlers.
@@ -412,6 +414,10 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
     UpgradeStep {
         id: "0012_email_gmail_handlers",
         run: email_gmail_handlers,
+    },
+    UpgradeStep {
+        id: "0013_email_gmail_restore",
+        run: email_gmail_restore,
     },
 ];
 
@@ -1708,6 +1714,46 @@ fn event_google_handler(w: &Writer) -> Result<()> {
 
 /// The script the shipped `email` type's mail action handlers name (TV-25).
 const EMAIL_HANDLER_SCRIPT: &str = "google_mail";
+
+/// Add the restore handler to an existing built-in email type without changing notes or
+/// replacing user edits to its other handlers.
+fn email_gmail_restore(w: &Writer) -> Result<()> {
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(EMAIL_TYPE) else {
+        return Ok(());
+    };
+    if !w.is_built_in_def(ty)
+        || ty
+            .handlers
+            .iter()
+            .any(|h| h.script == EMAIL_HANDLER_SCRIPT && h.event == "after_create")
+    {
+        return Ok(());
+    }
+    let path = type_path(EMAIL_TYPE);
+    let shipped = store::parse_data_only(DEFAULT_EMAIL_TYPE, &path)?;
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    let handler = shipped
+        .items
+        .into_iter()
+        .find(|i| block(i, "handler").is_some_and(|b| label(b) == Some("after_create")))
+        .expect("shipped email restore handler");
+    ast.items.push(handler);
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(EMAIL_TYPE, &change)?;
+    if plan.changes.is_empty() {
+        w.apply_type_change(
+            EMAIL_TYPE,
+            &change,
+            &plan.token,
+            &Author::Task(SERVER_AUTHOR.to_owned()),
+        )?;
+    }
+    Ok(())
+}
 
 /// Step `0012_email_gmail_handlers` (TV-25): an `email` type from before mail actions has no
 /// handler naming `google_mail`, and the seeding only ever adds fields to a type the vault has.
