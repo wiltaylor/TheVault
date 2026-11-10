@@ -139,6 +139,12 @@ field inbox_catch_up {
   hidden      = true
 }
 
+field agent_safety_reason {
+  kind    = "select"
+  options = ["allow", "prompt_injection", "sensitive_credentials", "scam", "spam", "marketing"]
+  label   = "Agent safety classification"
+}
+
 handler "after_update" {
   script        = "google_mail"
   allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com"]

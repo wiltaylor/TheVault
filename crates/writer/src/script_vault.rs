@@ -23,26 +23,57 @@ fn syntax(e: query::ParseError) -> String {
 }
 
 fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<query::Page, String> {
-    w.read_index(|index, schema| query::run(q, &query::Context::new(index, schema), &page))
-        .map_err(err)
+    let _guard = agent_reading().then(|| w.write_lock());
+    let excluded = if agent_reading() {
+        Some(
+            w.list_with(None, Archived::Include)
+                .map_err(err)?
+                .into_iter()
+                .filter(|n| !w.agent_may_read(&n.id))
+                .map(|n| n.id)
+                .collect::<std::collections::HashSet<_>>(),
+        )
+    } else {
+        None
+    };
+    w.read_index(|index, schema| {
+        let mut ctx = query::Context::new(index, schema);
+        ctx.excluded_notes = excluded.as_ref();
+        query::run(q, &ctx, &page)
+    })
+    .map_err(err)
+}
+
+fn agent_reading() -> bool {
+    matches!(crate::activity::acting(), Some(Author::Agent(_)))
+        || script_core::run::peek(|r| matches!(r.author, Author::Agent(_))).unwrap_or(false)
 }
 
 fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
+    let _guard = agent_reading().then(|| w.write_lock());
+    if agent_reading() && !w.agent_may_read(id) {
+        return Err("Note is held from agents".into());
+    }
     w.read(id).map_err(err)?;
-    w.read_index(|index, _| {
-        let mut stmt = index.connection().prepare(sql)?;
-        let rows = stmt.query_map([id], |r| {
-            Ok(json!({
-                "id": r.get::<_, String>(0)?,
-                "type": r.get::<_, Option<String>>(1)?,
-                "title": r.get::<_, Option<String>>(2)?,
-                "via": r.get::<_, String>(3)?,
-                "field": r.get::<_, String>(4)?,
-            }))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<Json>>>()
-    })
-    .map_err(err)
+    let mut rows = w
+        .read_index(|index, _| {
+            let mut stmt = index.connection().prepare(sql)?;
+            let rows = stmt.query_map([id], |r| {
+                Ok(json!({
+                    "id": r.get::<_, String>(0)?,
+                    "type": r.get::<_, Option<String>>(1)?,
+                    "title": r.get::<_, Option<String>>(2)?,
+                    "via": r.get::<_, String>(3)?,
+                    "field": r.get::<_, String>(4)?,
+                }))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<Json>>>()
+        })
+        .map_err(err)?;
+    if agent_reading() {
+        rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
+    }
+    Ok(rows)
 }
 
 fn asset_json(a: &crate::Asset) -> Json {
@@ -89,6 +120,10 @@ fn grow(t: &mut Taxonomy, path: &str) -> Result<bool, String> {
 /// The write path itself: every change a script makes goes through `writer` (D30).
 impl Vault for Writer {
     fn get(&self, id: &str) -> Result<Json, String> {
+        let _guard = agent_reading().then(|| self.write_lock());
+        if agent_reading() && !self.agent_may_read(id) {
+            return Err("Note is held from agents".into());
+        }
         let n = self.read(id).map_err(err)?;
         Ok(json!({
             "id": n.id,
@@ -230,11 +265,15 @@ impl Vault for Writer {
         Ok(Writer::assets(self)
             .map_err(err)?
             .iter()
+            .filter(|a| !agent_reading() || self.agent_may_read_asset(&a.id))
             .map(asset_json)
             .collect())
     }
 
     fn asset(&self, id: &str) -> Result<(Json, Vec<u8>), String> {
+        if agent_reading() && !self.agent_may_read_asset(id) {
+            return Err("Asset is held from agents".into());
+        }
         let (a, bytes) = Writer::asset(self, id).map_err(err)?;
         Ok((asset_json(&a), bytes))
     }

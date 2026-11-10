@@ -200,7 +200,8 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
             "inline_images",
             "converter",
             "images_pending",
-            "inbox_catch_up"
+            "inbox_catch_up",
+            "agent_safety_reason"
         ]
     );
     for (name, target, multiple) in [
@@ -268,7 +269,8 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
             "google_ref",
             "etag",
             "snapshot",
-            "send_updates"
+            "send_updates",
+            "agent_safety_reason"
         ]
     );
     assert_eq!(field(event, "when")["kind"], "date_range");

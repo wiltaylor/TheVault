@@ -885,10 +885,11 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
         generation(root).trim().parse::<u64>().unwrap(),
         before + 4 + 3 + 1
     );
-    // Message gains classifier fields and processed. Call gains only processed.
+    // Message gains classifier fields and processed. Call gains processed and agent safety.
     assert!(
         done.fields_added.iter().all(|(t, f)| t == "person"
-            || ((t == "message" || t == "call") && f == "processed")
+            || ((t == "message" || t == "call")
+                && matches!(f.as_str(), "processed" | "agent_safety_reason"))
             || (t == "message"
                 && matches!(f.as_str(), "scam_probability" | "communication_category"))),
         "{:?}",
@@ -1560,6 +1561,7 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
     assert_eq!(
         added,
         [
+            ("email".to_owned(), "agent_safety_reason".to_owned()),
             ("email".to_owned(), "communication_category".to_owned()),
             ("email".to_owned(), "converter".to_owned()),
             ("email".to_owned(), "images_pending".to_owned()),
@@ -1567,6 +1569,7 @@ fn a_0_1_13_vault_gains_processed_on_email_and_message_and_no_note_changes() {
             ("email".to_owned(), "inline_images".to_owned()),
             ("email".to_owned(), "processed".to_owned()),
             ("email".to_owned(), "scam_probability".to_owned()),
+            ("message".to_owned(), "agent_safety_reason".to_owned()),
             ("message".to_owned(), "communication_category".to_owned()),
             ("message".to_owned(), "processed".to_owned()),
             ("message".to_owned(), "scam_probability".to_owned())
@@ -1657,7 +1660,8 @@ fn a_vault_card_template_gains_no_slot_when_the_vault_type_has_no_card() {
             ("email".to_owned(), "inline_images".to_owned()),
             ("email".to_owned(), "converter".to_owned()),
             ("email".to_owned(), "images_pending".to_owned()),
-            ("email".to_owned(), "inbox_catch_up".to_owned())
+            ("email".to_owned(), "inbox_catch_up".to_owned()),
+            ("email".to_owned(), "agent_safety_reason".to_owned())
         ]
     );
     let schema = w.schema();
@@ -2813,7 +2817,10 @@ fn a_0_1_14_vault_gains_processed_on_call_and_no_note_changes() {
     let done = w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     assert_eq!(
         done.fields_added,
-        [("call".to_owned(), "processed".to_owned())]
+        [
+            ("call".to_owned(), "processed".to_owned()),
+            ("call".to_owned(), "agent_safety_reason".to_owned())
+        ]
     );
     // The page and the card both gain the slot (ticket 148), so the type is the shipped one.
     assert_eq!(

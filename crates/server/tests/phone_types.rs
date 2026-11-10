@@ -124,7 +124,8 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
             "scam_probability",
             "communication_category",
             "processed",
-            "device_ref"
+            "device_ref",
+            "agent_safety_reason"
         ]
     );
     assert_eq!(
@@ -163,7 +164,8 @@ fn a_new_vault_has_the_phone_types_with_the_fields_the_spec_lists() {
             "started",
             "duration",
             "processed",
-            "device_ref"
+            "device_ref",
+            "agent_safety_reason"
         ]
     );
     assert_eq!(field(call, "processed")["kind"], "bool");

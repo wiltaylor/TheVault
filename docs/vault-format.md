@@ -2882,7 +2882,50 @@ separate, so a crash between them can still lose dispatch. The classifier has no
 and treats note text only as untrusted state. Text can influence answer values. A low
 probability is not proof of safety.
 
-### Shipped scam classifier
+### Agent safety gate
+
+The home server activates the agent safety gate once and records `agent_safety.activation_ms`
+and the IDs already present in server state. Note dates cannot claim a legacy exemption.
+`agent_safety.pre_existing_mode` is a server-state setting: `held` (the default) or
+`legacy_allowed`. In `held` mode, pre-existing incoming notes need explicit user release.
+In `legacy_allowed` mode they retain the earlier behaviour. This setting is not a note field
+and is not available to agent tools. No automatic backlog classification runs. The opt-in,
+cost-shown 90-day pass and bulk release are separate work (TV-151).
+
+`classifiers/agent_safety.wcl` classifies newly arriving incoming email, SMS/messages, calls
+(including missed calls), and calendar invitations (`my_response` is present). New backfill
+is included regardless of its sent date. It uses Jev with the complete note document as
+untrusted state and no tools. `fields` remains required by the classifier format, but this
+security classifier always supplies the complete document rather than only those fields.
+Its `reason` choice writes `agent_safety_reason`. The `withhold` list defaults to
+`["prompt_injection", "scam", "sensitive_credentials"]`. Spam and marketing are labelled,
+not withheld unless the user adds them to that list. A classification is not proof of safety.
+The deterministic communication/script/calendar restrictions remain independent.
+
+Pending, missing, invalid, failed and timed-out decisions withhold the note from agents, not
+the user. The request timeout is 30 seconds, with one attempt and no automatic retry. The
+existing durable pending queue resumes queued work after restart, not an interrupted call.
+No valid definition or a lost dispatch leaves the note held. The decision is server-owned
+and bound to a fingerprint of the content. Editable classification fields cannot clear it.
+Content changes invalidate clearance. Ordinary classification annotations and timestamps
+are excluded from the fingerprint. A pending provider result cannot undo a user release.
+
+Agent triggers, mention/call dispatch, read tools, search/query results (including reference
+traversal), script reads and assets used by held notes are gated. User note reads show an
+`agent_safety` object with status, reason and fingerprint. The note page displays the hold
+and a release button. `POST /api/notes/{id}/agent-safety/release` takes `{ fingerprint }`,
+requires a browser session, checks the reviewed content and records the actor in activity.
+Tokens and agent tools cannot release notes. Clearing or releasing a note queues its single
+arrival event, which runs matching create triggers with the normal debounce and run limits.
+Mentions are not replayed. Subsequent releases do not replay that arrival.
+
+`GET /api/agent-safety/held` is session-only. Optional `type`, `reason`, `since` and `until`
+(inclusive RFC3339 **vault creation** dates) filter the inventory. `offset` and `limit`
+(default 100, maximum 500) page it. It returns IDs, types, creation dates and safety status,
+not note text. The writer's actor-checked release and inventory functions support future
+user-authorized bulk review without adding a backfill job here.
+
+### Shipped scam classifier (independent)
 
 `classifiers/scam.wcl` runs on incoming `message` notes and `email` notes without
 `system/SENT` or `system/DRAFT` labels, only when `sent >= now() - days(2)`.

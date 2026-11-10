@@ -37,6 +37,9 @@ pub fn wrap(inner: Box<dyn Hooks>) -> (Box<dyn Hooks>, Binding) {
 impl Binding {
     /// Holds only a weak writer while idle, so dropping the server releases the worker.
     pub fn start(self, writer: &Arc<Writer>) -> std::io::Result<()> {
+        writer
+            .activate_agent_safety()
+            .map_err(std::io::Error::other)?;
         let writer = Arc::downgrade(writer);
         let _ = self.1.set(writer.clone());
         std::thread::Builder::new()
@@ -76,13 +79,26 @@ impl Hooks for ClassifierHooks {
         self.inner.side_effects(changes)
     }
     fn after(&self, saved: &[Saved], author: &Author, schema: &Schema) {
-        self.inner.after(saved, author, schema);
         let Some(writer) = self.writer.get().and_then(Weak::upgrade) else {
+            self.inner.after(saved, author, schema);
             return;
         };
+        for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
+            if s.event == Event::Create
+                && !s.restored
+                && let Ok(doc) = Doc::parse(&s.wcl, "incoming note")
+                && writer
+                    .register_agent_safety(&s.id, &s.type_name, &doc)
+                    .is_err()
+            {
+                tracing::error!(target: "ai", "agent safety registration failed note={}", s.id);
+            }
+        }
+        self.inner.after(saved, author, schema);
         let types = classifier_types(&writer);
         let payloads: Vec<_> = saved
             .iter()
+            .flat_map(|s| std::iter::once(s).chain(&s.also))
             .filter(|s| s.event == Event::Create && !s.restored && types.contains(&s.type_name))
             .map(|s| {
                 serde_json::to_string(&Pending {
@@ -209,6 +225,12 @@ fn classify(writer: &Writer, saved: &Saved, invalid: &mut HashMap<String, Option
         if !config.types.contains(&saved.type_name) {
             continue;
         }
+        if config.name == "agent_safety"
+            && !Doc::parse(&saved.wcl, "safety scope")
+                .is_ok_and(|doc| writer::agent_safety::incoming(&saved.type_name, &doc))
+        {
+            continue;
+        }
         match matches(writer, saved, &config) {
             Ok(false) => continue,
             Err(_) => {
@@ -306,6 +328,13 @@ fn request(saved: &Saved, config: &Classifier) -> Result<decisions::Request, AiE
 }
 
 fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
+    let safety_hash = (config.name == "agent_safety")
+        .then(|| {
+            Doc::parse(&saved.wcl, "safety snapshot")
+                .ok()
+                .map(|doc| writer::agent_safety::fingerprint(&saved.type_name, &doc))
+        })
+        .flatten();
     let prepared = (|| {
         let accounts = Accounts::load(writer.state())?;
         let account = accounts.pick(config.account.as_deref(), None)?;
@@ -317,11 +346,22 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         }
         let credential = Credentials::resolve(writer.state(), account)?;
         decisions::validate_credential(&credential)?;
-        Ok::<_, AiError>((credential, request(saved, config)?))
+        let mut request = request(saved, config)?;
+        if safety_hash.is_some() {
+            // Security classification includes every field/block, not a lossy snippet.
+            request.state = writer::doc_to_json(
+                &Doc::parse(&saved.wcl, "safety snapshot")
+                    .map_err(|_| AiError::invalid("Invalid safety snapshot"))?,
+            );
+        }
+        Ok::<_, AiError>((credential, request))
     })();
     let (credential, request) = match prepared {
         Ok(p) => p,
         Err(e) => {
+            if let Some(hash) = &safety_hash {
+                let _ = writer.finish_agent_safety(&saved.id, hash, "held", "decision_failed");
+            }
             configuration_warning(writer, config, &e);
             eprintln!(
                 "classifier: name={} note={} outcome=error:{}",
@@ -360,6 +400,23 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
             }
         }
     }
+    if let Some(hash) = &safety_hash {
+        let (status, reason) = match &result {
+            Ok(response) => match response.answers.get("reason") {
+                Some(decisions::Answer::Choice { choice, .. }) => (
+                    if config.withhold.contains(choice) {
+                        "held"
+                    } else {
+                        "allowed"
+                    },
+                    choice.as_str(),
+                ),
+                _ => ("held", "invalid_decision"),
+            },
+            Err(_) => ("held", "decision_failed"),
+        };
+        let _ = writer.finish_agent_safety(&saved.id, hash, status, reason);
+    }
     tracing::info!(target: "ai",
         "{} classifier={} note={}",
         decisions::trail(&credential, &request, &result, began.elapsed()),
@@ -396,10 +453,14 @@ fn configuration_warning(writer: &Writer, config: &Classifier, error: &AiError) 
     }
     let warning = state::NewNotification {
         title: "Classifier account needs attention".into(),
-        body: Some(format!(
-            "Classifier {} could not start. Select an OpenRouter account in Settings > AI, or name that account in the classifier file. Unclassified notes must still be triaged as before.",
-            config.name
-        )),
+        body: Some(if config.name == "agent_safety" {
+            "Agent safety could not start. Select an OpenRouter account in Settings > AI, or name that account in classifiers/agent_safety.wcl. Incoming notes remain held from agents until cleared or explicitly released.".into()
+        } else {
+            format!(
+                "Classifier {} could not start. Select an OpenRouter account in Settings > AI, or name that account in the classifier file. Unclassified notes must still be triaged as before.",
+                config.name
+            )
+        }),
         note_id: None,
         url: Some("/settings/ai".into()),
         source: format!("classifier_config:{}", config.name),

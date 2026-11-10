@@ -107,6 +107,7 @@ pub trait AgentRunner: Send + Sync {
 /// One run to start: an agent's trigger, the first message and the thread's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentJob {
+    pub source_notes: Vec<String>,
     pub agent: String,
     pub trigger: String,
     pub prompt: String,
@@ -261,6 +262,7 @@ impl AgentPlan {
                 continue;
             };
             jobs.push(AgentJob {
+                source_notes: vec![],
                 agent: agent.clone(),
                 trigger: trigger.clone(),
                 prompt: t.prompt.clone(),
@@ -547,6 +549,16 @@ impl Scheduler {
         let mut plan = self.plan();
         for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
             let deleting = plan.agents.deleting.remove(&s.id);
+            if let Ok(doc) = Doc::parse(&s.wcl, "agent event") {
+                let safety = self.writer.agent_safety_doc(&s.id, &s.type_name, &doc);
+                if !safety.as_ref().is_ok_and(|safety| {
+                    safety.allowed()
+                        && (s.event != Event::Create
+                            || matches!(safety.status.as_str(), "legacy" | "not_required"))
+                }) {
+                    continue;
+                }
+            }
             if matches!(author, Author::Agent(_)) {
                 continue;
             }
@@ -577,6 +589,9 @@ impl Scheduler {
 
     /// The title of note `id`, of `type_name`, when it is in the index and matches `cond`.
     fn note_matches(&self, id: &str, type_name: &str, cond: Option<&Expr>) -> Option<String> {
+        if !self.writer.agent_may_read(id) {
+            return None;
+        }
         let mut filter = Expr::Binary(
             BinOp::Eq,
             Box::new(Expr::Name("id".to_owned())),
@@ -620,6 +635,22 @@ impl Scheduler {
         }
         self.reload_agents();
         let now = self.clock.now_ms();
+        // Clearance is a single durable arrival event, not replay of arbitrary note edits.
+        if let Ok(ids) = self.writer.state().take_agent_safety_clearances() {
+            for id in ids {
+                if self.writer.agent_may_read(&id)
+                    && let Ok(note) = self.writer.read(&id)
+                {
+                    self.plan().agents.heard.push(Heard {
+                        op: "create",
+                        id,
+                        type_name: note.type_name,
+                        at: now,
+                        deleting: None,
+                    });
+                }
+            }
+        }
         let (mut jobs, events) = self.plan().agents.take_due(now);
         let called = self.plan().agents.take_mentions();
         let mut tell = Vec::new();
@@ -641,6 +672,11 @@ impl Scheduler {
             };
             let Some(title) = title else { continue };
             jobs.push(AgentJob {
+                source_notes: if e.op == "delete" {
+                    vec![]
+                } else {
+                    vec![e.note.clone()]
+                },
                 agent: e.agent.name.clone(),
                 trigger: e.trigger.name.clone(),
                 prompt: format!(
@@ -693,6 +729,9 @@ impl Scheduler {
     /// next save of the note asks again. The note is left as it is. Answers the admitted runs,
     /// each [`Admitted::Start`] or [`Admitted::Queued`].
     fn mention_jobs(&self, id: &str, now: i64, tell: &mut Vec<AgentJob>) -> Vec<Admitted> {
+        if !self.writer.agent_may_read(id) {
+            return Vec::new();
+        }
         let Some(runner) = self.runner.get() else {
             return Vec::new();
         };
@@ -756,6 +795,7 @@ impl Scheduler {
             .collect::<Vec<_>>()
             .join("\n");
             let mut job = AgentJob {
+                source_notes: vec![id.to_owned()],
                 agent: agent.name.clone(),
                 trigger: trigger.name.clone(),
                 prompt,
@@ -847,6 +887,9 @@ impl Scheduler {
         title: &str,
         prompt: &str,
     ) -> Result<String, DispatchRefused> {
+        if notes.iter().any(|id| !self.writer.agent_may_read(id)) {
+            return Err(DispatchRefused::Thread("A note is held from agents".into()));
+        }
         let runner = self.runner.get().ok_or(DispatchRefused::NoRunner)?.clone();
         let now = self.clock.now_ms();
         // The agent as its file says now, as a run reads it, not as the plan last loaded it.
@@ -861,6 +904,7 @@ impl Scheduler {
             .open_thread(&a, DISPATCH_ORIGIN, title, notes)
             .map_err(DispatchRefused::Thread)?;
         let job = AgentJob {
+            source_notes: notes.to_vec(),
             agent: a.name.clone(),
             trigger: DISPATCH_TRIGGER.to_owned(),
             prompt: prompt.to_owned(),
@@ -925,6 +969,13 @@ impl Scheduler {
 
     /// Run one job: a new thread and one turn on it, recorded in `agent_runs`.
     fn run_agent_job(&self, job: &AgentJob) {
+        if job
+            .source_notes
+            .iter()
+            .any(|id| !self.writer.agent_may_read(id))
+        {
+            return;
+        }
         let Some(runner) = self.runner.get() else {
             return;
         };

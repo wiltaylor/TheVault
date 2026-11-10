@@ -586,9 +586,12 @@ impl Scheduler {
             let sleep = next.map_or(MAX_SLEEP, |at| {
                 Duration::from_millis(u64::try_from(at - now).unwrap_or(0)).min(MAX_SLEEP)
             });
-            let _ = self
-                .wake
-                .wait_timeout(plan, sleep.max(Duration::from_millis(10)));
+            let _ = self.wake.wait_timeout(
+                plan,
+                sleep
+                    .min(Duration::from_secs(1))
+                    .max(Duration::from_millis(10)),
+            );
         }
     }
 

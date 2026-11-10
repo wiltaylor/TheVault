@@ -4669,6 +4669,7 @@ dependencies = [
  "rusqlite",
  "schema",
  "script-core",
+ "serde",
  "serde_json",
  "sha2",
  "state",

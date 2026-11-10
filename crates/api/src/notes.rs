@@ -249,7 +249,12 @@ pub async fn read(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let note = blocking(w, move |w| w.read(&id)).await?;
+    let (note, safety) = blocking(w, move |w| {
+        let note = w.read(&id)?;
+        let safety = w.agent_safety_doc(&id, &note.type_name, &note.doc)?;
+        Ok::<_, writer::Error>((note, safety))
+    })
+    .await?;
     Ok(note_response(
         StatusCode::OK,
         &headers,
@@ -257,8 +262,85 @@ pub async fn read(
         &note.type_name,
         &note.version,
         note.wcl,
-        json!({}),
+        json!({"agent_safety": safety}),
     ))
+}
+
+#[derive(Deserialize)]
+pub struct SafetyRelease {
+    fingerprint: String,
+}
+
+#[derive(Deserialize)]
+pub struct HeldNotesQuery {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    reason: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+pub async fn held_agent_notes(
+    State(w): Shared,
+    Caller(author): Caller,
+    Query(q): Query<HeldNotesQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(author, Author::Session(_)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "Only the signed-in user may list held notes",
+        ));
+    }
+    for date in [&q.since, &q.until].into_iter().flatten() {
+        chrono::DateTime::parse_from_rfc3339(date)
+            .map_err(|_| ApiError::bad_request("since and until must be RFC3339 dates"))?;
+    }
+    blocking(w, move |w| {
+        let notes = w.held_agent_notes(
+            q.kind.as_deref(),
+            q.since.as_deref(),
+            q.until.as_deref(),
+            q.reason.as_deref(),
+        )?;
+        let total = notes.len();
+        let notes: Vec<_> = notes
+            .into_iter()
+            .skip(q.offset.unwrap_or(0))
+            .take(q.limit.unwrap_or(100).clamp(1, 500))
+            .collect();
+        Ok::<_, ApiError>(Json(json!({"notes":notes,"total":total})))
+    })
+    .await
+}
+
+pub async fn release_agent_safety(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(id): Path<String>,
+    Json(input): Json<SafetyRelease>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(author, Author::Session(_)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "Only the signed-in user may release a held note",
+        ));
+    }
+    blocking(w, move |w| {
+        if !w.release_agent_safety(&id, &input.fingerprint, &author)? {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "content_changed",
+                "The note changed. Review it again before release.",
+            ));
+        }
+        tracing::info!(target: "ai", "agent_safety release note={id} actor=session");
+        Ok(Json(json!({"agent_safety": w.agent_safety(&id)?})))
+    })
+    .await
 }
 
 /// Whether the request carries `If-None-Match: *`: write only if the note does not exist.

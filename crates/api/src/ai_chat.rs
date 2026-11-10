@@ -1181,6 +1181,9 @@ impl Limits {
             "get_note" | "propose_edit" | "propose_fields" | "propose_archive"
             | "propose_delete" => {
                 let id = input["id"].as_str()?.trim();
+                if !w.agent_may_read(id) {
+                    return Some(ToolOut::error(format!("Note {id} is held from agents.")));
+                }
                 let n = w.read(id).ok()?;
                 let verb = if call.name == "get_note" {
                     "read"
@@ -1366,6 +1369,7 @@ fn setup(
     if let Some(id) = note_id
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
+        .filter(|id| w.agent_may_read(id))
         && let Ok(n) = w.read(&id)
     {
         let doc = doc_to_json(&n.doc);
@@ -3762,6 +3766,7 @@ fn propose_or_read(
     agent: &Agent,
     call: &ToolCall,
 ) -> ToolOut {
+    let _acting = writer::acting_as(&Author::Agent(agent.name.clone()));
     if let Some(e) = &call.error {
         return ToolOut::error(e.clone());
     }
@@ -3797,6 +3802,7 @@ fn propose_or_read(
                 .clamp(1, SEARCH_LIMIT);
             Vault::search(w, text, limit, script_core::Archived::Exclude)
                 .map(|mut rows| {
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     rows_out(rows, left_out_of(left_out))
                 })
@@ -3806,6 +3812,7 @@ fn propose_or_read(
             Vault::query_page(w, q, QUERY_LIMIT, None)
                 .map(|page| {
                     let mut rows = page["rows"].as_array().cloned().unwrap_or_default();
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     let mut extra = left_out_of(left_out);
                     extra["total"] = page["total"].clone();
@@ -3815,6 +3822,9 @@ fn propose_or_read(
                 .map_err(|e| ToolOut::error(query_error(q, &e)))
         }),
         "get_note" => str_arg(input, "id").and_then(|id| {
+            if !w.agent_may_read(id) {
+                return Ok(ToolOut::error(format!("Note {id} is held from agents.")));
+            }
             Vault::get(w, id)
                 .map(|mut note| {
                     cut_strings(&mut note, BODY_LIMIT);
@@ -3843,6 +3853,7 @@ fn propose_or_read(
         "backlinks" => str_arg(input, "id").and_then(|id| {
             Vault::backlinks(w, id)
                 .map(|mut rows| {
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     rows_out(rows, left_out_of(left_out))
                 })
