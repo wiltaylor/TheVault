@@ -370,6 +370,7 @@ pub async fn start(
     Json(body): Json<ChatBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = state::random_hex(16);
+    crate::auth::require_in_app_agent_caller(&author)?;
     let agent = body.agent().unwrap_or(schema::ASSISTANT_AGENT).to_owned();
     let thread = body.thread().map(str::to_owned);
     {
@@ -771,6 +772,7 @@ pub async fn discard(
     Caller(author): Caller,
     Json(b): Json<Discard>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     let w = a.writer.clone();
     let t = crate::blocking(w, move |w| {
         let t = agent_threads::record_outcome(w, &b.thread, &b.id, Status::Discarded, None, None)?;

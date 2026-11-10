@@ -68,13 +68,12 @@ permissions {
 const CALL: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 
 #[test]
-fn write_callers_cannot_apply_pending_admin_changes_and_agent_tokens_only_propose_definitions() {
+fn write_callers_cannot_apply_pending_admin_changes() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("keeper", "label = \"Keeper\"\npermissions {\n  confirm {\n    agents = false\n    skills = false\n    types = false\n  }\n}\n");
     let note = api.note("memo", "Roof", &["Gutters."]);
     let writer = api.token_of("writer", "write");
-    let agent = api.token_of("agent-dispatcher", "admin");
     for (tool, input, event) in [
         (
             "propose_type_change",
@@ -92,10 +91,8 @@ fn write_callers_cannot_apply_pending_admin_changes_and_agent_tokens_only_propos
             "skill_proposal",
         ),
     ] {
-        for token in [&writer, &agent] {
-            if token == &agent && event == "type_proposal" {
-                continue;
-            }
+        {
+            let token = &writer;
             fake.push(AnthropicMessage::new().tool_use("toolu_scope", tool, input.clone()));
             fake.push(AnthropicMessage::text("Proposed."));
             let (status, body) = api.dispatch_as(

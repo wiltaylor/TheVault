@@ -1136,8 +1136,10 @@ pub struct NewThread {
 pub async fn start(
     State(w): Shared,
     Path(name): Path<String>,
+    Caller(author): Caller,
     body: Option<Json<NewThread>>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     let title = body.and_then(|Json(b)| b.title);
     let t = blocking(w, move |w| {
         let agent = w.agent(&name)?;

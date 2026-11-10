@@ -228,6 +228,7 @@ pub async fn chat(
     Json(body): Json<ChatBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     // No one stops this form of turn but the client, by going away.
+    crate::auth::require_in_app_agent_caller(&author)?;
     let (_, never) = watch::channel(false);
     let (rx, _) = start(w, author, scope, body, never).await?;
     Ok(sse(receive(rx)))

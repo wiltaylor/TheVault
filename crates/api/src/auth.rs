@@ -131,6 +131,18 @@ pub(crate) fn is_agent_token(author: &Author) -> bool {
     matches!(author, Author::Agent(name) if name.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("agent-")))
 }
 
+/// External agent credentials confer no authority to drive an in-app agent.
+pub(crate) fn require_in_app_agent_caller(author: &Author) -> Result<(), ApiError> {
+    if is_agent_token(author) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "agent tokens cannot run in-app agents",
+        ));
+    }
+    Ok(())
+}
+
 /// Whether `path` is `/api/devices/{id}/push`, `/api/devices/{id}/bases` or
 /// `/api/devices/{id}/health`, which a device sets for itself.
 fn is_device_own(path: &str) -> bool {
