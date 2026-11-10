@@ -13,10 +13,47 @@ CREATE TABLE IF NOT EXISTS trigger_jobs (
 );
 CREATE INDEX IF NOT EXISTS trigger_jobs_due ON trigger_jobs(status, due_ms);
 CREATE INDEX IF NOT EXISTS trigger_jobs_note ON trigger_jobs(agent, trigger, note);
-CREATE TABLE IF NOT EXISTS trigger_queue_drops (agent TEXT PRIMARY KEY, count INTEGER NOT NULL, notified_ms INTEGER);
+CREATE TABLE IF NOT EXISTS trigger_queue_drops (agent TEXT PRIMARY KEY, count INTEGER NOT NULL, notified_ms INTEGER, last_drop_ms INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS trigger_backfill_previews (id TEXT PRIMARY KEY, principal TEXT NOT NULL, agent TEXT NOT NULL, trigger TEXT NOT NULL, payload TEXT NOT NULL, expires_ms INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS trigger_events (note TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS trigger_legacy_runs (run_id INTEGER PRIMARY KEY, agent TEXT NOT NULL, trigger TEXT NOT NULL, matched INTEGER NOT NULL);
 ";
+
+/// Preserve pre-queue success records from the first user message of each recorded thread.
+/// Unreadable or missing threads remain visible as unmatched history in backfill previews.
+pub(crate) fn seed_legacy(conn: &rusqlite::Connection) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT id,agent,trigger,thread,started_ms FROM agent_runs WHERE outcome='succeeded' AND id NOT IN (SELECT run_id FROM trigger_legacy_runs) ORDER BY id")?;
+    let runs = stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,i64>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, agent, trigger, thread, at) in runs {
+        let content = match thread {
+            Some(thread) => conn.query_row("SELECT content FROM versions WHERE note_id=?1 AND note_type='agent_thread' ORDER BY seq DESC LIMIT 1", [thread], |r| r.get::<_,String>(0)).optional()?,
+            None => None,
+        };
+        let note = content.as_deref().and_then(legacy_note);
+        if let Some(note) = &note {
+            conn.execute("INSERT INTO trigger_jobs(agent,trigger,note,payload,queued_ms,due_ms,status) SELECT ?1,?2,?3,'{}',?4,?4,'succeeded' WHERE NOT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3)", params![agent,trigger,note,at])?;
+        }
+        conn.execute("INSERT INTO trigger_legacy_runs VALUES (?1,?2,?3,?4)", params![id,agent,trigger,note.is_some()])?;
+    }
+    Ok(())
+}
+
+fn legacy_note(content: &str) -> Option<String> {
+    let doc = schema::Doc::parse(content, "legacy agent thread").ok()?;
+    let transcript: serde_json::Value = serde_json::from_str(doc.field("transcript")?.as_str()?).ok()?;
+    let user = transcript["messages"].as_array()?.iter().find(|m| m["role"] == "user")?;
+    let text = user["content"].as_array()?.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+    for line in text.lines().rev() {
+        for op in ["create", "update", "delete"] {
+            if let Some(rest) = line.strip_prefix(&format!("Event: {op} of note ")) {
+                let (id, _) = rest.split_once(" (type ")?;
+                id.parse::<ulid::Ulid>().ok()?;
+                return Some(id.to_owned());
+            }
+        }
+    }
+    None
+}
 
 #[derive(Debug, Clone)]
 pub struct TriggerJob {
@@ -71,11 +108,28 @@ mod tests {
         let run = s.start_agent_run("clerk", "opened").unwrap();
         s.set_agent_run_thread(run, "thread").unwrap();
         s.finish_agent_run(run, &crate::AgentRunOutcome::Succeeded, "").unwrap();
+        let unmatched = s.start_agent_run("clerk", "opened").unwrap();
+        s.finish_agent_run(unmatched, &crate::AgentRunOutcome::Succeeded, "").unwrap();
         s.conn().execute_batch("DROP TABLE trigger_jobs; DROP TABLE trigger_queue_drops; DROP TABLE trigger_backfill_previews; DROP TABLE trigger_events;").unwrap();
         s.conn().pragma_update(None, "user_version", 20).unwrap();
         drop(s);
         let s = State::open(&path, None).unwrap();
         assert!(s.trigger_record_exists("clerk", "opened", note).unwrap());
+        assert_eq!(s.unmatched_legacy_trigger_runs("clerk", "opened").unwrap(), 1);
+    }
+
+    #[test]
+    fn waiting_payload_updates_and_unsuccessful_notes_can_be_backfilled() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        let id = s.enqueue_trigger("clerk", "opened", Some("a"), "old", 0).unwrap().unwrap();
+        assert!(s.enqueue_trigger("clerk", "opened", Some("a"), "new", 0).unwrap().is_none());
+        assert_eq!(s.due_trigger_jobs(s.now()).unwrap()[0].payload, "new");
+        for status in ["failed", "expired", "cancelled"] {
+            s.finish_trigger_job(id, status, None).unwrap();
+            assert!(!s.trigger_record_exists("clerk", "opened", "a").unwrap());
+        }
+        assert!(s.enqueue_backfill("clerk", "opened", Some("a"), "new", 0).unwrap().is_some());
     }
 
     #[test]
@@ -118,9 +172,12 @@ mod tests {
         );
         let stats = s.trigger_queue_stats("clerk").unwrap();
         assert_eq!((stats.waiting, stats.dropped), (10_000, 1));
-        assert!(s.trigger_drop_notice("clerk", 0).unwrap());
-        assert!(!s.trigger_drop_notice("clerk", 1).unwrap());
-        assert!(s.trigger_drop_notice("clerk", 3_600_000).unwrap());
+        let now = s.now();
+        assert!(s.trigger_drop_notice("clerk", now).unwrap());
+        assert!(!s.trigger_drop_notice("clerk", now + 1).unwrap());
+        assert!(!s.trigger_drop_notice("clerk", now + 3_600_000).unwrap(), "an old drop must not notify forever");
+        s.conn().execute("UPDATE trigger_queue_drops SET last_drop_ms=?1", [now+3_600_001]).unwrap();
+        assert!(s.trigger_drop_notice("clerk", now + 3_600_001).unwrap());
     }
 
     #[test]
@@ -217,7 +274,15 @@ pub struct TriggerQueueStats {
     pub dropped: i64,
 }
 
+fn prune_terminal(conn: &rusqlite::Connection) -> Result<()> {
+    conn.execute("DELETE FROM trigger_jobs WHERE status IN ('succeeded','failed','expired','cancelled') AND (note IS NULL OR id NOT IN (SELECT max(id) FROM trigger_jobs WHERE note IS NOT NULL AND status IN ('succeeded','failed','expired','cancelled') GROUP BY agent,trigger,note))", [])?;
+    Ok(())
+}
+
 impl State {
+    pub fn unmatched_legacy_trigger_runs(&self, agent: &str, trigger: &str) -> Result<i64> {
+        Ok(self.conn().query_row("SELECT count(*) FROM trigger_legacy_runs WHERE agent=?1 AND trigger=?2 AND matched=0", params![agent,trigger], |r| r.get(0))?)
+    }
     pub fn save_trigger_event(&self, note: &str, at: i64, payload: &str) -> Result<()> {
         self.conn().execute("INSERT INTO trigger_events VALUES (?1,?2,?3) ON CONFLICT(note) DO UPDATE SET at_ms=excluded.at_ms,payload=excluded.payload", params![note,at,payload])?;
         Ok(())
@@ -261,6 +326,7 @@ impl State {
         trigger: &str,
         payload: &str,
     ) -> Result<String> {
+        self.conn().execute("DELETE FROM trigger_backfill_previews WHERE expires_ms<?1", [self.now()-WEEK])?;
         let id = self.new_ulid().to_string();
         self.conn().execute(
             "INSERT INTO trigger_backfill_previews VALUES (?1,?2,?3,?4,?5,?6)",
@@ -321,8 +387,12 @@ impl State {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         if let Some(note) = note {
-            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND (?4 OR status IN ('waiting','admitted','running')))", params![agent, trigger, note, only_missing], |r| r.get(0))?;
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND ((?4 AND status IN ('succeeded','waiting','admitted','running')) OR (NOT ?4 AND status IN ('waiting','admitted'))))", params![agent, trigger, note, only_missing], |r| r.get(0))?;
             if exists {
+                if !only_missing {
+                    tx.execute("UPDATE trigger_jobs SET payload=?4,due_ms=max(due_ms,?5) WHERE agent=?1 AND trigger=?2 AND note=?3 AND status='waiting'", params![agent,trigger,note,payload,due])?;
+                }
+                tx.commit()?;
                 return Ok(None);
             }
         }
@@ -332,7 +402,7 @@ impl State {
             |r| r.get(0),
         )?;
         if count >= TRIGGER_QUEUE_CAP {
-            tx.execute("INSERT INTO trigger_queue_drops(agent,count) VALUES (?1,1) ON CONFLICT(agent) DO UPDATE SET count=count+1", [agent])?;
+            tx.execute("INSERT INTO trigger_queue_drops(agent,count,last_drop_ms) VALUES (?1,1,?2) ON CONFLICT(agent) DO UPDATE SET count=count+1,last_drop_ms=?2", params![agent,self.now()])?;
             tx.commit()?;
             return Ok(None);
         }
@@ -344,7 +414,7 @@ impl State {
 
     pub fn trigger_record_exists(&self, agent: &str, trigger: &str, note: &str) -> Result<bool> {
         Ok(self.conn().query_row(
-            "SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3)",
+            "SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND status IN ('succeeded','waiting','admitted','running'))",
             params![agent, trigger, note],
             |r| r.get(0),
         )?)
@@ -358,12 +428,15 @@ impl State {
             [],
         )?;
         self.conn().execute("UPDATE trigger_jobs SET status='failed', message='interrupted run, outcome unknown; not replayed' WHERE status='running'", [])?;
+        prune_terminal(&self.conn())?;
         Ok(())
     }
 
     pub fn due_trigger_jobs(&self, now: i64) -> Result<Vec<TriggerJob>> {
         let conn = self.conn();
         conn.execute("UPDATE trigger_jobs SET status='expired', message='wait exceeded seven days' WHERE status='waiting' AND queued_ms<=?1", [now - WEEK])?;
+        prune_terminal(&conn)?;
+        conn.execute("DELETE FROM trigger_backfill_previews WHERE expires_ms<?1", [now-WEEK])?;
         let mut stmt = conn.prepare("SELECT id,agent,trigger,note,payload FROM trigger_jobs WHERE status='waiting' AND due_ms<=?1 ORDER BY id LIMIT 1000")?;
         Ok(stmt
             .query_map([now], |r| {
@@ -396,6 +469,7 @@ impl State {
     pub fn begin_trigger_job(&self, id: i64, now: i64) -> Result<bool> {
         let conn = self.conn();
         conn.execute("UPDATE trigger_jobs SET status='expired',message='wait exceeded seven days' WHERE id=?1 AND status='admitted' AND queued_ms<=?2", params![id,now-WEEK])?;
+        prune_terminal(&conn)?;
         Ok(conn.execute(
             "UPDATE trigger_jobs SET status='running' WHERE id=?1 AND status='admitted'",
             [id],
@@ -403,10 +477,14 @@ impl State {
     }
 
     pub fn finish_trigger_job(&self, id: i64, status: &str, message: Option<&str>) -> Result<()> {
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE trigger_jobs SET status=?2, message=?3 WHERE id=?1",
             params![id, status, message],
         )?;
+        prune_terminal(&tx)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -427,6 +505,7 @@ impl State {
             "waiting"
         };
         tx.execute("UPDATE trigger_jobs SET status=?2, due_ms=?3, waits=waits+?4, failures=failures+?5, message=?6 WHERE id=?1", params![id,status,now+delay,i64::from(failure.is_none()),i64::from(failure.is_some()),failure])?;
+        prune_terminal(&tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -456,6 +535,6 @@ impl State {
     }
 
     pub fn trigger_drop_notice(&self, agent: &str, now: i64) -> Result<bool> {
-        Ok(self.conn().execute("UPDATE trigger_queue_drops SET notified_ms=?2 WHERE agent=?1 AND (notified_ms IS NULL OR notified_ms<=?2-3600000)", params![agent,now])? == 1)
+        Ok(self.conn().execute("UPDATE trigger_queue_drops SET notified_ms=?2 WHERE agent=?1 AND (notified_ms IS NULL OR (last_drop_ms>notified_ms AND notified_ms<=?2-3600000))", params![agent,now])? == 1)
     }
 }

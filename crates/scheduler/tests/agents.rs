@@ -102,6 +102,7 @@ impl AgentRunner for Fake {
             .push((agent.name.clone(), thread.to_owned(), prompt.to_owned()));
         self.running.fetch_sub(1, Ordering::SeqCst);
         TurnReport {
+            no_side_effects: true,
             outcome: match self.fail.lock().unwrap().clone() {
                 Some(m) => Err(m),
                 None => Ok(()),

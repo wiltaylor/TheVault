@@ -680,6 +680,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 20 {
                 tx.execute_batch(agent_queue::SCHEMA)?;
+                agent_queue::seed_legacy(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

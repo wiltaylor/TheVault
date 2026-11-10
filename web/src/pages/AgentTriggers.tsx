@@ -177,7 +177,7 @@ function RunList(props: { agent: string; runs: AgentRun[] | undefined; loading: 
 /** The Triggers tab. */
 function Backfill(props: { agent: string; trigger: string; refresh: () => void }) {
   const [limit, setLimit] = createSignal(100);
-  const [preview, setPreview] = createSignal<{ count: number; selected: number; preview: string } | null>(null);
+  const [preview, setPreview] = createSignal<{ count: number; selected: number; preview: string; unmatched_legacy_runs?: number } | null>(null);
   const [message, setMessage] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   async function run(confirm: boolean) {
@@ -195,6 +195,7 @@ function Backfill(props: { agent: string; trigger: string; refresh: () => void }
       onInput={(e) => { setLimit(e.currentTarget.valueAsNumber); setPreview(null); }} /></label>
     <button type="button" disabled={busy()} onClick={() => void run(false)}>Count matching notes</button>
     <Show when={preview()}>{(p) => <p>{p().count} matching notes have no trigger record. Run on the newest {p().selected}?
+      <Show when={p().unmatched_legacy_runs}>{p().unmatched_legacy_runs} runs from before this version could not be matched to a note.</Show>
       <button type="button" disabled={busy()} onClick={() => void run(true)}>Confirm backfill</button></p>}</Show>
     <p role="status">{message()}</p>
   </div>;

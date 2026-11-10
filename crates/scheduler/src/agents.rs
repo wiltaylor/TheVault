@@ -82,6 +82,8 @@ fn is_agent_type(type_name: &str) -> bool {
 /// What a turn of an unattended run reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnReport {
+    /// True only when no tool call was attempted. A partial turn must never be replayed.
+    pub no_side_effects: bool,
     /// `Err` with what went wrong: a provider error, a refusal, or a turn that never ended.
     pub outcome: Result<(), String>,
     /// The turn's trail lines (ai D12).
@@ -108,6 +110,7 @@ pub trait AgentRunner: Send + Sync {
 /// One run to start: an agent's trigger, the first message and the thread's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentJob {
+    pub op: Option<String>,
     /// Durable trigger queue identity. Person-requested calls keep their existing lane.
     pub durable: Option<i64>,
     pub note: Option<(String, String)>,
@@ -201,6 +204,8 @@ pub(crate) struct AgentPlan {
     lanes: BTreeMap<String, Lane>,
     /// Durable work displaced by a person-requested run, returned to disk after unlocking.
     displaced: Vec<AgentJob>,
+    /// Persistence errors keep their exact payload in memory as well as the durable event.
+    persist_retry: Vec<AgentJob>,
 }
 
 /// What became of a run asked for.
@@ -267,6 +272,7 @@ impl AgentPlan {
                 continue;
             };
             jobs.push(AgentJob {
+                op: None,
                 durable: None,
                 note: None,
                 agent: agent.clone(),
@@ -344,6 +350,7 @@ impl AgentPlan {
             .values()
             .filter_map(|(_, at)| *at)
             .chain(self.pending.values().map(|p| p.due))
+            .chain((!self.persist_retry.is_empty()).then_some(now + 30_000))
             .min()
     }
 
@@ -690,6 +697,7 @@ impl Scheduler {
         self.reload_agents();
         let now = self.clock.now_ms();
         let (mut jobs, events) = self.plan().agents.take_due(now);
+        jobs.extend(std::mem::take(&mut self.plan().agents.persist_retry));
         let called = self.plan().agents.take_mentions();
         let mut tell = Vec::new();
         // The runs of calls are admitted as they are recorded, under the same lock as their room.
@@ -697,7 +705,7 @@ impl Scheduler {
         for id in called {
             called_runs.extend(self.mention_jobs(&id, now, &mut tell));
         }
-        let mut processed = Vec::new();
+        let mut processed: Vec<String> = jobs.iter().filter_map(|job| job.note.as_ref().map(|(id,_)| id.clone())).collect();
         for e in events {
             processed.push(e.note.clone());
             let title = match e.op {
@@ -712,8 +720,9 @@ impl Scheduler {
             };
             let Some(title) = title else { continue };
             jobs.push(AgentJob {
+                op: Some(e.op.to_owned()),
                 durable: None,
-                note: (e.op != "delete").then(|| (e.note.clone(), e.type_name.clone())),
+                note: Some((e.note.clone(), e.type_name.clone())),
                 agent: e.agent.name.clone(),
                 trigger: e.trigger.name.clone(),
                 prompt: format!(
@@ -732,16 +741,26 @@ impl Scheduler {
                 _ => None,
             })
             .collect();
+        let mut failed_notes = Vec::new();
         for job in jobs {
-            self.persist_trigger(&job, now, false);
+            if let Err(error) = self.persist_trigger(&job, now, false) {
+                eprintln!("persisting trigger: {error}");
+                if let Some((id, _)) = &job.note {
+                    failed_notes.push(id.clone());
+                }
+                self.plan().agents.persist_retry.push(job);
+            }
         }
         for note in processed {
+            if failed_notes.contains(&note) { continue; }
             let _ = self
                 .writer
                 .state()
                 .acknowledge_trigger_event(&note, now - DEBOUNCE_MS);
         }
-        let _ = self.writer.state().prune_trigger_events(now - DEBOUNCE_MS);
+        if failed_notes.is_empty() {
+            let _ = self.writer.state().prune_trigger_events(now - DEBOUNCE_MS);
+        }
         let state = self.writer.state();
         match state.due_trigger_jobs(now) {
             Ok(queued) => {
@@ -756,6 +775,7 @@ impl Scheduler {
                         continue;
                     };
                     let job = AgentJob {
+                        op: payload["op"].as_str().map(str::to_owned),
                         durable: Some(row.id),
                         note: row
                             .note
@@ -807,10 +827,11 @@ impl Scheduler {
         }
     }
 
-    fn persist_trigger(&self, job: &AgentJob, due: i64, backfill: bool) -> bool {
+    fn persist_trigger(&self, job: &AgentJob, due: i64, backfill: bool) -> Result<bool, state::Error> {
         let payload = serde_json::json!({
             "prompt": job.prompt, "title": job.title,
             "type": job.note.as_ref().map(|(_, t)| t),
+            "op": job.op,
         })
         .to_string();
         let state = self.writer.state();
@@ -819,20 +840,14 @@ impl Scheduler {
         } else {
             state::State::enqueue_trigger
         };
-        let inserted = match enqueue(
+        let inserted = enqueue(
             state,
             &job.agent,
             &job.trigger,
             job.note.as_ref().map(|(id, _)| id.as_str()),
             &payload,
             due,
-        ) {
-            Ok(id) => id.is_some(),
-            Err(e) => {
-                eprintln!("persisting trigger: {e}");
-                false
-            }
-        };
+        )?.is_some();
         if state
             .trigger_drop_notice(&job.agent, self.clock.now_ms())
             .unwrap_or(false)
@@ -845,17 +860,17 @@ impl Scheduler {
                 source: format!("agent:{}", job.agent),
             });
         }
-        inserted
+        Ok(inserted)
     }
 
     /// Shared selection/execution guard. TV-137 adds writer.agent_may_read here when
     /// integrating its Jev gate, so a queued note is checked again just before it runs.
-    fn trigger_note_allowed(&self, id: &str, ty: &str, event: &schema::NoteEvent) -> bool {
-        (event.types.is_empty() || event.types.iter().any(|t| t == ty))
+    fn trigger_note_allowed(&self, id: &str, ty: &str, event: &schema::NoteEvent, op: &str) -> bool {
+        event.matches(op,ty)
             && (!is_agent_type(ty) || !event.types.is_empty())
-            && self
+            && (op == "delete" || self
                 .note_matches(id, ty, event.condition_expr().as_ref())
-                .is_some()
+                .is_some())
     }
 
     /// Newest matching notes without any trigger record. Also used when confirming the
@@ -873,11 +888,12 @@ impl Scheduler {
         let TriggerWhen::NoteEvent(e) = &t.when else {
             return Err("backfill needs a note event trigger".to_owned());
         };
+        let op = if e.on.iter().any(|op| op == "create") { "create" } else if e.on.iter().any(|op| op == "update") { "update" } else { return Err("backfill needs create or update in on".to_owned()); };
         let mut notes = self.writer.list(None).map_err(|e| e.to_string())?;
         notes.reverse();
         let mut found = Vec::new();
         for note in notes {
-            if !self.trigger_note_allowed(&note.id, &note.type_name, e)
+            if !self.trigger_note_allowed(&note.id, &note.type_name, e, op)
                 || self
                     .writer
                     .state()
@@ -908,6 +924,7 @@ impl Scheduler {
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             let job = AgentJob {
+                op: Some(match &t.when { TriggerWhen::NoteEvent(e) if e.on.iter().any(|op| op == "create") => "create", _ => "update" }.to_owned()),
                 durable: None,
                 note: Some((id.clone(), ty.clone())),
                 agent: name.to_owned(),
@@ -920,7 +937,7 @@ impl Scheduler {
                 thread: None,
                 origin: None,
             };
-            count += usize::from(self.persist_trigger(&job, self.clock.now_ms(), true));
+            count += usize::from(self.persist_trigger(&job, self.clock.now_ms(), true).map_err(|e| e.to_string())?);
         }
         self.wake.notify_all();
         Ok(count)
@@ -1017,6 +1034,7 @@ impl Scheduler {
             .collect::<Vec<_>>()
             .join("\n");
             let mut job = AgentJob {
+                op: None,
                 durable: None,
                 note: None,
                 agent: agent.name.clone(),
@@ -1154,6 +1172,7 @@ impl Scheduler {
             .open_thread(&a, DISPATCH_ORIGIN, title, notes)
             .map_err(DispatchRefused::Thread)?;
         let job = AgentJob {
+            op: None,
             durable: None,
             note: None,
             agent: a.name.clone(),
@@ -1255,9 +1274,9 @@ impl Scheduler {
                 .trigger(&job.trigger)
                 .is_some_and(|t| match (&job.note, &t.when) {
                     (Some((note, ty)), TriggerWhen::NoteEvent(e)) => {
-                        self.trigger_note_allowed(note, ty, e)
+                        job.op.as_deref().is_some_and(|op| self.trigger_note_allowed(note, ty, e, op))
                     }
-                    (None, _) => true,
+                    (None, TriggerWhen::Schedule(_)) => true,
                     _ => false,
                 });
             if !matches {
@@ -1285,15 +1304,15 @@ impl Scheduler {
             Some(t) => Ok(t.clone()),
             None => runner.open_thread(&agent, &origin, &job.title, &[]),
         };
-        let (outcome, log, thread) = match opened {
+        let (outcome, log, thread, no_side_effects) = match opened {
             Ok(thread) => {
                 if let Err(e) = state.set_agent_run_thread(id, &thread) {
                     eprintln!("agent {:?}: recording the run's thread: {e}", agent.name);
                 }
                 let r = runner.run_turn(&agent, &thread, &job.prompt);
-                (r.outcome, r.log, Some(thread))
+                (r.outcome, r.log, Some(thread), r.no_side_effects)
             }
-            Err(e) => (Err(e), Vec::new(), None),
+            Err(e) => (Err(e), Vec::new(), None, true),
         };
         let outcome = match outcome {
             Ok(()) => AgentRunOutcome::Succeeded,
@@ -1312,9 +1331,10 @@ impl Scheduler {
         if let Some(queued) = job.durable {
             let result = match &outcome {
                 AgentRunOutcome::Succeeded => state.finish_trigger_job(queued, "succeeded", None),
-                AgentRunOutcome::Failed(message) => {
+                AgentRunOutcome::Failed(message) if no_side_effects => {
                     state.retry_trigger_job(queued, self.clock.now_ms(), Some(message))
                 }
+                AgentRunOutcome::Failed(message) => state.finish_trigger_job(queued, "failed", Some(message)),
                 AgentRunOutcome::Running => unreachable!(),
             };
             if let Err(e) = result {

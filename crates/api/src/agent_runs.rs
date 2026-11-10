@@ -180,6 +180,7 @@ impl scheduler::AgentRunner for TriggerRunner {
             notify_needs_you(&self.writer, agent, thread);
         }
         scheduler::TurnReport {
+            no_side_effects: !done.tool_called,
             outcome,
             log: done.log,
         }
@@ -322,8 +323,9 @@ pub async fn backfill(
             let preview = w
                 .state()
                 .preview_trigger_backfill(&principal, &name, &trigger, &payload)?;
+            let unmatched = w.state().unmatched_legacy_trigger_runs(&name, &trigger)?;
             Ok(Json(
-                json!({ "count": count, "selected": notes.len(), "preview": preview }),
+                json!({ "count": count, "selected": notes.len(), "preview": preview, "unmatched_legacy_runs": unmatched }),
             ))
         }
     })

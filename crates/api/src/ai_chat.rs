@@ -207,6 +207,7 @@ impl Sent {
 /// trail lines.
 #[derive(Debug, Default)]
 pub(crate) struct Unattended {
+    pub(crate) tool_called: bool,
     pub(crate) ended: Option<Result<(), String>>,
     pub(crate) log: Vec<String>,
 }
@@ -283,6 +284,7 @@ pub(crate) async fn run_unattended(
                     .unwrap_or("the turn could not start")
                     .to_owned())),
                 log: Vec::new(),
+                tool_called: false,
             };
         }
     }
@@ -2077,6 +2079,9 @@ impl Turn {
             // The question this round's ask_user calls put to the user (TV-77 D3).
             let mut asked: Option<String> = None;
             for c in calls {
+                // Mark before execution, including scripts and subagents, so a later error
+                // can never cause a trigger retry to repeat an already attempted change.
+                self.report(|r| r.tool_called = true);
                 self.activity.tool_called(&c.id, &c.name, &c.input);
                 if !self
                     .out
