@@ -472,12 +472,23 @@ fn get_agent_redacts_other_agents_recipient_conditions() {
     let api = Api::start(&fake);
     let source = SENDER.replace("tools = [", "tools = [\"get_agent\", ").replace("send_without_review = true", "send_without_review = true\n conditions { recipients = [\"private@example.com\"]\n email = true\n daily_cap = 2\n }");
     api.agent("sender", &source);
-    api.agent("clerk", &CLERK.replace("tools = [", "tools = [\"get_agent\", "));
+    api.agent(
+        "clerk",
+        &CLERK.replace("tools = [", "tools = [\"get_agent\", "),
+    );
     api.one(&fake, Some("clerk"), "get_agent", json!({"name": "sender"}));
     let other = last_result(&fake, false);
-    assert!(!other.to_string().contains("private@example.com"), "{other}");
+    assert!(
+        !other.to_string().contains("private@example.com"),
+        "{other}"
+    );
     assert!(!other["wcl"].as_str().unwrap().contains("conditions"));
-    api.one(&fake, Some("sender"), "get_agent", json!({"name": "sender"}));
+    api.one(
+        &fake,
+        Some("sender"),
+        "get_agent",
+        json!({"name": "sender"}),
+    );
     let own = last_result(&fake, false);
     assert!(own.to_string().contains("private@example.com"), "{own}");
 }

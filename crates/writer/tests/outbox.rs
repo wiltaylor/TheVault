@@ -110,7 +110,12 @@ fn explicit_send_conditions_check_every_recipient_and_kind() {
     assert_eq!(status(&w, &id), "ready");
     assert_eq!(fields(&w, &id)["phone"], "+15551234567");
     for phone in ["0015551234567", "+1+555+123+4567"] {
-        let id = create(&w, &agent("sender"), json!({"fields": {"kind": "sms", "title": "SMS", "phone": phone, "status": "ready"}})).unwrap();
+        let id = create(
+            &w,
+            &agent("sender"),
+            json!({"fields": {"kind": "sms", "title": "SMS", "phone": phone, "status": "ready"}}),
+        )
+        .unwrap();
         assert_eq!(status(&w, &id), "draft");
     }
 }
