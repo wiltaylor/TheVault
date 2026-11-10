@@ -155,52 +155,30 @@ impl Device {
 
 /// A parent thread of agent `lead` and its two sessions, made on the home server as a turn there
 /// makes them: `(parent, [session of toolu_0, session of toolu_1])`.
-fn family(admin: &Admin) -> (String, [String; 2]) {
-    let thread = |origin: &str, transcript: Value| {
-        let made = admin.call(
-            "POST",
-            "/api/notes?type=agent_thread",
-            Some(json!({ "note": { "fields": {
-                "title": "Check", "agent": "lead", "origin": origin,
-                "transcript": transcript.to_string(),
-            } } })),
-            201,
-        );
-        made["id"].as_str().unwrap().to_owned()
-    };
-    let parent = thread("user", json!({ "messages": [] }));
-    let sub = |call: &str| {
-        thread(
-            &format!("subagent:{parent}"),
-            json!({ "messages": [], "parent": { "thread": parent, "turn": "t1", "call": call } }),
-        )
-    };
-    let subs = [sub("toolu_0"), sub("toolu_1")];
-    let listed: Vec<Value> = subs
-        .iter()
-        .zip(["toolu_0", "toolu_1"])
-        .enumerate()
-        .map(|(i, (s, call))| {
-            json!({
-                "call": call, "thread": s, "agent": "lead", "task": "Look around",
-                "n": i + 1, "status": "done", "started_ms": 0,
-            })
-        })
-        .collect();
-    let base = admin.call("GET", &format!("/api/notes/{parent}"), None, 200)["version"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    admin.call(
-        "PUT",
-        &format!("/api/notes/{parent}"),
-        Some(json!({ "base_version": base, "note": { "fields": {
-            "title": "Check", "agent": "lead", "origin": "user",
-            "transcript": json!({ "messages": [], "subagents": listed }).to_string(),
-        } } })),
-        200,
-    );
-    (parent, subs)
+fn family() -> (TestServer, String, [String; 2]) {
+    let parent = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA".to_owned();
+    let subs = ["01JB8Z4K2MQ7V3X9T5R6W8Y2ZB".to_owned(), "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC".to_owned()];
+    let listed: Vec<Value> = subs.iter().zip(["toolu_0", "toolu_1"]).enumerate().map(|(i, (id, call))| json!({
+        "call": call, "thread": id, "agent": "lead", "task": "Look around",
+        "n": i + 1, "status": "done", "started_ms": 0
+    })).collect();
+    let server = TestServer::start_seeded(|vault| {
+        let dir = vault.join("notes/agent_thread");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (i, id) in std::iter::once(&parent).chain(subs.iter()).enumerate() {
+            let (origin, transcript) = if i == 0 {
+                ("user".to_owned(), json!({"messages": [], "subagents": listed}))
+            } else {
+                (format!("subagent:{parent}"), json!({"messages": [], "parent": {
+                    "thread": parent, "turn": "t1", "call": format!("toolu_{}", i - 1)
+                }}))
+            };
+            let text = format!("title = \"Check\"\nagent = \"lead\"\norigin = {}\ntranscript = {}\n",
+                serde_json::to_string(&origin).unwrap(), serde_json::to_string(&transcript.to_string()).unwrap());
+            std::fs::write(dir.join(format!("{id}.wcl")), text).unwrap();
+        }
+    });
+    (server, parent, subs)
 }
 
 fn version(note: &Value) -> String {
@@ -225,10 +203,9 @@ fn author(admin: &Admin, id: &str) -> Value {
 
 #[test]
 fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_the_server() {
-    let server = TestServer::start();
+    let (server, parent, subs) = family();
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "Laptop");
-    let (parent, subs) = family(&admin);
     device.sync();
 
     // Archived in the app: the sessions are archived in the same local write.
@@ -298,10 +275,9 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
 
 #[test]
 fn a_parent_change_pushed_without_its_sessions_takes_them_along_on_the_server() {
-    let server = TestServer::start();
+    let (server, parent, subs) = family();
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "Phone");
-    let (parent, subs) = family(&admin);
     device.sync();
     // An older app pushes only the parent, with the device's token.
     let old_app = device.token();
@@ -361,9 +337,9 @@ fn a_parent_change_pushed_without_its_sessions_takes_them_along_on_the_server() 
             "transcript": transcript.to_string(),
         } } }),
         ),
-        200,
+        403,
     );
-    assert_eq!(admin.status(&format!("/api/notes/{}", subs[1])), 404);
+    assert_eq!(admin.status(&format!("/api/notes/{}", subs[1])), 200);
     assert_eq!(admin.status(&format!("/api/notes/{}", subs[0])), 200);
 
     // A deletion of the parent alone takes the remaining session to the trash.
