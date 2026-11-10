@@ -1774,9 +1774,8 @@ impl Writer {
             Some(Input::Wcl(text).parse(&note_path(&change.type_name, &change.id))?)
         };
         let next = change.doc.as_ref();
-        let field = |doc: Option<&schema::Doc>, name: &str| {
-            doc.and_then(|d| d.field(name)).cloned()
-        };
+        let field =
+            |doc: Option<&schema::Doc>, name: &str| doc.and_then(|d| d.field(name)).cloned();
         let sender = matches!(author, Author::Handler(name) if name == "outbox_send");
         if !sender
             && field(next, "send_updates").is_some()
@@ -1793,9 +1792,10 @@ impl Writer {
                     .and_then(schema::Value::as_str)
                     .is_some_and(|v| !v.is_empty())
             });
-            let sensitive = next.is_some() && ["attendees", "attendees_raw", "my_response", "status"]
-                .into_iter()
-                .any(|name| field(next, name) != field(old.as_ref(), name));
+            let sensitive = next.is_some()
+                && ["attendees", "attendees_raw", "my_response", "status"]
+                    .into_iter()
+                    .any(|name| field(next, name) != field(old.as_ref(), name));
             if sensitive || (google && change.event == Event::Delete) {
                 return Err(Error::Rejected(
                     "agent calendar attendees, RSVP, cancellation and Google deletes require an Outbox item of kind event".into(),
