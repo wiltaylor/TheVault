@@ -109,6 +109,9 @@ struct Shared {
     /// What the next command that writes a file (`--filename=` or `curl -o`) leaves there.
     capture: Mutex<Option<(String, Vec<u8>)>>,
     requests: Mutex<Vec<Request>>,
+    signed_profiles: Mutex<bool>,
+    legacy_protocol: Mutex<bool>,
+    cleanup_failure: Mutex<bool>,
 }
 
 /// The file a command writes, as `browser_capture` quotes it: `--filename='<path>'` or
@@ -152,6 +155,13 @@ impl FakeBrowser {
     pub fn token(&self) -> &'static str {
         DEFAULT_BROWSER_TOKEN
     }
+
+    /// Verify the profile MAC as the real box does, for server routing tests.
+    pub fn require_signed_profiles(&self) { *lock(&self.shared.signed_profiles) = true; }
+
+    pub fn legacy_protocol(&self) { *lock(&self.shared.legacy_protocol) = true; }
+
+    pub fn fail_cleanup(&self, fail: bool) { *lock(&self.shared.cleanup_failure) = fail; }
 
     /// Answer the next `/run` with `run`.
     pub fn push_run(&self, run: BrowserRun) {
@@ -211,14 +221,24 @@ fn answer(s: &Shared, r: &Request) -> Reply {
     if r.route() == "/health" {
         return Reply::json(
             200,
-            &json!({ "ok": true, "version": "0.0.0-fake", "display": ":1", "playwright_cli": "0.1.22" }),
+            &json!({ "ok": true, "version": "0.0.0-fake", "display": ":1", "playwright_cli": "0.1.22", "profile_protocol": if *lock(&s.legacy_protocol) { 0 } else { 1 } }),
         );
     }
     let expected = format!("Bearer {DEFAULT_BROWSER_TOKEN}");
     if r.header("authorization") != Some(expected.as_str()) {
         return error(401, "missing or wrong bearer token");
     }
+    if *lock(&s.signed_profiles) {
+        let id = r.header("x-vault-agent").unwrap_or_default();
+        let signature = r.header("x-vault-agent-signature").unwrap_or_default();
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, DEFAULT_BROWSER_TOKEN.as_bytes());
+        let signed = ring::hmac::sign(&key, format!("thevault-browser-profile-v1:{id}").as_bytes());
+        let expected: String = signed.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        if id.is_empty() || signature != expected { return error(401, "invalid signed profile"); }
+    }
     match (r.method.as_str(), r.route()) {
+        ("DELETE", "/profile") if *lock(&s.cleanup_failure) => error(503, "box unavailable"),
+        ("DELETE", "/profile") => Reply::json(200, &json!({"ok": true})),
         ("POST", "/run") => {
             let body = r.json();
             let command = body["command"].as_str().unwrap_or_default().to_owned();

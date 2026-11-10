@@ -149,7 +149,7 @@ fn section(skills: &[Listed], browser: bool) -> String {
         out.push_str(
             "To run a skill's scripts, copy the skill into the browser box with \
              install_skill_in_browser, then run them there with browser_run from \
-             /work/skills/<name>. ",
+             skills/<name> relative to your working directory. ",
         );
     } else {
         out.push_str(
@@ -187,7 +187,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
 pub fn install_spec() -> ToolSpec {
     tool(
         INSTALL_TOOL,
-        "Copy a skill's folder into the browser box at /work/skills/<name>, replacing what is there, so its scripts can run with browser_run (for example `cd /work/skills/<name> && python3 scripts/run.py`). Files starting with #! are made executable.",
+        "Copy a skill into skills/<name> within your browser profile's working directory, replacing what is there, so its scripts can run with browser_run (for example `cd skills/<name> && python3 scripts/run.py`). Files starting with #! are made executable.",
         json!({ "name": { "type": "string", "description": "The skill's name." } }),
     )
 }

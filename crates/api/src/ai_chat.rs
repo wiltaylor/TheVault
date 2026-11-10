@@ -1874,7 +1874,7 @@ impl Turn {
             .filter(|s| s.throwaway)
             .and_then(|_| setup.browser.take())
             .map(|b| {
-                crate::ai_browser::TemporaryProfile(b.with_profile(ulid::Ulid::new().to_string()))
+                crate::ai_browser::TemporaryProfile(b.with_profile(ulid::Ulid::new().to_string()), self.writer.clone())
             });
         if let Some(b) = &temporary_browser {
             setup.browser = Some(b.0.clone());

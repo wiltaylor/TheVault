@@ -21,6 +21,7 @@
 //! - `GET /health` answers `{ok, version, display, playwright_cli}` without a token.
 
 use std::io;
+use std::collections::HashMap;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -40,7 +41,7 @@ use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpListener;
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, RwLock, OwnedRwLockReadGuard};
 
 /// The most of stdout, and of stderr, a run answers: the tail is kept.
 pub const OUTPUT_CAP: usize = 64 * 1024;
@@ -79,6 +80,7 @@ struct AppState {
     home: PathBuf,
     runs: Arc<Semaphore>,
     profiles: Arc<Mutex<()>>,
+    profile_locks: Arc<Mutex<HashMap<String, Arc<RwLock<()>>>>>,
 }
 
 /// The service's routes over `config`. Fails when the work or home directory does not exist.
@@ -96,6 +98,7 @@ pub fn router(config: Config) -> io::Result<Router> {
         home,
         runs: Arc::new(Semaphore::new(MAX_RUNS)),
         profiles: Arc::new(Mutex::new(())),
+        profile_locks: Arc::new(Mutex::new(HashMap::new())),
         config,
     };
     Ok(Router::new()
@@ -175,6 +178,20 @@ fn profile_id<'a>(state: &AppState, headers: &'a HeaderMap) -> ApiResult<&'a str
 const PROFILE_LIMIT: usize = 64;
 const PROFILE_BYTES: u64 = 512 * 1024 * 1024;
 
+fn profile_lock(state: &AppState, id: &str) -> Arc<RwLock<()>> {
+    state.profile_locks.lock().unwrap_or_else(|e| e.into_inner())
+        .entry(id.to_owned()).or_default().clone()
+}
+
+async fn profile_access(state: &AppState, headers: &HeaderMap) -> ApiResult<OwnedRwLockReadGuard<()>> {
+    let id = profile_id(state, headers)?;
+    let guard = profile_lock(state, id).read_owned().await;
+    if std::fs::symlink_metadata(state.home.join(".retired-profiles").join(id)).is_ok() {
+        return Err(ApiError::new(StatusCode::GONE, "this browser profile was retired"));
+    }
+    Ok(guard)
+}
+
 fn safe_dir(path: &Path) -> ApiResult<()> {
     match std::fs::symlink_metadata(path) {
         Ok(m) if m.is_dir() && !m.file_type().is_symlink() => Ok(()),
@@ -245,6 +262,7 @@ fn scoped(state: &AppState, headers: &HeaderMap, admission: bool) -> ApiResult<A
         work,
         runs: state.runs.clone(),
         profiles: state.profiles.clone(),
+        profile_locks: state.profile_locks.clone(),
     })
 }
 
@@ -253,6 +271,8 @@ async fn delete_profile(
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let id = profile_id(&state, &headers)?;
+    let lock = profile_lock(&state, id);
+    let _exclusive = lock.write().await;
     let root = state.home.join("profiles");
     let path = root.join(id);
     if path.exists() {
@@ -278,10 +298,20 @@ async fn delete_profile(
     }
     if std::fs::symlink_metadata(&path).is_ok() {
         safe_dir(&path)?;
+    }
+    let retired = state.home.join(".retired-profiles");
+    safe_dir(&retired)?;
+    let marker = retired.join(id);
+    if std::fs::symlink_metadata(&marker).is_err() {
+        std::fs::OpenOptions::new().write(true).create_new(true).open(&marker)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if path.exists() {
         // remove_dir_all does not follow symlinks, including children.
         std::fs::remove_dir_all(&path)
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
+    state.profile_locks.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
     Ok(Json(json!({"ok": true})))
 }
 
@@ -314,6 +344,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "display": state.config.display,
         "playwright_cli": state.config.playwright_cli,
+        "profile_protocol": 1,
     }))
 }
 
@@ -329,6 +360,7 @@ async fn run(
     headers: HeaderMap,
     body: Result<Json<RunRequest>, JsonRejection>,
 ) -> ApiResult<Json<Value>> {
+    let _profile = profile_access(&state, &headers).await?;
     let state = scoped(&state, &headers, true)?;
     let Json(req) = body.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     if req.command.trim().is_empty() {
@@ -609,6 +641,7 @@ async fn file(
     headers: HeaderMap,
     query: Result<Query<FileQuery>, QueryRejection>,
 ) -> ApiResult<Response> {
+    let _profile = profile_access(&state, &headers).await?;
     let state = scoped(&state, &headers, false)?;
     let Query(query) = query.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     let path = state.resolve(&query.path)?;
@@ -694,6 +727,7 @@ async fn files(
     headers: HeaderMap,
     query: Result<Query<FilesQuery>, QueryRejection>,
 ) -> ApiResult<Json<Value>> {
+    let _profile = profile_access(&state, &headers).await?;
     let state = scoped(&state, &headers, false)?;
     let Query(query) = query.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     let dir = match query.dir.as_deref() {

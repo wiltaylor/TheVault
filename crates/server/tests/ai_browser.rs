@@ -21,6 +21,105 @@ const MODEL: &str = "claude-opus-5";
 /// An agent with browser automation and every other default.
 const DRIVER: &str = "label = \"Driver\"\n\npermissions {\n  browser = true\n}\n";
 
+#[test]
+fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    browser.require_signed_profiles();
+    let api = Api::start(&fake, Some(&browser));
+    api.agent("driver", DRIVER);
+    api.call(&fake, Some("driver"), "browser_run", json!({"command":"true"}));
+    let profile = browser.requests().iter().find(|r| r.route() == "/run").unwrap()
+        .header("x-vault-agent").unwrap().to_owned();
+    browser.file("storage.json", "application/json", b"fixture storage".to_vec());
+    api.call(&fake, Some("driver"), "browser_file", json!({"path":"storage.json"}));
+    browser.capture("image/png", vec![0x89, 0x50]);
+    let events = api.call(&fake, Some("driver"), "browser_capture", json!({"what":"screenshot"}));
+    let proposal = last(&events, "proposal").clone();
+    assert_eq!(proposal["browser_profile"], profile);
+    let (status, done) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::OK, "{done}");
+    for request in browser.requests().iter().filter(|r| r.route() != "/health") {
+        assert_eq!(request.header("x-vault-agent"), Some(profile.as_str()));
+    }
+    api.agent("driver", &DRIVER.replace("Driver", "Renamed display label"));
+    api.call(&fake, Some("driver"), "browser_run", json!({"command":"true"}));
+    assert_eq!(browser.requests().last().unwrap().header("x-vault-agent"), Some(profile.as_str()));
+    api.agent("other", DRIVER);
+    api.call(&fake, Some("other"), "browser_run", json!({"command":"true"}));
+    let other = browser.requests().last().unwrap().header("x-vault-agent").unwrap().to_owned();
+    assert_ne!(profile, other);
+    browser.fail_cleanup(true);
+    let response = api.client.delete(api.server.url("/api/agents/driver"))
+        .bearer_auth(api.token()).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    browser.fail_cleanup(false);
+    api.agent("driver", DRIVER);
+    api.call(&fake, Some("driver"), "browser_run", json!({"command":"true"}));
+    let requests = browser.requests();
+    let fresh = requests.last().unwrap().header("x-vault-agent").unwrap();
+    assert_ne!(fresh, profile);
+    assert_ne!(fresh, other);
+    let removed: Vec<_> = requests.iter().filter(|r| r.method == "DELETE").collect();
+    assert_eq!(removed.len(), 2, "failed cleanup is retried on the next turn");
+    assert!(removed.iter().all(|r| r.header("x-vault-agent") == Some(profile.as_str())));
+    let before = requests.len();
+    let (status, _) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "a stale save cannot read the replacement profile");
+    assert_eq!(browser.requests().len(), before);
+}
+
+#[test]
+fn an_old_shared_box_is_refused_before_running_commands() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    browser.legacy_protocol();
+    let api = Api::start(&fake, Some(&browser));
+    api.agent("driver", DRIVER);
+    api.call(&fake, Some("driver"), "browser_run", json!({"command":"must-not-run"}));
+    assert!(browser.commands().is_empty());
+    assert!(result_text(&result(&fake, 0)).contains("needs rebuilding"));
+}
+
+#[test]
+fn throwaway_browser_identity_is_fresh_and_cleanup_is_retried_after_an_outage() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    browser.require_signed_profiles();
+    let api = Api::start(&fake, Some(&browser));
+    api.agent("parent", "permissions {\n  browser = true\n  subagents {\n    allow = true\n  }\n}\n");
+    api.call(&fake, Some("parent"), "browser_run", json!({"command":"parent"}));
+    let parent = browser.requests().last().unwrap().header("x-vault-agent").unwrap().to_owned();
+    let thread: Value = api.client.post(api.server.url("/api/agents/parent/threads"))
+        .bearer_auth(api.token()).json(&json!({})).send().unwrap().json().unwrap();
+    fake.push(AnthropicMessage::new().tool_use("child", "start_subagent", json!({"task":"Check your browser", "agent":null})));
+    fake.push(AnthropicMessage::new().tool_use("browse", "browser_run", json!({"command":"child"})));
+    fake.push(AnthropicMessage::text("Child done."));
+    fake.push(AnthropicMessage::text("Parent done."));
+    browser.fail_cleanup(true);
+    let response = api.client.post(api.server.url("/api/ai/chat"))
+        .bearer_auth(api.token()).json(&json!({"agent":"parent", "thread":thread["id"], "messages":[{"role":"user","content":[{"type":"text","text":"Go"}]}]}))
+        .send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let events = read_events(response);
+    assert!(events.iter().any(|(n, _)| n == "subagent"), "{events:?}");
+    let began = std::time::Instant::now();
+    while !browser.requests().iter().any(|r| r.method == "DELETE") {
+        assert!(began.elapsed() < Duration::from_secs(5), "child did not request cleanup");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let requests = browser.requests();
+    let child = requests.iter().find(|r| r.route() == "/run" && r.json()["command"] == "child")
+        .expect("child drove its browser").header("x-vault-agent").unwrap().to_owned();
+    assert_ne!(child, parent);
+    assert!(requests.iter().filter(|r| r.method == "DELETE").all(|r| r.header("x-vault-agent") == Some(child.as_str())));
+    browser.fail_cleanup(false);
+    api.call(&fake, Some("parent"), "browser_run", json!({"command":"parent-again"}));
+    let requests = browser.requests();
+    assert!(requests.iter().filter(|r| r.method == "DELETE").count() >= 2);
+    assert_eq!(requests.last().unwrap().header("x-vault-agent"), Some(parent.as_str()));
+}
+
 struct Api {
     server: TestServer,
     client: Client,

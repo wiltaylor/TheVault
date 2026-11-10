@@ -18,6 +18,27 @@ fn identity(r: reqwest::RequestBuilder, id: &str) -> reqwest::RequestBuilder {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn deletion_waits_for_running_commands_and_rejects_the_retired_identity() {
+    let b = Agent::start().await;
+    let request = b.http.post(b.url("/run")).bearer_auth(TOKEN)
+        .json(&json!({"command":"touch started; sleep 0.2; printf finished > result"}));
+    let task = tokio::spawn(async move { request.send().await.unwrap() });
+    let began = Instant::now();
+    while !b.work().join("started").exists() {
+        assert!(began.elapsed() < Duration::from_secs(5));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(task.await.unwrap().status(), 200);
+    assert!(!b.work().exists());
+    assert_eq!(b.http.post(b.url("/run")).bearer_auth(TOKEN).json(&json!({"command":"true"})).send().await.unwrap().status(), 410);
+    assert_eq!(b.get("/file", &[("path", "result")]).await.status(), 410);
+    assert!(b.home.path().join(".retired-profiles/test").is_file());
+    assert_eq!(identity(b.http.post(b.url("/run")), "new-incarnation").json(&json!({"command":"true"})).send().await.unwrap().status(), 200);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn identities_are_required_and_cannot_be_forged() {
     let b = Agent::start().await;
     for route in ["/run", "/file?path=x", "/files", "/profile"] {

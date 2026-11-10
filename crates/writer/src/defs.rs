@@ -868,6 +868,24 @@ impl Writer {
             .unwrap_or_default())
     }
 
+    /// Queue an expired throwaway profile for retry if the box is offline.
+    pub fn retire_browser_profile(&self, id: &str) -> Result<()> {
+        let _w = self.write_lock();
+        self.retire_browser_profile_locked(id)
+    }
+
+    fn retire_browser_profile_locked(&self, id: &str) -> Result<()> {
+        let mut ids = self.retired_browser_profiles()?;
+        if !ids.iter().any(|s| s == id) {
+            ids.push(id.to_owned());
+        }
+        self.state().set_meta(
+            "browser-retired",
+            &serde_json::to_string(&ids).expect("strings serialize"),
+        )?;
+        Ok(())
+    }
+
     pub fn browser_profile_removed(&self, id: &str) -> Result<()> {
         let _w = self.write_lock();
         let mut ids = self.retired_browser_profiles()?;
@@ -928,6 +946,15 @@ impl Writer {
         let _w = self.write_lock();
         let mut inner = self.lock();
         let (text, agent) = self.plan_agent(&inner, name, source, check)?;
+        // A delete through a synced file or an interrupted delete must not let a later
+        // creation inherit a former incarnation's login state.
+        if self.read_agent(name).is_err() {
+            let key = format!("browser-profile:{name}");
+            if let Some(id) = self.state().meta(&key)?.filter(|s| !s.is_empty()) {
+                self.retire_browser_profile_locked(&id)?;
+                self.state().set_meta(&key, "")?;
+            }
+        }
         let generation = self.commit(vec![Change::write(agent_path(name), text.as_bytes())])?;
         inner.index.advance(generation)?;
         Ok((text, agent))
@@ -1002,12 +1029,7 @@ impl Writer {
         let key = format!("browser-profile:{name}");
         if let Some(id) = self.state().meta(&key)?.filter(|s| !s.is_empty()) {
             // Keep a durable cleanup marker if the browser box is temporarily offline.
-            let mut ids = self.retired_browser_profiles()?;
-            ids.push(id);
-            self.state().set_meta(
-                "browser-retired",
-                &serde_json::to_string(&ids).expect("strings serialize"),
-            )?;
+            self.retire_browser_profile_locked(&id)?;
             self.state().set_meta(&key, "")?;
         }
         Ok(())
