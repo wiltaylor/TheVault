@@ -468,7 +468,11 @@ fn issued_calls_are_note_and_agent_bound_and_expire() {
     let id = api.note("memo", "Original", &[]);
     let issued = api.issue(&id, "helper");
     let asked = call("@Helper request", "helper", &issued);
-    api.note("memo", "Copy", &[&asked]);
+    let copy = api.note("memo", "Copy", &[&asked]);
+    api.advance("PT1S");
+    assert_eq!(api.status(&format!("/api/agents/calls/{issued}?note={id}")), 404);
+    assert_eq!(api.status(&format!("/api/agents/calls/{issued}")), 404);
+    assert!(api.get(&format!("/api/agents/calls/{issued}?note={copy}"))["thread"].is_null());
     api.save(
         &id,
         "Original",
@@ -509,6 +513,24 @@ fn a_write_token_cannot_deliver_a_session_issued_call() {
     api.advance("PT1S");
     assert!(fake.message_requests().is_empty(), "an API token cannot deliver an owner's reserved call");
     assert!(api.threads("helper").is_empty());
+}
+
+#[test]
+fn issuance_refuses_disabled_uncallable_agents_and_imported_types() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("sleepy", "label = \"Sleepy\"\nenabled = false\n");
+    api.agent("clerk", CLERK);
+    let log = api.note("log", "Not callable", &[]);
+    for agent in ["sleepy", "clerk"] {
+        let res = api.request("POST", "/api/agents/calls", Some(json!({ "note": log, "agent": agent })));
+        assert_eq!(res.status().as_u16(), 400, "{agent}");
+    }
+    for type_name in ["email", "message", "call", "conversation", "event", "email_thread"] {
+        let id = api.note(type_name, "Imported", &[]);
+        let res = api.request("POST", "/api/agents/calls", Some(json!({ "note": id, "agent": "assistant" })));
+        assert_eq!(res.status().as_u16(), 400, "{type_name}");
+    }
 }
 
 #[test]

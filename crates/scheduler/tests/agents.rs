@@ -605,7 +605,7 @@ fn a_committed_call_is_answered_at_once_and_once_without_touching_the_note() {
 }
 
 #[test]
-fn a_handler_rewrite_preserves_an_issued_editor_call() {
+fn a_handler_rewrite_refuses_an_issued_editor_call() {
     let r = Rig::new();
     r.agent("clerk", CLERK);
     let text = call("@Clerk answer", "clerk", CALL);
@@ -621,7 +621,8 @@ fn a_handler_rewrite_preserves_an_issued_editor_call() {
         &Author::Handler("stamp".into()),
     );
     r.advance(1);
-    assert_eq!(r.fake.turns().len(), 1);
+    assert!(r.fake.turns().is_empty());
+    assert!(r.writer.state().agent_call(CALL).unwrap().unwrap().thread.is_none());
 }
 
 #[test]
@@ -1013,4 +1014,35 @@ fn a_call_refused_by_a_full_queue_is_not_recorded_and_the_next_save_asks_again()
     assert!(recorded.thread.is_some(), "{recorded:?}");
     r.fake.wait_turns(room + 1);
     assert!(r.fake.turns()[room].2.starts_with("check the gutters\n"));
+}
+
+#[test]
+fn a_released_call_refuses_delivery_by_other_principals() {
+    for by in [
+        Author::Token("agent-clerk".into()),
+        Author::Token("writer".into()),
+        Author::Token("admin".into()),
+        Author::Token("device-other".into()),
+        Author::Handler("stamp".into()),
+        Author::Task("stamp".into()),
+    ] {
+        let r = Rig::new();
+        r.agent("clerk", CLERK);
+        r.fake.hold.store(true, Ordering::SeqCst);
+        let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
+        for i in 0..room {
+            r.scheduler.dispatch("clerk", &[], &format!("Run {i}"), "Go.").unwrap();
+        }
+        let text = call("@Clerk owner's request", "clerk", CALL);
+        let id = r.note("memo", "Pending", &[&text], &user());
+        r.writer.state().issue_agent_call(CALL, &id, "clerk", "session:owner").unwrap();
+        r.advance(1);
+        assert!(r.writer.state().agent_call(CALL).unwrap().is_none());
+        r.fake.hold.store(false, Ordering::SeqCst);
+        r.fake.wait_turns(room);
+        r.save(&id, "Hijacked", &[&call("@Clerk attacker request", "clerk", CALL)], &by);
+        r.advance(1);
+        assert_eq!(r.fake.turns().len(), room, "{by:?}");
+        assert!(r.writer.state().agent_call(CALL).unwrap().unwrap().thread.is_none(), "{by:?}");
+    }
 }

@@ -340,11 +340,17 @@ fn the_event_stream_carries_the_servers_notifications_and_the_devices_note_chang
 
 #[test]
 fn the_app_forwards_call_issuance_before_its_note_has_synced() {
-    let server = TestServer::start_seeded(seed);
+    let fake = testkit::FakeAnthropic::start();
+    let server = TestServer::start_with_args(seed, &[
+        std::ffi::OsStr::new("--test-clock"),
+        std::ffi::OsStr::new("2026-01-05T00:30:00Z"),
+    ]);
+    let admin = Admin::of(&server);
+    admin.anthropic(&fake);
     let device = Device::pair(&server, "Laptop");
     let local = device.call(
         "POST",
-        "/api/notes?type=memo",
+        "/api/notes?type=fleeting",
         Some(json!({
             "note": { "fields": { "title": "Local editor" } }
         })),
@@ -359,7 +365,19 @@ fn the_app_forwards_call_issuance_before_its_note_has_synced() {
         200,
     );
     assert!(issued["call"].as_str().is_some_and(|s| s.len() == 26));
+    let request = format!("[@Assistant answer the app](agent:assistant?call={})", issued["call"].as_str().unwrap());
+    device.call("PUT", &format!("/api/notes/{}", local["id"].as_str().unwrap()), Some(json!({
+        "base_version": local["version"],
+        "note": { "fields": { "title": "Local editor" }, "blocks": [{
+            "kind": "content", "labels": ["body"], "blocks": [{ "kind": "paragraph", "fields": { "text": request } }]
+        }] }
+    })), 200);
+    fake.push(testkit::AnthropicMessage::text("App answered."));
     device.sync();
+    admin.call("POST", "/api/test/clock", Some(json!({ "advance": "PT1S" })), 200);
+    assert_eq!(fake.message_requests().len(), 1);
+    let answered = device.call("GET", &format!("/api/agents/calls/{}?note={}", issued["call"].as_str().unwrap(), local["id"].as_str().unwrap()), None, 200);
+    assert!(answered["thread"].is_string());
     let home = Admin::of(&server).call(
         "GET",
         &format!("/api/notes/{}", local["id"].as_str().unwrap()),

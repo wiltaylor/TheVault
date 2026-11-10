@@ -1973,7 +1973,7 @@ export const api = {
    * What became of a call of an agent committed in a note (agents G19): its thread, null for a
    * call the server did not run, and whether the thread runs. 404 while the server has not seen it.
    */
-  agentCall: (call: string) => request<AgentCallInfo>("GET", `/api/agents/calls/${enc(call)}`),
+  agentCall: (call: string, note?: string) => request<AgentCallInfo>("GET", `/api/agents/calls/${enc(call)}${note ? `?note=${enc(note)}` : ""}`),
   issueAgentCall: (note: string, agent: string) => request<{ call: string }>("POST", "/api/agents/calls", { note, agent }),
   /** The agent's threads, newest activity first (agents G7); archived ones only with `archived` (agents G15). */
   agentThreads: (name: string, archived = false) =>

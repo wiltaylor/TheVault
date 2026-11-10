@@ -130,7 +130,6 @@ export const AGENT_MEMORY_TYPE = "agent_memory";
  * starts with `query`, ignoring case. With no type known, only agents every type may call.
  */
 export function callableAgents(list: readonly AgentSummary[], type: string | undefined, query: string): AgentSummary[] {
-  if (["email", "message", "call", "conversation", "event", "email_thread"].includes(type ?? "")) return [];
   const q = query.trim().toLowerCase();
   return list.filter((a) => {
     const m = a.mention;

@@ -746,7 +746,7 @@ impl Scheduler {
             }
             if matches!(version.author, Author::Agent(_))
                 || !state
-                    .consume_agent_call(&call.call, id, &call.agent)
+                    .consume_agent_call(&call.call, id, &call.agent, &version.author)
                     .unwrap_or(false)
             {
                 record(None);

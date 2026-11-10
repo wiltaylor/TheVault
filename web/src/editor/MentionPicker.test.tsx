@@ -19,8 +19,8 @@ if (!Range.prototype.getClientRects) {
 }
 
 const AGENTS: AgentSummary[] = [
-  { name: "assistant", label: "Assistant", built_in: true, mention: { types: null } },
-  { name: "clerk", label: "Clerk", icon: "pen", built_in: false, enabled: true, mention: { types: null } },
+  { name: "assistant", label: "Assistant", built_in: true, mention: { types: null, excluded_types: ["email", "message", "call", "conversation", "event", "email_thread"] } },
+  { name: "clerk", label: "Clerk", icon: "pen", built_in: false, enabled: true, mention: { types: null, excluded_types: ["email", "message", "call", "conversation", "event", "email_thread"] } },
   { name: "owl", label: "Night owl", built_in: false, enabled: true, mention: { types: ["memo"] } },
   { name: "sleepy", label: "Sleepy", built_in: false, enabled: false, mention: { types: null } },
 ];

@@ -275,11 +275,15 @@ pub async fn list(
 pub async fn call(
     State(w): State<Arc<Writer>>,
     Path(call): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, ApiError> {
     let found = blocking(w, move |w| {
         Ok::<_, ApiError>(match w.state().agent_call(&call)? {
-            Some(answered) => Some(answered),
-            None => w.state().refused_agent_call(&call)?,
+            Some(answered) if query.get("note").is_none_or(|note| *note == answered.note) => Some(answered),
+            _ => match query.get("note") {
+                Some(note) => w.state().refused_agent_call(&call, note)?,
+                None => None,
+            },
         })
     })
     .await?;
