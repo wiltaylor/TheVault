@@ -330,6 +330,29 @@ fn round3_agent_write_cannot_return_or_change_held_note_reached_through_ref() {
     let result = script_core::Vault::set_archived(&w, &reference, true, &actor);
     assert!(result.is_err(), "agent write leaked held note: {result:?}");
     assert_eq!(w.read(&hidden.id).unwrap().version, hidden.version);
+    assert!(script_core::Vault::update(&w, &reference, serde_json::json!({"fields":{"title":"overwrite"}}), &hidden.version, &actor).is_err());
+    assert!(script_core::Vault::delete(&w, &reference, &hidden.version, &actor).is_err());
+    assert!(script_core::Vault::restore(&w, &reference, &actor).is_err());
+    assert_eq!(w.read(&hidden.id).unwrap().version, hidden.version);
+}
+
+#[test]
+fn round3_agent_create_returns_only_receipt_for_held_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let actor = Author::Agent("reader".into());
+    let result = script_core::Vault::create(&w, "email", serde_json::json!({"fields":{"title":"Unreviewed"}}), &actor).unwrap();
+    assert_eq!(result["held"], true);
+    assert!(result.get("note").is_none());
+}
+
+#[test]
+fn round3_unknown_google_series_organiser_is_incoming() {
+    let doc = Input::Json(serde_json::json!({"fields":{"organiser":"", "google_ref":"google-id"}})).parse("notes/event_series/test.wcl").unwrap();
+    assert!(writer::agent_safety::incoming("event_series", &doc));
+    let local = Input::Json(serde_json::json!({"fields":{"organiser":""}})).parse("notes/event_series/test.wcl").unwrap();
+    assert!(!writer::agent_safety::incoming("event_series", &local));
 }
 
 #[test]

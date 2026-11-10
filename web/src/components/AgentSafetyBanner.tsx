@@ -44,7 +44,9 @@ export function AgentSafetyBanner(props: { id: string; safety?: AgentSafety }) {
     <aside role="status" class="agent-safety-banner">
       <strong>Held from agents</strong>
       <p>{reasons[safety()?.reason ?? ""] ?? "This note has no valid safety clearance."} You can still read and edit it.</p>
-      <p>Release only after reviewing this note. Agents may then read it and run matching arrival triggers.</p>
+      <p>Release only after reviewing this note. {safety()?.reason === "predates_activation"
+        ? "Agents may then read it. Arrival triggers are not replayed for existing notes."
+        : "Agents may then read it and run matching arrival triggers."}</p>
       <button type="button" disabled={busy()} onClick={() => void release()}>Release reviewed note to agents</button>
       <button type="button" disabled={busy()} onClick={() => void refresh()}>Refresh safety status</button>
       <Show when={error()}><p role="alert">{error()}</p></Show>

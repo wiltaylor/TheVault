@@ -38,8 +38,11 @@ pub fn incoming(kind: &str, doc: &Doc) -> bool {
         // Calendar sync retains the organiser address on the series, but not my_response.
         // Unknown ownership is conservative: only an exact own-calendar address exempts it.
         "event_series" => {
-            fields["organiser"].as_str().is_some_and(|s| !s.is_empty())
-                && fields["organiser"] != fields["calendar"]
+            if fields["organiser"].as_str().is_some_and(|s| !s.is_empty()) {
+                fields["organiser"] != fields["calendar"]
+            } else {
+                fields.get("google_ref").is_some_and(|v| !v.is_null())
+            }
         }
         _ => false,
     }

@@ -5,6 +5,12 @@ import { AgentSafetyBanner } from "./AgentSafetyBanner";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+it("does not promise arrival replay for pre-existing notes", () => {
+  render(() => <AgentSafetyBanner id="old" safety={{ status: "held", reason: "predates_activation", fingerprint: "hash" }} />);
+  expect(screen.getByText(/Arrival triggers are not replayed/)).toBeInTheDocument();
+  expect(screen.queryByText(/run matching arrival triggers/)).toBeNull();
+});
+
 it("shows unclassified and oversized holds without polling", async () => {
   vi.useFakeTimers();
   try {

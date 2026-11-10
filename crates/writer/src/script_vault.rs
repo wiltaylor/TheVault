@@ -43,6 +43,26 @@ fn agent_reading() -> bool {
         .unwrap_or(false)
 }
 
+fn check_agent_write(w: &Writer, id: &str, author: &Author) -> Result<(), String> {
+    if (agent_reading() || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
+        && !w.agent_may_read(id)
+    {
+        return Err("Note is held from agents".into());
+    }
+    Ok(())
+}
+
+fn agent_saved(w: &Writer, s: Saved, author: &Author) -> Json {
+    if (agent_reading() || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
+        && !w.agent_may_read(&s.id)
+    {
+        // A create or a content edit may itself enter the gate. Return only the receipt,
+        // not generated defaults, handler output or other unreviewed note content.
+        return json!({"id":s.id,"type":s.type_name,"version":s.version,"held":true});
+    }
+    saved(s)
+}
+
 fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
     if agent_reading() && !w.agent_may_read(id) {
         return Err("Note is held from agents".into());
@@ -193,13 +213,14 @@ impl Vault for Writer {
 
     fn create(&self, type_name: &str, note: Json, author: &Author) -> Result<Json, String> {
         Writer::create(self, type_name, &Input::Json(note), author)
-            .map(saved)
+            .map(|s| agent_saved(self, s, author))
             .map_err(err)
     }
 
     fn update(&self, id: &str, note: Json, version: &str, author: &Author) -> Result<Json, String> {
+        check_agent_write(self, id, author)?;
         Writer::update(self, id, &Input::Json(note), Some(version), author)
-            .map(saved)
+            .map(|s| agent_saved(self, s, author))
             .map_err(err)
     }
 
@@ -207,6 +228,7 @@ impl Vault for Writer {
     /// [`Writer::remove_sent_outbox`], which refuses an item that is not `sending`. An empty
     /// `version` takes the item as it is now.
     fn delete(&self, id: &str, version: &str, author: &Author) -> Result<Json, String> {
+        check_agent_write(self, id, author)?;
         let outbox = matches!(author, Author::Handler(_) | Author::Task(_))
             && self.locate(id).map_err(err)?.as_deref() == Some(crate::builtin::OUTBOX_TYPE);
         if outbox {
@@ -222,16 +244,18 @@ impl Vault for Writer {
     }
 
     fn restore(&self, id: &str, author: &Author) -> Result<Json, String> {
-        self.restore_from_trash(id, author).map(saved).map_err(err)
+        check_agent_write(self, id, author)?;
+        self.restore_from_trash(id, author).map(|s| agent_saved(self, s, author)).map_err(err)
     }
 
     fn set_archived(&self, id: &str, archived: bool, author: &Author) -> Result<Json, String> {
+        check_agent_write(self, id, author)?;
         let version = self
             .current_version(id)
             .map_err(err)?
             .ok_or_else(|| format!("note {id} does not exist"))?;
         Writer::set_archived(self, id, archived, Some(&version), author)
-            .map(saved)
+            .map(|s| agent_saved(self, s, author))
             .map_err(err)
     }
 
