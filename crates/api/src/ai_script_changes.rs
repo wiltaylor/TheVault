@@ -147,8 +147,10 @@ pub(crate) fn shared_paths_refused(
         .into_iter()
         .filter(|u| !(u.kind == "task" && Some(u.name.as_str()) == except_task))
         .filter(|u| {
-            !u.read_paths.is_empty() || !u.write_paths.is_empty()
-                || !u.secrets.is_empty() || !u.allow_domains.is_empty()
+            !u.read_paths.is_empty()
+                || !u.write_paths.is_empty()
+                || !u.secrets.is_empty()
+                || !u.allow_domains.is_empty()
         })
         .map(|u| {
             let mut paths = Vec::new();
