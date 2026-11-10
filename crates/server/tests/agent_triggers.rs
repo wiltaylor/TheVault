@@ -422,7 +422,7 @@ fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it()
         result["content"]
             .as_str()
             .unwrap()
-            .contains("the change was not proposed"),
+            .contains("there is no tool named"),
         "{result}"
     );
     // Nothing waits in the thread, and the helper is unchanged.
