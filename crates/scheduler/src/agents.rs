@@ -705,7 +705,10 @@ impl Scheduler {
         for id in called {
             called_runs.extend(self.mention_jobs(&id, now, &mut tell));
         }
-        let mut processed: Vec<String> = jobs.iter().filter_map(|job| job.note.as_ref().map(|(id,_)| id.clone())).collect();
+        let mut processed: Vec<String> = jobs
+            .iter()
+            .filter_map(|job| job.note.as_ref().map(|(id, _)| id.clone()))
+            .collect();
         for e in events {
             processed.push(e.note.clone());
             let title = match e.op {
@@ -752,7 +755,9 @@ impl Scheduler {
             }
         }
         for note in processed {
-            if failed_notes.contains(&note) { continue; }
+            if failed_notes.contains(&note) {
+                continue;
+            }
             let _ = self
                 .writer
                 .state()
@@ -827,7 +832,12 @@ impl Scheduler {
         }
     }
 
-    fn persist_trigger(&self, job: &AgentJob, due: i64, backfill: bool) -> Result<bool, state::Error> {
+    fn persist_trigger(
+        &self,
+        job: &AgentJob,
+        due: i64,
+        backfill: bool,
+    ) -> Result<bool, state::Error> {
         let payload = serde_json::json!({
             "prompt": job.prompt, "title": job.title,
             "type": job.note.as_ref().map(|(_, t)| t),
@@ -847,7 +857,8 @@ impl Scheduler {
             job.note.as_ref().map(|(id, _)| id.as_str()),
             &payload,
             due,
-        )?.is_some();
+        )?
+        .is_some();
         if state
             .trigger_drop_notice(&job.agent, self.clock.now_ms())
             .unwrap_or(false)
@@ -865,12 +876,19 @@ impl Scheduler {
 
     /// Shared selection/execution guard. TV-137 adds writer.agent_may_read here when
     /// integrating its Jev gate, so a queued note is checked again just before it runs.
-    fn trigger_note_allowed(&self, id: &str, ty: &str, event: &schema::NoteEvent, op: &str) -> bool {
-        event.matches(op,ty)
+    fn trigger_note_allowed(
+        &self,
+        id: &str,
+        ty: &str,
+        event: &schema::NoteEvent,
+        op: &str,
+    ) -> bool {
+        event.matches(op, ty)
             && (!is_agent_type(ty) || !event.types.is_empty())
-            && (op == "delete" || self
-                .note_matches(id, ty, event.condition_expr().as_ref())
-                .is_some())
+            && (op == "delete"
+                || self
+                    .note_matches(id, ty, event.condition_expr().as_ref())
+                    .is_some())
     }
 
     /// Newest matching notes without any trigger record. Also used when confirming the
@@ -888,7 +906,13 @@ impl Scheduler {
         let TriggerWhen::NoteEvent(e) = &t.when else {
             return Err("backfill needs a note event trigger".to_owned());
         };
-        let op = if e.on.iter().any(|op| op == "create") { "create" } else if e.on.iter().any(|op| op == "update") { "update" } else { return Err("backfill needs create or update in on".to_owned()); };
+        let op = if e.on.iter().any(|op| op == "create") {
+            "create"
+        } else if e.on.iter().any(|op| op == "update") {
+            "update"
+        } else {
+            return Err("backfill needs create or update in on".to_owned());
+        };
         let mut notes = self.writer.list(None).map_err(|e| e.to_string())?;
         notes.reverse();
         let mut found = Vec::new();
@@ -924,7 +948,15 @@ impl Scheduler {
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             let job = AgentJob {
-                op: Some(match &t.when { TriggerWhen::NoteEvent(e) if e.on.iter().any(|op| op == "create") => "create", _ => "update" }.to_owned()),
+                op: Some(
+                    match &t.when {
+                        TriggerWhen::NoteEvent(e) if e.on.iter().any(|op| op == "create") => {
+                            "create"
+                        }
+                        _ => "update",
+                    }
+                    .to_owned(),
+                ),
                 durable: None,
                 note: Some((id.clone(), ty.clone())),
                 agent: name.to_owned(),
@@ -937,7 +969,10 @@ impl Scheduler {
                 thread: None,
                 origin: None,
             };
-            count += usize::from(self.persist_trigger(&job, self.clock.now_ms(), true).map_err(|e| e.to_string())?);
+            count += usize::from(
+                self.persist_trigger(&job, self.clock.now_ms(), true)
+                    .map_err(|e| e.to_string())?,
+            );
         }
         self.wake.notify_all();
         Ok(count)
@@ -1273,9 +1308,10 @@ impl Scheduler {
             let matches = agent
                 .trigger(&job.trigger)
                 .is_some_and(|t| match (&job.note, &t.when) {
-                    (Some((note, ty)), TriggerWhen::NoteEvent(e)) => {
-                        job.op.as_deref().is_some_and(|op| self.trigger_note_allowed(note, ty, e, op))
-                    }
+                    (Some((note, ty)), TriggerWhen::NoteEvent(e)) => job
+                        .op
+                        .as_deref()
+                        .is_some_and(|op| self.trigger_note_allowed(note, ty, e, op)),
                     (None, TriggerWhen::Schedule(_)) => true,
                     _ => false,
                 });
@@ -1334,7 +1370,9 @@ impl Scheduler {
                 AgentRunOutcome::Failed(message) if no_side_effects => {
                     state.retry_trigger_job(queued, self.clock.now_ms(), Some(message))
                 }
-                AgentRunOutcome::Failed(message) => state.finish_trigger_job(queued, "failed", Some(message)),
+                AgentRunOutcome::Failed(message) => {
+                    state.finish_trigger_job(queued, "failed", Some(message))
+                }
                 AgentRunOutcome::Running => unreachable!(),
             };
             if let Err(e) = result {

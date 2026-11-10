@@ -23,7 +23,17 @@ CREATE TABLE IF NOT EXISTS trigger_legacy_runs (run_id INTEGER PRIMARY KEY, agen
 /// Unreadable or missing threads remain visible as unmatched history in backfill previews.
 pub(crate) fn seed_legacy(conn: &rusqlite::Connection) -> Result<()> {
     let mut stmt = conn.prepare("SELECT id,agent,trigger,thread,started_ms FROM agent_runs WHERE outcome='succeeded' AND id NOT IN (SELECT run_id FROM trigger_legacy_runs) ORDER BY id")?;
-    let runs = stmt.query_map([], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,i64>(4)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let runs = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     for (id, agent, trigger, thread, at) in runs {
         let content = match thread {
             Some(thread) => conn.query_row("SELECT content FROM versions WHERE note_id=?1 AND note_type='agent_thread' ORDER BY seq DESC LIMIT 1", [thread], |r| r.get::<_,String>(0)).optional()?,
@@ -33,16 +43,28 @@ pub(crate) fn seed_legacy(conn: &rusqlite::Connection) -> Result<()> {
         if let Some(note) = &note {
             conn.execute("INSERT INTO trigger_jobs(agent,trigger,note,payload,queued_ms,due_ms,status) SELECT ?1,?2,?3,'{}',?4,?4,'succeeded' WHERE NOT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3)", params![agent,trigger,note,at])?;
         }
-        conn.execute("INSERT INTO trigger_legacy_runs VALUES (?1,?2,?3,?4)", params![id,agent,trigger,note.is_some()])?;
+        conn.execute(
+            "INSERT INTO trigger_legacy_runs VALUES (?1,?2,?3,?4)",
+            params![id, agent, trigger, note.is_some()],
+        )?;
     }
     Ok(())
 }
 
 fn legacy_note(content: &str) -> Option<String> {
     let doc = schema::Doc::parse(content, "legacy agent thread").ok()?;
-    let transcript: serde_json::Value = serde_json::from_str(doc.field("transcript")?.as_str()?).ok()?;
-    let user = transcript["messages"].as_array()?.iter().find(|m| m["role"] == "user")?;
-    let text = user["content"].as_array()?.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+    let transcript: serde_json::Value =
+        serde_json::from_str(doc.field("transcript")?.as_str()?).ok()?;
+    let user = transcript["messages"]
+        .as_array()?
+        .iter()
+        .find(|m| m["role"] == "user")?;
+    let text = user["content"]
+        .as_array()?
+        .iter()
+        .filter_map(|c| c["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     for line in text.lines().rev() {
         for op in ["create", "update", "delete"] {
             if let Some(rest) = line.strip_prefix(&format!("Event: {op} of note ")) {
@@ -72,10 +94,17 @@ mod tests {
     fn review_f2_edit_during_running_job_is_not_deduped() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
-        let id = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().unwrap();
+        let id = s
+            .enqueue_trigger("clerk", "opened", Some("a"), "{}", 0)
+            .unwrap()
+            .unwrap();
         s.claim_trigger_job(id).unwrap();
         s.begin_trigger_job(id, s.now()).unwrap();
-        assert!(s.enqueue_trigger("clerk", "opened", Some("a"), "{\"title\":\"new\"}", 0).unwrap().is_some());
+        assert!(
+            s.enqueue_trigger("clerk", "opened", Some("a"), "{\"title\":\"new\"}", 0)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -83,17 +112,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
         for _ in 0..700 {
-            let id = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().unwrap();
+            let id = s
+                .enqueue_trigger("clerk", "opened", Some("a"), "{}", 0)
+                .unwrap()
+                .unwrap();
             s.finish_trigger_job(id, "succeeded", None).unwrap();
-            let id = s.enqueue_trigger("clerk", "deleted", None, "{}", 0).unwrap().unwrap();
+            let id = s
+                .enqueue_trigger("clerk", "deleted", None, "{}", 0)
+                .unwrap()
+                .unwrap();
             s.finish_trigger_job(id, "succeeded", None).unwrap();
         }
-        for _ in 0..50 { s.preview_trigger_backfill("owner", "clerk", "opened", "[]").unwrap(); }
-        s.conn().execute("UPDATE trigger_backfill_previews SET expires_ms=?1", [s.now()-WEEK-1]).unwrap();
+        for _ in 0..50 {
+            s.preview_trigger_backfill("owner", "clerk", "opened", "[]")
+                .unwrap();
+        }
+        s.conn()
+            .execute(
+                "UPDATE trigger_backfill_previews SET expires_ms=?1",
+                [s.now() - WEEK - 1],
+            )
+            .unwrap();
         s.due_trigger_jobs(s.now()).unwrap();
-        let jobs: i64 = s.conn().query_row("SELECT count(*) FROM trigger_jobs", [], |r| r.get(0)).unwrap();
-        let previews: i64 = s.conn().query_row("SELECT count(*) FROM trigger_backfill_previews", [], |r| r.get(0)).unwrap();
-        assert_eq!((jobs,previews), (1,0));
+        let jobs: i64 = s
+            .conn()
+            .query_row("SELECT count(*) FROM trigger_jobs", [], |r| r.get(0))
+            .unwrap();
+        let previews: i64 = s
+            .conn()
+            .query_row("SELECT count(*) FROM trigger_backfill_previews", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!((jobs, previews), (1, 0));
     }
 
     #[test]
@@ -103,33 +154,58 @@ mod tests {
         let s = State::open(&path, None).unwrap();
         let note = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
         let transcript = serde_json::json!({"messages":[{"role":"user", "content":[{"type":"text", "text":format!("Tidy.\nEvent: create of note {note} (type memo, title Roof)")}]}]});
-        let content = format!("transcript = {}\n", serde_json::json!(transcript.to_string()));
-        s.record_version("thread", "agent_thread", &crate::Author::Agent("clerk".into()), &content).unwrap();
+        let content = format!(
+            "transcript = {}\n",
+            serde_json::json!(transcript.to_string())
+        );
+        s.record_version(
+            "thread",
+            "agent_thread",
+            &crate::Author::Agent("clerk".into()),
+            &content,
+        )
+        .unwrap();
         let run = s.start_agent_run("clerk", "opened").unwrap();
         s.set_agent_run_thread(run, "thread").unwrap();
-        s.finish_agent_run(run, &crate::AgentRunOutcome::Succeeded, "").unwrap();
+        s.finish_agent_run(run, &crate::AgentRunOutcome::Succeeded, "")
+            .unwrap();
         let unmatched = s.start_agent_run("clerk", "opened").unwrap();
-        s.finish_agent_run(unmatched, &crate::AgentRunOutcome::Succeeded, "").unwrap();
+        s.finish_agent_run(unmatched, &crate::AgentRunOutcome::Succeeded, "")
+            .unwrap();
         s.conn().execute_batch("DROP TABLE trigger_jobs; DROP TABLE trigger_queue_drops; DROP TABLE trigger_backfill_previews; DROP TABLE trigger_events;").unwrap();
         s.conn().pragma_update(None, "user_version", 20).unwrap();
         drop(s);
         let s = State::open(&path, None).unwrap();
         assert!(s.trigger_record_exists("clerk", "opened", note).unwrap());
-        assert_eq!(s.unmatched_legacy_trigger_runs("clerk", "opened").unwrap(), 1);
+        assert_eq!(
+            s.unmatched_legacy_trigger_runs("clerk", "opened").unwrap(),
+            1
+        );
     }
 
     #[test]
     fn waiting_payload_updates_and_unsuccessful_notes_can_be_backfilled() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
-        let id = s.enqueue_trigger("clerk", "opened", Some("a"), "old", 0).unwrap().unwrap();
-        assert!(s.enqueue_trigger("clerk", "opened", Some("a"), "new", 0).unwrap().is_none());
+        let id = s
+            .enqueue_trigger("clerk", "opened", Some("a"), "old", 0)
+            .unwrap()
+            .unwrap();
+        assert!(
+            s.enqueue_trigger("clerk", "opened", Some("a"), "new", 0)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(s.due_trigger_jobs(s.now()).unwrap()[0].payload, "new");
         for status in ["failed", "expired", "cancelled"] {
             s.finish_trigger_job(id, status, None).unwrap();
             assert!(!s.trigger_record_exists("clerk", "opened", "a").unwrap());
         }
-        assert!(s.enqueue_backfill("clerk", "opened", Some("a"), "new", 0).unwrap().is_some());
+        assert!(
+            s.enqueue_backfill("clerk", "opened", Some("a"), "new", 0)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -175,8 +251,16 @@ mod tests {
         let now = s.now();
         assert!(s.trigger_drop_notice("clerk", now).unwrap());
         assert!(!s.trigger_drop_notice("clerk", now + 1).unwrap());
-        assert!(!s.trigger_drop_notice("clerk", now + 3_600_000).unwrap(), "an old drop must not notify forever");
-        s.conn().execute("UPDATE trigger_queue_drops SET last_drop_ms=?1", [now+3_600_001]).unwrap();
+        assert!(
+            !s.trigger_drop_notice("clerk", now + 3_600_000).unwrap(),
+            "an old drop must not notify forever"
+        );
+        s.conn()
+            .execute(
+                "UPDATE trigger_queue_drops SET last_drop_ms=?1",
+                [now + 3_600_001],
+            )
+            .unwrap();
         assert!(s.trigger_drop_notice("clerk", now + 3_600_001).unwrap());
     }
 
@@ -281,7 +365,11 @@ fn prune_terminal(conn: &rusqlite::Connection) -> Result<()> {
 
 impl State {
     pub fn unmatched_legacy_trigger_runs(&self, agent: &str, trigger: &str) -> Result<i64> {
-        Ok(self.conn().query_row("SELECT count(*) FROM trigger_legacy_runs WHERE agent=?1 AND trigger=?2 AND matched=0", params![agent,trigger], |r| r.get(0))?)
+        Ok(self.conn().query_row(
+            "SELECT count(*) FROM trigger_legacy_runs WHERE agent=?1 AND trigger=?2 AND matched=0",
+            params![agent, trigger],
+            |r| r.get(0),
+        )?)
     }
     pub fn save_trigger_event(&self, note: &str, at: i64, payload: &str) -> Result<()> {
         self.conn().execute("INSERT INTO trigger_events VALUES (?1,?2,?3) ON CONFLICT(note) DO UPDATE SET at_ms=excluded.at_ms,payload=excluded.payload", params![note,at,payload])?;
@@ -326,7 +414,10 @@ impl State {
         trigger: &str,
         payload: &str,
     ) -> Result<String> {
-        self.conn().execute("DELETE FROM trigger_backfill_previews WHERE expires_ms<?1", [self.now()-WEEK])?;
+        self.conn().execute(
+            "DELETE FROM trigger_backfill_previews WHERE expires_ms<?1",
+            [self.now() - WEEK],
+        )?;
         let id = self.new_ulid().to_string();
         self.conn().execute(
             "INSERT INTO trigger_backfill_previews VALUES (?1,?2,?3,?4,?5,?6)",
@@ -436,7 +527,10 @@ impl State {
         let conn = self.conn();
         conn.execute("UPDATE trigger_jobs SET status='expired', message='wait exceeded seven days' WHERE status='waiting' AND queued_ms<=?1", [now - WEEK])?;
         prune_terminal(&conn)?;
-        conn.execute("DELETE FROM trigger_backfill_previews WHERE expires_ms<?1", [now-WEEK])?;
+        conn.execute(
+            "DELETE FROM trigger_backfill_previews WHERE expires_ms<?1",
+            [now - WEEK],
+        )?;
         let mut stmt = conn.prepare("SELECT id,agent,trigger,note,payload FROM trigger_jobs WHERE status='waiting' AND due_ms<=?1 ORDER BY id LIMIT 1000")?;
         Ok(stmt
             .query_map([now], |r| {

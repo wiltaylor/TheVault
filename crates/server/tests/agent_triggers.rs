@@ -239,13 +239,31 @@ fn review_f1_a_failure_after_a_tool_call_never_replays_the_change() {
         fake.push(AnthropicMessage::new().tool_use("toolu_create", "propose_create", json!({
             "type": "memo", "note": json!({"fields":{"title":"Side effect", "status":"closed"}}).to_string()
         })));
-        fake.push(AnthropicReply::error(400, "invalid_request_error", "No credit"));
+        fake.push(AnthropicReply::error(
+            400,
+            "invalid_request_error",
+            "No credit",
+        ));
     }
     api.memo("Trigger", "open");
-    for by in ["PT31S", "PT30S", "PT60S", "PT120S"] { api.advance(by); }
-    assert_eq!(fake.message_requests().len(), 2, "a partial turn must not be replayed");
+    for by in ["PT31S", "PT30S", "PT60S", "PT120S"] {
+        api.advance(by);
+    }
+    assert_eq!(
+        fake.message_requests().len(),
+        2,
+        "a partial turn must not be replayed"
+    );
     let notes = api.get("/api/notes?type=memo");
-    assert_eq!(notes["notes"].as_array().unwrap().iter().filter(|n| n["title"] == "Side effect").count(), 1);
+    assert_eq!(
+        notes["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["title"] == "Side effect")
+            .count(),
+        1
+    );
 }
 
 #[test]

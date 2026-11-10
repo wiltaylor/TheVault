@@ -361,7 +361,8 @@ fn persistence_errors_leave_the_event_unacknowledged_until_retry_succeeds() {
     r.advance(31);
     assert!(r.fake.turns().is_empty());
     assert_eq!(r.writer.state().trigger_events().unwrap().len(), 1);
-    conn.execute_batch("DROP TRIGGER refuse_trigger_insert;").unwrap();
+    conn.execute_batch("DROP TRIGGER refuse_trigger_insert;")
+        .unwrap();
     r.advance(31);
     assert_eq!(r.fake.turns().len(), 1);
     assert!(r.writer.state().trigger_events().unwrap().is_empty());
@@ -372,15 +373,38 @@ fn backfill_refuses_delete_only_and_queued_ops_are_rechecked() {
     let r = Rig::new();
     r.agent("watcher", WATCHER);
     let id = r.create("memo", "Roof", "open", &Author::Agent("other".into()));
-    assert!(r.scheduler.trigger_backfill_candidates("watcher", "gone").is_err());
-    for (trigger,op) in [("opened","create"),("gone","delete")] {
-        let payload = json!({"prompt":"original", "title":"Roof", "type":"memo", "op":op}).to_string();
-        r.writer.state().enqueue_trigger("watcher",trigger,Some(&id),&payload,r.clock.now_ms()).unwrap();
+    assert!(
+        r.scheduler
+            .trigger_backfill_candidates("watcher", "gone")
+            .is_err()
+    );
+    for (trigger, op) in [("opened", "create"), ("gone", "delete")] {
+        let payload =
+            json!({"prompt":"original", "title":"Roof", "type":"memo", "op":op}).to_string();
+        r.writer
+            .state()
+            .enqueue_trigger("watcher", trigger, Some(&id), &payload, r.clock.now_ms())
+            .unwrap();
     }
-    r.agent("watcher", &WATCHER.replace("[\"create\", \"update\"]", "[\"update\"]").replace("[\"delete\"]", "[\"update\"]"));
+    r.agent(
+        "watcher",
+        &WATCHER
+            .replace("[\"create\", \"update\"]", "[\"update\"]")
+            .replace("[\"delete\"]", "[\"update\"]"),
+    );
     r.scheduler.tick();
-    assert!(r.fake.turns().is_empty(), "removed create and delete ops must cancel");
-    assert_eq!(r.writer.state().trigger_queue_stats("watcher").unwrap().waiting, 0);
+    assert!(
+        r.fake.turns().is_empty(),
+        "removed create and delete ops must cancel"
+    );
+    assert_eq!(
+        r.writer
+            .state()
+            .trigger_queue_stats("watcher")
+            .unwrap()
+            .waiting,
+        0
+    );
 }
 
 #[test]
