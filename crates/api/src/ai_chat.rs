@@ -4172,14 +4172,14 @@ fn propose_or_read(
         "search_notes" | "query_notes" | "backlinks"
     ) {
         let omitted = w.take_agent_omissions();
-        if omitted > 0 {
-            if let Ok(Value::Object(mut result)) = serde_json::from_str(&out.content) {
-                result.insert(
-                    "notice".into(),
-                    json!("some notes may be held; the user can review and release them."),
-                );
-                out.content = Value::Object(result).to_string();
-            }
+        if omitted > 0
+            && let Ok(Value::Object(mut result)) = serde_json::from_str(&out.content)
+        {
+            result.insert(
+                "notice".into(),
+                json!("some notes may be held; the user can review and release them."),
+            );
+            out.content = Value::Object(result).to_string();
         }
     }
     out
