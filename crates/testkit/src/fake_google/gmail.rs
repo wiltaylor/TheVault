@@ -529,7 +529,7 @@ pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
     if let Some((id, action)) = rest
         .strip_prefix("messages/")
         .and_then(|r| r.split_once('/'))
-        .filter(|(_, a)| *a == "modify" || *a == "trash")
+        .filter(|(_, a)| *a == "modify" || *a == "trash" || *a == "untrash")
     {
         if request.method != "POST" {
             return Some(error(
@@ -849,6 +849,8 @@ fn act(gmail: &mut State, id: &str, action: &str, request: &Request) -> Reply {
             strings(&body["addLabelIds"]),
             strings(&body["removeLabelIds"]),
         )
+    } else if action == "untrash" {
+        (Vec::new(), vec!["TRASH".to_owned()])
     } else {
         (vec!["TRASH".to_owned()], Vec::new())
     };

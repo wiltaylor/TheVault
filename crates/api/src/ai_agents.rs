@@ -236,6 +236,9 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
                 .to_owned(),
         );
     }
+    if tp.gmail_actions && !bp.gmail_actions {
+        problems.push("it would turn on Gmail actions, which are off for this agent".to_owned());
+    }
     // Skills (skills S6): only those this agent is offered itself; an absent list is every skill.
     match (&bp.skills, &tp.skills) {
         (Some(_), None) => problems.push(
@@ -643,6 +646,18 @@ mod tests {
         assert!(p[0].contains("Browser automation"), "{p:?}");
         assert!(escalation(&driver, &driver).is_empty());
         assert!(escalation(&driver, &all).is_empty());
+    }
+
+    #[test]
+    fn escalation_refuses_gmail_actions_the_proposer_lacks() {
+        let mail = agent("permissions { gmail_actions = true\n}\n");
+        let off = agent("");
+        assert!(
+            escalation(&off, &mail)
+                .iter()
+                .any(|p| p.contains("Gmail actions"))
+        );
+        assert!(escalation(&mail, &off).is_empty());
     }
 
     #[test]

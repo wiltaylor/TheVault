@@ -2347,6 +2347,9 @@ impl Turn {
                 }
                 let w = self.writer.clone();
                 let author = self.author.clone();
+                // The capability is scoped to this call, never inherited by a sub agent.
+                let gmail_actions =
+                    !self.unattended && self.sub.is_none() && setup.agent.permissions.gmail_actions;
                 let call = c.clone();
                 let direct = setup.direct;
                 let held = self.held;
@@ -2354,10 +2357,23 @@ impl Turn {
                 limits.parent = self.sub.as_ref().map(|s| s.parent.clone());
                 let agent = setup.agent.clone();
                 let got = tokio::task::spawn_blocking(move || {
-                    run_tool(&w, &author, scope, direct, held, &limits, &agent, &call)
+                    run_tool(
+                        &w,
+                        &author,
+                        scope,
+                        direct,
+                        held,
+                        &limits,
+                        &agent,
+                        &call,
+                        gmail_actions,
+                    )
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                if let Some(line) = got.summary["gmail_skipped"].as_str() {
+                    self.report(|r| r.log.push(line.to_owned()));
+                }
                 if let Some((name, p)) = got.proposal
                     && !self.emit(name, p).await
                 {
@@ -3532,6 +3548,7 @@ fn run_tool(
     limits: &Limits,
     agent: &Agent,
     call: &ToolCall,
+    gmail_actions: bool,
 ) -> ToolOut {
     // The memory tools reach only the agent's own memories, and write as the agent (agents G21).
     if call.error.is_none() && agent_memory::is_memory_tool(&call.name) {
@@ -3558,12 +3575,41 @@ fn run_tool(
             let (event, p) = (*event, p.clone());
             // A change made without the user's Apply to an Outbox item is the agent's, whoever
             // runs the turn, so the writer's review rules hold for it (outbox X2).
-            let author = if touches_outbox(w, event, &p) {
+            let email = event == "proposal"
+                && (p["type"] == "email"
+                    || p["note_id"]
+                        .as_str()
+                        .and_then(|id| w.read(id).ok())
+                        .is_some_and(|n| n.type_name == "email"));
+            let author = if email && gmail_actions {
+                Author::AgentMail(agent.name.clone())
+            } else if email || touches_outbox(w, event, &p) {
                 Author::Agent(agent.name.clone())
             } else {
                 author.clone()
             };
-            make(w, &author, event, &p, out.summary)
+            let mut made = make(w, &author, event, &p, out.summary);
+            if email && !gmail_actions && !made.is_error {
+                let notice = "Gmail action skipped: the note change was applied only in the vault. Gmail archive/trash needs a user Apply or an opted-in foreground chat, never a trigger or mention run.";
+                made.summary["gmail_skipped"] = json!(notice);
+                let summary_message = made.summary["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                made.summary["message"] = json!(format!("{summary_message} {notice}").trim());
+                if let Ok(mut content) = serde_json::from_str::<Value>(&made.content) {
+                    content["message"] = json!(format!(
+                        "{} {notice}",
+                        content["message"].as_str().unwrap_or_default()
+                    ));
+                    content["gmail_skipped"] = json!(notice);
+                    if summary_message.is_empty() {
+                        made.summary["message"] = content["message"].clone();
+                    }
+                    made.content = content.to_string();
+                }
+            }
+            made
         }
         Some(_) if held == Held::Drop => ToolOut::error(HELD_REFUSAL),
         _ => out,

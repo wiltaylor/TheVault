@@ -90,7 +90,11 @@ export function Trash() {
               <For each={sorted()}>
                 {(t) => (
                   <tr data-note={t.id}>
-                    <td>{titleOf(t)}</td>
+                    <td>{titleOf(t)}
+                      <Show when={t.type === "email"}>
+                        <p class="muted">If this message reached Gmail trash, Google permanently removes it after 30 days, around {when(t.deleted_at + 30 * 86_400_000)}. Restore also requests a Gmail restore. Check notifications for failures.</p>
+                      </Show>
+                    </td>
                     <td>{typeDef(t.type)?.label ?? t.type}</td>
                     <td>
                       {when(t.deleted_at)} <span class="muted">by {authorText(t.deleted_by)}</span>
