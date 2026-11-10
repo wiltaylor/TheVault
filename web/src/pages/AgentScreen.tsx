@@ -625,8 +625,10 @@ function PermissionsTab(p: AgentTabProps) {
           <Show when={perms().outbox?.send_without_review}>
             <p class="agent-perm-note" role="note">
               {OUTBOX_WARNING}
-              {!perms().outbox?.conditions && " Legacy limits, set conditions: 20 items per UTC day, five minute cancellation delay."}
             </p>
+            <Show when={!perms().outbox?.conditions}>
+              <p class="agent-perm-note">Legacy limits, set conditions: 20 items per UTC day, five minute cancellation delay.</p>
+            </Show>
           </Show>
           <button type="button" onClick={() => setPerms({ outbox: { ...perms().outbox, send_without_review: perms().outbox?.send_without_review ?? false, conditions: perms().outbox?.conditions ?? { recipients: [], email: false, sms: false, event: false, daily_cap: 0, cancel_delay_minutes: 5 } } })}>
             Set send conditions
