@@ -48,34 +48,54 @@ pub async fn issue_call(
         };
         let permitted = call_issuer_allowed(&author, scope, paired);
         if !permitted {
-            return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden", "calls require an editor session or a paired device write token"));
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "calls require an editor session or a paired device write token",
+            ));
         }
         let note = body["note"].as_str().unwrap_or("");
         let agent = body["agent"].as_str().unwrap_or("");
         if note.parse::<ulid::Ulid>().is_err() {
-            return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", "a note id is required"));
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "a note id is required",
+            ));
         }
         let agents = w.agents()?;
-        let valid = agents.iter().any(|(name, a)| name == agent && a.as_ref().is_ok_and(|a| {
-            a.enabled && w.read(note).map_or(true, |n| {
-                !schema::AGENT_CALL_EXCLUDED_TYPES.contains(&n.type_name.as_str())
-                    && a.mention_trigger(&n.type_name).is_some()
-            })
-        }));
+        let valid = agents.iter().any(|(name, a)| {
+            name == agent
+                && a.as_ref().is_ok_and(|a| {
+                    a.enabled
+                        && w.read(note).map_or(true, |n| {
+                            !schema::AGENT_CALL_EXCLUDED_TYPES.contains(&n.type_name.as_str())
+                                && a.mention_trigger(&n.type_name).is_some()
+                        })
+                })
+        });
         if !valid {
-            return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", "this agent cannot be called from this note"));
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "this agent cannot be called from this note",
+            ));
         }
         let call = ulid::Ulid::new().to_string();
         let (kind, name) = author.parts();
-        w.state().issue_agent_call(&call, note, agent, &format!("{kind}:{name}"))?;
+        w.state()
+            .issue_agent_call(&call, note, agent, &format!("{kind}:{name}"))?;
         Ok(Json(json!({ "call": call })))
-    }).await
+    })
+    .await
 }
 
 fn call_issuer_allowed(author: &state::Author, scope: state::Scope, paired: bool) -> bool {
     match author {
         state::Author::Session(_) => true,
-        state::Author::Token(name) => paired && scope == state::Scope::Write && !name.starts_with("agent-"),
+        state::Author::Token(name) => {
+            paired && scope == state::Scope::Write && !name.starts_with("agent-")
+        }
         _ => false,
     }
 }
@@ -87,8 +107,16 @@ mod call_issuer_tests {
 
     #[test]
     fn only_editor_principals_issue_call_ids() {
-        assert!(call_issuer_allowed(&Author::Session("owner".into()), Scope::Admin, false));
-        assert!(call_issuer_allowed(&Author::Token("device-phone".into()), Scope::Write, true));
+        assert!(call_issuer_allowed(
+            &Author::Session("owner".into()),
+            Scope::Admin,
+            false
+        ));
+        assert!(call_issuer_allowed(
+            &Author::Token("device-phone".into()),
+            Scope::Write,
+            true
+        ));
         for (author, scope, paired) in [
             (Author::Agent("assistant".into()), Scope::Write, true),
             (Author::Token("agent-assistant".into()), Scope::Write, true),

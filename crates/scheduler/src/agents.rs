@@ -553,7 +553,9 @@ impl Scheduler {
             // Scan the latest version, including refusals for agent-written calls.
             plan.agents.mentions.remove(&s.id);
             if s.event != Event::Delete {
-                plan.agents.mentions.insert(s.id.clone(), s.type_name.clone());
+                plan.agents
+                    .mentions
+                    .insert(s.id.clone(), s.type_name.clone());
             }
             if matches!(author, Author::Agent(_)) {
                 continue;
@@ -735,11 +737,17 @@ impl Scheduler {
                     }
                 }
             };
-            if state.agent_call_bound_elsewhere(&call.call, id, &call.agent).unwrap_or(true) {
+            if state
+                .agent_call_bound_elsewhere(&call.call, id, &call.agent)
+                .unwrap_or(true)
+            {
                 continue;
             }
             if matches!(version.author, Author::Agent(_))
-                || !state.consume_agent_call(&call.call, id, &call.agent).unwrap_or(false) {
+                || !state
+                    .consume_agent_call(&call.call, id, &call.agent)
+                    .unwrap_or(false)
+            {
                 record(None);
                 continue;
             }

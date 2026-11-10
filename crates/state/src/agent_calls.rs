@@ -20,7 +20,13 @@ pub struct AgentCall {
 
 impl State {
     /// Issue a short-lived capability, independent of answered calls.
-    pub fn issue_agent_call(&self, call: &str, note: &str, agent: &str, principal: &str) -> Result<()> {
+    pub fn issue_agent_call(
+        &self,
+        call: &str,
+        note: &str,
+        agent: &str,
+        principal: &str,
+    ) -> Result<()> {
         self.conn().execute(
             "INSERT INTO agent_call_ids (call,note,agent,principal,expires_ms) VALUES (?1,?2,?3,?4,?5)",
             params![call, note, agent, principal, self.now() + 86_400_000],
@@ -40,7 +46,8 @@ impl State {
     pub fn agent_call_bound_elsewhere(&self, call: &str, note: &str, agent: &str) -> Result<bool> {
         Ok(self.conn().query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_call_ids WHERE call=?1 AND (note<>?2 OR agent<>?3))",
-            params![call, note, agent], |r| r.get(0),
+            params![call, note, agent],
+            |r| r.get(0),
         )?)
     }
 
@@ -68,7 +75,8 @@ impl State {
             .conn()
             .execute("DELETE FROM agent_calls WHERE call = ?1", [call])?;
         if changed == 1 {
-            self.conn().execute("UPDATE agent_call_ids SET used=0 WHERE call=?1", [call])?;
+            self.conn()
+                .execute("UPDATE agent_call_ids SET used=0 WHERE call=?1", [call])?;
         }
         Ok(changed == 1)
     }
@@ -102,7 +110,8 @@ mod tests {
     fn issued_calls_are_bound_and_single_use() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
-        s.issue_agent_call("CALL", "NOTE", "clerk", "session:owner").unwrap();
+        s.issue_agent_call("CALL", "NOTE", "clerk", "session:owner")
+            .unwrap();
         assert!(!s.consume_agent_call("CALL", "OTHER", "clerk").unwrap());
         assert!(!s.consume_agent_call("CALL", "NOTE", "owl").unwrap());
         assert!(s.consume_agent_call("CALL", "NOTE", "clerk").unwrap());

@@ -264,19 +264,36 @@ impl Api {
             .split(';')
             .next()
             .unwrap();
-        let saved: Value = self.client.post(self.server.url("/api/notes?type=memo"))
+        let saved: Value = self
+            .client
+            .post(self.server.url("/api/notes?type=memo"))
             .header("cookie", cookie)
             .json(&json!({ "note": { "fields": { "title": "Ask" } } }))
-            .send().unwrap().error_for_status().unwrap().json().unwrap();
-        let issued: Value = self.client.post(self.server.url("/api/agents/calls"))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
+        let issued: Value = self
+            .client
+            .post(self.server.url("/api/agents/calls"))
             .header("cookie", cookie)
             .json(&json!({ "note": saved["id"], "agent": agent }))
-            .send().unwrap().error_for_status().unwrap().json().unwrap();
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
         let call = issued["call"].as_str().unwrap();
         let text = format!("[@Keeper schedule it.](agent:{agent}?call={call})");
         let response = self
             .client
-            .put(self.server.url(&format!("/api/notes/{}", saved["id"].as_str().unwrap())))
+            .put(
+                self.server
+                    .url(&format!("/api/notes/{}", saved["id"].as_str().unwrap())),
+            )
             .header("cookie", cookie)
             .json(&json!({ "base_version": saved["version"], "note": {
                 "fields": { "title": "Ask" },
