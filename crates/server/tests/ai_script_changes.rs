@@ -21,6 +21,25 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, PASSWORD, TestAccount, Te
 
 const MODEL: &str = "claude-opus-5";
 
+#[test]
+fn privileged_script_sources_are_read_only_for_agents() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    // Discover the shipped scripts, including every secret-bearing handler and task.
+    for file in writer::SHIPPED_FILES {
+        let Some(name) = file.path.strip_prefix("scripts/").and_then(|p| p.strip_suffix(".ws")) else {
+            continue;
+        };
+        let before = api.script(name).unwrap();
+        let events = api.one(&fake, "propose_script_change", json!({
+            "name": name, "source": format!("{before}\n// agent edit\n")
+        }));
+        assert!(find(&events, "script_proposal").is_none(), "{name}: {events:?}");
+        assert!(last_result(&fake).0, "{name} must be refused");
+        assert_eq!(api.script(name).as_deref(), Some(before.as_str()));
+    }
+}
+
 const PHONE_FILE: &str =
     "handler \"sms_received\" {\n script = \"phone_test\"\n function = \"run\"\n}\n";
 
