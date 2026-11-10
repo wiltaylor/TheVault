@@ -150,7 +150,11 @@ fn agent_code_token_calendar_changes_require_outbox() {
             "{field}: {status}: {body}"
         );
     }
-    let res = agent.delete(&url).send().unwrap();
+    let res = agent
+        .delete(&url)
+        .query(&[("base_version", made["version"].as_str().unwrap())])
+        .send()
+        .unwrap();
     let status = res.status();
     let body = res.text().unwrap();
     assert!(
