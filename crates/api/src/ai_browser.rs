@@ -105,12 +105,21 @@ impl BrowserBox {
     fn auth(&self, r: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let r = if let Some(id) = &self.profile {
             use hmac::{Hmac, Mac};
-            let mut mac = Hmac::<sha2::Sha256>::new_from_slice(self.token.as_bytes()).expect("HMAC accepts any key");
+            let mut mac = Hmac::<sha2::Sha256>::new_from_slice(self.token.as_bytes())
+                .expect("HMAC accepts any key");
             mac.update(b"thevault-browser-profile-v1:");
             mac.update(id.as_bytes());
-            let signature: String = mac.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect();
-            r.header("x-vault-agent", id).header("x-vault-agent-signature", signature)
-        } else { r };
+            let signature: String = mac
+                .finalize()
+                .into_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            r.header("x-vault-agent", id)
+                .header("x-vault-agent-signature", signature)
+        } else {
+            r
+        };
         if self.token.is_empty() {
             r
         } else {
@@ -125,8 +134,16 @@ impl BrowserBox {
 
     pub async fn remove_profile(&self) -> Result<(), String> {
         let url = self.url("/profile", &[])?;
-        let response = self.auth(http().delete(url)).send().await.map_err(|e| e.to_string())?;
-        if response.status().is_success() { Ok(()) } else { Err(box_error(response).await) }
+        let response = self
+            .auth(http().delete(url))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(box_error(response).await)
+        }
     }
 }
 
@@ -145,11 +162,15 @@ impl Drop for TemporaryProfile {
 }
 
 pub async fn cleanup_retired(w: &Writer) {
-    let Some(b) = BrowserBox::from_env() else { return; };
+    let Some(b) = BrowserBox::from_env() else {
+        return;
+    };
     let ids = w.retired_browser_profiles().unwrap_or_default();
     for id in ids {
         match b.clone().with_profile(id.clone()).remove_profile().await {
-            Ok(()) => { let _ = w.browser_profile_removed(&id); }
+            Ok(()) => {
+                let _ = w.browser_profile_removed(&id);
+            }
             Err(e) => eprintln!("retired browser profile cleanup failed: {e}"),
         }
     }
@@ -966,11 +987,17 @@ pub fn apply_save(w: &Writer, author: &Author, p: &Value) -> Result<Value, Apply
             agent.label
         )));
     }
-    let b = BrowserBox::from_env().ok_or_else(|| {
-        ApplyError::Browser("this server has no browser box (VAULT_BROWSER_URL is not set)".into())
-    })?.with_profile(w.browser_profile(&agent.name)?);
+    let b = BrowserBox::from_env()
+        .ok_or_else(|| {
+            ApplyError::Browser(
+                "this server has no browser box (VAULT_BROWSER_URL is not set)".into(),
+            )
+        })?
+        .with_profile(w.browser_profile(&agent.name)?);
     if p["browser_profile"].as_str() != b.profile.as_deref() {
-        return Err(ApplyError::Refused("the browser profile has changed or expired".into()));
+        return Err(ApplyError::Refused(
+            "the browser profile has changed or expired".into(),
+        ));
     }
     let handle = tokio::runtime::Handle::try_current()
         .map_err(|_| ApplyError::Invalid("a save needs the server's runtime".into()))?;

@@ -1863,8 +1863,17 @@ impl Turn {
             }
         };
         crate::ai_browser::cleanup_retired(&self.writer).await;
-        let temporary_browser = self.sub.as_ref().filter(|s| s.throwaway).and_then(|_| setup.browser.take()).map(|b| crate::ai_browser::TemporaryProfile(b.with_profile(ulid::Ulid::new().to_string())));
-        if let Some(b) = &temporary_browser { setup.browser = Some(b.0.clone()); }
+        let temporary_browser = self
+            .sub
+            .as_ref()
+            .filter(|s| s.throwaway)
+            .and_then(|_| setup.browser.take())
+            .map(|b| {
+                crate::ai_browser::TemporaryProfile(b.with_profile(ulid::Ulid::new().to_string()))
+            });
+        if let Some(b) = &temporary_browser {
+            setup.browser = Some(b.0.clone());
+        }
         // Only the tools the agent may use (agents G4); a call naming another is not run.
         let mut tools = turn_tools(
             setup.web,

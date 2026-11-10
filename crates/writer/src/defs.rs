@@ -861,15 +861,21 @@ impl Writer {
     }
 
     pub fn retired_browser_profiles(&self) -> Result<Vec<String>> {
-        Ok(self.state().meta("browser-retired")?
-            .and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+        Ok(self
+            .state()
+            .meta("browser-retired")?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default())
     }
 
     pub fn browser_profile_removed(&self, id: &str) -> Result<()> {
         let _w = self.write_lock();
         let mut ids = self.retired_browser_profiles()?;
         ids.retain(|s| s != id);
-        self.state().set_meta("browser-retired", &serde_json::to_string(&ids).expect("strings serialize"))?;
+        self.state().set_meta(
+            "browser-retired",
+            &serde_json::to_string(&ids).expect("strings serialize"),
+        )?;
         Ok(())
     }
 
@@ -998,7 +1004,10 @@ impl Writer {
             // Keep a durable cleanup marker if the browser box is temporarily offline.
             let mut ids = self.retired_browser_profiles()?;
             ids.push(id);
-            self.state().set_meta("browser-retired", &serde_json::to_string(&ids).expect("strings serialize"))?;
+            self.state().set_meta(
+                "browser-retired",
+                &serde_json::to_string(&ids).expect("strings serialize"),
+            )?;
             self.state().set_meta(&key, "")?;
         }
         Ok(())
