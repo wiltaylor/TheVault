@@ -408,6 +408,19 @@ fn round3_derived_email_thread_title_is_held_with_first_message() {
     w.activate_agent_safety().unwrap();
     let actor = Author::Session("owner".into());
     let thread = w.create("email_thread", &Input::Json(serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT"}})), &actor).unwrap();
-    w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT", "thread":thread.id}})), &actor).unwrap();
+    let email = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT", "thread":thread.id}})), &actor).unwrap();
     assert!(!w.agent_may_read(&thread.id), "derived unclassified subject reached an agent");
+    let hash = w.agent_safety(&thread.id).unwrap().fingerprint;
+    w.finish_agent_safety(&thread.id, &hash, "allowed", "allow").unwrap();
+    assert!(!w.agent_may_read(&thread.id), "thread cleared before its first message");
+    assert!(w.state().held_agent_note_ids().unwrap().contains(&thread.id));
+    assert_eq!(w.agent_safety(&thread.id).unwrap().reason, "awaiting_first_member");
+    let hash = w.agent_safety(&email.id).unwrap().fingerprint;
+    w.finish_agent_safety(&email.id, &hash, "allowed", "allow").unwrap();
+    assert!(w.agent_may_read(&thread.id));
+    assert!(!w.state().held_agent_note_ids().unwrap().contains(&thread.id));
+    assert!(w.state().agent_safety_clearances().unwrap().contains(&thread.id));
+    w.update(&email.id, &Input::Json(serde_json::json!({"fields":{"title":"Changed untrusted subject", "thread":thread.id}})), Some(&email.version), &actor).unwrap();
+    assert!(!w.agent_may_read(&thread.id));
+    assert!(w.state().held_agent_note_ids().unwrap().contains(&thread.id));
 }

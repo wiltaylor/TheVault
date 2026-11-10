@@ -1677,6 +1677,9 @@ impl Writer {
             }
         }
         for s in &saved {
+            if s.event == Event::Create && !s.restored && let Ok(doc) = Doc::parse(&s.wcl, "safety member") {
+                self.bind_safety_member(&s.id, &s.type_name, &doc)?;
+            }
             if s.restored
                 && let Ok(doc) = Doc::parse(&s.wcl, "restored note")
             {
@@ -1702,6 +1705,9 @@ impl Writer {
             }
         }
         inner.index.update(&inner.schema, &updates)?;
+        for s in &saved {
+            self.refresh_safety_parents(&s.id)?;
+        }
         inner.index.advance(generation)?;
         for ((by, act, id), s) in acts.iter().zip(&saved) {
             let title = match gone_titles.remove(id) {

@@ -110,6 +110,21 @@ impl State {
         Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<std::result::Result<_, _>>()?)
     }
 
+    pub fn bind_agent_safety_member(&self, parent: &str, member: &str) -> Result<()> {
+        self.conn().execute("INSERT OR IGNORE INTO meta(key,value) VALUES (?1,?2)", [format!("agent_safety.member.{parent}"), member.to_owned()])?;
+        Ok(())
+    }
+
+    pub fn agent_safety_parents(&self, member: &str) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT substr(key,length('agent_safety.member.')+1) FROM meta WHERE key LIKE 'agent_safety.member.%' AND value=?1")?;
+        Ok(stmt.query_map([member], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn indexed_agent_note_allowed(&self, id: &str) -> Result<bool> {
+        Ok(self.conn().query_row("SELECT EXISTS(SELECT 1 FROM agent_safety_index WHERE id=?1 AND held=0)", [id], |r| r.get(0))?)
+    }
+
     pub fn queue_classifications(&self, payloads: &[String]) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;

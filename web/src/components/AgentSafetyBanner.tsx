@@ -3,6 +3,7 @@ import { api, type AgentSafety } from "../api";
 
 const reasons: Record<string, string> = {
   awaiting_decision: "Waiting for the safety decision.",
+  awaiting_first_member: "Waiting for the first message in this thread to be cleared.",
   prompt_injection: "Possible instructions aimed at an AI agent.",
   sensitive_credentials: "May contain credentials or a login code.",
   scam: "Possible scam or phishing.",

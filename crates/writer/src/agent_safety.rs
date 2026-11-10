@@ -25,6 +25,7 @@ pub fn incoming(kind: &str, doc: &Doc) -> bool {
     let note = doc_to_json(doc);
     let fields = &note["fields"];
     match kind {
+        "email_thread" | "conversation" => true,
         "email" => !fields["labels"].as_array().is_some_and(|labels| {
             labels
                 .iter()
@@ -120,6 +121,36 @@ pub fn fingerprint(kind: &str, doc: &Doc) -> String {
 }
 
 impl Writer {
+    fn safety_member_cleared(&self, id: &str) -> Result<bool> {
+        let Some(member) = self.state().meta(&format!("agent_safety.member.{id}"))? else { return Ok(false); };
+        Ok(self.state().indexed_agent_note_allowed(&member)?)
+    }
+
+    /// The first committed member is pinned in server state, not editable reference fields.
+    pub(crate) fn bind_safety_member(&self, id: &str, kind: &str, doc: &Doc) -> Result<()> {
+        if self.state().meta("agent_safety.activation_ms")?.is_none() { return Ok(()); }
+        let field = match kind { "email" => "thread", "message" => "conversation", _ => return Ok(()) };
+        if let Some(parent) = doc.field(field).and_then(schema::Value::as_str) {
+            self.state().bind_agent_safety_member(parent, id)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn refresh_safety_parents(&self, member: &str) -> Result<()> {
+        for parent in self.state().agent_safety_parents(member)? {
+            let Some(raw) = self.state().meta(&format!("agent_safety.note.{parent}"))? else { continue; };
+            let Ok(safety) = serde_json::from_str::<Safety>(&raw) else { continue; };
+            let indexed = self.state().indexed_agent_safety()?.into_iter().find(|(id, _, _)| id == &parent);
+            let Some((_, hash, _)) = indexed else { continue; };
+            let allowed = safety.fingerprint == hash && safety.allowed()
+                && (safety.status == "released" || self.safety_member_cleared(&parent)?);
+            self.state().index_agent_safety(&parent, &hash, !allowed)?;
+            if allowed {
+                self.state().set_agent_safety_result(&parent, &raw, true)?;
+            }
+        }
+        Ok(())
+    }
     pub fn set_agent_safety_wake(&self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
         *self.safety_wake.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake);
     }
@@ -188,6 +219,10 @@ impl Writer {
             });
             if safety.fingerprint != hash {
                 safety = Safety { status: "held".into(), reason: "content_changed".into(), fingerprint: hash };
+            }
+            if safety.status == "allowed" && matches!(type_name.as_str(), "email_thread" | "conversation") && !self.safety_member_cleared(&id)? {
+                safety.status = "held".into();
+                safety.reason = "awaiting_first_member".into();
             }
             if !safety.allowed() && reason.is_none_or(|r| r == safety.reason) {
                 out.push(serde_json::json!({"id":id,"type":type_name,"created":created,"agent_safety":safety}));
@@ -293,6 +328,9 @@ impl Writer {
         if let Some(stored) = stored {
             if let Ok(safety) = serde_json::from_str::<Safety>(&stored) {
                 if safety.fingerprint == hash {
+                    if matches!(kind, "email_thread" | "conversation") && safety.status == "allowed" && !self.safety_member_cleared(id)? {
+                        return Ok(result("held", "awaiting_first_member"));
+                    }
                     return Ok(safety);
                 }
                 return Ok(result("held", "content_changed"));
@@ -390,8 +428,9 @@ impl Writer {
         self.state().set_agent_safety_result(
             id,
             &serde_json::to_string(&safety).expect("safety"),
-            safety.allowed(),
+            safety.allowed() && (status == "released" || !matches!(note.type_name.as_str(), "email_thread" | "conversation") || self.safety_member_cleared(id)?),
         )?;
+        self.refresh_safety_parents(id)?;
         if let Some(wake) = self
             .safety_wake
             .lock()
