@@ -662,7 +662,7 @@ fn a_task_with_its_script_is_written_in_one_apply_and_changes_and_deletes_are_ch
         Some(&changed),
     );
     assert!(refused.to_string().contains("task other (hosts *)"));
-    // File-only changes still show shared roles and their host warnings.
+    // File-only changes still show shared roles, without a source-change warning.
     let p = api.propose(
         &fake,
         "digest",
@@ -672,11 +672,7 @@ fn a_task_with_its_script_is_written_in_one_apply_and_changes_and_deletes_are_ch
     assert_eq!(p["runs_as"].as_array().unwrap().len(), 1, "{p}");
     assert_eq!(p["runs_as"][0]["name"], "other");
     let w = warnings(&p);
-    assert!(
-        w.iter()
-            .any(|w| w.starts_with("Task other may reach any host")),
-        "{w:?}"
-    );
+    assert!(w.is_empty(), "{w:?}");
 
     // A delete keeps the script and the run history.
     let ran = api.ok("POST", "/api/tasks/digest/run?wait=true", json!({}));
