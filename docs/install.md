@@ -148,7 +148,7 @@ A tunnel connects out from the server to Cloudflare, so you open no ports on you
    - **URL**: `thevault:8080`.
 7. Save the tunnel and open `https://vault.example.com`.
 
-The URL is `thevault:8080` because `cloudflared` runs in the same compose network as the server and finds it by its service name. Cloudflare provides the HTTPS certificate.
+The URL is `thevault:8080` because `cloudflared` shares the Compose `proxy` network with the server and finds it by its service name. Cloudflare provides the HTTPS certificate.
 
 If `docker compose logs cloudflared` shows `Provided Tunnel token is not valid.`, copy the token again into `.env` and run `docker compose up -d`.
 
@@ -407,3 +407,66 @@ docker compose down -v
 ```
 
 `down -v` cannot be undone. Remove the folder with `compose.yaml` afterwards, and the images with `docker image rm ghcr.io/wiltaylor/thevault:latest ghcr.io/wiltaylor/thevault-browser:latest`.
+
+## Credential attempt limits and reverse proxies
+
+Login, device pairing (password or code), and agent-code redemption share failure
+counters. Five failures from one client in 60 seconds cause a 60-second backoff.
+Repeated exhausted windows double this delay, up to 15 minutes. Success resets
+that client's count. After 24 hours without a failed check its backoff resets.
+HTTP 429 includes `Retry-After` in seconds. Fifty failures globally in 60 seconds
+also trigger backoff for clients with recent failures, but not for a clean client.
+During a sustained global flood, an owner who has already failed in the window
+must wait too; a clean attempt from another address key still passes.
+IPv4 uses its full address, including when received as an IPv4-mapped IPv6 address.
+Native IPv6 addresses share a budget within each /64, so rotating privacy addresses
+does not bypass the limit. A fully uploaded check is charged as a provisional
+failure before verification. Success refunds its global charge and resets the
+address's completed failures, but not other pending checks. Cancellation or any
+non-success result retains the charge and can notify the owner, so disconnecting
+cannot bypass the hash budget. Concurrent checks return 429 when the budget is
+full. Incomplete bodies consume no reservation and time
+out after 10 seconds, with a 2 MiB body limit.
+After five failures in a minute the owner gets a notification through the normal
+notification feed and device push, at most once per 15 minutes. Counters are in
+memory and reset on restart. History retains at most 65,536 address keys. A full
+table still admits a clean client using a temporary bucket. If that check fails,
+the oldest non-in-flight history is evicted through an ordered index (clean history first, then failing
+history). A successful check evicts nothing. Accepted trade-off: a flood from
+more than 65,536 distinct failing IPv6 /64s or IPv4 addresses can churn the oldest
+failure history, rather than prevent the owner from signing in. Active checks
+have temporary state until completion or cancellation. If every retained bucket
+has a check in flight, a new failure contributes to the global counter but cannot
+evict address history until a bucket is free. Missing peer metadata shares one bucket.
+
+The server trusts no forwarded addresses by default. `VAULT_TRUSTED_PROXIES`
+sets comma-separated literal peer IPs with a proxy type, for example
+`caddy=172.30.141.2,cloudflare=172.30.141.3`. Caddy peers use the last address in
+`X-Forwarded-For`. Cloudflared peers use `CF-Connecting-IP`. Headers from other
+peers are ignored. Invalid configuration stops startup. Do not trust arbitrary
+clients or expose a trusted proxy's network address to untrusted containers.
+The `caddy=` convention also fits nginx and Traefik when configured to replace
+untrusted forwarding headers and append the actual immediate client address.
+
+The shipped Compose file configures those two fixed proxy container addresses on
+the dedicated `172.30.141.0/24` proxy network for its `https` and `cloudflare`
+profiles. No proxy container is present in the LAN-only profile. The server
+and proxy containers must be recreated after updating the Compose configuration.
+Dynamic network allocation uses `172.30.141.128/25`, keeping the trusted fixed
+proxy addresses outside the dynamic range even when a proxy profile is off.
+If that subnet conflicts with an existing network, change the proxy network's
+subnet, both fixed container addresses, and `VAULT_TRUSTED_PROXIES` together.
+For a custom deployment, set this variable to the actual immediate proxy peer,
+not its public client or the whole Docker network. An empty value trusts none.
+
+Two proxy configurations need extra care. Docker can forward a published IPv6
+port through `docker-proxy` onto this IPv4-only proxy network. Caddy then sees
+the network gateway (`172.30.141.1`) instead of the original IPv6 client, so those
+clients share one budget. Use an end-to-end IPv6-capable proxy path, or do not
+publish an IPv6 route to Caddy in this configuration. With Cloudflare's
+orange-cloud DNS proxy in front of Caddy, Caddy sees Cloudflare edge addresses
+instead of the clients. Prefer the shipped `cloudflare` tunnel profile, or
+configure Caddy to trust only Cloudflare's current published edge ranges and to
+forward the real client securely. Do not trust client-supplied forwarding headers
+or all peers to work around either case.
+

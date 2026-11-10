@@ -49,7 +49,7 @@ function widget(r: CallRange, part: string, content: () => JSX.Element): HTMLEle
   return el;
 }
 
-function decorations(doc: PMNode): DecorationSet {
+function decorations(doc: PMNode, note?: string): DecorationSet {
   const decos: Decoration[] = [];
   const destroy = (node: Node) => {
     disposers.get(node)?.();
@@ -64,7 +64,7 @@ function decorations(doc: PMNode): DecorationSet {
         destroy,
       }),
       Decoration.inline(r.from, r.to, { class: "agent-call", "data-testid": "agent-call", "data-call": r.call, "data-agent": r.agent }),
-      Decoration.widget(r.to, () => widget(r, "end", () => <AgentCallState call={r.call} />), {
+      Decoration.widget(r.to, () => widget(r, "end", () => <AgentCallState call={r.call} note={note} />), {
         side: 1,
         key: `agent-call-end:${r.call}`,
         ignoreSelection: true,
@@ -84,15 +84,16 @@ export function agentCallAt(target: EventTarget | null): { agent: string; call: 
   return a ? parseAgentCall(a.getAttribute("href") ?? "") : null;
 }
 
-export const AgentCallChips = Extension.create({
+export const AgentCallChips = Extension.create<{ note?: string }>({
   name: "agentCallChips",
   addProseMirrorPlugins() {
+    const note = this.options.note;
     return [
       new Plugin({
         key: new PluginKey("agentCallChips"),
         state: {
-          init: (_, state) => decorations(state.doc),
-          apply: (tr, old) => (tr.docChanged ? decorations(tr.doc) : old),
+          init: (_, state) => decorations(state.doc, note),
+          apply: (tr, old) => (tr.docChanged ? decorations(tr.doc, note) : old),
         },
         props: {
           decorations(state) {

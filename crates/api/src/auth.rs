@@ -48,12 +48,8 @@ const WRITE_PATHS: [&str; 11] = [
     "/api/upsert",
 ];
 
-/// Paths whose POST only reads: running a query and converting between query text and the
-/// builder's model send the query in the body but change nothing, and an AI chat turn reads
-/// notes, its edits being proposals the user applies through the write routes (ai D15); a change
-/// the chat makes itself, its confirmation turned off, needs the caller's own `write` or `admin`
-/// scope, which the chat's tools check (ai D22).
-const READ_POST_PATHS: [&str; 3] = ["/api/query", "/api/ai/chat", "/api/ai/discard"];
+/// Query bodies only read. Agent conversations spend the AI account and need write.
+const READ_POST_PATHS: [&str; 1] = ["/api/query"];
 
 /// `/api/agents/{name}/threads` and `/api/agents/{name}/threads/{id}`: `Some(false)` for the
 /// list, `Some(true)` for one thread (agents G7).
@@ -130,6 +126,12 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrantedScope(pub Scope);
 
+/// Agent credentials share one identity check. TV-142 will switch this implementation to
+/// stored token kind when that representation lands after TV-140.
+pub(crate) fn is_agent_token(author: &Author) -> bool {
+    matches!(author, Author::Token(name) if name.starts_with("agent-"))
+}
+
 /// Whether `path` is `/api/devices/{id}/push`, `/api/devices/{id}/bases` or
 /// `/api/devices/{id}/health`, which a device sets for itself.
 fn is_device_own(path: &str) -> bool {
@@ -200,33 +202,11 @@ pub fn is_skill_write(method: &Method, path: &str) -> bool {
     }
 }
 
-/// Whether the request is a paired device writing a definition with its own `write` token: an
-/// agent file ([`is_agent_file_write`]) or a skill ([`is_skill_write`]). Both need `admin`, but
-/// the user asked to edit agents and skills in the desktop and Android apps, which they pair
-/// themselves, as in the web app: an agent's settings, permissions and triggers, the grants an
-/// AI proposal may not make on its own (Run wscript code, sub agents) among them, and a skill's
-/// `SKILL.md`, its files and the skill itself. So these routes, and only these, take a device's
-/// token. It stays `write` everywhere else (D2), and an API token with `write` is still refused.
-async fn device_writes_definition(
-    sessions: &Sessions,
-    granted: &Granted,
-    method: &Method,
-    path: &str,
-) -> bool {
-    let Author::Token(token) = &granted.author else {
-        return false;
-    };
-    if granted.scope != Scope::Write
-        || !(is_agent_file_write(method, path) || is_skill_write(method, path))
-    {
-        return false;
-    }
-    let token = token.clone();
-    blocking(sessions.writer.clone(), move |w| {
-        w.state().device_for_token(&token)
-    })
-    .await
-    .is_ok_and(|device| device.is_some())
+/// Definitions can grant authority. Agent tokens may not change them even with admin scope.
+fn is_definition_write(method: &Method, path: &str) -> bool {
+    is_agent_file_write(method, path)
+        || is_skill_write(method, path)
+        || (*method == Method::POST && path == "/api/skills/import")
 }
 
 /// Whether `method` on `path` is for a password-login session only: every API token, `admin`
@@ -301,13 +281,9 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     if ADMIN_PATHS.iter().any(|p| under(p)) {
         return Some(Scope::Admin);
     }
-    // Stopping one of the caller's own chat turns changes nothing (ai D23).
     if matches!(*method, Method::GET | Method::HEAD)
         || path == "/api/logout"
         || (method == Method::POST && READ_POST_PATHS.iter().any(|p| under(p)))
-        || (method == Method::DELETE && under("/api/ai/chat/turns"))
-        // Starting a thread with an agent is part of chatting with it (agents G7).
-        || (method == Method::POST && agent_threads_path(path) == Some(false))
     {
         return Some(Scope::Read);
     }
@@ -316,10 +292,14 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
     // handler checks it is its own.
     // Renaming and deleting a thread are note edits (agents G7).
     if WRITE_PATHS.iter().any(|p| under(p))
+        || (method == Method::POST && agent_threads_path(path) == Some(false))
+        || (method == Method::POST && (under("/api/ai/chat") || path == "/api/ai/discard"))
+        || (method == Method::DELETE && under("/api/ai/chat/turns"))
         || agent_threads_path(path) == Some(true)
         // An agent's memories are notes (agents G21).
         || agent_memories_path(path)
         || (method == Method::POST && agent_dispatch_path(path))
+        || (method == Method::POST && path == "/api/agents/calls")
         || (method == Method::PUT && is_device_own(path))
         || (method == Method::POST && is_device_command_result(path))
         || (method == Method::POST && is_device_commands(path))
@@ -443,9 +423,18 @@ pub async fn authenticate(
     {
         return human_only_for(req.uri().path()).into_response();
     }
-    if !granted.scope.allows(needed)
-        && !device_writes_definition(&sessions, &granted, req.method(), req.uri().path()).await
-    {
+    let path = req.uri().path();
+    let agent_admin_route = is_definition_write(req.method(), path)
+        || (*req.method() == Method::POST
+            && matches!(
+                path,
+                "/api/tokens" | "/api/agent-codes" | "/api/devices/pair-codes"
+            ))
+        || (*req.method() == Method::PUT && path == "/api/integrations/ai/settings")
+        || (!matches!(*req.method(), Method::GET | Method::HEAD)
+            && (path == "/api/integrations/gitsync"
+                || path.starts_with("/api/integrations/gitsync/")));
+    if !granted.scope.allows(needed) || (agent_admin_route && is_agent_token(&granted.author)) {
         return ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
@@ -761,16 +750,16 @@ mod tests {
                 Some(Scope::Admin),
             ),
             (Method::GET, "/api/ai/models", Some(Scope::Read)),
-            (Method::POST, "/api/ai/chat", Some(Scope::Read)),
+            (Method::POST, "/api/ai/chat", Some(Scope::Write)),
             // The turns form reads as the chat does; applying a change writes (ai D23).
             (Method::GET, "/api/ai/accounts", Some(Scope::Read)),
-            (Method::POST, "/api/ai/chat/turns", Some(Scope::Read)),
+            (Method::POST, "/api/ai/chat/turns", Some(Scope::Write)),
             (
                 Method::GET,
                 "/api/ai/chat/turns/t/events",
                 Some(Scope::Read),
             ),
-            (Method::DELETE, "/api/ai/chat/turns/t", Some(Scope::Read)),
+            (Method::DELETE, "/api/ai/chat/turns/t", Some(Scope::Write)),
             (Method::DELETE, "/api/ai/chat", Some(Scope::Admin)),
             (Method::POST, "/api/ai/apply", Some(Scope::Write)),
         ];

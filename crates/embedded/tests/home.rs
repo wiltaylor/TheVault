@@ -339,10 +339,89 @@ fn the_event_stream_carries_the_servers_notifications_and_the_devices_note_chang
 }
 
 #[test]
+fn the_app_forwards_call_issuance_before_its_note_has_synced() {
+    let fake = testkit::FakeAnthropic::start();
+    let server = TestServer::start_with_args(
+        seed,
+        &[
+            std::ffi::OsStr::new("--test-clock"),
+            std::ffi::OsStr::new("2026-01-05T00:30:00Z"),
+        ],
+    );
+    let admin = Admin::of(&server);
+    admin.anthropic(&fake);
+    let device = Device::pair(&server, "Laptop");
+    let local = device.call(
+        "POST",
+        "/api/notes?type=fleeting",
+        Some(json!({
+            "note": { "fields": { "title": "Local editor" } }
+        })),
+        201,
+    );
+    let issued = device.call(
+        "POST",
+        "/api/agents/calls",
+        Some(json!({
+            "note": local["id"], "agent": "assistant"
+        })),
+        200,
+    );
+    assert!(issued["call"].as_str().is_some_and(|s| s.len() == 26));
+    let request = format!(
+        "[@Assistant answer the app](agent:assistant?call={})",
+        issued["call"].as_str().unwrap()
+    );
+    device.call("PUT", &format!("/api/notes/{}", local["id"].as_str().unwrap()), Some(json!({
+        "base_version": local["version"],
+        "note": { "fields": { "title": "Local editor" }, "blocks": [{
+            "kind": "content", "labels": ["body"], "blocks": [{ "kind": "paragraph", "fields": { "text": request } }]
+        }] }
+    })), 200);
+    fake.push(testkit::AnthropicMessage::text("App answered."));
+    device.sync();
+    admin.call(
+        "POST",
+        "/api/test/clock",
+        Some(json!({ "advance": "PT1S" })),
+        200,
+    );
+    assert_eq!(fake.message_requests().len(), 1);
+    let answered = device.call(
+        "GET",
+        &format!(
+            "/api/agents/calls/{}?note={}",
+            issued["call"].as_str().unwrap(),
+            local["id"].as_str().unwrap()
+        ),
+        None,
+        200,
+    );
+    assert!(answered["thread"].is_string());
+    let home = Admin::of(&server).call(
+        "GET",
+        &format!("/api/notes/{}", local["id"].as_str().unwrap()),
+        None,
+        200,
+    );
+    assert_eq!(home["note"]["fields"]["title"], "Local editor");
+}
+
+#[test]
 fn offline_or_unpaired_the_server_routes_say_so_and_the_notes_still_work() {
     let server = TestServer::start_seeded(seed);
     let device = Device::pair(&server, "Laptop");
     device.go_offline();
+
+    let out = device.call(
+        "POST",
+        "/api/agents/calls",
+        Some(json!({
+            "note": "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA", "agent": "assistant"
+        })),
+        503,
+    );
+    assert_eq!(out["error"], "offline");
 
     for path in ["/api/devices", "/api/notifications", "/api/clients"] {
         let out = device.call("GET", path, None, 503);
@@ -1003,11 +1082,9 @@ impl Device {
     }
 }
 
-// An agent's confirmation switches decide in the apps as in the web app (ai D22, agents G4): the
-// turn runs on the home server with the agent's own rights, though the device token has only
-// `write`, and its changes reach the device by sync.
+// Confirmation switches apply only within the device caller scope ceiling.
 #[test]
-fn an_agents_confirmation_switches_decide_in_the_app_as_in_the_web_app() {
+fn agent_confirmation_switches_stay_within_the_device_scope_ceiling() {
     let server = TestServer::start_seeded(seed);
     let admin = Admin::of(&server);
     let fake = testkit::FakeAnthropic::start();
@@ -1083,8 +1160,7 @@ fn an_agents_confirmation_switches_decide_in_the_app_as_in_the_web_app() {
     let home = admin.call("GET", &format!("/api/notes/{id}"), None, 200);
     assert_eq!(home["note"]["fields"]["title"], "Groceries and eggs");
 
-    // The agent's own rights decide on the home server, though the device token lacks `admin`:
-    // with the types switch on, a type change waits for the user.
+    // The device token lacks admin: a type change waits for the user.
     let names = device.agent_turn(
         &fake,
         "careful",
@@ -1097,7 +1173,7 @@ fn an_agents_confirmation_switches_decide_in_the_app_as_in_the_web_app() {
     let memo = admin.call("GET", "/api/types/memo", None, 200);
     assert!(!memo.to_string().contains("Details"), "{memo}");
 
-    // With it off, the type is changed on the home server.
+    // Even with it off, the device caller cannot directly change types.
     let names = device.agent_turn(
         &fake,
         "clerk",
@@ -1105,10 +1181,10 @@ fn an_agents_confirmation_switches_decide_in_the_app_as_in_the_web_app() {
         "propose_type_change",
         json!({ "name": "memo", "wcl": MEMO.replace("Main", "Details") }),
     );
-    assert!(names.iter().any(|n| n == "applied"), "{names:?}");
-    assert!(!names.iter().any(|n| n == "type_proposal"), "{names:?}");
+    assert!(names.iter().any(|n| n == "type_proposal"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "applied"), "{names:?}");
     let memo = admin.call("GET", "/api/types/memo", None, 200);
-    assert!(memo.to_string().contains("Details"), "{memo}");
+    assert!(!memo.to_string().contains("Details"), "{memo}");
 
     // Nothing was written on the device: its copy waits for the sync.
     assert!(device.embedded.queue().pending().unwrap().is_empty());
@@ -1117,11 +1193,9 @@ fn an_agents_confirmation_switches_decide_in_the_app_as_in_the_web_app() {
     assert_eq!(local["note"]["fields"]["title"], "Groceries and eggs");
 }
 
-// The agent screen edits agents in the apps as in the web app: the home server takes the
-// device's token for an agent file's writes, the grants an AI proposal may not make on its own
-// among them, and the change reaches the device's copy by sync.
+// Device tokens can read and sync definitions, but cannot grant permissions.
 #[test]
-fn the_app_writes_agent_files_on_the_home_server() {
+fn the_app_reads_agent_files_but_cannot_write_them() {
     let server = TestServer::start_seeded(seed);
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "Phone");
@@ -1133,8 +1207,9 @@ fn the_app_writes_agent_files_on_the_home_server() {
         },
     });
 
-    // Created from the app, it is written on the home server and read from there at once.
-    let saved = device.call("PUT", "/api/agents/clerk", Some(form.clone()), 200);
+    // The device cannot grant permissions. An explicit admin can create the file.
+    device.call("PUT", "/api/agents/clerk", Some(form.clone()), 403);
+    let saved = admin.call("PUT", "/api/agents/clerk", Some(form.clone()), 200);
     assert_eq!(saved["label"], "Clerk", "{saved}");
     assert_eq!(saved["permissions"]["scripts"]["run_code"], true, "{saved}");
     assert_eq!(saved["permissions"]["subagents"]["allow"], true, "{saved}");
@@ -1152,14 +1227,14 @@ fn the_app_writes_agent_files_on_the_home_server() {
         saved["wcl"].as_str().unwrap()
     );
 
-    // The server's checks are the app's: a bad file is its 400 with the issues.
+    // Authorization is checked before validating a definition.
     let bad = device.call(
         "PUT",
         "/api/agents/clerk",
         Some(json!({ "permissions": { "tools": ["summon_cat"] } })),
-        400,
+        403,
     );
-    assert_eq!(bad["error"], "invalid", "{bad}");
+    assert_eq!(bad["error"], "needs_web_app", "{bad}");
 
     // Offline, a write says it needs the home server and a read is the local copy.
     device.go_offline();
@@ -1172,8 +1247,9 @@ fn the_app_writes_agent_files_on_the_home_server() {
     assert_eq!(read["label"], "Clerk", "{read}");
     device.embedded.set_remote(Some(device.remote.clone()));
 
-    // Deleted from the app, it is gone on the home server, then on the device.
-    let gone = device.call("DELETE", "/api/agents/clerk", None, 200);
+    // The device cannot delete it. An admin deletion reaches the device by sync.
+    device.call("DELETE", "/api/agents/clerk", None, 403);
+    let gone = admin.call("DELETE", "/api/agents/clerk", None, 200);
     assert_eq!(gone["deleted"], true, "{gone}");
     admin.call("GET", "/api/agents/clerk", None, 404);
     device.sync();
@@ -1210,14 +1286,14 @@ const SKILL_MD: &str =
 // device's token for a skill's writes, the skill is read from there before the sync round brings
 // it, and offline a write says it needs the home server.
 #[test]
-fn the_app_writes_skills_on_the_home_server() {
+fn the_app_reads_skills_but_cannot_write_them() {
     let server = TestServer::start_seeded(seed);
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "Phone");
     let local = device._vault.path().join("skills/forms");
 
-    // Created from the app, it is written on the home server and read from there at once.
-    let saved = device.call(
+    // Created by an admin, it is read from the home server and later synced.
+    let saved = admin.call(
         "PUT",
         "/api/skills/forms",
         Some(json!({ "text": SKILL_MD })),
@@ -1232,31 +1308,31 @@ fn the_app_writes_skills_on_the_home_server() {
     let list = device.call("GET", "/api/skills", None, 200);
     assert!(list.to_string().contains("\"forms\""), "{list}");
 
-    // Its files, text and binary, are written there too, and read back before a sync.
+    // The device cannot create skill files, either text or binary.
     let png: &[u8] = &[0x89, b'P', b'N', b'G', 0, 0xff, 0xfe, 1];
     let (got, body) = device.call_bytes("PUT", "/api/skills/forms/files/assets/logo.png", png);
-    assert_eq!(got, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(got, 403, "{}", String::from_utf8_lossy(&body));
     let (got, _) = device.call_bytes("PUT", "/api/skills/forms/files/notes.md", b"# Notes\n");
-    assert_eq!(got, 200);
+    assert_eq!(got, 403);
     let (got, body) = device.call_bytes("GET", "/api/skills/forms/files/assets/logo.png", b"");
-    assert_eq!(got, 200);
-    assert_eq!(body, png);
+    assert_eq!(got, 404);
+    assert!(!body.is_empty());
     let changed = SKILL_MD.replace("# Forms", "# Forms, changed");
     device.call(
         "PUT",
         "/api/skills/forms",
         Some(json!({ "text": changed })),
-        200,
+        403,
     );
 
-    // The server's checks are the app's: a bad SKILL.md is its 400 with the issues.
+    // A malformed definition does not bypass authorization.
     let bad = device.call(
         "PUT",
         "/api/skills/forms",
         Some(json!({ "text": "no frontmatter\n" })),
-        400,
+        403,
     );
-    assert_eq!(bad["error"], "invalid", "{bad}");
+    assert_eq!(bad["error"], "needs_web_app", "{bad}");
     // An import still needs the web app.
     let (got, _) = device.call_bytes("POST", "/api/skills/import", b"PK");
     assert_eq!(got, 403);
@@ -1264,9 +1340,9 @@ fn the_app_writes_skills_on_the_home_server() {
     device.sync();
     assert_eq!(
         std::fs::read_to_string(local.join("SKILL.md")).unwrap(),
-        changed
+        SKILL_MD
     );
-    assert_eq!(std::fs::read(local.join("assets/logo.png")).unwrap(), png);
+    assert!(!local.join("assets/logo.png").exists());
 
     // Offline, a write says it needs the home server and a read is the local copy.
     device.go_offline();
@@ -1285,14 +1361,13 @@ fn the_app_writes_skills_on_the_home_server() {
     let out = device.call("DELETE", "/api/skills/forms", None, 503);
     assert_eq!(out["error"], "ai_needs_server", "{out}");
     let read = device.call("GET", "/api/skills/forms", None, 200);
-    assert!(read["body"].as_str().unwrap().contains("changed"), "{read}");
+    assert!(read["body"].as_str().unwrap().contains("# Forms"), "{read}");
     device.embedded.set_remote(Some(device.remote.clone()));
 
-    // A file deleted, then the skill deleted from the app: gone on the home server, then on the
-    // device.
-    let gone = device.call("DELETE", "/api/skills/forms/files/notes.md", None, 200);
-    assert_eq!(gone["deleted"], json!(["notes.md"]), "{gone}");
-    let gone = device.call("DELETE", "/api/skills/forms", None, 200);
+    // Device deletes are refused. An admin deletion reaches the device by sync.
+    device.call("DELETE", "/api/skills/forms/files/notes.md", None, 403);
+    device.call("DELETE", "/api/skills/forms", None, 403);
+    let gone = admin.call("DELETE", "/api/skills/forms", None, 200);
     assert_eq!(gone["deleted"], true, "{gone}");
     admin.call("GET", "/api/skills/forms", None, 404);
     device.sync();

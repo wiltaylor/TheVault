@@ -463,6 +463,7 @@ impl State {
 
     /// Prune the log to [`RETENTION_MS`] and [`MAX_ENTRIES`]. Returns how many entries went.
     pub fn prune_activity(&self) -> Result<usize> {
+        self.prune_agent_calls()?;
         self.prune_activity_to(RETENTION_MS, MAX_ENTRIES)
     }
 

@@ -115,7 +115,7 @@ fn the_vault_starts_with_the_assistant() {
             "model": null,
             "enabled": true,
             "triggers": 0,
-            "mention": { "types": null },
+            "mention": { "types": null, "excluded_types": ["email", "message", "call", "conversation", "event", "email_thread"] },
             "running": 0,
             "built_in": true,
         }])
@@ -426,12 +426,11 @@ fn pair_device(api: &Api) -> String {
         .to_owned()
 }
 
-// The apps edit agents as the web app does: a paired device's `write` token creates, changes and
-// deletes agent files, Run wscript code and sub agents included, and nothing else it may do grows.
+// Explicit admin tokens may manage definitions, including permission grants.
 #[test]
-fn a_paired_device_writes_agent_files_and_nothing_more() {
+fn an_admin_token_writes_agent_files() {
     let api = Api::start();
-    let device = pair_device(&api);
+    let device = api.server.admin_token().to_owned();
 
     let created = expect(
         api.req("PUT", "/api/agents/clerk", &device)
@@ -490,7 +489,8 @@ fn a_paired_device_writes_agent_files_and_nothing_more() {
     assert_eq!(gone, json!({ "name": "clerk", "deleted": true }));
     assert!(!api.server.vault_path().join("agents/clerk.wcl").exists());
 
-    // Every other admin route still refuses the device: Settings > AI accounts, a type's delete.
+    // A write-scoped device still cannot use other admin routes.
+    let device = pair_device(&api);
     let refused = expect(
         api.req("POST", "/api/integrations/ai/accounts", &device)
             .json(&json!({ "name": "Mine", "provider": "anthropic" }))

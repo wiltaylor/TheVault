@@ -250,17 +250,63 @@ impl Api {
     }
 
     /// A memo whose body calls `agent` with call id `call`.
-    fn call_note(&self, agent: &str, call: &str) {
+    fn call_note(&self, agent: &str, _call: &str) {
+        let login = self
+            .client
+            .post(self.server.url("/api/login"))
+            .json(&json!({ "password": testkit::PASSWORD }))
+            .send()
+            .unwrap();
+        assert!(login.status().is_success());
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let saved: Value = self
+            .client
+            .post(self.server.url("/api/notes?type=memo"))
+            .header("cookie", cookie)
+            .json(&json!({ "note": { "fields": { "title": "Ask" } } }))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
+        let issued: Value = self
+            .client
+            .post(self.server.url("/api/agents/calls"))
+            .header("cookie", cookie)
+            .json(&json!({ "note": saved["id"], "agent": agent }))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
+        let call = issued["call"].as_str().unwrap();
         let text = format!("[@Keeper schedule it.](agent:{agent}?call={call})");
-        self.ok(
-            "POST",
-            "/api/notes?type=memo",
-            json!({ "note": {
+        let response = self
+            .client
+            .put(
+                self.server
+                    .url(&format!("/api/notes/{}", saved["id"].as_str().unwrap())),
+            )
+            .header("cookie", cookie)
+            .json(&json!({ "base_version": saved["version"], "note": {
                 "fields": { "title": "Ask" },
                 "blocks": [{ "kind": "content", "labels": ["body"], "blocks": [
                     { "kind": "paragraph", "fields": { "text": text } },
                 ] }],
-            } }),
+            } }))
+            .send()
+            .unwrap();
+        assert!(
+            response.status().is_success(),
+            "{}",
+            response.text().unwrap()
         );
     }
 
@@ -742,6 +788,8 @@ fn a_call_from_a_note_leaves_a_task_proposal_that_a_phone_applies_from_the_threa
     let mut forged = stored["data"].clone();
     forged["after"] = json!(format!("{NIGHTLY}read_paths = [\"/\"]\n"));
     let (status, body) = api.apply_as(&write, &forged);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = api.apply_as(&api.token(), &stored["data"]);
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["op"], "task_create");
     let got = api.task("nightly").unwrap();

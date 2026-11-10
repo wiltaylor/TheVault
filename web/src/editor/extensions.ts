@@ -171,7 +171,7 @@ function linkAt(view: EditorView, e: MouseEvent): HTMLAnchorElement | null {
  * (a drag across the link, a double click) only selects; the caret goes into a link's text
  * from beside it or with the keyboard, and the selection bubble edits the link.
  */
-export const FollowLinks = Extension.create({
+export const FollowLinks = Extension.create<{ note?: string }>({
   name: "followLinks",
   addProseMirrorPlugins() {
     const follow = (view: EditorView, e: MouseEvent, background: boolean) => {
@@ -185,7 +185,7 @@ export const FollowLinks = Extension.create({
       const call = e.target instanceof Element && view.dom.contains(e.target) ? agentCallAt(e.target) : null;
       if (call && e.target instanceof Element) {
         e.preventDefault();
-        followLink(callTarget(call.agent, call.call), e.target, background);
+        followLink(callTarget(call.agent, call.call, this.options.note), e.target, background);
         return true;
       }
       const a = linkAt(view, e);
@@ -357,6 +357,7 @@ export const FieldRef = Node.create({
 });
 
 export interface EditorOptions {
+  note?: string;
   /** The block menu, opened by `/`. */
   slash?: Omit<SuggestOptions, "key" | "topLevelOnly" | "match">;
   /** Template editing: property blocks, and `{{name}}` with its menu. */
@@ -428,8 +429,8 @@ export function editorExtensions(options: EditorOptions = {}): AnyExtension[] {
     Mention,
     PlaceholderLink,
     MentionPickerNode,
-    FollowLinks,
-    AgentCallChips,
+    FollowLinks.configure({ note: options.note }),
+    AgentCallChips.configure({ note: options.note }),
     VaultBlock,
     ImageUpload.configure(options.images ?? {}),
   ];

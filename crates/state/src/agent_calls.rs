@@ -1,5 +1,5 @@
-//! The calls of agents committed in notes (agents G19): each call id, made by the client that
-//! wrote the call, is answered once. A call is recorded with the thread its run writes, or with
+//! The calls of agents committed in notes (agents G19): server-issued, note-and-agent-bound
+//! capabilities are consumed once. A call is recorded with the thread its run writes, or with
 //! none when it was not run (an agent that may not be called from the note, is disabled or is
 //! missing), and is never answered again.
 
@@ -19,6 +19,112 @@ pub struct AgentCall {
 }
 
 impl State {
+    /// Issue a short-lived capability, independent of answered calls.
+    pub fn issue_agent_call(
+        &self,
+        call: &str,
+        note: &str,
+        agent: &str,
+        principal: &str,
+    ) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO agent_call_ids (call,note,agent,principal,expires_ms) VALUES (?1,?2,?3,?4,?5)",
+            params![call, note, agent, principal, self.now() + 86_400_000],
+        )?;
+        Ok(())
+    }
+
+    /// The persisted issuance boundary and principal for a note's reserved call.
+    pub fn agent_call_issuance(
+        &self,
+        call: &str,
+        note: &str,
+        agent: &str,
+    ) -> Result<Option<(i64, String)>> {
+        Ok(self.conn().query_row(
+            "SELECT expires_ms - 86400000, principal FROM agent_call_ids WHERE call=?1 AND note=?2 AND agent=?3",
+            params![call, note, agent], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?)
+    }
+
+    /// Atomically consume an unused capability bound to this note and agent.
+    pub fn consume_agent_call(
+        &self,
+        call: &str,
+        note: &str,
+        agent: &str,
+        author: &crate::Author,
+    ) -> Result<bool> {
+        if !matches!(author, crate::Author::Session(_) | crate::Author::Token(_)) {
+            return Ok(false);
+        }
+        let (kind, name) = author.parts();
+        let principal = format!("{kind}:{name}");
+        Ok(self.conn().execute(
+            "UPDATE agent_call_ids SET used=1 WHERE call=?1 AND note=?2 AND agent=?3 AND principal=?4 AND used=0 AND expires_ms>?5",
+            params![call, note, agent, principal, self.now()],
+        )? == 1)
+    }
+
+    /// Whether a reserved id belongs elsewhere. Observing a copy must not poison it.
+    pub fn agent_call_bound_elsewhere(&self, call: &str, note: &str, agent: &str) -> Result<bool> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_call_ids WHERE call=?1 AND (note<>?2 OR agent<>?3))",
+            params![call, note, agent],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Release an admission that opened no run. Answered ids cannot be released.
+    pub fn release_agent_call(&self, call: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE agent_call_ids SET used=0 WHERE call=?1 AND NOT EXISTS(SELECT 1 FROM agent_calls WHERE call=?1)",
+            [call],
+        )?;
+        Ok(())
+    }
+
+    /// Keep an observed copy's refusal separate from the legitimate capability's answer.
+    pub fn refuse_agent_call_copy(&self, call: &str, note: &str, agent: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO agent_call_refusals (call,note,agent,created_ms) VALUES (?1,?2,?3,?4)",
+            params![call, note, agent, self.now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn refused_agent_call(&self, call: &str, note: &str) -> Result<Option<AgentCall>> {
+        Ok(self
+            .conn()
+            .query_row(
+            "SELECT call,agent,note,created_ms FROM agent_call_refusals WHERE call=?1 AND note=?2",
+            params![call, note],
+                |r| {
+                    Ok(AgentCall {
+                        call: r.get(0)?,
+                        agent: r.get(1)?,
+                        note: r.get(2)?,
+                        thread: None,
+                        created_ms: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Called by the existing activity upkeep. Answers remain as replay tombstones.
+    pub fn prune_agent_calls(&self) -> Result<usize> {
+        let conn = self.conn();
+        let now = self.now();
+        let old = now - 30 * 86_400_000;
+        let ids = conn.execute("DELETE FROM agent_call_ids WHERE (used=0 AND expires_ms<=?1) OR (used=1 AND expires_ms<=?2)", params![now, old])?;
+        let refusals = conn.execute(
+            "DELETE FROM agent_call_refusals WHERE created_ms<=?1",
+            [old],
+        )?;
+        Ok(ids + refusals)
+    }
+
     /// Records call `call` of `agent` from note `note`, answered by `thread`. Answers false, and
     /// changes nothing, when the call is recorded already.
     pub fn record_agent_call(
@@ -42,6 +148,10 @@ impl State {
         let changed = self
             .conn()
             .execute("DELETE FROM agent_calls WHERE call = ?1", [call])?;
+        if changed == 1 {
+            self.conn()
+                .execute("UPDATE agent_call_ids SET used=0 WHERE call=?1", [call])?;
+        }
         Ok(changed == 1)
     }
 
@@ -69,6 +179,100 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issued_calls_are_bound_and_single_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        s.issue_agent_call("CALL", "NOTE", "clerk", "session:owner")
+            .unwrap();
+        for author in [
+            crate::Author::Token("writer".into()),
+            crate::Author::Token("admin".into()),
+            crate::Author::Token("agent-clerk".into()),
+            crate::Author::Token("device-other".into()),
+            crate::Author::Handler("stamp".into()),
+            crate::Author::Task("stamp".into()),
+            crate::Author::Agent("clerk".into()),
+        ] {
+            assert!(
+                !s.consume_agent_call("CALL", "NOTE", "clerk", &author)
+                    .unwrap(),
+                "{author:?}"
+            );
+        }
+        assert!(
+            !s.consume_agent_call(
+                "CALL",
+                "OTHER",
+                "clerk",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+        assert!(
+            !s.consume_agent_call(
+                "CALL",
+                "NOTE",
+                "owl",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+        assert!(
+            s.consume_agent_call(
+                "CALL",
+                "NOTE",
+                "clerk",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+        assert!(
+            !s.consume_agent_call(
+                "CALL",
+                "NOTE",
+                "clerk",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+        assert!(
+            !s.consume_agent_call(
+                "FORGED",
+                "NOTE",
+                "clerk",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_device_issued_call_requires_that_same_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        s.issue_agent_call("CALL", "NOTE", "clerk", "token:device-one")
+            .unwrap();
+        for author in [
+            crate::Author::Session("owner".into()),
+            crate::Author::Token("device-two".into()),
+        ] {
+            assert!(
+                !s.consume_agent_call("CALL", "NOTE", "clerk", &author)
+                    .unwrap()
+            );
+        }
+        assert!(
+            s.consume_agent_call(
+                "CALL",
+                "NOTE",
+                "clerk",
+                &crate::Author::Token("device-one".into())
+            )
+            .unwrap()
+        );
+    }
 
     #[test]
     fn a_call_is_recorded_once() {

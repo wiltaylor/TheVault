@@ -490,8 +490,8 @@ fn device_file_thread_apply_uses_stored_body_and_sensitive_code_requires_session
             let mut forged = p.clone();
             forged["after"] = json!("not WCL");
             let (status, body) = api.apply_as(&write, &forged);
+            assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
             if sensitive {
-                assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
                 assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
                 let login = api
                     .client
@@ -518,6 +518,7 @@ fn device_file_thread_apply_uses_stored_body_and_sensitive_code_requires_session
                     .unwrap();
                 assert_eq!(res.status(), StatusCode::OK, "{}", res.text().unwrap());
             } else {
+                let (status, body) = api.apply_as(&api.token(), &p);
                 assert_eq!(status, StatusCode::OK, "{body}");
             }
             assert_eq!(api.script("phone_test").as_deref(), Some(source.as_str()));
@@ -843,7 +844,7 @@ fn device_file_wcl_only_thread_changes_need_a_session_and_warn_only_for_shipped_
     for token in [api.token(), api.token_of("wcl_phone", "write")] {
         let (status, body) = api.apply_as(&token, &p);
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-        assert!(body.to_string().contains("signed-in admin"));
+        assert!(body.to_string().contains("signed-in admin") || body["error"] == "needs_admin");
     }
     let (status, body) = api.apply_signed_in(&p);
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -1222,17 +1223,63 @@ impl Api {
     }
 
     /// A memo whose body calls `agent` with call id `call`.
-    fn call_note(&self, agent: &str, call: &str) {
+    fn call_note(&self, agent: &str, _call: &str) {
+        let login = self
+            .client
+            .post(self.server.url("/api/login"))
+            .json(&json!({ "password": testkit::PASSWORD }))
+            .send()
+            .unwrap();
+        assert!(login.status().is_success());
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let saved: Value = self
+            .client
+            .post(self.server.url("/api/notes?type=memo"))
+            .header("cookie", cookie)
+            .json(&json!({ "note": { "fields": { "title": "Ask" } } }))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
+        let issued: Value = self
+            .client
+            .post(self.server.url("/api/agents/calls"))
+            .header("cookie", cookie)
+            .json(&json!({ "note": saved["id"], "agent": agent }))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
+        let call = issued["call"].as_str().unwrap();
         let text = format!("[@Keeper tidy the script.](agent:{agent}?call={call})");
-        self.ok(
-            "POST",
-            "/api/notes?type=memo",
-            json!({ "note": {
+        let response = self
+            .client
+            .put(
+                self.server
+                    .url(&format!("/api/notes/{}", saved["id"].as_str().unwrap())),
+            )
+            .header("cookie", cookie)
+            .json(&json!({ "base_version": saved["version"], "note": {
                 "fields": { "title": "Ask" },
                 "blocks": [{ "kind": "content", "labels": ["body"], "blocks": [
                     { "kind": "paragraph", "fields": { "text": text } },
                 ] }],
-            } }),
+            } }))
+            .send()
+            .unwrap();
+        assert!(
+            response.status().is_success(),
+            "{}",
+            response.text().unwrap()
         );
     }
 
@@ -1553,6 +1600,8 @@ fn a_call_from_a_note_leaves_a_script_proposal_that_a_phone_applies_or_discards_
     let mut forged = stored["data"].clone();
     forged["after"] = json!("fn run() -> Result[(), string] {\n    Err(\"forged\")\n}\n");
     let (status, body) = api.apply_as(&write, &forged);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = api.apply_as(&api.token(), &stored["data"]);
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["op"], "script_change");
     assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
@@ -2036,11 +2085,13 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
             let p = read["proposals"][0]["data"].clone();
             let write = api.token_of("phone", "write");
             let (status, body) = api.apply_as(&write, &p);
+            assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
             if mode == "plain" {
+                let (status, body) = api.apply_as(&api.token(), &p);
                 assert_eq!(status, StatusCode::OK, "{mode}: {body}");
             } else {
                 assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
-                assert!(body.to_string().contains("signed-in admin"), "{body}");
+                assert_eq!(body["error"], "needs_admin", "{body}");
                 assert_eq!(
                     api.script("custom_messages").as_deref(),
                     Some(current.as_str())

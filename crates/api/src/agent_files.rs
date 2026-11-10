@@ -12,10 +12,8 @@
 //! - `DELETE /api/agents/{name}` (admin): removes the file. Its threads stay. The built-in agent
 //!   is a 400 `built_in`.
 //!
-//! Agent files are definitions, so changing one needs `admin`, as types and tasks do
-//! (`auth::required_scope` answers `admin` for any write it does not list). A paired device's
-//! `write` token may also write them, so the apps edit agents as the web app does (see
-//! `auth::device_writes_definition`).
+//! Creating, editing or deleting an agent requires a signed-in session or a non-agent admin
+//! API token. Paired-device, write-scoped and agent-prefixed tokens cannot write definitions.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -191,15 +189,16 @@ fn mention_json(a: &Agent) -> Value {
     for t in &a.triggers {
         if let TriggerWhen::Mention(m) = &t.when {
             if m.types.is_empty() {
-                return json!({ "types": null });
+                return json!({ "types": null, "excluded_types": schema::AGENT_CALL_EXCLUDED_TYPES });
             }
             types.extend(m.types.iter().map(String::as_str));
         }
     }
     // No mention trigger of its own: every type may call it (agents G16).
     if types.is_empty() {
-        return json!({ "types": null });
+        return json!({ "types": null, "excluded_types": schema::AGENT_CALL_EXCLUDED_TYPES });
     }
+    types.retain(|t| !schema::AGENT_CALL_EXCLUDED_TYPES.contains(t));
     types.sort_unstable();
     types.dedup();
     json!({ "types": types })

@@ -16,6 +16,7 @@ import { type DraggedBlock, matchesQuery } from "./blockTools";
 import { COLUMNS_MAX, COLUMNS_MIN, newColumns } from "../blocks/columns";
 import { type MenuItem, type MenuPos, SuggestMenu } from "./SlashMenu";
 import type { SlotContext } from "./SlotHolder";
+import { useThisNote } from "../views/thisNote";
 import { adoptOwner } from "./solidNodeView";
 import { useControlBinding } from "../controls/binding";
 import { CONTROL_INFO, CONTROL_KINDS, fieldKindText, fittingFields, newControl } from "../controls/model";
@@ -130,6 +131,7 @@ export function ContentEditor(props: {
 }) {
   // The fields a control inserted here can bind: the note's, or the template's type's.
   const binding = useControlBinding();
+  const note = useThisNote();
   let host!: HTMLDivElement;
   let wrap!: HTMLDivElement;
   let fileInput!: HTMLInputElement;
@@ -183,6 +185,7 @@ export function ContentEditor(props: {
     editor = new Editor({
       element: host,
       extensions: editorExtensions({
+        note,
         slash: { onChange: track("slash", setSlash), onKey: keys("slash") },
         template: props.template && {
           slots: props.template.slots,

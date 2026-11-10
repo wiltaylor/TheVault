@@ -1,5 +1,5 @@
 // Calls of agents committed in notes (agents G19). The editor's `@` picker commits a call as one
-// link, `[@<Label> <request>](agent:<name>?call=<ULID>)`, with a call id made here, and the
+// link, `[@<Label> <request>](agent:<name>?call=<ULID>)`, with a server-issued call id, and the
 // note's save carries it whole. The server answers each call id once and never rewrites the
 // note; `GET /api/agents/calls/{call}` says what became of a call: 404 while the server has not
 // seen it yet, then its thread (null for a call it did not run) and whether the thread runs.
@@ -65,6 +65,8 @@ export const CALL_POLL_MS = 3_000;
 export const CALL_POLL_FOR_MS = 60_000;
 
 interface Entry {
+  call: string;
+  note?: string;
   status: Accessor<CallStatus>;
   set: Setter<CallStatus>;
   since: number;
@@ -81,7 +83,7 @@ async function ask(call: string) {
   clearTimeout(e.timer);
   e.timer = undefined;
   try {
-    const got = await api.agentCall(call);
+    const got = e.note ? await api.agentCall(e.call, e.note) : await api.agentCall(e.call);
     e.set({ state: got.thread ? "answered" : "unanswered", thread: got.thread, running: got.running });
     // The apps may not have the live stream: while the thread runs, ask again now and then.
     if (got.running) e.timer = setTimeout(() => void ask(call), RUNNING_POLL_MS);
@@ -89,6 +91,7 @@ async function ask(call: string) {
     if (!(err instanceof ApiError && err.status === 404)) console.warn(`call ${call}:`, err);
     // Not seen yet: the note's save may still be on its way.
     if (Date.now() - e.since < CALL_POLL_FOR_MS) e.timer = setTimeout(() => void ask(call), CALL_POLL_MS);
+    else e.set({ state: "unanswered", thread: null, running: false });
   } finally {
     e.busy = false;
   }
@@ -108,13 +111,14 @@ createRoot(() => {
 });
 
 /** Reactive: what became of call `call`, asked of the server the first time a view wants it. */
-export function callStatus(call: string): CallStatus {
-  let e = entries.get(call);
+export function callStatus(call: string, note?: string): CallStatus {
+  const key = `${call}/${note ?? ""}`;
+  let e = entries.get(key);
   if (!e) {
     const [status, set] = createRoot(() => createSignal<CallStatus>(SENDING));
-    e = { status, set, since: Date.now(), busy: false };
-    entries.set(call, e);
-    void ask(call);
+    e = { call, note, status, set, since: Date.now(), busy: false };
+    entries.set(key, e);
+    void ask(key);
   }
   return e.status();
 }
@@ -130,8 +134,8 @@ export function callsSaved() {
 }
 
 /** Where clicking call `call` of `agent` goes: its thread, or the agent's chat until it has one. */
-export function callTarget(agent: string, call: string): string {
-  const thread = entries.get(call)?.status().thread;
+export function callTarget(agent: string, call: string, note?: string): string {
+  const thread = entries.get(`${call}/${note ?? ""}`)?.status().thread;
   return thread ? `/agents/${agent}?thread=${thread}` : `/agents/${agent}`;
 }
 

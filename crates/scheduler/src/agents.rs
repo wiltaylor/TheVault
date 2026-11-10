@@ -101,12 +101,22 @@ pub trait AgentRunner: Send + Sync {
     ) -> Result<String, String>;
 
     /// Run one turn of `agent` on thread `thread` whose user message is `prompt`.
-    fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str) -> TurnReport;
+    fn run_turn(
+        &self,
+        agent: &Agent,
+        thread: &str,
+        prompt: &str,
+        scope: Option<state::Scope>,
+        caller: Option<&Author>,
+    ) -> TurnReport;
 }
 
 /// One run to start: an agent's trigger, the first message and the thread's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentJob {
+    /// Caller ceiling for explicitly dispatched runs. Autonomous runs use the agent scope.
+    pub scope: Option<state::Scope>,
+    pub caller: Option<Author>,
     pub agent: String,
     pub trigger: String,
     pub prompt: String,
@@ -267,6 +277,8 @@ impl AgentPlan {
                 title: run_title(trigger, now, Some(&schedule.timezone)),
                 thread: None,
                 origin: None,
+                scope: None,
+                caller: None,
             });
         }
         for h in std::mem::take(&mut self.heard) {
@@ -349,6 +361,9 @@ impl AgentPlan {
     /// (agents G16). A trigger with no `type` is not called from an `agent_thread` or
     /// `agent_memory` note.
     fn callees(&self, type_name: &str) -> Vec<(Agent, Trigger)> {
+        if schema::AGENT_CALL_EXCLUDED_TYPES.contains(&type_name) {
+            return Vec::new();
+        }
         self.agents
             .values()
             .filter_map(|a| {
@@ -547,6 +562,13 @@ impl Scheduler {
         let mut plan = self.plan();
         for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
             let deleting = plan.agents.deleting.remove(&s.id);
+            // Scan the latest version, including refusals for agent-written calls.
+            plan.agents.mentions.remove(&s.id);
+            if s.event != Event::Delete {
+                plan.agents
+                    .mentions
+                    .insert(s.id.clone(), s.type_name.clone());
+            }
             if matches!(author, Author::Agent(_) | Author::AgentMail(_)) {
                 continue;
             }
@@ -555,14 +577,6 @@ impl Scheduler {
                 Event::Update => "update",
                 Event::Delete => "delete",
             };
-            // A saved note is read for calls committed in it (agents G19).
-            if s.event == Event::Delete {
-                plan.agents.mentions.remove(&s.id);
-            } else {
-                plan.agents
-                    .mentions
-                    .insert(s.id.clone(), s.type_name.clone());
-            }
             plan.agents.heard.push(Heard {
                 op,
                 id: s.id.clone(),
@@ -650,6 +664,8 @@ impl Scheduler {
                 title: run_title(&e.trigger.name, now, None),
                 thread: None,
                 origin: None,
+                scope: None,
+                caller: None,
             });
         }
         let mut starts: Vec<AgentJob> = called_runs
@@ -699,6 +715,10 @@ impl Scheduler {
         let Ok(note) = self.writer.read(id) else {
             return Vec::new();
         };
+        // Recheck the last persisted writer, not just the queued notification.
+        let Ok(Some(version)) = self.writer.state().version(id, &note.version) else {
+            return Vec::new();
+        };
         let found = mentions::calls(&note.doc);
         if found.is_empty() {
             return Vec::new();
@@ -731,6 +751,22 @@ impl Scheduler {
                     }
                 }
             };
+            if state
+                .agent_call_bound_elsewhere(&call.call, id, &call.agent)
+                .unwrap_or(true)
+            {
+                let _ = state.refuse_agent_call_copy(&call.call, id, &call.agent);
+                continue;
+            }
+            if matches!(version.author, Author::Agent(_))
+                || !self.call_versions_trusted(id, &call.call, &call.agent)
+                || !state
+                    .consume_agent_call(&call.call, id, &call.agent, &version.author)
+                    .unwrap_or(false)
+            {
+                record(None);
+                continue;
+            }
             let Some((agent, trigger)) = callees.iter().find(|(a, _)| a.name == call.agent) else {
                 eprintln!(
                     "call {} in note {id}: agent {:?} may not be called from a {} note, or is disabled or missing",
@@ -765,6 +801,8 @@ impl Scheduler {
                 ),
                 thread: None,
                 origin: Some(MENTION_ORIGIN),
+                scope: None,
+                caller: None,
             };
             if self.plan().agents.over_limit(&agent.name, now) {
                 let admitted = self.plan().agents.admit(job.clone(), now);
@@ -777,6 +815,7 @@ impl Scheduler {
             }
             // Full queue: no thread is opened, and the call is not recorded (TV-86 F2).
             if self.plan().agents.room(&agent.name, now).is_err() {
+                let _ = state.release_agent_call(&call.call);
                 eprintln!(
                     "agent {:?}: call {} in note {id} is not run: its queue is full; the next save of the note asks again",
                     agent.name, call.call
@@ -792,6 +831,7 @@ impl Scheduler {
                 Ok(t) => t,
                 Err(e) => {
                     // Not recorded: the next save tries again.
+                    let _ = state.release_agent_call(&call.call);
                     eprintln!(
                         "agent {:?}: the thread for call {} in note {id} could not be opened: {e}",
                         agent.name, call.call
@@ -835,6 +875,34 @@ impl Scheduler {
         admits
     }
 
+    /// A later issuer save cannot launder an earlier foreign write. Use persisted
+    /// history rather than pending scans, which are coalesced and lost on restart.
+    fn call_versions_trusted(&self, note: &str, call: &str, agent: &str) -> bool {
+        let state = self.writer.state();
+        let Ok(Some((issued_ms, principal))) = state.agent_call_issuance(call, note, agent) else {
+            return false;
+        };
+        let Ok(versions) = state.history(note) else {
+            return false;
+        };
+        for version in versions.into_iter().filter(|v| v.at_ms >= issued_ms) {
+            let (kind, name) = version.author.parts();
+            if format!("{kind}:{name}") == principal {
+                continue;
+            }
+            let Ok(doc) = schema::Doc::parse(&version.content, note) else {
+                return false;
+            };
+            if mentions::calls(&doc)
+                .iter()
+                .any(|found| found.call.call == call)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Run notes sent to `agent` (TV-77 D1): open a thread of origin [`DISPATCH_ORIGIN`] about
     /// `notes` titled `title`, and start a run on it whose first message is `prompt`, now or once
     /// one of the agent's slots is free. The hourly limit and the queue are checked first, so a
@@ -846,6 +914,8 @@ impl Scheduler {
         notes: &[String],
         title: &str,
         prompt: &str,
+        scope: state::Scope,
+        caller: Author,
     ) -> Result<String, DispatchRefused> {
         let runner = self.runner.get().ok_or(DispatchRefused::NoRunner)?.clone();
         let now = self.clock.now_ms();
@@ -867,6 +937,8 @@ impl Scheduler {
             title: title.to_owned(),
             thread: Some(thread.clone()),
             origin: Some(DISPATCH_ORIGIN),
+            scope: Some(scope),
+            caller: Some(caller),
         };
         let admitted = {
             let mut plan = self.plan();
@@ -951,7 +1023,8 @@ impl Scheduler {
                 if let Err(e) = state.set_agent_run_thread(id, &thread) {
                     eprintln!("agent {:?}: recording the run's thread: {e}", agent.name);
                 }
-                let r = runner.run_turn(&agent, &thread, &job.prompt);
+                let r =
+                    runner.run_turn(&agent, &thread, &job.prompt, job.scope, job.caller.as_ref());
                 (r.outcome, r.log, Some(thread))
             }
             Err(e) => (Err(e), Vec::new(), None),
