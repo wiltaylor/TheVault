@@ -855,7 +855,9 @@ impl Scheduler {
         }
         // Only acknowledge after trigger matching and admission, not before debounce.
         for id in admitted_clearances {
-            if failed_notes.contains(&id) { continue; }
+            if failed_notes.contains(&id) {
+                continue;
+            }
             let _ = self.writer.state().acknowledge_agent_safety_clearance(&id);
         }
         for note in processed {
@@ -990,7 +992,9 @@ impl Scheduler {
         op: &str,
     ) -> bool {
         event.matches(op, ty)
-            && self.writer.agent_may_read(id)
+            // Delete jobs carry the snapshot checked by deleting() before removal.
+            // Every live-note job must recheck its current content at execution.
+            && (op == "delete" || self.writer.agent_may_read(id))
             && (!is_agent_type(ty) || !event.types.is_empty())
             && (op == "delete"
                 || self

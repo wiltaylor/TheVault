@@ -18,31 +18,32 @@ thread_local! {
 impl Writer {
     /// Held and unindexed notes excluded before query conditions are evaluated.
     /// Call while holding the note index read guard.
-    pub fn agent_excluded_notes(&self, index: &index::Index) -> Result<std::collections::HashSet<String>, String> {
-            let mut held = self.state().held_agent_note_ids().map_err(err)?;
-            if self.state()
-                .meta("agent_safety.activation_ms")
-                .map_err(err)?
-                .is_some()
-            {
-                // Missing cache rows must fail closed too, without reading note files
-                // or evaluating the caller's condition against unreviewed content.
-                let known =
-                    serde_json::to_string(&self.state().agent_safety_index_ids().map_err(err)?)
-                        .map_err(err)?;
-                let mut stmt = index
-                    .connection()
-                    .prepare(
-                        "SELECT id FROM notes WHERE id NOT IN (SELECT value FROM json_each(?1))",
-                    )
-                    .map_err(err)?;
-                let rows = stmt
-                    .query_map([known], |r| r.get::<_, String>(0))
-                    .map_err(err)?;
-                for id in rows {
-                    held.insert(id.map_err(err)?);
-                }
+    pub fn agent_excluded_notes(
+        &self,
+        index: &index::Index,
+    ) -> Result<std::collections::HashSet<String>, String> {
+        let mut held = self.state().held_agent_note_ids().map_err(err)?;
+        if self
+            .state()
+            .meta("agent_safety.activation_ms")
+            .map_err(err)?
+            .is_some()
+        {
+            // Missing cache rows must fail closed too, without reading note files
+            // or evaluating the caller's condition against unreviewed content.
+            let known = serde_json::to_string(&self.state().agent_safety_index_ids().map_err(err)?)
+                .map_err(err)?;
+            let mut stmt = index
+                .connection()
+                .prepare("SELECT id FROM notes WHERE id NOT IN (SELECT value FROM json_each(?1))")
+                .map_err(err)?;
+            let rows = stmt
+                .query_map([known], |r| r.get::<_, String>(0))
+                .map_err(err)?;
+            for id in rows {
+                held.insert(id.map_err(err)?);
             }
+        }
         Ok(held)
     }
 

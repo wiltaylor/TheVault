@@ -213,7 +213,11 @@ fn saved_response(status: StatusCode, headers: &HeaderMap, s: Saved) -> Response
     )
 }
 
-pub async fn list(State(w): Shared, Caller(author): Caller, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+pub async fn list(
+    State(w): Shared,
+    Caller(author): Caller,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
     let agent = crate::auth::is_agent_token(&author);
     let archived = crate::query::archived_param(q.archived.as_deref())?;
     let notes = blocking(w, move |w| {
@@ -245,7 +249,9 @@ pub async fn list(State(w): Shared, Caller(author): Caller, Query(q): Query<List
         })
         .collect();
     let mut result = json!({ "notes": notes });
-    if agent { result["notice"] = json!("some notes may be held"); }
+    if agent {
+        result["notice"] = json!("some notes may be held");
+    }
     Ok(Json(result))
 }
 
@@ -278,7 +284,11 @@ pub async fn read(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     if crate::auth::is_agent_token(&author) && !w.agent_may_read(&id) {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "held", "Note is unavailable to agents"));
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "held",
+            "Note is unavailable to agents",
+        ));
     }
     let (note, safety) = blocking(w, move |w| {
         let note = w.read(&id)?;
@@ -573,10 +583,13 @@ pub async fn graph(
         let mut graph = w.graph(&id, limit)?;
         if agent {
             graph.neighbours.retain(|n| w.agent_may_read(&n.id));
-            graph.edges.retain(|e| w.agent_may_read(&e.from) && w.agent_may_read(&e.to));
+            graph
+                .edges
+                .retain(|e| w.agent_may_read(&e.from) && w.agent_may_read(&e.to));
         }
         Ok::<_, writer::Error>(graph)
-    }).await?;
+    })
+    .await?;
     let c = &g.center.id;
     let direction = |n: &str| {
         let out = g.edges.iter().any(|e| &e.from == c && e.to == n);
@@ -600,7 +613,9 @@ pub async fn graph(
         "edges": edges,
         "truncated": g.truncated,
     });
-    if agent { result["notice"] = json!("some notes may be held"); }
+    if agent {
+        result["notice"] = json!("some notes may be held");
+    }
     Ok(Json(result))
 }
 

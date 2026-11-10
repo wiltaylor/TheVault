@@ -583,6 +583,14 @@ pub async fn run_route(
     Path(name): Path<String>,
     Json(b): Json<RunBody>,
 ) -> Result<Json<Value>, ApiError> {
+    // Carry the external-agent identity into the script worker thread, where vault
+    // reads and writes enforce the same held-note rules as internal agents.
+    let by = if crate::auth::is_agent_token(&by) {
+        let Author::Token(name) = by else { unreachable!() };
+        Author::Agent(format!("token:{name}"))
+    } else {
+        by
+    };
     let ran = blocking(w, move |w| {
         let Some(host) = host_for(w) else {
             return Err(ApiError::new(
