@@ -428,6 +428,7 @@ fn login_validation_and_namespace_never_echo_credentials() {
     for (field, value) in [
         ("totp_seed", json!("made-up-invalid-seed!")),
         ("origins", json!(["https://example.com/path"])),
+        ("origins", json!(["https://example.com/a/.."])),
         ("origins", json!(["https://user:pass@example.com"])),
         ("origins", json!(["https://example.com?query"])),
         ("origins", json!(["file:///tmp"])),
@@ -462,6 +463,29 @@ fn login_mutations_refuse_agent_device_and_write_tokens() {
         expect(caller.delete(api.server.url("/api/secrets/site")).send().unwrap(), 403);
     }
     expect(api.client.delete(api.server.url("/api/secrets/site")).send().unwrap(), 200);
+}
+
+#[test]
+fn login_owner_session_and_canonical_origins() {
+    let api = Api::start();
+    let res = api.client.post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let cookie = res.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned();
+    let mut body = login_body();
+    body["origins"] = json!(["https://BÜCHER.example:443", "http://127.0.0.1:8080", "http://[::1]:80"]);
+    let plain = Client::new();
+    let saved = expect(plain.put(api.server.url("/api/secrets/site"))
+        .header(reqwest::header::COOKIE, &cookie).json(&body).send().unwrap(), 200);
+    assert_eq!(saved["origins"], json!(["https://xn--bcher-kva.example", "http://127.0.0.1:8080", "http://[::1]"]));
+    body["origins"] = json!([]);
+    body["totp_seed"] = Value::Null;
+    let saved = expect(plain.put(api.server.url("/api/secrets/site"))
+        .header(reqwest::header::COOKIE, &cookie).json(&body).send().unwrap(), 200);
+    assert_eq!(saved["origins"], json!([]));
+    assert_eq!(saved["has_totp"], false);
+    expect(plain.delete(api.server.url("/api/secrets/site"))
+        .header(reqwest::header::COOKIE, &cookie).send().unwrap(), 200);
 }
 
 #[test]

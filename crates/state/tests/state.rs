@@ -470,6 +470,37 @@ fn secrets_round_trip_and_list_without_values() {
 }
 
 #[test]
+fn login_credentials_are_separate_encrypted_and_name_bound() {
+    let dir = TempDir::new().unwrap();
+    let key = SecretKey::generate();
+    let state = open_with_key(&dir, key.clone());
+    let login = state::LoginSecret { username: "made-up-user".into(), password: "made-up-password".into(),
+        totp_seed: Some("JBSWY3DPEHPK3PXP".into()), origins: vec!["https://example.com".into()] };
+    state.set_login_secret("site", &login).unwrap();
+    assert_eq!(state.get_secret("site").unwrap(), None);
+    assert!(state.list_secrets().unwrap().is_empty());
+    assert!(state.set_secret("site", "string collision").is_err());
+    state.set_secret("plain", "ordinary").unwrap();
+    assert!(state.set_login_secret("plain", &login).is_err());
+    let debug = format!("{:?}", state.list_login_secrets().unwrap());
+    assert!(!debug.contains(&login.password));
+    assert!(!debug.contains(login.totp_seed.as_ref().unwrap()));
+    drop(state);
+    let bytes = read_db_bytes(&dir);
+    for marker in [&login.username, &login.password, login.totp_seed.as_ref().unwrap()] {
+        assert!(!contains(&bytes, marker.as_bytes()));
+    }
+    let reopened = open_with_key(&dir, key);
+    assert_eq!(reopened.get_login_secret("site").unwrap().unwrap().password, login.password);
+    drop(reopened);
+    let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+    conn.execute("UPDATE login_secrets SET name='swapped' WHERE name='site'", []).unwrap();
+    drop(conn);
+    let state = open_with_key(&dir, SecretKey::generate());
+    assert!(state.get_login_secret("swapped").is_err());
+}
+
+#[test]
 fn secret_plaintext_never_appears_in_state_db_bytes() {
     let dir = TempDir::new().unwrap();
     let plaintext = "plaintext-marker-7f3a9c2e-do-not-store";
@@ -1168,7 +1199,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 20);
+    assert_eq!(version, 21);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.
