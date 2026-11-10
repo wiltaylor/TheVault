@@ -751,6 +751,18 @@ pub struct Discard {
     thread: String,
 }
 
+/// Read the authoritative waiting proposal, never the caller's replacement content.
+fn waiting_in_thread(w: &writer::Writer, event: &str, change: &Value) -> Option<Value> {
+    let thread = change["thread"].as_str().filter(|s| !s.is_empty())?;
+    let id = change["id"].as_str().filter(|s| !s.is_empty())?;
+    let t = agent_threads::Thread::read(w, thread).ok()?;
+    t.transcript
+        .proposals
+        .iter()
+        .find(|p| p.id() == id && p.event == event && p.waits())
+        .map(|p| p.data.clone())
+}
+
 /// `POST /api/ai/discard` (write): the user discarded a proposal of a thread, recorded there so
 /// the reopened thread shows it and the next turn tells the model (agents G8, ai D29). It
 /// changes nothing else.
