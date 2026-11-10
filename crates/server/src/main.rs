@@ -120,9 +120,6 @@ fn main() -> anyhow::Result<()> {
     writer
         .upgrade_shipped_defaults(writer::Upkeep::Home)
         .context("bringing the vault's shipped defaults up to date")?;
-    api::recover_browser_profiles(&writer)
-        .await
-        .context("recovering temporary browser profiles")?;
     handlers.start(&writer);
     classifiers.start(&writer).context("starting classifiers")?;
     // The script hosts' HTTP clients block, so they are made outside the async runtime. Tasks
@@ -152,6 +149,8 @@ fn main() -> anyhow::Result<()> {
         },
     ));
     let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
+    runtime.block_on(api::recover_browser_profiles(&writer))
+        .context("recovering temporary browser profiles")?;
     // In the runtime, so agent trigger runs use it (agents G12).
     let app = {
         let _entered = runtime.enter();
