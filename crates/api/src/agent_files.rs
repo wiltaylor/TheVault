@@ -326,10 +326,11 @@ pub async fn read(
                 Err(e) => Some(Err(e)),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if !login_full {
+        let login_hidden = !login_full && !agent.permissions.browser_secrets.is_empty();
+        if login_hidden {
             agent.permissions.browser_secrets.clear();
         }
-        if hidden || !login_full {
+        if hidden || login_hidden {
             wcl = agent.to_wcl();
         }
         let account = crate::ai_settings::agent_account_name(w, &agent);

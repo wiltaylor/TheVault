@@ -92,6 +92,7 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let (agent, error) = match Agent::parse(name, &wcl) {
         Ok(mut a) => {
+            let login_count = a.permissions.browser_secrets.len();
             a.permissions.browser_secrets.retain(|n| {
                 by.permissions.browser
                     && by.permissions.browser_secrets.contains(n)
@@ -99,7 +100,9 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
                         .browser_secret_active(&by.name, n)
                         .unwrap_or(false)
             });
-            wcl = a.to_wcl();
+            if login_count != a.permissions.browser_secrets.len() {
+                wcl = a.to_wcl();
+            }
             let hidden = name != by.name && a.permissions.outbox.conditions.take().is_some();
             if hidden {
                 wcl = a.to_wcl();
