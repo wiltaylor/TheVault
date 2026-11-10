@@ -126,6 +126,12 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrantedScope(pub Scope);
 
+/// Agent credentials share one identity check. TV-142 will switch this implementation to
+/// stored token kind when that representation lands after TV-140.
+pub(crate) fn is_agent_token(author: &Author) -> bool {
+    matches!(author, Author::Token(name) if name.starts_with("agent-"))
+}
+
 /// Whether `path` is `/api/devices/{id}/push`, `/api/devices/{id}/bases` or
 /// `/api/devices/{id}/health`, which a device sets for itself.
 fn is_device_own(path: &str) -> bool {
@@ -430,7 +436,7 @@ pub async fn authenticate(
                 || path.starts_with("/api/integrations/gitsync/")));
     if !granted.scope.allows(needed)
         || (agent_admin_route
-            && matches!(&granted.author, Author::Token(name) if name.starts_with("agent-")))
+            && is_agent_token(&granted.author))
     {
         return ApiError::new(
             StatusCode::FORBIDDEN,

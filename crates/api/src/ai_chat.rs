@@ -1862,7 +1862,7 @@ impl Turn {
                 return;
             }
         };
-        if matches!(&self.owner, Author::Token(name) if name.starts_with("agent-")) {
+        if crate::auth::is_agent_token(&self.owner) {
             setup.direct.agents = false;
             setup.direct.skills = false;
         }

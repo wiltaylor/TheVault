@@ -93,8 +93,8 @@ pub async fn issue_call(
 fn call_issuer_allowed(author: &state::Author, scope: state::Scope, paired: bool) -> bool {
     match author {
         state::Author::Session(_) => true,
-        state::Author::Token(name) => {
-            paired && scope == state::Scope::Write && !name.starts_with("agent-")
+        state::Author::Token(_) => {
+            paired && scope == state::Scope::Write && !crate::auth::is_agent_token(author)
         }
         _ => false,
     }

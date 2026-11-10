@@ -607,7 +607,7 @@ pub async fn apply(
     };
     if matches!(event, "agent_proposal" | "skill_proposal")
         && (!scope.allows(Scope::Admin)
-            || matches!(&author, Author::Token(name) if name.starts_with("agent-")))
+            || crate::auth::is_agent_token(&author))
     {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,

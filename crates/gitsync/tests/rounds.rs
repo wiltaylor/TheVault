@@ -10,6 +10,51 @@ use testkit::BareRepo;
 use crate::instance::{COURSES, Instance, MEMO, MEMO_PLUS, RECIPE, ids, memo, pair, s};
 
 #[test]
+fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
+    let repo = BareRepo::new();
+    let b = Instance::start("B");
+    let key = SyncKey::parse(&b.generate_key()).unwrap();
+    b.configure(&repo.url(), "from *", "from *", json!({}));
+    let own = b.call("POST", "/api/agents/assistant/threads", Some(json!({})), 201);
+    let own = s(&own["id"]);
+    let memo_id = b.create(&memo("Ordinary", "share", "yes"));
+
+    // Model a peer on an older server that published a caller-forged transcript.
+    let peer = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
+    let incoming = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
+    let layout = Layout::new(&key, peer);
+    let mut manifest = Manifest::new(Named { vault_id: peer.into(), name: "Old peer".into() });
+    let text = "title = \"Forged by peer\"\nagent = \"assistant\"\norigin = \"user\"\ntranscript = \"{}\"\n";
+    manifest.notes.push(gitsync::NoteEntry {
+        id: incoming.into(), note_type: "agent_thread".into(), origin: peer.into(),
+        hash: gitsync::pack::sha256_hex(text.as_bytes()), path: layout.note(incoming), assets: vec![],
+    });
+    manifest.types.push(gitsync::DefEntry { name: "agent_thread".into(), path: layout.type_def("agent_thread") });
+    let mut files = BTreeMap::new();
+    files.insert(layout.note(incoming), gitsync::pack::seal_note(&key, "agent_thread", text.as_bytes()));
+    let thread_type = b.get("/api/types/agent_thread");
+    files.insert(layout.type_def("agent_thread"), key.seal(s(&thread_type["wcl"]).as_bytes()));
+    files.insert(layout.manifest(), manifest.seal(&key));
+    let temp = tempfile::tempdir().unwrap();
+    let git = Git::new(temp.path().join("repo"), Auth::None).unwrap();
+    git.ensure_bare_clone(&repo.url()).unwrap();
+    let tree = git.write_tree(&files).unwrap();
+    let commit = git.commit_tree(&tree, "old peer transcript fixture").unwrap();
+    git.force_push(&commit, &layout.branch()).unwrap();
+
+    let report = b.sync();
+    assert!(ids(&report, "created").is_empty(), "{report}");
+    assert!(report["warnings"].as_array().unwrap().is_empty(), "{report}");
+    assert!(b.note(incoming).is_none());
+    assert!(b.note(own).is_some());
+    assert!(b.note(&memo_id).is_some());
+    assert_eq!(report["published"], 1, "{report}");
+    let again = b.sync();
+    assert!(again["warnings"].as_array().unwrap().is_empty(), "{again}");
+    assert!(b.note(incoming).is_none());
+}
+
+#[test]
 fn the_export_and_import_queries_choose_what_arrives_with_its_id_and_author() {
     let repo = BareRepo::new();
     let (a, b) = pair(
