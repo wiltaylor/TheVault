@@ -547,6 +547,9 @@ impl Scheduler {
         let mut plan = self.plan();
         for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
             let deleting = plan.agents.deleting.remove(&s.id);
+            // Only an editor session can commit a call. A later untrusted write
+            // must also cancel a pending scan of the same note.
+            plan.agents.mentions.remove(&s.id);
             if matches!(author, Author::Agent(_)) {
                 continue;
             }
@@ -556,9 +559,7 @@ impl Scheduler {
                 Event::Delete => "delete",
             };
             // A saved note is read for calls committed in it (agents G19).
-            if s.event == Event::Delete {
-                plan.agents.mentions.remove(&s.id);
-            } else {
+            if s.event != Event::Delete && matches!(author, Author::Session(_)) {
                 plan.agents
                     .mentions
                     .insert(s.id.clone(), s.type_name.clone());
@@ -699,6 +700,20 @@ impl Scheduler {
         let Ok(note) = self.writer.read(id) else {
             return Vec::new();
         };
+        // Imported content remains untrusted even when saved through the editor.
+        if matches!(
+            note.type_name.as_str(),
+            "email" | "message" | "call" | "conversation" | "event" | "email_thread"
+        ) {
+            return Vec::new();
+        }
+        // Recheck the last persisted writer, not just the queued notification.
+        let Ok(Some(version)) = self.writer.state().version(id, &note.version) else {
+            return Vec::new();
+        };
+        if !matches!(version.author, Author::Session(_)) {
+            return Vec::new();
+        }
         let found = mentions::calls(&note.doc);
         if found.is_empty() {
             return Vec::new();
