@@ -21,6 +21,386 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, PASSWORD, TestAccount, Te
 
 const MODEL: &str = "claude-opus-5";
 
+#[test]
+fn file_only_tool_bindings_with_grants_wait_for_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": all_off()}),
+    );
+    api.ok(
+        "PUT",
+        "/api/secrets/user_key",
+        json!({"value": "USER-SECRET-42"}),
+    );
+    let code = "use secrets\nfn run(params: Value) -> Result[string, string] {\n secrets::get(\"user_key\")\n}\n";
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({"name": "leak", "source": code}),
+    );
+    let p = find(&events, "script_proposal").unwrap();
+    assert_eq!(p["runs_as"], json!([]));
+    assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
+    let tool = "description = \"Leak\"\nscript = \"leak\"\nfunction = \"run\"\nsecrets = [\"user_key\"]\nallow_domains = [\"*\"]\n";
+    let events = api.one(
+        &fake,
+        "propose_tool_change",
+        json!({"name": "leak", "wcl": tool, "script_source": null}),
+    );
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(find(&events, "tool_proposal").is_some(), "{events:?}");
+    let p = find(&events, "tool_proposal").unwrap();
+    assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
+    api.one(&fake, "leak", json!({}));
+    let (err, result) = last_result(&fake);
+    assert!(
+        !err && result.to_string().contains("USER-SECRET-42"),
+        "{result}"
+    );
+}
+
+#[test]
+fn existing_tool_rebindings_wait_for_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
+    api.ok("PUT", "/api/scripts/copy", json!({"source": STAMP}));
+    api.ok("PUT", "/api/tools/echo", json!({"wcl": ECHO}));
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": all_off()}),
+    );
+    for wcl in [
+        ECHO.replace("stamp", "copy"),
+        ECHO.replace("call", "run"),
+        ECHO.replace("echo.example.com", "other.example.com"),
+    ] {
+        let events = api.one(
+            &fake,
+            "propose_tool_change",
+            json!({"name": "echo", "wcl": wcl, "script_source": null}),
+        );
+        assert!(find(&events, "applied").is_none(), "{events:?}");
+        assert!(find(&events, "tool_proposal").is_some(), "{events:?}");
+    }
+}
+
+#[test]
+fn unchanged_google_handlers_allow_description_edits() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let edited = writer::DEFAULT_EMAIL_TYPE.replace(
+        "One email message, pulled from Gmail.",
+        "Email description edited by the agent.",
+    );
+    assert_ne!(edited, writer::DEFAULT_EMAIL_TYPE);
+    let events = api.one(
+        &fake,
+        "propose_type_change",
+        json!({"name": "email", "wcl": edited}),
+    );
+    let p = find(&events, "type_proposal").unwrap_or_else(|| panic!("{events:?}"));
+    assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
+}
+
+#[test]
+fn every_privileged_default_run_is_guarded_through_every_agent_route() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": all_off()}),
+    );
+    // A user-owned copy bound by a shipped handler must be guarded by grants, not its name.
+    let mail = api.script("google_mail").unwrap();
+    api.ok("PUT", "/api/scripts/mail_copy", json!({"source": mail}));
+    api.put_text(
+        "/api/types/email",
+        &writer::DEFAULT_EMAIL_TYPE.replace("google_mail", "mail_copy"),
+    );
+    api.put_text(
+        "/api/skills/probe",
+        "---\nname: probe\ndescription: Test\n---\n",
+    );
+    let mut guarded = Vec::new();
+    // Read the actual installed runs, not SHIPPED_FILES: a new handler/task can name a script
+    // absent from that list. Runs include every type handler, task and device binding.
+    for name in api.get("/api/scripts")["scripts"].as_array().unwrap() {
+        let name = name.as_str().unwrap();
+        api.one(&fake, "get_script", json!({"name": name}));
+        let (_, got) = last_result(&fake);
+        if got["runs_as"].as_array().unwrap().iter().any(|r| {
+            ["handler", "task", "device"].contains(&r["kind"].as_str().unwrap())
+                && (!r["secrets"].as_array().unwrap().is_empty()
+                    || !r["allow_domains"].as_array().unwrap().is_empty())
+        }) {
+            guarded.push(name.to_owned());
+        }
+    }
+    assert!(guarded.iter().any(|n| n == "mail_copy"));
+    assert!(guarded.len() >= 5, "{guarded:?}");
+    for name in guarded {
+        let source = format!("{}\n// agent edit\n", api.script(&name).unwrap());
+        let tool = format!("description = \"Test\"\nscript = \"{name}\"\nfunction = \"run\"\n");
+        let task = format!("schedule = \"0 0 1 1 *\"\nscript = \"{name}\"\n");
+        let device = PHONE_FILE.replace("phone_test", &name);
+        for (method, event, input) in [
+            (
+                "propose_script_change",
+                "script_proposal",
+                json!({"name": name, "source": source}),
+            ),
+            (
+                "propose_tool_change",
+                "tool_proposal",
+                json!({"name": "attempt", "wcl": tool, "script_source": source}),
+            ),
+            (
+                "propose_task_change",
+                "task_proposal",
+                json!({"name": "attempt", "wcl": task, "script_source": source}),
+            ),
+            (
+                "propose_device_file_change",
+                "device_file_proposal",
+                json!({"platform": "android", "wcl": device, "scripts": [{"name": name, "source": source}]}),
+            ),
+            (
+                "propose_skill_file_change",
+                "skill_proposal",
+                json!({"name": "probe", "path": format!("scripts/{name}.ws"), "text": source, "base64": null}),
+            ),
+            (
+                "propose_type_change",
+                "type_proposal",
+                json!({"name": "attempt", "wcl": ITEM.replace("stamp", &name)}),
+            ),
+        ] {
+            let events = api.one(&fake, method, input);
+            assert!(
+                find(&events, "applied").is_none(),
+                "{name} {method}: {events:?}"
+            );
+            if matches!(method, "propose_skill_file_change" | "propose_type_change") {
+                assert!(
+                    find(&events, event).is_some() || last_result(&fake).0,
+                    "{name} {method}: {events:?}"
+                );
+            } else {
+                assert!(
+                    find(&events, event).is_none() && last_result(&fake).0,
+                    "{name} {method}: {events:?}"
+                );
+            }
+        }
+        // File-only tool binding has no source edit to trigger shared_paths_refused.
+        // It must still be held because it adds grants to previously approved code.
+        let binding = format!("{tool}secrets = [\"user_key\"]\nallow_domains = [\"*\"]\n");
+        let events = api.one(
+            &fake,
+            "propose_tool_change",
+            json!({"name": "binding", "wcl": binding, "script_source": null}),
+        );
+        assert!(find(&events, "applied").is_none(), "{name}: {events:?}");
+        assert!(
+            find(&events, "tool_proposal").is_some(),
+            "{name}: {events:?}"
+        );
+    }
+}
+
+#[test]
+fn handler_binding_cannot_grant_google_secrets_or_bypass_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": {"types": false}}),
+    );
+    api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
+    let with_secret = ITEM.replace("  function      = \"after_update\"", "  function = \"after_update\"\n  secrets = [\"google_refresh_token\"]\n  allow_domains = [\"*\"]");
+    let events = api.one(
+        &fake,
+        "propose_type_change",
+        json!({"name": "item", "wcl": with_secret}),
+    );
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(find(&events, "type_proposal").is_none(), "{events:?}");
+    let events = api.one(
+        &fake,
+        "propose_type_change",
+        json!({"name": "item", "wcl": ITEM}),
+    );
+    assert!(find(&events, "type_proposal").is_some(), "{events:?}");
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    let mut p = find(&events, "type_proposal").unwrap().clone();
+    p["after"] = json!(with_secret);
+    assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
+    // An existing shipped binding cannot be switched to agent code with Google grants.
+    let rebound = writer::DEFAULT_EMAIL_TYPE.replace("google_mail", "stamp");
+    let events = api.one(
+        &fake,
+        "propose_type_change",
+        json!({"name": "email", "wcl": rebound}),
+    );
+    assert!(find(&events, "type_proposal").is_none(), "{events:?}");
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(last_result(&fake).0);
+}
+
+#[test]
+fn a_tools_own_hosts_allow_held_source_edits_but_not_forged_script_names() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
+    api.ok("PUT", "/api/tools/echo", json!({"wcl": ECHO}));
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": all_off()}),
+    );
+    let changed = format!("{STAMP}\n// edit\n");
+    let events = api.one(
+        &fake,
+        "propose_tool_change",
+        json!({"name": "echo", "wcl": ECHO, "script_source": changed}),
+    );
+    assert!(find(&events, "applied").is_none());
+    let p = find(&events, "tool_proposal").unwrap().clone();
+    for script in [Value::Null, json!("google_mail")] {
+        let mut forged = p.clone();
+        forged["script"] = script;
+        assert_eq!(api.apply_as(&api.token(), &forged).0, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::OK);
+    assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
+}
+
+#[test]
+fn privileged_script_sources_are_read_only_for_agents() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    // Discover the shipped scripts, including every secret-bearing handler and task.
+    for file in writer::SHIPPED_FILES {
+        let Some(name) = file
+            .path
+            .strip_prefix("scripts/")
+            .and_then(|p| p.strip_suffix(".ws"))
+        else {
+            continue;
+        };
+        let before = api.script(name).unwrap();
+        let events = api.one(
+            &fake,
+            "propose_script_change",
+            json!({
+                "name": name, "source": format!("{before}\n// agent edit\n")
+            }),
+        );
+        assert!(
+            find(&events, "script_proposal").is_none(),
+            "{name}: {events:?}"
+        );
+        assert!(last_result(&fake).0, "{name} must be refused");
+        assert_eq!(api.script(name).as_deref(), Some(before.as_str()));
+        let wcl = format!("description = \"Attempt\"\nscript = \"{name}\"\nfunction = \"run\"\n");
+        let events = api.one(
+            &fake,
+            "propose_tool_change",
+            json!({
+                "name": "attempt", "wcl": wcl, "script_source": format!("{before}\n// agent edit\n")
+            }),
+        );
+        assert!(find(&events, "tool_proposal").is_none(), "{name}");
+        assert!(
+            last_result(&fake).1.to_string().contains("read-only"),
+            "{name}"
+        );
+        api.one(&fake, "propose_script_delete", json!({"name": name}));
+        assert!(
+            last_result(&fake).1.to_string().contains("read-only"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn tool_source_waits_even_with_tools_confirmation_off() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/agents/keeper", KEEPER);
+    let wcl = "description = \"Safe\"\nscript = \"safe\"\nfunction = \"run\"\n";
+    fake.push(AnthropicMessage::new().tool_use("source", "propose_tool_change",
+        json!({"name": "safe", "wcl": wcl, "script_source": "fn run(params: Value) -> string { \"safe\" }\n"})));
+    fake.push(AnthropicMessage::text("Waiting."));
+    api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
+    api.advance("PT1S");
+    assert_eq!(api.threads("keeper")[0]["pending"], 1);
+    assert!(api.script("safe").is_none());
+}
+
+#[test]
+fn secret_and_host_runs_refuse_script_and_tool_sources_including_stale_apply() {
+    for grant in [
+        "secrets = [\"api_key\"]",
+        "allow_domains = [\"example.com\"]",
+    ] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
+        let wcl = "description = \"Echo\"\nscript = \"stamp\"\nfunction = \"call\"\n";
+        let changed = format!("{STAMP}\n// edit\n");
+        let mut pending = Vec::new();
+        for method in ["propose_script_change", "propose_tool_change"] {
+            let events = api.one(
+                &fake,
+                method,
+                if method == "propose_script_change" {
+                    json!({"name": "stamp", "source": changed})
+                } else {
+                    json!({"name": "echo", "wcl": wcl, "script_source": changed})
+                },
+            );
+            let event = if method == "propose_script_change" {
+                "script_proposal"
+            } else {
+                "tool_proposal"
+            };
+            pending.push(
+                find(&events, event)
+                    .unwrap_or_else(|| panic!("{method}: {events:?}"))
+                    .clone(),
+            );
+        }
+        api.put_text(
+            "/api/tasks/guarded",
+            &format!("schedule = \"0 0 1 1 *\"\nscript = \"stamp\"\npaused = true\n{grant}\n"),
+        );
+        for p in pending {
+            assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
+        }
+        for method in ["propose_script_change", "propose_tool_change"] {
+            api.one(
+                &fake,
+                method,
+                if method == "propose_script_change" {
+                    json!({"name": "stamp", "source": changed})
+                } else {
+                    json!({"name": "echo", "wcl": wcl, "script_source": changed})
+                },
+            );
+            assert!(last_result(&fake).0);
+        }
+        assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+    }
+}
+
 const PHONE_FILE: &str =
     "handler \"sms_received\" {\n script = \"phone_test\"\n function = \"run\"\n}\n";
 
@@ -448,7 +828,7 @@ fn device_file_wcl_only_thread_changes_need_a_session_and_warn_only_for_shipped_
         writer::DEFAULT_ANDROID_DEVICE_FILE,
     );
     api.put_text("/api/agents/keeper", KEEPER);
-    let input = json!({"platform": "android", "wcl": ANDROID, "scripts": []});
+    let input = json!({"platform": "android", "wcl": ANDROID.replace("custom_messages", "device_messages"), "scripts": []});
     fake.push(AnthropicMessage::new().tool_use("wcl_only", "propose_device_file_change", input));
     fake.push(AnthropicMessage::text("Waiting."));
     api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
@@ -537,7 +917,6 @@ const ITEM: &str = r#"label = "Item"
 handler "after_update" {
   script        = "stamp"
   function      = "after_update"
-  allow_domains = ["*"]
 }
 
 template default {
@@ -560,7 +939,8 @@ fn call(params: Value) -> Value {
 }
 "#;
 
-const NIGHTLY: &str = "schedule = \"0 3 * * *\"\ntimezone = \"Europe/London\"\nscript = \"stamp\"\nallow_domains = [\"api.example.com\"]\nsecrets = [\"api_key\"]\npaused = true\n";
+const NIGHTLY: &str =
+    "schedule = \"0 3 * * *\"\ntimezone = \"Europe/London\"\nscript = \"stamp\"\npaused = true\n";
 
 #[test]
 fn device_commands_are_refused_for_script_task_and_tool_proposals_and_apply() {
@@ -758,7 +1138,11 @@ impl Api {
         self.ok("PUT", "/api/scripts/stamp", json!({ "source": STAMP }));
         self.put_text("/api/types/item", ITEM);
         self.put_text("/api/tasks/nightly", NIGHTLY);
-        self.ok("PUT", "/api/tools/echo", json!({ "wcl": ECHO }));
+        self.ok(
+            "PUT",
+            "/api/tools/echo",
+            json!({ "wcl": ECHO.replace("allow_domains = [\"echo.example.com\"]\n", "") }),
+        );
     }
 
     /// One tool call by the Assistant as the admin, then an answer: the turn's events.
@@ -1029,27 +1413,16 @@ fn a_script_change_waits_for_apply_with_every_switch_off_and_shows_what_runs_it(
     );
     let handler = &p["runs_as"][0];
     assert_eq!(handler["event"], "after_update");
-    assert_eq!(handler["allow_domains"], json!(["*"]));
+    assert_eq!(handler["allow_domains"], json!([]));
     assert_eq!(handler["file"], "types/item.wcl");
     let task = &p["runs_as"][1];
     assert_eq!(task["schedule"], "0 3 * * *");
     assert_eq!(task["timezone"], "Europe/London");
-    assert_eq!(task["secrets"], json!(["api_key"]));
-    assert_eq!(task["allow_domains"], json!(["api.example.com"]));
+    assert_eq!(task["secrets"], json!([]));
+    assert_eq!(task["allow_domains"], json!([]));
     assert_eq!(task["paused"], true);
-    assert_eq!(
-        p["runs_as"][2]["allow_domains"],
-        json!(["echo.example.com"])
-    );
-    // Any host is allowed, with a warning (TV-32 Q4).
-    let warnings = p["warnings"].as_array().unwrap();
-    assert_eq!(warnings.len(), 1, "{p}");
-    let w = warnings[0].as_str().unwrap();
-    assert!(
-        w.starts_with("The after_update handler of type item may reach any host"),
-        "{w}"
-    );
-    assert!(w.contains("local network"), "{w}");
+    assert_eq!(p["runs_as"][2]["allow_domains"], json!([]));
+    assert_eq!(p["warnings"], json!([]));
     let (err, said) = last_result(&fake);
     assert!(!err && said["proposed"] == true, "{said}");
     assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
@@ -1149,7 +1522,7 @@ fn a_tool_proposal_shows_what_else_runs_its_script() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.seed_users();
-    let open = ECHO.replace("[\"echo.example.com\"]", "[\"*\"]");
+    let open = ECHO.replace("echo.example.com", "*");
     let events = api.one(
         &fake,
         "propose_tool_change",
@@ -1169,13 +1542,9 @@ fn a_tool_proposal_shows_what_else_runs_its_script() {
         .iter()
         .map(|w| w.as_str().unwrap())
         .collect();
-    assert_eq!(warnings.len(), 2, "{p}");
+    assert_eq!(warnings.len(), 1, "{p}");
     assert!(
         warnings[0].starts_with("The tool echo may reach any host"),
-        "{warnings:?}"
-    );
-    assert!(
-        warnings[1].starts_with("The after_update handler of type item"),
         "{warnings:?}"
     );
     // A delete that keeps the script lists what keeps it.
@@ -1283,7 +1652,7 @@ fn a_script_applied_after_what_runs_it_changed_is_stale() {
     // The task nightly now reaches another host: what runs the script has changed since the card.
     api.put_text(
         "/api/tasks/nightly",
-        &NIGHTLY.replace("api.example.com", "other.example.com"),
+        &NIGHTLY.replace("0 3 * * *", "0 4 * * *"),
     );
     let (status, body) = api.apply_as(&api.token(), &p);
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
@@ -1316,16 +1685,26 @@ fn a_delete_applied_after_a_task_started_to_run_the_script_is_refused_in_use() {
 fn a_device_file_that_runs_a_script_is_in_its_runs_as_list() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
+    api.ok(
+        "PUT",
+        "/api/scripts/custom_messages",
+        json!({"source": writer::default_device_script("device_messages").unwrap()}),
+    );
     api.put_text(
         "/api/device-files/android",
-        "handler \"sms_received\" {\n  script = \"device_messages\"\n}\n",
+        "handler \"sms_received\" {\n  script = \"custom_messages\"\n}\n",
     );
-    let current = api.script("device_messages").unwrap();
+    api.ok(
+        "PUT",
+        "/api/scripts/custom_messages",
+        json!({"source": writer::default_device_script("device_messages").unwrap()}),
+    );
+    let current = api.script("custom_messages").unwrap();
     let changed = format!("{current}\n");
     let events = api.one(
         &fake,
         "propose_script_change",
-        json!({ "name": "device_messages", "source": changed }),
+        json!({ "name": "custom_messages", "source": changed }),
     );
     let p = find(&events, "script_proposal")
         .unwrap_or_else(|| panic!("{events:?}"))
@@ -1341,7 +1720,7 @@ fn a_tool_applied_after_what_runs_its_script_changed_is_stale() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.seed_users();
-    let open = ECHO.replace("[\"echo.example.com\"]", "[\"*\"]");
+    let open = ECHO.replace("echo.example.com", "*");
     let events = api.one(
         &fake,
         "propose_tool_change",
@@ -1353,7 +1732,7 @@ fn a_tool_applied_after_what_runs_its_script_changed_is_stale() {
     // The task nightly now reaches another host: the tool's script has a new "Runs as" list.
     api.put_text(
         "/api/tasks/nightly",
-        &NIGHTLY.replace("api.example.com", "other.example.com"),
+        &NIGHTLY.replace("0 3 * * *", "0 4 * * *"),
     );
     let before = api.get("/api/tools/echo");
     let (status, body) = api.apply_as(&api.token(), &p);
@@ -1409,8 +1788,8 @@ fn a_script_change_is_refused_while_a_task_with_folders_runs_it_at_propose_and_a
     assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
 }
 
-/// The device file that runs `device_messages` for an incoming SMS and for the Outbox's send.
-const ANDROID: &str = "handler \"sms_received\" {\n  script = \"device_messages\"\n}\n\ncommand \"send_sms\" {\n  script = \"device_messages\"\n}\n";
+/// The device file that runs `custom_messages` for an incoming SMS and for the Outbox's send.
+const ANDROID: &str = "handler \"sms_received\" {\n  script = \"custom_messages\"\n}\n\ncommand \"send_sms\" {\n  script = \"custom_messages\"\n}\n";
 
 const PHONE_NOTE: &str = "Runs on your phone at its next sync, with no further prompt there.";
 
@@ -1501,6 +1880,11 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
     for platform in ["android", "linux"] {
         let fake = FakeAnthropic::start();
         let api = Api::start(&fake);
+        api.ok(
+            "PUT",
+            "/api/scripts/custom_messages",
+            json!({"source": writer::default_device_script("device_messages").unwrap()}),
+        );
         api.put_text("/api/device-files/android", "");
         api.put_text(&format!("/api/device-files/{platform}"), ANDROID);
         let pixel = api.platform_device(
@@ -1509,7 +1893,12 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
             json!({ "commands": ["send_sms"], "sms_send": true }),
         );
         api.platform_device(platform, "Tablet", json!({ "contacts_write": true }));
-        let current = api.script("device_messages").unwrap();
+        api.ok(
+            "PUT",
+            "/api/scripts/custom_messages",
+            json!({"source": writer::default_device_script("device_messages").unwrap()}),
+        );
+        let current = api.script("custom_messages").unwrap();
         // The new code reads an SMS from the phone's store: a new item. It keeps the one send.
         let changed = format!(
             "{current}\nfn peek() -> Result[Value, string] {{\n    device::sms_get(\"x\")\n}}\n"
@@ -1517,7 +1906,7 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         let events = api.one(
             &fake,
             "propose_script_change",
-            json!({ "name": "device_messages", "source": changed }),
+            json!({ "name": "custom_messages", "source": changed }),
         );
         let p = find(&events, "script_proposal")
             .unwrap_or_else(|| panic!("{events:?}"))
@@ -1595,7 +1984,7 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
         assert_eq!(body["error"], "stale");
         assert_eq!(
-            api.script("device_messages").as_deref(),
+            api.script("custom_messages").as_deref(),
             Some(current.as_str())
         );
 
@@ -1603,7 +1992,7 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         let events = api.one(
             &fake,
             "propose_script_change",
-            json!({ "name": "device_messages", "source": changed }),
+            json!({ "name": "custom_messages", "source": changed }),
         );
         let p = find(&events, "script_proposal")
             .unwrap_or_else(|| panic!("{events:?}"))
@@ -1612,7 +2001,7 @@ fn a_change_to_a_phone_script_shows_the_phones_their_switches_and_what_the_code_
         let (status, body) = api.apply_signed_in(&p);
         assert!(status.is_success(), "{status}: {body}");
         assert_eq!(
-            api.script("device_messages").as_deref(),
+            api.script("custom_messages").as_deref(),
             Some(changed.as_str())
         );
     }
@@ -1649,10 +2038,17 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
         ] {
             let fake = FakeAnthropic::start();
             let api = Api::start(&fake);
+            api.ok(
+                "PUT",
+                "/api/scripts/custom_messages",
+                json!({"source": writer::default_device_script("device_messages").unwrap()}),
+            );
             api.put_text("/api/device-files/android", "");
             api.put_text(&format!("/api/device-files/{platform}"), ANDROID);
             api.put_text("/api/agents/keeper", KEEPER);
-            let original = api.script("device_messages").unwrap();
+            let original = writer::default_device_script("device_messages")
+                .unwrap()
+                .to_owned();
             let plain = original.replace(
                 "device::sms_send(to, text_of(payload, \"body\"))",
                 "Err(\"sending disabled\")",
@@ -1668,13 +2064,13 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
             };
             api.ok(
                 "PUT",
-                "/api/scripts/device_messages",
+                "/api/scripts/custom_messages",
                 json!({ "source": current }),
             );
             fake.push(AnthropicMessage::new().tool_use(
                 "toolu_phone",
                 "propose_script_change",
-                json!({ "name": "device_messages", "source": changed }),
+                json!({ "name": "custom_messages", "source": changed }),
             ));
             fake.push(AnthropicMessage::text("Waiting."));
             api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
@@ -1692,21 +2088,21 @@ fn sensitive_phone_script_changes_in_a_thread_require_admin_even_when_the_send_i
                 assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
                 assert!(body.to_string().contains("signed-in admin"), "{body}");
                 assert_eq!(
-                    api.script("device_messages").as_deref(),
+                    api.script("custom_messages").as_deref(),
                     Some(current.as_str())
                 );
                 let (status, body) = api.apply_as(&api.token(), &p);
                 assert_eq!(status, StatusCode::FORBIDDEN, "{mode}: {body}");
                 assert!(body.to_string().contains("admin-scoped tokens"), "{body}");
                 assert_eq!(
-                    api.script("device_messages").as_deref(),
+                    api.script("custom_messages").as_deref(),
                     Some(current.as_str())
                 );
                 let (status, body) = api.apply_signed_in(&p);
                 assert_eq!(status, StatusCode::OK, "{mode}: {body}");
             }
             assert_eq!(
-                api.script("device_messages").as_deref(),
+                api.script("custom_messages").as_deref(),
                 Some(changed.as_str())
             );
         }
@@ -1717,6 +2113,11 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
     for platform in ["android", "linux"] {
         let fake = FakeAnthropic::start();
         let api = Api::start(&fake);
+        api.ok(
+            "PUT",
+            "/api/scripts/custom_messages",
+            json!({"source": writer::default_device_script("device_messages").unwrap()}),
+        );
         api.put_text("/api/device-files/android", "");
         api.put_text(&format!("/api/device-files/{platform}"), ANDROID);
         api.platform_device(
@@ -1724,7 +2125,12 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
             "Pixel",
             json!({ "commands": ["send_sms"], "sms_send": true }),
         );
-        let current = api.script("device_messages").unwrap();
+        api.ok(
+            "PUT",
+            "/api/scripts/custom_messages",
+            json!({"source": writer::default_device_script("device_messages").unwrap()}),
+        );
+        let current = api.script("custom_messages").unwrap();
         let forward = format!(
             "{current}\nfn forward() -> Result[Value, string] {{\n    device::sms_send(\"+15550100\", \"x\")\n}}\n"
         );
@@ -1733,14 +2139,14 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
         let events = api.one(
             &fake,
             "propose_script_change",
-            json!({ "name": "device_messages", "source": forward }),
+            json!({ "name": "custom_messages", "source": forward }),
         );
         assert!(find(&events, "script_proposal").is_none(), "{events:?}");
         let (err, got) = last_result(&fake);
         assert!(err, "{got}");
         let why = got["error"].as_str().unwrap();
         assert!(
-            why.contains("may not add a call to device::sms_send to script \"device_messages\""),
+            why.contains("may not add a call to device::sms_send to script \"custom_messages\""),
             "{got}"
         );
         assert!(why.contains("calls it 1 times"), "{got}");
@@ -1753,7 +2159,7 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
         let events = api.one(
             &fake,
             "propose_script_change",
-            json!({ "name": "device_messages", "source": alias }),
+            json!({ "name": "custom_messages", "source": alias }),
         );
         assert!(find(&events, "script_proposal").is_none(), "{events:?}");
         assert!(last_result(&fake).0);
@@ -1763,7 +2169,7 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
         let events = api.one(
             &fake,
             "propose_script_change",
-            json!({ "name": "device_messages", "source": kept }),
+            json!({ "name": "custom_messages", "source": kept }),
         );
         let p = find(&events, "script_proposal")
             .unwrap_or_else(|| panic!("{events:?}"))
@@ -1783,7 +2189,7 @@ fn a_change_that_adds_an_sms_send_is_refused_at_propose_and_at_apply() {
             "{body}"
         );
         assert_eq!(
-            api.script("device_messages").as_deref(),
+            api.script("custom_messages").as_deref(),
             Some(current.as_str())
         );
     }
