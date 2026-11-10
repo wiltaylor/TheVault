@@ -289,6 +289,31 @@ impl Api {
             .unwrap();
         expect(client.post(self.server.url("/api/notes?type=fleeting")).header(reqwest::header::COOKIE, cookie).json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000002)"}}]}]}})).send().unwrap(), 201);
     }
+
+    fn wait_run(&self, thread: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let activity = expect(
+                self.req("GET", "/api/activity?limit=200&category=automation")
+                    .send()
+                    .unwrap(),
+                200,
+            );
+            if activity["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["kind"] == "agent.run" && e["subject"] == thread)
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "dispatch run did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }
 
 #[test]
@@ -705,7 +730,10 @@ fn interactive_agents_need_the_gmail_switch_for_archive_and_trash() {
             }
         );
         if !allowed {
-            assert!(stream.contains("The edit was written to the note."), "{stream}");
+            assert!(
+                stream.contains("The edit was written to the note."),
+                "{stream}"
+            );
             assert!(stream.contains("Gmail action skipped"), "{stream}");
             api.google.set_history_not_found(true);
             api.run_gmail();
@@ -941,17 +969,19 @@ fn dispatch_cannot_reach_gmail_and_explicit_apply_of_a_mention_proposal_can() {
             json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()}),
         ));
         fake.push(AnthropicMessage::text("Handled locally or proposed."));
-        if mention {
+        let dispatched = if mention {
             api.session_call();
+            None
         } else {
-            expect(
+            let started = expect(
                 api.req("POST", "/api/agents/clerk/dispatch")
                     .json(&json!({"notes": [one], "request": "Process this mail."}))
                     .send()
                     .unwrap(),
                 202,
             );
-        }
+            Some(started["thread"]["id"].as_str().unwrap().to_owned())
+        };
         expect(
             api.req("POST", "/api/test/clock")
                 .json(&json!({"advance": "PT40S"}))
@@ -959,6 +989,9 @@ fn dispatch_cannot_reach_gmail_and_explicit_apply_of_a_mention_proposal_can() {
                 .unwrap(),
             200,
         );
+        if let Some(thread) = dispatched {
+            api.wait_run(&thread);
+        }
         api.settle();
         assert_eq!(fake.message_requests().len(), 2);
         assert!(api.google.mail_actions().is_empty());
