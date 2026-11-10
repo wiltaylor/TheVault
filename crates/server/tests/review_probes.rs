@@ -581,3 +581,33 @@ fn agent_integration_guard_covers_methods_paths_and_future_routes() {
         }
     }
 }
+
+#[test]
+fn p18_legacy_admin_agent_cannot_rewrite_integration_secrets() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let legacy = install(&server, &admin, "legacy", "admin");
+    let mut statuses = Vec::new();
+    for name in ["ai_accounts", "ai_settings", "ai_account_key_probe", "brave_settings", "gitsync_settings", "google_client_id"] {
+        let url = server.url(&format!("/api/secrets/{name}"));
+        assert!(admin.put(&url).json(&json!({ "value": "fixture" })).send().unwrap().status().is_success());
+        statuses.push(legacy.put(&url).json(&json!({ "value": "replacement" })).send().unwrap().status());
+        statuses.push(legacy.delete(&url).send().unwrap().status());
+    }
+    assert!(statuses.iter().all(|s| s.as_u16() == 403), "{statuses:?}");
+}
+
+#[test]
+fn p19_legacy_admin_agent_cannot_read_google_token_through_a_task() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    assert!(admin.put(server.url("/api/secrets/google_refresh_token")).json(&json!({ "value": "synthetic-test-marker" })).send().unwrap().status().is_success());
+    let legacy = install(&server, &admin, "legacy", "admin");
+    let script = "use vault\nuse secrets\nfn run() -> Result[string, string] {\n    let t = secrets::get(\"google_refresh_token\")?\n    vault::log(t)\n    Ok(\"done\")\n}\n";
+    let script_status = legacy.put(server.url("/api/scripts/leak")).json(&json!({ "source": script })).send().unwrap().status();
+    let task_status = legacy.put(server.url("/api/tasks/leak")).body("schedule = \"0 0 1 1 *\"\nscript = \"leak\"\nsecrets = [\"google_refresh_token\"]\n").send().unwrap().status();
+    let run = legacy.post(server.url("/api/tasks/leak/run?wait=true")).send().unwrap();
+    let run_status = run.status();
+    let leaked = run.text().unwrap().contains("synthetic-test-marker");
+    assert!(!leaked && [script_status, task_status, run_status].iter().all(|s| s.as_u16() == 403), "script={script_status} task={task_status} run={run_status} leaked={leaked}");
+}
