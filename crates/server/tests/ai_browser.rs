@@ -32,7 +32,7 @@ fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
         &fake,
         Some("driver"),
         "browser_run",
-        json!({"command":"true"}),
+        json!({"command":"true", "timeout":null}),
     );
     let profile = browser
         .requests()
@@ -58,7 +58,7 @@ fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
         &fake,
         Some("driver"),
         "browser_capture",
-        json!({"what":"screenshot"}),
+        json!({"what":"screenshot", "target":null, "url":null, "full_page":false, "session":null, "filename":null}),
     );
     let proposal = last(&events, "proposal").clone();
     assert_eq!(proposal["browser_profile"], profile);
@@ -72,7 +72,7 @@ fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
         &fake,
         Some("driver"),
         "browser_run",
-        json!({"command":"true"}),
+        json!({"command":"true", "timeout":null}),
     );
     assert_eq!(
         browser.requests().last().unwrap().header("x-vault-agent"),
@@ -83,7 +83,7 @@ fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
         &fake,
         Some("other"),
         "browser_run",
-        json!({"command":"true"}),
+        json!({"command":"true", "timeout":null}),
     );
     let other = browser
         .requests()
@@ -107,7 +107,7 @@ fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
         &fake,
         Some("driver"),
         "browser_run",
-        json!({"command":"true"}),
+        json!({"command":"true", "timeout":null}),
     );
     let requests = browser.requests();
     let fresh = requests.last().unwrap().header("x-vault-agent").unwrap();
@@ -145,7 +145,7 @@ fn an_old_shared_box_is_refused_before_running_commands() {
         &fake,
         Some("driver"),
         "browser_run",
-        json!({"command":"must-not-run"}),
+        json!({"command":"must-not-run", "timeout":null}),
     );
     assert!(browser.commands().is_empty());
     assert!(result_text(&result(&fake, 0)).contains("needs rebuilding"));
@@ -165,7 +165,7 @@ fn throwaway_browser_identity_is_fresh_and_cleanup_is_retried_after_an_outage() 
         &fake,
         Some("parent"),
         "browser_run",
-        json!({"command":"parent"}),
+        json!({"command":"parent", "timeout":null}),
     );
     let parent = browser
         .requests()
@@ -186,12 +186,12 @@ fn throwaway_browser_identity_is_fresh_and_cleanup_is_retried_after_an_outage() 
     fake.push(AnthropicMessage::new().tool_use(
         "child",
         "start_subagent",
-        json!({"task":"Check your browser", "agent":null}),
+        json!({"task":"Check your browser", "agent":null, "instructions":null, "permissions":null, "model":null}),
     ));
     fake.push(AnthropicMessage::new().tool_use(
         "browse",
         "browser_run",
-        json!({"command":"child"}),
+        json!({"command":"child", "timeout":null}),
     ));
     fake.push(AnthropicMessage::text("Child done."));
     fake.push(AnthropicMessage::text("Parent done."));
@@ -230,7 +230,7 @@ fn throwaway_browser_identity_is_fresh_and_cleanup_is_retried_after_an_outage() 
         &fake,
         Some("parent"),
         "browser_run",
-        json!({"command":"parent-again"}),
+        json!({"command":"parent-again", "timeout":null}),
     );
     let requests = browser.requests();
     assert!(requests.iter().filter(|r| r.method == "DELETE").count() >= 2);
