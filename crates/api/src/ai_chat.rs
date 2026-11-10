@@ -24,8 +24,8 @@
 //! check a change and hand it to the user (ai D14, D18, D20, D31, agents
 //! G20; an agent change is also checked against the turn's agent, `crate::ai_agents`). When
 //! the agent's permissions turn a kind's confirmation off and the turn's scope allows the write
-//! (`write` for notes, `admin` for types, taxonomies, agents and skills; a `write` caller's turn
-//! has the agent's own scope, [`change_scope`]), the tool makes
+//! (`write` for notes, `admin` for types, taxonomies, agents and skills; [`change_scope`]
+//! caps direct changes at both caller and agent scope), the tool makes
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
 //! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
@@ -233,8 +233,8 @@ pub async fn chat(
 }
 
 /// Run one unattended turn of agent `agent` on its thread `thread`, whose user message is
-/// `prompt`, and wait for it to end (agents G12). The agent is the caller, with `write` scope,
-/// and `admin` when its permissions allow a type or taxonomy change. The thread's origin sets
+/// `prompt`, and wait for it to end (agents G12). Explicit dispatch retains the caller identity
+/// and scope ceiling. Autonomous runs use the agent's unattended scope. The thread's origin sets
 /// its [`Held`] mode: a trigger's run is offered no change tool whose confirmation switch is on,
 /// so nothing waits for a user, while a call from a note or a dispatch keeps those changes as
 /// proposals in the thread (TV-77 D2). A model call that fails with a transient error is made

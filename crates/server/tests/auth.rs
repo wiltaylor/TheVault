@@ -85,8 +85,15 @@ fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
             .json(&json!({"type": "agent_thread", "key": "title", "note": {"fields": {"title": "Forged"}}}))
             .send().unwrap(), 403);
     }
+    for action in ["archive", "unarchive"] {
+        expect(api.req("POST", &format!("/api/notes/{id}/{action}"), api.admin()).send().unwrap(), 200);
+    }
     let read = expect(api.req("GET", &format!("/api/agents/assistant/threads/{id}"), api.admin()).send().unwrap(), 200);
     assert_ne!(read["title"], "Forged");
+    expect(api.req("DELETE", &format!("/api/notes/{id}"), api.admin()).send().unwrap(), 200);
+    expect(api.req("POST", &format!("/api/trash/{id}/restore"), api.admin()).send().unwrap(), 403);
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    expect(api.req("POST", &format!("/api/trash/{id}/restore"), Auth::Cookie(&cookie)).send().unwrap(), 200);
 }
 
 #[test]

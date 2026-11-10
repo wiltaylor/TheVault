@@ -1,5 +1,5 @@
 //! S1: Agent Skills through `/api/skills` (skills S1, S2, S3, S7): reads need `read`, every write
-//! needs `admin`, or a paired device's token for every write but an import; `SKILL.md` is validated before it is written; a zip imports from one folder or
+//! needs a session or a non-agent admin token for every write; `SKILL.md` is validated before it is written; a zip imports from one folder or
 //! from its root, refuses an existing name unless `replace=true`, and writes nothing when it
 //! fails; export round-trips; and each write is a `skill.change` in the activity log.
 
@@ -544,9 +544,7 @@ fn pair_device(api: &Api) -> String {
         .to_owned()
 }
 
-// The apps edit skills as the web app does: a paired device's `write` token creates a skill,
-// replaces its `SKILL.md`, writes and deletes its files, text and binary, and deletes it, and
-// nothing else it may do grows.
+// Explicit admin tokens manage skill definitions and files.
 #[test]
 fn an_admin_token_writes_skills() {
     let api = Api::start();

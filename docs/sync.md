@@ -47,8 +47,10 @@ The server enforces these rules for writes and history (D29):
 A device pairs with a `write` token (D2). With it, a device:
 
 - creates, updates and deletes notes, restores them from the trash, uploads assets, and writes pins and notifications, like any `write` token;
+- starts chat turns and threads, dispatches notes, stops turns and discards proposals; direct changes are capped at write;
+- applies note and asset proposals, but cannot Apply any admin-level proposal, including one held in a thread;
 - sets the push endpoint and bases of its own device only;
-- **cannot** write types, templates, taxonomies, scripts or tasks. All of those need `admin`, so the server answers 403. The device reads them, and receives them in the feed, like any other token. Definitions are edited online through a session or an `admin` token, and never through device sync (D20).
+- **cannot** write agent definitions, skills, types, templates, taxonomies, scripts or tasks. Note and batch routes cannot write agent transcripts. All of those need `admin`, so the server answers 403. The device reads them, and receives them in the feed, like any other token. Definitions are edited online through a session or an `admin` token, and never through device sync (D20).
 
 ## What the apps answer locally
 

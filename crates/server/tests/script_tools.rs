@@ -644,8 +644,7 @@ fn run_script_is_offered_only_with_run_code_and_never_self_granted() {
         );
     }
 
-    // A script's changes are made at once, so a `read` caller's turn is offered no script, and a
-    // `write` caller's (an app's) has the agent's own scope, as its switches do.
+    // Writers and admins may run scripts within the agent's permissions.
     for (scope, offers) in [("write", true), ("admin", true)] {
         let token = api.token_of(&format!("caller_{scope}"), scope);
         fake.push(AnthropicMessage::text("Hi."));
@@ -1140,8 +1139,7 @@ fn tool_changes_are_proposed_or_made_by_the_switch_and_admin_scope() {
         "Say hello."
     );
 
-    // The switch off, but a caller with only `read`: still a proposal. (A `write` caller's turn has
-    // the agent's own scope, which for the Assistant is `admin`.)
+    // The switch is off, but write scope still cannot make admin changes directly.
     let read = api.token_of("writer", "write");
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_w",

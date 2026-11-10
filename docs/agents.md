@@ -13,7 +13,7 @@ To ask about your notes without an agent, use the AI panel in the web app or the
 | `read` token | Read only, no new turns or threads | Read only |
 | `write` token, including a paired device | Start turns and threads, direct changes capped at write | No create, edit, delete, import or Apply |
 | Non-agent `admin` API token | Direct changes capped by the agent's permissions | Manage definitions and Apply, subject to proposal guards |
-| `agent-<name>` token, even admin | Direct changes capped by caller and agent scope | No definition writes or Apply |
+| `agent-<name>` token, even admin | Direct changes capped by caller and agent scope | No agent/skill definition writes or Apply, credential creation, Assistant settings changes or git-sync mutations |
 | Signed-in session | Direct changes capped by the agent's permissions | Manage definitions and Apply |
 
 Chat mutations, including stopping a turn and discarding proposals, require write. Query POSTs and authorized event reads still require only read. Autonomous triggers use the agent's scope. Explicit dispatch runs retain their caller's scope ceiling.

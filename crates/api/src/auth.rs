@@ -417,7 +417,9 @@ pub async fn authenticate(
         return human_only_for(req.uri().path()).into_response();
     }
     let path = req.uri().path();
-    if !matches!(*req.method(), Method::GET | Method::HEAD)
+    let metadata_only = *req.method() == Method::DELETE
+        || (*req.method() == Method::POST && (path.ends_with("/archive") || path.ends_with("/unarchive")));
+    if !matches!(*req.method(), Method::GET | Method::HEAD) && !metadata_only
         && let Some(id) = path.strip_prefix("/api/notes/").and_then(|p| p.split('/').next())
     {
         let id = id.to_owned();

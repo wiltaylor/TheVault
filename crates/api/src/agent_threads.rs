@@ -17,7 +17,7 @@
 //!   `{id, title, origin, last_activity, pending, archived, running, turn, started_ms}`:
 //!   `running` says a turn runs on the thread now, `turn` is its id in the turns form (null for a
 //!   trigger's run) and `started_ms` when it started (agents G17).
-//! - `POST /api/agents/{name}/threads` (read) takes `{title?}` and creates a thread, 201 with the
+//! - `POST /api/agents/{name}/threads` (write) takes `{title?}` and creates a thread, 201 with the
 //!   thread.
 //! - `GET /api/agents/{name}/threads/{id}` (read): the thread with its `messages`, `steps` and
 //!   `proposals`, and `running`, `turn` and `started_ms` as the list has them, its `notes`, its

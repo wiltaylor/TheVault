@@ -518,7 +518,15 @@ pub async fn restore_from_trash(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let saved = blocking(w, move |w| w.restore_from_trash(&id, &author)).await?;
+    let saved = blocking(w, move |w| {
+        if !matches!(author, state::Author::Session(_))
+            && w.trash()?.iter().any(|n| n.id == id && n.type_name == crate::agent_threads::THREAD_TYPE)
+        {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "human_only",
+                "Only a signed-in session can restore agent threads."));
+        }
+        w.restore_from_trash(&id, &author).map_err(ApiError::from)
+    }).await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 

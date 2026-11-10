@@ -142,6 +142,6 @@ Turn off **Ask before changing skills** on an agent's Permissions tab (`permissi
 
 ## In the apps
 
-The desktop and Android apps edit skills as the web app does: **New skill**, the command palette's **New skill**, the skill screen's **Save**, the Files tab's uploads, new files, renames and deletes, and **Delete skill** all work there. The apps read and write the skill on the home server, which takes a paired device's token for these writes, and the change reaches the device's copy with the sync round that follows. When the home server cannot be reached, a save says "Changing a skill needs the home server, which is not reachable." and the form keeps what was typed; the skill screen shows the device's copy. **Export** and **Download** work in the apps.
+The desktop and Android apps read and sync skills. Skill writes require a session or a non-agent admin API token on the home server. Paired-device tokens cannot create, edit, delete or import skills. Export and Download remain available.
 
 **Import** is the web app's only: an import needs `admin`, which an app's device token never has.

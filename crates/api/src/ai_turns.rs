@@ -737,7 +737,7 @@ pub struct Discard {
     thread: String,
 }
 
-/// `POST /api/ai/discard` (read): the user discarded a proposal of a thread, recorded there so
+/// `POST /api/ai/discard` (write): the user discarded a proposal of a thread, recorded there so
 /// the reopened thread shows it and the next turn tells the model (agents G8, ai D29). It
 /// changes nothing else.
 pub async fn discard(

@@ -742,6 +742,8 @@ fn a_call_from_a_note_leaves_a_task_proposal_that_a_phone_applies_from_the_threa
     let mut forged = stored["data"].clone();
     forged["after"] = json!(format!("{NIGHTLY}read_paths = [\"/\"]\n"));
     let (status, body) = api.apply_as(&write, &forged);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = api.apply_as(&api.token(), &stored["data"]);
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["op"], "task_create");
     let got = api.task("nightly").unwrap();

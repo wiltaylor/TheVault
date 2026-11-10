@@ -583,8 +583,6 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"], "needs_admin");
 
-    // Restore the switch for the rest.
-    api.anthropic(&fake, json!({ "agents": true }));
     }
 
 }

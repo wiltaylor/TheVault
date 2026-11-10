@@ -1005,7 +1005,7 @@ impl Device {
 
 // Confirmation switches apply only within the device caller scope ceiling.
 #[test]
-fn an_agents_confirmation_switches_decide_in_the_app_as_in_the_web_app() {
+fn agent_confirmation_switches_stay_within_the_device_scope_ceiling() {
     let server = TestServer::start_seeded(seed);
     let admin = Admin::of(&server);
     let fake = testkit::FakeAnthropic::start();
