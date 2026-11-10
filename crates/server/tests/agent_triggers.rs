@@ -248,6 +248,47 @@ fn safety_rest_list_and_post_query_exclude_held_notes() {
     }
 }
 
+#[test]
+fn safety_rest_asset_download_of_held_attachment_is_refused() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("prompt_injection"));
+    let asset: Value = api.client.post(api.server.url("/api/assets?filename=held.txt"))
+        .bearer_auth(api.server.admin_token()).body("HELD ATTACHMENT")
+        .send().unwrap().json().unwrap();
+    let asset = asset["id"].as_str().unwrap();
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
+        "title":"Held attachment", "attachments":[asset], "sent":"2000-01-01T00:00:00Z"
+    }}}));
+    assert_eq!(safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["status"], "held");
+    let token = api.send("POST", "/api/tokens", json!({"name":"agent-cli", "scope":"write"}));
+    let response = api.client.get(api.server.url(&format!("/api/assets/{asset}")))
+        .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap();
+    assert_eq!(response.status(), 403);
+    assert!(!response.text().unwrap().contains("HELD ATTACHMENT"));
+}
+
+#[test]
+fn safety_trigger_backfill_excludes_held_notes() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("prompt_injection"));
+    let note = safety_note(&api);
+    assert_eq!(safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["status"], "held");
+    api.advance("PT31S");
+    let login = api.client.post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+    let cookie = login.headers()[reqwest::header::SET_COOKIE].to_str().unwrap()
+        .split(';').next().unwrap().to_owned();
+    let preview: Value = api.client.post(api.server.url("/api/agents/reader/triggers/arrived/backfill"))
+        .header(reqwest::header::COOKIE, cookie).json(&json!({"limit":100}))
+        .send().unwrap().error_for_status().unwrap().json().unwrap();
+    assert_eq!(preview["count"], 0);
+    assert!(chat.message_requests().is_empty());
+}
+
 fn safety_wait(api: &Api, id: &str) -> Value {
     let began = std::time::Instant::now();
     loop {
