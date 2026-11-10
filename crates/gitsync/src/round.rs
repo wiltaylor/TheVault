@@ -611,6 +611,12 @@ impl Round<'_> {
                     continue;
                 }
             };
+            // Transcripts are local runtime records, never peer-authored content.
+            if type_name == writer::AGENT_THREAD_TYPE
+                || entry.note_type == writer::AGENT_THREAD_TYPE
+            {
+                continue;
+            }
             match parse_note(&type_name, &entry.id, &wcl) {
                 Ok(doc) => {
                     notes.insert(
@@ -1070,6 +1076,9 @@ impl Round<'_> {
         let mut out: BTreeMap<String, (String, String, String)> = BTreeMap::new();
         for id in &ids {
             let Ok(note) = self.w.read(id) else { continue };
+            if note.type_name == writer::AGENT_THREAD_TYPE {
+                continue;
+            }
             let entry = match base_of(id) {
                 Some(base) => (
                     note.type_name.clone(),
@@ -1085,6 +1094,9 @@ impl Round<'_> {
                 continue;
             }
             let Ok(note) = self.w.read(id) else { continue };
+            if note.type_name == writer::AGENT_THREAD_TYPE {
+                continue;
+            }
             let Some(base) = base_of(id) else { continue };
             let text = self.publish_imported(&note, base)?;
             if text.as_bytes() != base.base {

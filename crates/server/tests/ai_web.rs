@@ -602,12 +602,12 @@ fn a_download_cut_off_part_way_stores_nothing_and_leaves_no_file() {
 }
 
 #[test]
-fn a_read_scope_caller_always_gets_a_download_proposal() {
+fn a_write_caller_gets_a_download_proposal_with_confirmation() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     let web = FakeWeb::start();
-    api.anthropic(&fake, json!({ "downloads": false }), true);
-    let reader = api.token_of("reader", "read");
+    api.anthropic(&fake, json!({ "downloads": true }), true);
+    let reader = api.token_of("reader", "write");
     let events = api.call_as(
         &reader,
         &fake,

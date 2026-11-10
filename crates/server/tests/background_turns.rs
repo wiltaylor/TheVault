@@ -53,7 +53,7 @@ impl Api {
         let v = self.send(
             "POST",
             "/api/tokens",
-            json!({ "name": name, "scope": "read" }),
+            json!({ "name": name, "scope": "write" }),
         );
         v["secret"].as_str().unwrap().to_owned()
     }
