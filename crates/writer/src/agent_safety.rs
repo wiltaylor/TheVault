@@ -33,12 +33,9 @@ pub fn incoming(kind: &str, doc: &Doc) -> bool {
         }),
         "message" => fields["direction"] != "out",
         "call" => fields["direction"] != "out",
-        "event" => fields["my_response"]
-            .as_str()
-            .is_some_and(|s| !s.is_empty()),
         // Calendar sync retains the organiser address on the series, but not my_response.
         // Unknown ownership is conservative: only an exact own-calendar address exempts it.
-        "event_series" => {
+        "event" | "event_series" => {
             if fields["organiser"].as_str().is_some_and(|s| !s.is_empty()) {
                 fields["organiser"] != fields["calendar"]
             } else {
@@ -51,7 +48,7 @@ pub fn incoming(kind: &str, doc: &Doc) -> bool {
 
 /// The same content projection is sent to Jev and hashed. Workflow and sync bookkeeping
 /// are not evidence. Unknown/custom fields remain evidence rather than silently bypassing it.
-pub fn classified_content(doc: &Doc) -> serde_json::Value {
+pub fn classified_content(kind: &str, doc: &Doc) -> serde_json::Value {
     let mut note = doc_to_json(doc);
     if let Some(blocks) = note["blocks"].as_array_mut() {
         blocks.retain(|block| {
@@ -62,6 +59,10 @@ pub fn classified_content(doc: &Doc) -> serde_json::Value {
         });
     }
     if let Some(fields) = note["fields"].as_object_mut() {
+        if matches!(kind, "email_thread" | "conversation") {
+            // Server person references change as members arrive, not the derived title.
+            fields.remove("participants");
+        }
         fields.retain(|key, _| {
             !key.ends_with("_ref")
                 && !matches!(
@@ -116,7 +117,7 @@ pub fn classified_content(doc: &Doc) -> serde_json::Value {
 pub fn fingerprint(kind: &str, doc: &Doc) -> String {
     format!(
         "{:x}",
-        Sha256::digest(format!("{kind}:{}", classified_content(doc)))
+        Sha256::digest(format!("{kind}:{}", classified_content(kind, doc)))
     )
 }
 
@@ -148,7 +149,7 @@ impl Writer {
             return Ok(());
         }
         let without_rendering = |doc: &Doc| {
-            let mut value = classified_content(doc);
+            let mut value = classified_content(kind, doc);
             if let Some(fields) = value["fields"].as_object_mut() {
                 fields.remove("html");
                 fields.remove("attachments");

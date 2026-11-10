@@ -43,19 +43,10 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
         let mut ctx = query::Context::new(index, schema);
         ctx.excluded_notes = excluded.as_ref();
         let result = query::run(q, &ctx, &page).map_err(err)?;
-        if page.cursor.is_none() && excluded.as_ref().is_some_and(|ids| !ids.is_empty()) {
-            // Only totals cross this boundary, never the unfiltered row content.
-            ctx.excluded_notes = None;
-            let all = query::run(
-                q,
-                &ctx,
-                &query::PageRequest {
-                    cursor: None,
-                    size: 1,
-                },
-            )
-            .map_err(err)?;
-            OMITTED.with(|n| n.set(n.get() + all.total.saturating_sub(result.total)));
+        if excluded.is_some() {
+            // Never evaluate the condition against held content, even for a count.
+            // This fixed notice signal is independent of the query and its results.
+            OMITTED.with(|n| n.set(1));
         }
         Ok(result)
     })

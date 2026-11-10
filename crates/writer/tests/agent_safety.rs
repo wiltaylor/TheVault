@@ -92,6 +92,17 @@ fn review3_member_write_cost_with_large_safety_state() {
 }
 
 #[test]
+fn round4_group_invitation_and_shared_calendar_events_are_incoming() {
+    for fields in [
+        serde_json::json!({"organiser":"external@example.test","calendar":"group@example.test"}),
+        serde_json::json!({"organiser":"","calendar":"shared@example.test","google_ref":"event-1"}),
+    ] {
+        let doc = Input::Json(serde_json::json!({"fields":fields})).parse("notes/event/test.wcl");
+        assert!(writer::agent_safety::incoming("event", &doc.unwrap()));
+    }
+}
+
+#[test]
 fn activation_inventory_is_not_note_date_and_both_legacy_modes_work() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
@@ -318,7 +329,7 @@ fn review_sync_snapshot_is_not_classified_content() {
         writer::agent_safety::fingerprint("event", &b)
     );
     assert!(
-        !writer::agent_safety::classified_content(&a)
+        !writer::agent_safety::classified_content("email", &a)
             .to_string()
             .contains("Before sync")
     );
@@ -494,7 +505,7 @@ fn round3_agent_query_keeps_sql_plan_on_large_index() {
 }
 
 #[test]
-fn round3_omission_count_is_scoped_to_the_query() {
+fn round3_omission_notice_is_independent_of_the_query() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
     w.activate_agent_safety().unwrap();
@@ -513,14 +524,14 @@ fn round3_omission_count_is_scoped_to_the_query() {
         None,
     )
     .unwrap();
-    assert_eq!(w.take_agent_omissions(), 0);
+    assert_eq!(w.take_agent_omissions(), 1);
     w.query_page(
         "from email where title == \"Missing\" select title",
         10,
         None,
     )
     .unwrap();
-    assert_eq!(w.take_agent_omissions(), 0);
+    assert_eq!(w.take_agent_omissions(), 1);
 }
 
 #[test]

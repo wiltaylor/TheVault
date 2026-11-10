@@ -374,6 +374,7 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         if safety_hash.is_some() {
             // Exactly the projection used by the clearance fingerprint.
             request.state = writer::agent_safety::classified_content(
+                &saved.type_name,
                 &Doc::parse(&saved.wcl, "safety snapshot")
                     .map_err(|_| AiError::invalid("Invalid safety snapshot"))?,
             );

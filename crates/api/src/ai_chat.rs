@@ -1508,7 +1508,7 @@ fn setup(
         .as_deref()
         .is_some_and(|id| !id.trim().is_empty() && !w.agent_may_read(id))
     {
-        system.push_str("\n1 notes are held from agents; the user can review and release them.\n");
+        system.push_str("\nThis note is held from agents; the user can review and release it.\n");
     }
     // What the agent can do with wscript, so it opens the wscript skill first (script-tools T5).
     let scripts = if change_scope(scope, agent).allows(Scope::Write) {
@@ -4158,10 +4158,7 @@ fn propose_or_read(
     ) {
         let omitted = w.take_agent_omissions();
         if omitted > 0 {
-            out.content.push_str(&format!(
-                "\n{} notes are held from agents; the user can review and release them.",
-                omitted
-            ));
+            out.content.push_str("\nsome notes may be held; the user can review and release them.");
         }
     }
     out
