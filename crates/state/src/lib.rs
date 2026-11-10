@@ -604,7 +604,7 @@ impl State {
     }
 
     /// Forget daily counters and cancellation deadlines older than seven days.
-    pub fn prune_outbox_limits(&self, now: i64) -> Result<usize> {
+    pub fn prune_outbox_limits(&self, now: i64, keep_deadline: impl Fn(&str) -> bool) -> Result<usize> {
         let cutoff = now.saturating_sub(7 * 86_400_000);
         let conn = self.conn();
         let mut stmt = conn.prepare(
@@ -614,8 +614,8 @@ impl State {
         let mut expired = Vec::new();
         for row in rows {
             let (key, value) = row?;
-            let old = if key.starts_with("outbox-delay:") {
-                value.parse::<i64>().is_ok_and(|v| v < cutoff)
+            let old = if let Some(id) = key.strip_prefix("outbox-delay:") {
+                value.parse::<i64>().is_ok_and(|v| v < cutoff) && !keep_deadline(id)
             } else {
                 key.rsplit(':')
                     .next()
@@ -631,6 +631,14 @@ impl State {
             conn.execute("DELETE FROM meta WHERE key=?1", [key])?;
         }
         Ok(expired.len())
+    }
+
+    /// Pre-upgrade agent names whose legacy grant has not been revoked.
+    pub fn legacy_outbox_agents(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT key FROM meta WHERE key LIKE 'outbox-legacy:%' AND value='true'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?.into_iter().filter_map(|k| k.strip_prefix("outbox-legacy:").map(str::to_owned)).collect())
     }
 
     /// The live events of this vault's changes, for open clients (D4).

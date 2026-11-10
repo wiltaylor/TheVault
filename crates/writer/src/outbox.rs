@@ -244,9 +244,7 @@ impl Writer {
                 .and_then(|s| Input::Wcl(s).parse("event").ok());
             if let Some(note) = existing {
                 recipients.extend(strings(&note, "attendees_raw"));
-                if text(doc, "my_response").is_some_and(|s| !s.is_empty()) {
-                    recipients.extend(strings(&note, "organiser"));
-                }
+                recipients.extend(strings(&note, "organiser"));
             } else {
                 set(doc, "status", "draft");
                 return Ok(());
@@ -264,9 +262,10 @@ impl Writer {
             && text(doc, "phone")
                 .and_then(|p| recipient_key(p, kind))
                 .is_none();
+        let invalid_email = kind == "email" && recipients.iter().any(|r| recipient_key(r, kind).is_none());
         let denied = if !enabled {
             Some("this kind is not enabled for this agent")
-        } else if !allowed || invalid_phone {
+        } else if !allowed || invalid_phone || invalid_email {
             Some("recipient not on this agent's list")
         } else if !self.state.reserve_outbox(
             name,
@@ -291,6 +290,18 @@ impl Writer {
             && let Some(phone) = text(doc, "phone").and_then(|p| recipient_key(p, kind))
         {
             set(doc, "phone", &phone);
+        } else if kind == "email" {
+            for name in ["to", "cc", "bcc"] {
+                let values = strings(doc, name);
+                if values.is_empty() { continue; }
+                let Some(normalized) = values.iter().map(|v| recipient_key(v, "email").map(Value::Str)).collect::<Option<Vec<_>>>() else {
+                    // Even legacy sends must have unambiguous ASCII address keys.
+                    set(doc, "status", "draft");
+                    return Ok(());
+                };
+                doc.fields.retain(|(n, _)| n != name);
+                doc.fields.push((name.to_owned(), Value::List(normalized)));
+            }
         }
         Ok(())
     }
@@ -553,7 +564,7 @@ impl Writer {
     /// removed is logged and left for the next sweep.
     pub fn sweep_outbox(&self, now_ms: i64) -> usize {
         use script_core::Vault as _;
-        if let Err(e) = self.state.prune_outbox_limits(now_ms) {
+        if let Err(e) = self.state.prune_outbox_limits(now_ms, |id| self.vault.root().join(note_path("outbox", id)).is_file()) {
             eprintln!("outbox: could not prune expired send limits: {e}");
         }
         let rows = match self.query(

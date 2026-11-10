@@ -366,7 +366,7 @@ impl Outbox {
 
 /// Exact address/number keys shared by send admission and permission containment.
 pub fn send_recipient_key(value: &str, sms: bool) -> Option<String> {
-    let value = value.trim();
+    let value = value.trim_matches(|c: char| c.is_ascii_whitespace());
     if !sms {
         return (value.is_ascii() && value.contains('@')).then(|| value.to_ascii_lowercase());
     }

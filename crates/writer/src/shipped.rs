@@ -2275,6 +2275,7 @@ impl Writer {
                 lists_not_multiple(self)?;
                 // Likewise an agent file naming a provider of before accounts.
                 agents_name_accounts(self)?;
+                self.refresh_outbox_legacy()?;
                 steps
             }
             Upkeep::Device => Vec::new(),

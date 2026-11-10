@@ -289,18 +289,26 @@ fn agent_response(
 /// `GET /api/agents/{name}`.
 pub async fn read(
     State(w): Shared,
+    Caller(by): Caller,
+    crate::auth::GrantedScope(scope): crate::auth::GrantedScope,
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // A file that does not parse is a 400 `invalid` with its issues and its text, so the File
     // tab can show it to be fixed.
     let (wcl, agent, account) = blocking(w, move |w| {
-        let wcl = w.read_agent(&name)?;
-        let agent = Agent::parse(&name, &wcl).map_err(|e| {
-            let mut err = ApiError::from(writer::Error::Invalid(e));
-            err.body["wcl"] = json!(wcl);
+        let full = matches!(by, state::Author::Session(_))
+            || (scope.allows(state::Scope::Admin) && !crate::auth::is_agent_token(&by));
+        let mut wcl = w.read_agent(&name)?;
+        let mut agent = w.agent(&name).map_err(|e| {
+            let mut err = ApiError::from(e);
+            if full { err.body["wcl"] = json!(wcl); }
             err
         })?;
+        if !full {
+            agent.permissions.outbox.conditions = None;
+            wcl = agent.to_wcl();
+        }
         let account = crate::ai_settings::agent_account_name(w, &agent);
         Ok::<_, ApiError>((wcl, agent, account))
     })

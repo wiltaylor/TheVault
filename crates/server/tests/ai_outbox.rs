@@ -494,6 +494,27 @@ fn get_agent_redacts_other_agents_recipient_conditions() {
 }
 
 #[test]
+fn round3_http_agent_read_redacts_conditions_for_both_agent_scopes() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let source = SENDER.replace("send_without_review = true", "send_without_review = true\n conditions { recipients = [\"private@example.com\"]\n email = true\n daily_cap = 2\n }");
+    api.agent("sender", &source);
+    for scope in ["read", "write"] {
+        let issued = api.send("POST", "/api/agent-codes", json!({"name": format!("reader_{scope}"), "scope": scope}));
+        let response: Value = api.client.post(api.server.url("/api/agent-codes/redeem")).json(&json!({"code": issued["code"]})).send().unwrap().json().unwrap();
+        let token = response["token"].as_str().unwrap();
+        for accept in ["application/json", "text/plain"] {
+            let result = api.client.get(api.server.url("/api/agents/sender")).bearer_auth(token).header("accept", accept).send().unwrap();
+            assert_eq!(result.status(), StatusCode::OK);
+            let text = result.text().unwrap();
+            assert!(!text.contains("private@example.com"), "{scope} {accept}: {text}");
+            assert!(!text.contains("conditions"), "{scope} {accept}: {text}");
+        }
+    }
+    assert!(api.get("/api/agents/sender").to_string().contains("private@example.com"));
+}
+
+#[test]
 fn only_an_agent_with_send_without_review_drafts_approved_items() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

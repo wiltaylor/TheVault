@@ -111,6 +111,36 @@ fn round3_switch_off_then_bare_on_does_not_restore_legacy() {
     assert_eq!(status(&w, &id), "draft");
 }
 
+#[test]
+fn round3_sweep_keeps_existing_items_cancellation_and_retry_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    let deadline = w.state().outbox_deadline(&id).unwrap().unwrap();
+    w.sweep_outbox(deadline + 8 * 86_400_000);
+    assert_eq!(w.state().outbox_deadline(&id).unwrap(), Some(deadline));
+    edit(&w, &id, &user(), json!({"status": "draft"})).unwrap();
+    w.put_agent("sender", "permissions { outbox { send_without_review = true\n conditions {}\n }\n }", |_| Vec::new()).unwrap();
+    assert!(edit(&w, &id, &user(), json!({"status": "ready"})).is_err());
+    let note = w.read(&id).unwrap();
+    w.delete(&id, Some(&note.version), &user()).unwrap();
+    w.sweep_outbox(deadline + 8 * 86_400_000);
+    assert_eq!(w.state().outbox_deadline(&id).unwrap(), None);
+}
+
+#[test]
+fn round3_email_keys_are_ascii_trimmed_and_written_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready", "to": [" ANN@example.com "], "cc": ["\tBO@example.COM\r\n"]}))).unwrap();
+    assert_eq!(fields(&w, &id)["to"], json!(["ann@example.com"]));
+    assert_eq!(fields(&w, &id)["cc"], json!(["bo@example.com"]));
+    for to in ["\u{a0}ann@example.com", "ann@example.com\u{3000}"] {
+        let id = create(&w, &agent("sender"), email(json!({"status": "ready", "to": [to]}))).unwrap();
+        assert_eq!(status(&w, &id), "draft");
+    }
+}
+
 fn user() -> Author {
     Author::Session("test".into())
 }
