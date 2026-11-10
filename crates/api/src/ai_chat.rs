@@ -2416,7 +2416,7 @@ impl Turn {
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
                 if c.name == "propose_agent_delete" {
-        crate::ai_browser::cleanup_retired(self.writer.clone());
+                    crate::ai_browser::cleanup_retired(self.writer.clone());
                 }
                 if let Some(line) = got.summary["gmail_skipped"].as_str() {
                     self.report(|r| r.log.push(line.to_owned()));

@@ -21,6 +21,37 @@ const MODEL: &str = "claude-opus-5";
 /// An agent with browser automation and every other default.
 const DRIVER: &str = "label = \"Driver\"\n\npermissions {\n  browser = true\n}\n";
 
+fn eventually(timeout: u64, mut condition: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while !condition() {
+        assert!(started.elapsed() < Duration::from_secs(timeout), "background cleanup did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn unanswering_box_cleanup_does_not_delay_turns_or_startup() {
+    let fake = FakeAnthropic::start();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    // Keep connections open without answering HTTP. No serving thread needed.
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = TestServer::start_with_env(|_| {}, &[("VAULT_BROWSER_URL", &url), ("VAULT_BROWSER_TOKEN", "fixture")]);
+    let mut api = Api { server, client: Client::new() };
+    for (name, value) in AiSeed::new().account(TestAccount::anthropic(&fake).model(MODEL)).secrets() {
+        api.secret(&name, &value);
+    }
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    state.set_meta("browser-retired", r#"["retired-one","retired-two","retired-three"]"#).unwrap();
+    fake.push(AnthropicMessage::text("No browser needed."));
+    let start = std::time::Instant::now();
+    api.turn(None);
+    assert!(start.elapsed() < Duration::from_secs(3), "turn waited for offline cleanup");
+    let start = std::time::Instant::now();
+    api.server.restart();
+    assert!(start.elapsed() < Duration::from_secs(3), "startup waited for offline cleanup");
+    assert_eq!(state.meta("browser-retired").unwrap().unwrap(), r#"["retired-one","retired-two","retired-three"]"#);
+}
+
 #[test]
 fn browser_reset_is_an_owner_action_and_rotates_only_that_agent() {
     let fake = FakeAnthropic::start();
@@ -68,7 +99,7 @@ fn browser_reset_is_an_owner_action_and_rotates_only_that_agent() {
         .send()
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(browser.profiles().len(), 1);
+    eventually(5, || browser.profiles().len() == 1);
     assert!(!browser.profiles().contains(&old));
     api.call(
         &fake,
@@ -99,7 +130,7 @@ fn browser_reset_is_an_owner_action_and_rotates_only_that_agent() {
         .send()
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(browser.profiles().len(), 1);
+    eventually(5, || browser.profiles().len() == 1);
 }
 
 #[test]
@@ -149,10 +180,7 @@ fn a_crash_during_a_throwaway_retires_its_persisted_profile_on_startup() {
     );
     // TestServer::restart kills the process, so the guard's Drop cannot run.
     api.server.restart();
-    assert!(
-        browser.profiles().is_empty(),
-        "startup must remove the crashed child's profile"
-    );
+    eventually(5, || browser.profiles().is_empty());
     let pending: Vec<String> =
         serde_json::from_str(&state.meta("browser-temporary").unwrap().unwrap()).unwrap();
     assert!(pending.is_empty());
@@ -244,6 +272,8 @@ fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
         .send()
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    eventually(5, || browser.requests().iter().any(|r| r.method == "DELETE"));
+    let attempts = browser.requests().iter().filter(|r| r.method == "DELETE").count();
     browser.fail_cleanup(false);
     api.agent("driver", DRIVER);
     api.call(
@@ -256,12 +286,10 @@ fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
     let fresh = requests.last().unwrap().header("x-vault-agent").unwrap();
     assert_ne!(fresh, profile);
     assert_ne!(fresh, other);
+    assert_eq!(requests.iter().filter(|r| r.method == "DELETE").count(), attempts, "permanent failures must not retry on each turn");
+    eventually(40, || !browser.profiles().contains(&profile));
+    let requests = browser.requests();
     let removed: Vec<_> = requests.iter().filter(|r| r.method == "DELETE").collect();
-    assert_eq!(
-        removed.len(),
-        2,
-        "failed cleanup is retried on the next turn"
-    );
     assert!(
         removed
             .iter()
@@ -375,10 +403,11 @@ fn throwaway_browser_identity_is_fresh_and_cleanup_is_retried_after_an_outage() 
         "browser_run",
         json!({"command":"parent-again", "timeout":null}),
     );
+    eventually(40, || !browser.profiles().contains(&child));
     let requests = browser.requests();
     assert!(requests.iter().filter(|r| r.method == "DELETE").count() >= 2);
     assert_eq!(
-        requests.last().unwrap().header("x-vault-agent"),
+        requests.iter().rev().find(|r| r.route() == "/run").unwrap().header("x-vault-agent"),
         Some(parent.as_str())
     );
 }

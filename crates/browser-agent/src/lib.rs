@@ -380,7 +380,10 @@ async fn delete_profile(
             ));
         }
     }
-    kill_profile_processes(&path)?;
+    let owned_path = path.clone();
+    tokio::task::spawn_blocking(move || kill_profile_processes(&owned_path))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let _guard = state.profiles.lock().unwrap_or_else(|e| e.into_inner());
     if root.exists() {
         safe_dir(&root)?;
@@ -394,6 +397,10 @@ async fn delete_profile(
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if path.exists() {
         // remove_dir_all does not follow symlinks, including children.
+        std::fs::remove_dir_all(&path)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if path.exists() {
         std::fs::remove_dir_all(&path)
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
@@ -416,7 +423,11 @@ fn kill_profile_processes(path: &Path) -> ApiResult<()> {
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .flatten()
         {
-            let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<i32>().ok())
+            else {
                 continue;
             };
             if pid <= 1 || pid as u32 == std::process::id() {
@@ -424,15 +435,18 @@ fn kill_profile_processes(path: &Path) -> ApiResult<()> {
             }
             let owns_home = std::fs::read(entry.path().join("environ"))
                 .is_ok_and(|env| env.split(|b| *b == 0).any(|v| v == expected.as_bytes()));
-            let owns_cwd = std::fs::read_link(entry.path().join("cwd"))
-                .is_ok_and(|cwd| cwd.starts_with(path));
+            let owns_cwd =
+                std::fs::read_link(entry.path().join("cwd")).is_ok_and(|cwd| cwd.starts_with(path));
             if owns_home || owns_cwd {
                 found = true;
                 // Numeric pid only. Permission errors leave deletion pending.
-                if unsafe { libc::kill(pid, libc::SIGKILL) } != 0
-                    && io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-                {
-                    return Err(ApiError::new(StatusCode::CONFLICT, "could not stop this profile's processes"));
+                let pid = rustix::process::Pid::from_raw(pid).expect("positive process id");
+                if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::KILL)
+                    && e != rustix::io::Errno::SRCH {
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        "could not stop this profile's processes",
+                    ));
                 }
             }
         }
@@ -441,7 +455,10 @@ fn kill_profile_processes(path: &Path) -> ApiResult<()> {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    Err(ApiError::new(StatusCode::CONFLICT, "profile processes have not stopped; cleanup will retry"))
+    Err(ApiError::new(
+        StatusCode::CONFLICT,
+        "profile processes have not stopped; cleanup will retry",
+    ))
 }
 
 fn authorize(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {

@@ -15,10 +15,13 @@ async fn deleting_a_profile_stops_detached_children_and_prevents_regrowth() {
     let b = Agent::start().await;
     let result = b.run("setsid sh -c 'while :; do mkdir -p \"$HOME/regrow\"; sleep 0.05; done' </dev/null >/dev/null 2>&1 & printf '%s' $!").await;
     let pid: i32 = result["stdout"].as_str().unwrap().trim().parse().unwrap();
-    let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+    let response = identity(b.http.delete(b.url("/profile")), "test")
+        .send()
+        .await
+        .unwrap();
     // Always stop our test child even if the assertion fails on an old service.
     let alive = std::fs::read_link(format!("/proc/{pid}/cwd")).is_ok();
-    unsafe { libc::kill(pid, libc::SIGKILL); }
+    let _ = rustix::process::kill_process(rustix::process::Pid::from_raw(pid).unwrap(), rustix::process::Signal::KILL);
     assert_eq!(response.status(), 200);
     assert!(!alive, "detached child survived DELETE");
     tokio::time::sleep(Duration::from_millis(500)).await;

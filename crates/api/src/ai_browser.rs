@@ -194,7 +194,10 @@ pub fn cleanup_retired(w: Arc<Writer>) {
     let Some(b) = BrowserBox::from_env() else {
         return;
     };
-    if RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+    if RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
         return;
     }
     struct Flight;
@@ -211,18 +214,29 @@ pub fn cleanup_retired(w: Arc<Writer>) {
             let Some(first) = ids.first() else { break };
             // One protocol check per sweep, not per identity. An offline box
             // must never delay a turn or startup, or create concurrent retries.
-            if b.clone().with_profile(first.clone()).check_protocol().await.is_ok() {
+            if b.clone()
+                .with_profile(first.clone())
+                .check_protocol()
+                .await
+                .is_ok()
+            {
                 for id in ids {
                     match b.clone().with_profile(id.clone()).remove_profile().await {
-                        Ok(()) => { let _ = w.browser_profile_removed(&id); }
+                        Ok(()) => {
+                            let _ = w.browser_profile_removed(&id);
+                        }
                         Err((unreachable, e)) => {
                             eprintln!("retired browser profile cleanup failed: {e}");
-                            if unreachable { break; }
+                            if unreachable {
+                                break;
+                            }
                         }
                     }
                 }
             }
-            if w.retired_browser_profiles().unwrap_or_default().is_empty() { break; }
+            if w.retired_browser_profiles().unwrap_or_default().is_empty() {
+                break;
+            }
             tokio::time::sleep(delay).await;
             delay = (delay * 2).min(Duration::from_secs(900));
         }

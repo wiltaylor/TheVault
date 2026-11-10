@@ -620,7 +620,7 @@ pub async fn reset_browser_profile(
         Ok::<_, ApiError>(w.reset_browser_profile(&name)?)
     })
     .await?;
-        crate::ai_browser::cleanup_retired(w.clone());
+    crate::ai_browser::cleanup_retired(w.clone());
     let pending = id.is_some_and(|id| {
         w.retired_browser_profiles()
             .is_ok_and(|ids| ids.contains(&id))
@@ -640,6 +640,6 @@ pub async fn delete(
         w.delete_agent(&n)
     })
     .await?;
-        crate::ai_browser::cleanup_retired(w.clone());
+    crate::ai_browser::cleanup_retired(w.clone());
     Ok(Json(json!({ "name": name, "deleted": true })))
 }
