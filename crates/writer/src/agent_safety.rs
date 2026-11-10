@@ -229,6 +229,9 @@ impl Writer {
     }
 
     pub(crate) fn refresh_safety_parents(&self, member: &str) -> Result<()> {
+        if self.state().meta("agent_safety.activation_ms")?.is_none() {
+            return Ok(());
+        }
         for parent in self.state().agent_safety_parents(member)? {
             let Some(raw) = self.state().meta(&format!("agent_safety.note.{parent}"))? else {
                 continue;
@@ -236,12 +239,7 @@ impl Writer {
             let Ok(safety) = serde_json::from_str::<Safety>(&raw) else {
                 continue;
             };
-            let indexed = self
-                .state()
-                .indexed_agent_safety()?
-                .into_iter()
-                .find(|(id, _, _)| id == &parent);
-            let Some((_, hash, _)) = indexed else {
+            let Some(hash) = self.state().indexed_agent_safety_hash(&parent)? else {
                 continue;
             };
             let allowed = safety.fingerprint == hash
@@ -251,6 +249,9 @@ impl Writer {
             if allowed {
                 self.state().set_agent_safety_result(&parent, &raw, true)?;
             }
+        }
+        if self.state().indexed_agent_safety_hash(member)?.is_none() {
+            self.state().unbind_deleted_safety_member(member)?;
         }
         Ok(())
     }
@@ -359,6 +360,7 @@ impl Writer {
     }
 
     pub fn activate_agent_safety(&self) -> Result<()> {
+        self.state().prepare_agent_safety_parents()?;
         if self.state().meta("agent_safety.index_ready")?.as_deref() == Some("1") {
             for (id, _, stored) in self.state().indexed_agent_safety()? {
                 if let Some(mut safety) =

@@ -113,16 +113,46 @@ impl State {
     }
 
     pub fn bind_agent_safety_member(&self, parent: &str, member: &str) -> Result<()> {
-        self.conn().execute(
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT OR IGNORE INTO meta(key,value) VALUES (?1,?2)",
             [format!("agent_safety.member.{parent}"), member.to_owned()],
         )?;
+        tx.execute("INSERT OR IGNORE INTO agent_safety_parents(parent,member) SELECT ?1,value FROM meta WHERE key=?2", rusqlite::params![parent, format!("agent_safety.member.{parent}")])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn prepare_agent_safety_parents(&self) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_safety_parents(parent TEXT PRIMARY KEY, member TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS agent_safety_parents_member ON agent_safety_parents(member);")?;
+        let first = tx.execute("INSERT OR IGNORE INTO meta(key,value) VALUES ('agent_safety.parents_ready','1')", [])?;
+        if first == 1 {
+            tx.execute("INSERT OR IGNORE INTO agent_safety_parents(parent,member) SELECT substr(key,length('agent_safety.member.')+1),value FROM meta WHERE key GLOB 'agent_safety.member.*'", [])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn indexed_agent_safety_hash(&self, id: &str) -> Result<Option<String>> {
+        Ok(self.conn().query_row("SELECT fingerprint FROM agent_safety_index WHERE id=?1", [id], |r| r.get(0)).optional()?)
+    }
+
+    pub fn unbind_deleted_safety_member(&self, member: &str) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM meta WHERE key IN (SELECT 'agent_safety.member.' || parent FROM agent_safety_parents WHERE member=?1)", [member])?;
+        tx.execute("DELETE FROM agent_safety_parents WHERE member=?1", [member])?;
+        tx.commit()?;
         Ok(())
     }
 
     pub fn agent_safety_parents(&self, member: &str) -> Result<Vec<String>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT substr(key,length('agent_safety.member.')+1) FROM meta WHERE key LIKE 'agent_safety.member.%' AND value=?1")?;
+        let mut stmt = conn.prepare("SELECT parent FROM agent_safety_parents WHERE member=?1")?;
         Ok(stmt
             .query_map([member], |r| r.get(0))?
             .collect::<std::result::Result<_, _>>()?)

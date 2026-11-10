@@ -1349,10 +1349,11 @@ fn older_bodies_are_reconverted_unless_the_user_edited_them() {
     );
     let note = gmail.note(&kept);
     assert_eq!(
-        note["agent_safety"]["status"], "released",
-        "unchanged reconversion must preserve release: {note}"
+        note["agent_safety"]["status"], "held",
+        "new HTML body text must not inherit release: {note}"
     );
-    assert_eq!(gmail.note(&gone)["agent_safety"]["status"], "released");
+    assert_eq!(note["agent_safety"]["reason"], "content_changed");
+    assert_eq!(gmail.note(&gone)["agent_safety"]["status"], "held");
     assert_eq!(note["note"]["fields"]["converter"], 2);
     let blocks = body_blocks(&note);
     assert_eq!(

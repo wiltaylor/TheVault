@@ -103,6 +103,21 @@ fn round4_group_invitation_and_shared_calendar_events_are_incoming() {
 }
 
 #[test]
+fn round4_deleted_first_member_can_be_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let first = create(&w, "First");
+    w.state().bind_agent_safety_member("parent", &first.id).unwrap();
+    w.delete(&first.id, Some(&first.version), &Author::Session("owner".into())).unwrap();
+    assert!(w.state().agent_safety_parents(&first.id).unwrap().is_empty());
+    assert!(w.state().meta("agent_safety.member.parent").unwrap().is_none());
+    let next = create(&w, "Next");
+    w.state().bind_agent_safety_member("parent", &next.id).unwrap();
+    assert_eq!(w.state().meta("agent_safety.member.parent").unwrap(), Some(next.id));
+}
+
+#[test]
 fn activation_inventory_is_not_note_date_and_both_legacy_modes_work() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
