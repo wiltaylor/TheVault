@@ -2,9 +2,25 @@
 // groups, and the command palette's New agent and Open agent actions.
 
 import { describe, expect, it } from "vitest";
-import { agentNameFrom, scriptsBlock, toolGroups } from "./agents";
-import type { AgentSummary } from "./api";
+import { agentForm, agentNameFrom, scriptsBlock, toolGroups } from "./agents";
+import type { Agent, AgentSummary } from "./api";
 import { agentActions } from "./palette/actions";
+
+it("preserves independent change permissions in an unrelated form edit", () => {
+  const agent = {
+    label: "Triage", enabled: true, triggers: [],
+    permissions: {
+      tools: null, types: ["email", "person"], change_types: ["email"],
+      change_fields: { email: ["processed"] }, confirm: {}, web: {},
+    },
+  } as unknown as Agent;
+  const form = agentForm(agent);
+  form.label = "Renamed";
+  expect(form.permissions.change_types).toEqual(["email"]);
+  expect(form.permissions.change_fields).toEqual({ email: ["processed"] });
+  form.permissions.change_fields!.email!.push("subject");
+  expect(agent.permissions.change_fields).toEqual({ email: ["processed"] });
+});
 
 describe("agentNameFrom", () => {
   it("makes a vault name of what was typed", () => {

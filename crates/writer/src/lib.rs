@@ -77,6 +77,14 @@ pub use activity::{Acting, acting_as};
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
+
+/// A single note write whose authorization must be checked under the write lock.
+pub enum CheckedNoteWrite<'a> {
+    Create(&'a str, &'a Input),
+    Update(&'a str, &'a Input, Option<&'a str>),
+    Archive(&'a str, bool, Option<&'a str>),
+    Delete(&'a str, Option<&'a str>),
+}
 pub use builtin::{
     AGENT_MEMORY_TYPE, AGENT_THREAD_TYPE, BUILT_IN_KEYS, BUILT_IN_TAXONOMIES, BUILT_IN_TYPES,
     CALL_TYPE, CONVERSATION_TYPE, DEFAULT_AGENT_MEMORY_TYPE, DEFAULT_AGENT_THREAD_TYPE,
@@ -649,6 +657,19 @@ impl Writer {
         Ok(texts.remove(0))
     }
 
+    /// Create an empty type with authorization checked under the write lock.
+    pub fn put_type_checked<E: From<Error>>(
+        &self,
+        name: &str,
+        source: &str,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<String, E> {
+        let _w = self.write_lock();
+        check(self)?;
+        let mut texts = self.put_types_locked(self.lock(), &[(name, source)])?;
+        Ok(texts.remove(0))
+    }
+
     /// Write several type files in one commit, checked as one schema, so types that name each
     /// other can arrive together. Returns each canonical text, in order.
     pub(crate) fn put_types(&self, sources: &[(&str, &str)]) -> Result<Vec<String>> {
@@ -788,6 +809,10 @@ impl Writer {
     /// Create a note of `type_name` with a new id.
     pub fn create(&self, type_name: &str, input: &Input, author: &Author) -> Result<Saved> {
         let _w = self.write_lock();
+        self.create_unlocked(type_name, input, author)
+    }
+
+    fn create_unlocked(&self, type_name: &str, input: &Input, author: &Author) -> Result<Saved> {
         let inner = self.lock();
         let id = ulid::Ulid::new().to_string();
         let doc = input.parse(&note_path(type_name, &id))?;
@@ -805,6 +830,16 @@ impl Writer {
         author: &Author,
     ) -> Result<Saved> {
         let _w = self.write_lock();
+        self.update_unlocked(id, input, base, author)
+    }
+
+    fn update_unlocked(
+        &self,
+        id: &str,
+        input: &Input,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         let doc = input.parse(&note_path(&type_name, id))?;
@@ -857,6 +892,10 @@ impl Writer {
     /// Delete note `id`, which must be at version `base`, moving it to the trash.
     pub fn delete(&self, id: &str, base: Option<&str>, author: &Author) -> Result<Saved> {
         let _w = self.write_lock();
+        self.delete_unlocked(id, base, author)
+    }
+
+    fn delete_unlocked(&self, id: &str, base: Option<&str>, author: &Author) -> Result<Saved> {
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         self.check_base(id, &type_name, &old, base)?;
@@ -944,6 +983,16 @@ impl Writer {
         author: &Author,
     ) -> Result<Saved> {
         let _w = self.write_lock();
+        self.archive_unlocked(id, archived, base, author)
+    }
+
+    fn archive_unlocked(
+        &self,
+        id: &str,
+        archived: bool,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         self.check_base(id, &type_name, &old, base)?;
@@ -1241,6 +1290,28 @@ impl Writer {
         let generation = self.commit(changes)?;
         inner.index.advance(generation).map_err(Error::from)?;
         Ok(())
+    }
+
+    /// Like `commit_checked`, but retains the full note pipeline, including handlers,
+    /// validation, events and base-version checks. The callback may read, not write.
+    pub fn commit_checked_note<E: From<Error>>(
+        &self,
+        op: CheckedNoteWrite<'_>,
+        author: &Author,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<Saved, E> {
+        let _w = self.write_lock();
+        check(self)?;
+        Ok(match op {
+            CheckedNoteWrite::Create(t, input) => self.create_unlocked(t, input, author),
+            CheckedNoteWrite::Update(id, input, base) => {
+                self.update_unlocked(id, input, base, author)
+            }
+            CheckedNoteWrite::Archive(id, archived, base) => {
+                self.archive_unlocked(id, archived, base, author)
+            }
+            CheckedNoteWrite::Delete(id, base) => self.delete_unlocked(id, base, author),
+        }?)
     }
 
     /// The type folder holding note `id`, from the files on disk.

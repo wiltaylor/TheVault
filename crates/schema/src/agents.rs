@@ -133,6 +133,10 @@ pub struct Permissions {
     pub outbox: Outbox,
     /// The note types the agent may read and change; `None` is every type.
     pub types: Option<Vec<String>>,
+    /// Note changes are also limited to these types. Absent inherits `types`.
+    pub change_types: Option<Vec<String>>,
+    /// Types listed here allow edits only to these fields, never create or delete.
+    pub change_fields: std::collections::BTreeMap<String, Vec<String>>,
     /// Browser automation (browser B6): the `browser_run`, `browser_file`, `browser_save` and `browser_capture`
     /// tools, offered when the server has a browser box. Absent means `false`, and it is
     /// independent of `tools`: an absent tools list does not include the browser tools.
@@ -689,6 +693,32 @@ impl Agent {
                 ));
             }
         }
+        for t in self.permissions.change_types.iter().flatten() {
+            if schema.type_def(t).is_none() {
+                issues.push(Issue::new(
+                    "permissions.change_types",
+                    format!("there is no type {t:?}"),
+                ));
+            }
+        }
+        for (t, fields) in &self.permissions.change_fields {
+            let path = format!("permissions.change_fields.{t}");
+            match schema.type_def(t) {
+                None => issues.push(Issue::new(&path, format!("there is no type {t:?}"))),
+                Some(def) => {
+                    for f in fields {
+                        if def.field(f).is_none()
+                            && !crate::types::RESERVED_FIELDS.contains(&f.as_str())
+                        {
+                            issues.push(Issue::warning(
+                                &path,
+                                format!("there is no field {f:?} in type {t:?}"),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         for trigger in &self.triggers {
             let types = match &trigger.when {
                 When::NoteEvent(e) => &e.types,
@@ -746,6 +776,18 @@ impl Agent {
             }
             if let Some(types) = &p.types {
                 field(&mut out, "  ", "types", &list(types));
+            }
+            if let Some(types) = &p.change_types {
+                field(&mut out, "  ", "change_types", &list(types));
+            }
+            if !p.change_fields.is_empty() {
+                let entries = p
+                    .change_fields
+                    .iter()
+                    .map(|(t, f)| format!("{t}: {}", list(f)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                field(&mut out, "  ", "change_fields", &format!("{{ {entries} }}"));
             }
             // Written only when on, so a file without it still reads in an app from before it.
             if p.browser {
@@ -1004,7 +1046,7 @@ impl Reader<'_> {
     fn permissions(&mut self, d: &Doc) -> Permissions {
         self.known(
             d,
-            &["tools", "types", "browser", "skills", "gmail_actions"],
+            &["tools", "types", "change_types", "change_fields", "browser", "skills", "gmail_actions"],
             "permissions.",
             "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... }, outbox { ... }, scripts { ... } or subagents { ... }",
         );
@@ -1014,6 +1056,7 @@ impl Reader<'_> {
                 .unwrap_or(false),
             tools: self.names_by(d, "tools", "permissions.tools", "tool", is_tool_name),
             types: self.names(d, "types", "permissions.types", "type"),
+            change_types: self.names(d, "change_types", "permissions.change_types", "type"),
             browser: self
                 .bool(d, "browser", "permissions.browser")
                 .unwrap_or(false),
@@ -1026,6 +1069,30 @@ impl Reader<'_> {
             ),
             ..Permissions::default()
         };
+        if let Some(value) = d.field("change_fields") {
+            match value {
+                Value::Record(entries) => {
+                    for (name, value) in entries {
+                        let at = format!("permissions.change_fields.{name}");
+                        if !is_name(name) || p.change_fields.contains_key(name) {
+                            self.c.fail(&at, "must be a unique type name");
+                            continue;
+                        }
+                        let fields = Doc {
+                            fields: vec![("fields".into(), value.clone())],
+                            blocks: Vec::new(),
+                        };
+                        if let Some(fields) = self.names(&fields, "fields", &at, "field") {
+                            p.change_fields.insert(name.clone(), fields);
+                        }
+                    }
+                }
+                _ => self.c.fail(
+                    "permissions.change_fields",
+                    "must be a record of type names and field lists",
+                ),
+            }
+        }
         let mut seen = HashSet::new();
         for b in &d.blocks {
             let at = format!("permissions.{}", b.kind);
