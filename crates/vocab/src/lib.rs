@@ -145,4 +145,15 @@ mod tests {
         assert_eq!(Author::Agent("triage".into()).parts(), ("agent", "triage"));
         assert_eq!(Author::from_parts("robot", "x".into()), None);
     }
+
+    #[test]
+    fn persisted_authors_cannot_grant_gmail_actions() {
+        let author = Author::AgentMail("clerk".into());
+        let (kind, name) = author.parts();
+        assert_eq!(
+            Author::from_parts(kind, name.to_owned()),
+            Some(Author::Agent("clerk".into()))
+        );
+        assert_eq!(Author::from_parts("agent_mail", "clerk".into()), None);
+    }
 }

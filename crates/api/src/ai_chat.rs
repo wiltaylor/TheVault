@@ -2226,25 +2226,27 @@ impl Turn {
                     continue;
                 }
                 let w = self.writer.clone();
-                // Only a foreground chat may opt into Gmail effects. Sub agents and every
-                // unattended origin (including mentions) keep the ordinary agent author.
-                let author = if !self.unattended
-                    && self.sub.is_none()
-                    && setup.agent.permissions.gmail_actions
-                {
-                    Author::AgentMail(setup.agent.name.clone())
-                } else if matches!(self.author, Author::Agent(_)) {
-                    self.author.clone()
-                } else {
-                    Author::Agent(setup.agent.name.clone())
-                };
+                let author = self.author.clone();
+                // The capability is scoped to this call, never inherited by a sub agent.
+                let gmail_actions =
+                    !self.unattended && self.sub.is_none() && setup.agent.permissions.gmail_actions;
                 let call = c.clone();
                 let direct = setup.direct;
                 let held = self.held;
                 let limits = setup.limits.clone();
                 let agent = setup.agent.clone();
                 let got = tokio::task::spawn_blocking(move || {
-                    run_tool(&w, &author, scope, direct, held, &limits, &agent, &call)
+                    run_tool(
+                        &w,
+                        &author,
+                        scope,
+                        direct,
+                        held,
+                        &limits,
+                        &agent,
+                        &call,
+                        gmail_actions,
+                    )
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
@@ -3421,6 +3423,7 @@ fn run_tool(
     limits: &Limits,
     agent: &Agent,
     call: &ToolCall,
+    gmail_actions: bool,
 ) -> ToolOut {
     // The memory tools reach only the agent's own memories, and write as the agent (agents G21).
     if call.error.is_none() && agent_memory::is_memory_tool(&call.name) {
@@ -3435,7 +3438,15 @@ fn run_tool(
             let (event, p) = (*event, p.clone());
             // A change made without the user's Apply to an Outbox item is the agent's, whoever
             // runs the turn, so the writer's review rules hold for it (outbox X2).
-            let author = if touches_outbox(w, event, &p) {
+            let email = event == "proposal"
+                && (p["type"] == "email"
+                    || p["note_id"]
+                        .as_str()
+                        .and_then(|id| w.read(id).ok())
+                        .is_some_and(|n| n.type_name == "email"));
+            let author = if email && gmail_actions {
+                Author::AgentMail(agent.name.clone())
+            } else if email || touches_outbox(w, event, &p) {
                 Author::Agent(agent.name.clone())
             } else {
                 author.clone()

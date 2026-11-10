@@ -728,7 +728,21 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         let one = api.email("one");
         let two = api.email("two");
         if mention {
-            expect(api.req("POST", "/api/notes?type=fleeting").json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000001)"}}]}]}})).send().unwrap(), 200);
+            // A real session authors the call, as required by the external-text boundary.
+            let client = Client::new();
+            let login = client
+                .post(api.server.url("/api/login"))
+                .json(&json!({"password": testkit::PASSWORD}))
+                .send()
+                .unwrap();
+            assert_eq!(login.status(), 200);
+            let cookie = login.headers()[reqwest::header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap();
+            expect(client.post(api.server.url("/api/notes?type=fleeting")).header(reqwest::header::COOKIE, cookie).json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000001)"}}]}]}})).send().unwrap(), 201);
         } else {
             api.edit(&one, json!({"title": "Changed"}));
         }

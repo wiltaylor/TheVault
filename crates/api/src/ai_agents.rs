@@ -600,6 +600,18 @@ mod tests {
     }
 
     #[test]
+    fn escalation_refuses_gmail_actions_the_proposer_lacks() {
+        let mail = agent("permissions { gmail_actions = true\n}\n");
+        let off = agent("");
+        assert!(
+            escalation(&off, &mail)
+                .iter()
+                .any(|p| p.contains("Gmail actions"))
+        );
+        assert!(escalation(&mail, &off).is_empty());
+    }
+
+    #[test]
     fn escalation_refuses_the_skills_switch_off_when_the_proposer_must_ask() {
         let free = agent("permissions {\n  confirm {\n    skills = false\n  }\n}\n");
         let all = agent("");
