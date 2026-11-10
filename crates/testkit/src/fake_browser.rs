@@ -25,7 +25,7 @@
 //! starting with `/` is relative to `/work`. Errors are `{error}`. It binds `127.0.0.1` on a free
 //! port and records every request.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -112,6 +112,7 @@ struct Shared {
     signed_profiles: Mutex<bool>,
     legacy_protocol: Mutex<bool>,
     cleanup_failure: Mutex<bool>,
+    profiles: Mutex<BTreeSet<String>>,
 }
 
 /// The file a command writes, as `browser_capture` quotes it: `--filename='<path>'` or
@@ -168,6 +169,8 @@ impl FakeBrowser {
     pub fn fail_cleanup(&self, fail: bool) {
         *lock(&self.shared.cleanup_failure) = fail;
     }
+
+    pub fn profiles(&self) -> Vec<String> { lock(&self.shared.profiles).iter().cloned().collect() }
 
     /// Answer the next `/run` with `run`.
     pub fn push_run(&self, run: BrowserRun) {
@@ -246,8 +249,12 @@ fn answer(s: &Shared, r: &Request) -> Reply {
     }
     match (r.method.as_str(), r.route()) {
         ("DELETE", "/profile") if *lock(&s.cleanup_failure) => error(503, "box unavailable"),
-        ("DELETE", "/profile") => Reply::json(200, &json!({"ok": true})),
+        ("DELETE", "/profile") => {
+            lock(&s.profiles).remove(r.header("x-vault-agent").unwrap_or_default());
+            Reply::json(200, &json!({"ok": true}))
+        }
         ("POST", "/run") => {
+            if let Some(id) = r.header("x-vault-agent") { lock(&s.profiles).insert(id.to_owned()); }
             let body = r.json();
             let command = body["command"].as_str().unwrap_or_default().to_owned();
             if command.trim().is_empty() {

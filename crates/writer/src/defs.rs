@@ -843,8 +843,52 @@ impl Writer {
 
     /// Agent `name`, parsed. A file that does not parse is [`Error::Invalid`].
     pub fn agent(&self, name: &str) -> Result<Agent> {
-        let text = self.read_agent(name)?;
-        Agent::parse(name, &text).map_err(Error::Invalid)
+        let text = match self.read_agent(name) {
+            Ok(text) => text,
+            Err(e) => {
+                self.revoke_outbox_legacy(name)?;
+                return Err(e);
+            }
+        };
+        let mut agent = match Agent::parse(name, &text) {
+            Ok(agent) => agent,
+            Err(e) => {
+                self.revoke_outbox_legacy(name)?;
+                return Err(Error::Invalid(e));
+            }
+        };
+        if !agent.permissions.outbox.send_without_review
+            || agent.permissions.outbox.conditions.is_some()
+        {
+            self.revoke_outbox_legacy(name)?;
+        }
+        if agent.permissions.outbox.send_without_review
+            && agent.permissions.outbox.conditions.is_none()
+            && self
+                .state
+                .meta(&format!("outbox-legacy:{name}"))?
+                .as_deref()
+                != Some("true")
+        {
+            agent.permissions.outbox.conditions = Some(schema::OutboxConditions::default());
+        }
+        Ok(agent)
+    }
+
+    fn revoke_outbox_legacy(&self, name: &str) -> Result<()> {
+        let key = format!("outbox-legacy:{name}");
+        if self.state.meta(&key)?.as_deref() == Some("true") {
+            self.state.set_meta(&key, "false")?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn refresh_outbox_legacy(&self) -> Result<()> {
+        for name in self.state.legacy_outbox_agents()? {
+            // agent() revokes missing, invalid, disabled and explicitly constrained files.
+            let _ = self.agent(&name);
+        }
+        Ok(())
     }
 
     /// Local, per-incarnation browser identity. Not part of a synced agent file.
@@ -874,6 +918,45 @@ impl Writer {
         self.retire_browser_profile_locked(id)
     }
 
+    /// Write before the throwaway can contact the box, so a crash cannot orphan it.
+    pub fn begin_temporary_browser_profile(&self, id: &str) -> Result<()> {
+        let _w = self.write_lock();
+        let mut ids = self.temporary_browser_profiles()?;
+        ids.push(id.to_owned());
+        self.state().set_meta("browser-temporary", &serde_json::to_string(&ids).expect("strings serialize"))?;
+        Ok(())
+    }
+
+    pub fn temporary_browser_profiles(&self) -> Result<Vec<String>> {
+        Ok(self.state().meta("browser-temporary")?
+            .and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+    }
+
+    /// Home-server startup only, never on an ordinary writer opened by a CLI or app.
+    pub fn recover_temporary_browser_profiles(&self) -> Result<()> {
+        let _w = self.write_lock();
+        for id in self.temporary_browser_profiles()? {
+            self.retire_browser_profile_locked(&id)?;
+        }
+        Ok(())
+    }
+
+    pub fn reset_browser_profile(&self, name: &str) -> Result<Option<String>> {
+        let _w = self.write_lock();
+        self.read_agent(name)?;
+        self.reset_browser_profile_locked(name)
+    }
+
+    fn reset_browser_profile_locked(&self, name: &str) -> Result<Option<String>> {
+        let key = format!("browser-profile:{name}");
+        let id = self.state().meta(&key)?.filter(|s| !s.is_empty());
+        if let Some(id) = &id {
+            self.retire_browser_profile_locked(id)?;
+            self.state().set_meta(&key, "")?;
+        }
+        Ok(id)
+    }
+
     fn retire_browser_profile_locked(&self, id: &str) -> Result<()> {
         let mut ids = self.retired_browser_profiles()?;
         if !ids.iter().any(|s| s == id) {
@@ -883,6 +966,10 @@ impl Writer {
             "browser-retired",
             &serde_json::to_string(&ids).expect("strings serialize"),
         )?;
+        // Retired first, pending second: a crash between writes is safe to retry.
+        let mut pending = self.temporary_browser_profiles()?;
+        pending.retain(|s| s != id);
+        self.state().set_meta("browser-temporary", &serde_json::to_string(&pending).expect("strings serialize"))?;
         Ok(())
     }
 
@@ -945,18 +1032,70 @@ impl Writer {
     ) -> Result<(String, Agent)> {
         let _w = self.write_lock();
         let mut inner = self.lock();
-        let (text, agent) = self.plan_agent(&inner, name, source, check)?;
-        // A delete through a synced file or an interrupted delete must not let a later
-        // creation inherit a former incarnation's login state.
-        if self.read_agent(name).is_err() {
-            let key = format!("browser-profile:{name}");
-            if let Some(id) = self.state().meta(&key)?.filter(|s| !s.is_empty()) {
-                self.retire_browser_profile_locked(&id)?;
-                self.state().set_meta(&key, "")?;
+        let stored_legacy = self
+            .read_agent(name)
+            .ok()
+            .and_then(|s| Agent::parse(name, &s).ok())
+            .is_some_and(|a| {
+                a.permissions.outbox.send_without_review
+                    && a.permissions.outbox.conditions.is_none()
+            });
+        if !stored_legacy {
+            self.revoke_outbox_legacy(name)?;
+        }
+        let (mut text, mut agent) = self.plan_agent(&inner, name, source, check)?;
+        if agent.permissions.outbox.send_without_review
+            && agent.permissions.outbox.conditions.is_none()
+            && self
+                .state
+                .meta(&format!("outbox-legacy:{name}"))?
+                .as_deref()
+                != Some("true")
+        {
+            agent.permissions.outbox.conditions = Some(schema::OutboxConditions::default());
+            text = agent.to_wcl();
+        }
+        if let Some(Author::Token(token)) = crate::activity::acting()
+            && self.state.device_for_token(&token)?.is_some()
+        {
+            let previous = self
+                .agent(name)
+                .map(|a| a.permissions.outbox)
+                .unwrap_or_default();
+            let mut previous_limits = previous.clone();
+            previous_limits.send_without_review = true;
+            if previous_limits.conditions.is_none() && !previous.send_without_review {
+                previous_limits.conditions = Some(schema::OutboxConditions::default());
             }
+            let mut proposed_limits = agent.permissions.outbox.clone();
+            if proposed_limits.conditions.is_none() && !proposed_limits.send_without_review {
+                proposed_limits.conditions = Some(schema::OutboxConditions::default());
+            }
+            proposed_limits.send_without_review = true;
+            if !previous.allows(&agent.permissions.outbox)
+                || !previous_limits.allows(&proposed_limits)
+            {
+                return Err(Error::Invalid(Invalid {
+                    file: agent_path(name),
+                    issues: vec![Issue::new(
+                        "permissions.outbox",
+                        "a device may narrow send conditions but not broaden them",
+                    )],
+                }));
+            }
+        }
+        // A replacement after a synced or interrupted delete must not inherit old logins.
+        if self.read_agent(name).is_err() {
+            self.reset_browser_profile_locked(name)?;
         }
         let generation = self.commit(vec![Change::write(agent_path(name), text.as_bytes())])?;
         inner.index.advance(generation)?;
+        if agent.permissions.outbox.conditions.is_some()
+            || !agent.permissions.outbox.send_without_review
+        {
+            self.state
+                .set_meta(&format!("outbox-legacy:{name}"), "false")?;
+        }
         Ok((text, agent))
     }
 
@@ -1032,6 +1171,8 @@ impl Writer {
             self.retire_browser_profile_locked(&id)?;
             self.state().set_meta(&key, "")?;
         }
+        self.state
+            .set_meta(&format!("outbox-legacy:{name}"), "false")?;
         Ok(())
     }
 

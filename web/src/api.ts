@@ -714,6 +714,8 @@ export interface AgentSubagents {
 export interface AgentOutbox {
   /** The agent's drafts are created ready and sent at once, without waiting in Draft. */
   send_without_review: boolean;
+  conditions_hidden?: boolean;
+  conditions?: { recipients: string[]; email: boolean; sms: boolean; event: boolean; daily_cap: number; cancel_delay_minutes: number };
 }
 
 /**
@@ -1982,6 +1984,8 @@ export const api = {
   putAgent: (name: string, body: Partial<AgentForm> | { wcl: string }) => request<Agent>("PUT", `/api/agents/${enc(name)}`, body),
   /** Delete an agent; its threads stay. Assistant is a 400 `built_in`. */
   deleteAgent: (name: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}`),
+  /** Sign out and clear this agent's browser profile. Owner session or admin user token only. */
+  resetBrowserProfile: (name: string) => request<{ reset: boolean; cleanup_pending: boolean }>("POST", `/api/agents/${enc(name)}/browser-profile/reset`, {}),
   /** The last runs of each of the agent's triggers, and the tools a trigger run is offered (agents G12). */
   agentRuns: (name: string) => request<AgentRuns>("GET", `/api/agents/${enc(name)}/runs`),
   triggerBackfill: (name: string, trigger: string, body: { limit: number } | { preview: string }) =>

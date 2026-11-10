@@ -85,18 +85,26 @@ pub(crate) fn list(w: &Writer) -> Result<ToolOut, ToolOut> {
 }
 
 /// `get_agent`: the file as stored, the agent parsed, and the agent-file vocabulary.
-pub(crate) fn get(w: &Writer, input: &Value) -> Result<ToolOut, ToolOut> {
+pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, ToolOut> {
     let name = str_arg(input, "name")?;
-    let wcl = w
+    let mut wcl = w
         .read_agent(name)
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let (agent, error) = match Agent::parse(name, &wcl) {
-        Ok(a) => {
+        Ok(mut a) => {
+            let hidden = name != by.name && a.permissions.outbox.conditions.take().is_some();
+            if hidden {
+                wcl = a.to_wcl();
+            }
             let mut v = crate::agent_files::agent_json(&a);
             v["account"] = json!(crate::ai_settings::agent_account_name(w, &a));
+            if hidden {
+                v["permissions"]["outbox"]["conditions_hidden"] = json!(true);
+            }
             (v, Value::Null)
         }
-        Err(e) => (Value::Null, json!(e.to_string())),
+        Err(e) if name == by.name => (Value::Null, json!(e.to_string())),
+        Err(_) => return Err(ToolOut::error("the other agent's file is invalid")),
     };
     Ok(out(
         json!({
@@ -185,6 +193,11 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
         }
     }
     // The Outbox bypass (outbox X11): only an agent that sends without review may give it.
+    if bp.outbox.send_without_review && !bp.outbox.allows(&tp.outbox) {
+        problems.push(
+            "it would broaden send_without_review conditions beyond this agent's grant".to_owned(),
+        );
+    }
     for ((name, on), (_, mine)) in tp.outbox.switches().into_iter().zip(bp.outbox.switches()) {
         if on && !mine {
             problems.push(format!(
@@ -351,11 +364,21 @@ pub(crate) fn propose_change(
 
 /// Whether writing `agent` as agent `name` turns on `run_code`, which it does not have now.
 fn grants(w: &Writer, name: &str, agent: &Agent) -> bool {
-    agent.permissions.scripts.run_code
+    (agent.permissions.outbox.send_without_review
         && !agent_named(w, name)
             .ok()
             .flatten()
-            .is_some_and(|a| a.permissions.scripts.run_code)
+            .is_some_and(|a| a.permissions.outbox.send_without_review))
+        || agent.permissions.outbox.conditions
+            != agent_named(w, name)
+                .ok()
+                .flatten()
+                .and_then(|a| a.permissions.outbox.conditions)
+        || agent.permissions.scripts.run_code
+            && !agent_named(w, name)
+                .ok()
+                .flatten()
+                .is_some_and(|a| a.permissions.scripts.run_code)
 }
 
 /// Whether writing `agent` as agent `name` lets it run saved scripts and tasks, which it may not
@@ -472,9 +495,6 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     }
     if p["op"] == "delete" {
         w.delete_agent(name)?;
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.block_on(crate::ai_browser::cleanup_retired(w));
-        }
         return Ok(json!({ "op": "agent_delete", "agent_name": name }));
     }
     let after = p["after"]

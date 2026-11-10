@@ -31,6 +31,7 @@ const agentMemories = vi.fn();
 const createAgentMemory = vi.fn();
 const updateAgentMemory = vi.fn();
 const deleteAgentMemory = vi.fn();
+const resetBrowserProfile = vi.fn();
 const skillsList = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
@@ -55,6 +56,7 @@ vi.mock("../api", async (orig) => {
       createAgentMemory,
       updateAgentMemory,
       deleteAgentMemory,
+      resetBrowserProfile,
       skills: skillsList,
     },
   };
@@ -170,6 +172,7 @@ function status(): AiStatus {
 }
 
 beforeEach(async () => {
+  resetBrowserProfile.mockReset().mockResolvedValue({ reset: true, cleanup_pending: false });
   agent.mockResolvedValue(triage());
   putAgent.mockImplementation(async (name: string, body: Partial<Agent> | { wcl: string }) =>
     "wcl" in body ? triage({ wcl: body.wcl as string }) : { ...triage(), ...body, name, wcl: "saved\n" },
@@ -623,7 +626,7 @@ describe("the Permissions tab", () => {
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
     fireEvent.click(p.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(putAgent).toHaveBeenCalled());
-    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true });
+    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true, conditions: { recipients: [], email: false, sms: false, event: false, daily_cap: 0, cancel_delay_minutes: 5 } });
   });
 
   it("shows the switch on for an agent that sends without review", async () => {
@@ -632,6 +635,27 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByRole("switch", { name: "Send from the Outbox without review" })).toBeChecked();
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
+    expect(p.getByText(/Legacy limits, set conditions/)).toBeTruthy();
+  });
+
+  it("does not show legacy limits when conditions are hidden", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, outbox: { send_without_review: true, conditions_hidden: true } } }));
+    await open();
+    const p = await tab("Permissions");
+    expect(p.queryByText(/Legacy limits, set conditions/)).toBeNull();
+  });
+
+  it("saves explicit strict send conditions without losing them when toggled", async () => {
+    await open();
+    const p = await tab("Permissions");
+    fireEvent.click(p.getByRole("button", { name: "Set send conditions" }));
+    fireEvent.input(p.getByLabelText(/Recipients \(one address/), { target: { value: "ann@example.com" } });
+    fireEvent.click(p.getByLabelText("email", { exact: true }));
+    fireEvent.input(p.getByLabelText("Daily cap"), { target: { value: "2" } });
+    fireEvent.click(p.getByRole("switch", { name: "Send from the Outbox without review" }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true, conditions: { recipients: ["ann@example.com"], email: true, sms: false, event: false, daily_cap: 2, cancel_delay_minutes: 5 } });
   });
 
   it("offers all skills by default, and saves a chosen list from the vault's skills", async () => {
@@ -687,6 +711,33 @@ describe("the Permissions tab", () => {
     await open();
     p = await tab("Permissions");
     expect(p.queryByText(SKILLS_WITHOUT_USE_SKILL_WARNING)).toBeNull();
+  });
+
+  it("resets only the current agent after confirmation and reports offline cleanup or an error", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      await open("/agents/inbox_triage/settings/permissions");
+      const button = await screen.findByRole("button", { name: "Reset browser profile" });
+      fireEvent.click(button);
+      expect(resetBrowserProfile).not.toHaveBeenCalled();
+      confirm.mockReturnValue(true);
+      fireEvent.click(button);
+      await waitFor(() => expect(resetBrowserProfile).toHaveBeenCalledWith("inbox_triage"));
+      expect(await screen.findByRole("status")).toHaveTextContent("next browser action starts empty");
+      resetBrowserProfile.mockResolvedValueOnce({ reset: true, cleanup_pending: true });
+      fireEvent.click(button);
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("when the browser box is available"));
+      resetBrowserProfile.mockRejectedValueOnce(new Error("box cleanup refused"));
+      fireEvent.click(button);
+      expect(await screen.findByRole("alert")).toHaveTextContent("box cleanup refused");
+    } finally { confirm.mockRestore(); }
+  });
+
+  it("does not offer profile reset in a device app", async () => {
+    appInfo.mockResolvedValue({ platform: "android" });
+    await open("/agents/inbox_triage/settings/permissions");
+    expect(await screen.findByRole("switch", { name: "Browser automation" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reset browser profile" })).toBeNull();
   });
 
   it("shows Browser automation off with its warning line, and saves it on", async () => {

@@ -291,10 +291,95 @@ impl Web {
 
 /// What the agent may do with Outbox items (outbox X2). A switch left out of the file is
 /// `false`: an agent's items wait in Review for the user.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Outbox {
     /// The agent's items may be created as `approved`, so they send without the user's review.
     pub send_without_review: bool,
+    pub conditions: Option<OutboxConditions>,
+}
+
+/// Explicit unattended-send limits. Omitted conditions use bounded legacy limits.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OutboxConditions {
+    pub recipients: Vec<String>,
+    pub email: bool,
+    pub sms: bool,
+    pub event: bool,
+    pub daily_cap: i64,
+    pub cancel_delay_minutes: i64,
+}
+
+impl Default for OutboxConditions {
+    fn default() -> Self {
+        Self {
+            recipients: Vec::new(),
+            email: false,
+            sms: false,
+            event: false,
+            daily_cap: 0,
+            cancel_delay_minutes: 5,
+        }
+    }
+}
+
+impl Outbox {
+    /// Whether another agent's send grant is no broader than this one.
+    pub fn allows(&self, other: &Self) -> bool {
+        if !other.send_without_review {
+            return true;
+        }
+        if !self.send_without_review {
+            return false;
+        }
+        let own = self.limits();
+        let theirs = other.limits();
+        (!theirs.email || own.email)
+            && (!theirs.sms || own.sms)
+            && (!theirs.event || own.event)
+            && theirs.daily_cap <= own.daily_cap
+            && theirs.cancel_delay_minutes >= own.cancel_delay_minutes
+            && (self.conditions.is_none()
+                || (other.conditions.is_some()
+                    && theirs.recipients.iter().all(|r| {
+                        own.recipients.iter().any(|a| {
+                            send_recipient_key(a, false)
+                                .zip(send_recipient_key(r, false))
+                                .is_some_and(|(a, r)| a == r)
+                                || send_recipient_key(a, true)
+                                    .zip(send_recipient_key(r, true))
+                                    .is_some_and(|(a, r)| a == r)
+                        })
+                    })))
+    }
+
+    pub fn limits(&self) -> OutboxConditions {
+        self.conditions.clone().unwrap_or(OutboxConditions {
+            email: true,
+            sms: true,
+            event: true,
+            daily_cap: 20,
+            ..OutboxConditions::default()
+        })
+    }
+}
+
+/// Exact address/number keys shared by send admission and permission containment.
+pub fn send_recipient_key(value: &str, sms: bool) -> Option<String> {
+    let value = value.trim_matches(|c: char| c.is_ascii_whitespace());
+    if !sms {
+        return (value.is_ascii() && value.contains('@')).then(|| value.to_ascii_lowercase());
+    }
+    let rest = value.strip_prefix('+')?;
+    if !rest
+        .chars()
+        .all(|c| c.is_ascii_digit() || " -().".contains(c))
+    {
+        return None;
+    }
+    let digits: String = rest.chars().filter(char::is_ascii_digit).collect();
+    (digits.len() >= 8 && digits.len() <= 15 && !digits.starts_with('0'))
+        .then(|| format!("+{digits}"))
 }
 
 impl Outbox {
@@ -827,10 +912,30 @@ impl Agent {
                 .into_iter()
                 .filter(|(_, on)| *on)
                 .collect();
-            if !on.is_empty() {
+            if !on.is_empty() || p.outbox.conditions.is_some() {
                 out.push_str("\n  outbox {\n");
                 for (name, _) in on {
                     field(&mut out, "    ", name, "true");
+                }
+                if let Some(c) = &p.outbox.conditions {
+                    out.push_str("    conditions {\n");
+                    field(&mut out, "      ", "recipients", &list(&c.recipients));
+                    for (name, value) in [("email", c.email), ("sms", c.sms), ("event", c.event)] {
+                        field(
+                            &mut out,
+                            "      ",
+                            name,
+                            if value { "true" } else { "false" },
+                        );
+                    }
+                    field(&mut out, "      ", "daily_cap", &c.daily_cap.to_string());
+                    field(
+                        &mut out,
+                        "      ",
+                        "cancel_delay_minutes",
+                        &c.cancel_delay_minutes.to_string(),
+                    );
+                    out.push_str("    }\n");
                 }
                 out.push_str("  }\n");
             }
@@ -1121,7 +1226,74 @@ impl Reader<'_> {
                 p.subagents = self.subagents(&b.body, &at);
                 continue;
             }
-            self.c.only_blocks(&b.body, &[], &at);
+            if b.kind == "outbox" {
+                self.c.only_blocks(&b.body, &["conditions"], &at);
+                for block in &b.body.blocks {
+                    if p.outbox.conditions.is_some() || !block.labels.is_empty() {
+                        self.c
+                            .fail(&at, "conditions must appear once without labels");
+                    }
+                    let d = &block.body;
+                    let ca = "permissions.outbox.conditions";
+                    self.c.only_blocks(d, &[], ca);
+                    self.known(
+                        d,
+                        &[
+                            "recipients",
+                            "email",
+                            "sms",
+                            "event",
+                            "daily_cap",
+                            "cancel_delay_minutes",
+                        ],
+                        &format!("{ca}."),
+                        "unknown send condition",
+                    );
+                    let mut c = OutboxConditions::default();
+                    if let Some(v) = d.field("recipients") {
+                        match v {
+                            Value::List(items)
+                                if items
+                                    .iter()
+                                    .all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())) =>
+                            {
+                                c.recipients = items
+                                    .iter()
+                                    .map(|v| v.as_str().unwrap().trim().to_owned())
+                                    .collect();
+                            }
+                            _ => self.c.fail(
+                                ca,
+                                "recipients must be a list of addresses or E.164 numbers",
+                            ),
+                        }
+                    }
+                    for (name, slot) in [
+                        ("email", &mut c.email),
+                        ("sms", &mut c.sms),
+                        ("event", &mut c.event),
+                    ] {
+                        match d.field(name) {
+                            None => {}
+                            Some(Value::Bool(v)) => *slot = *v,
+                            _ => self.c.fail(ca, "kind controls must be booleans"),
+                        }
+                    }
+                    for (name, slot, min, max) in [
+                        ("daily_cap", &mut c.daily_cap, 0, 10000),
+                        ("cancel_delay_minutes", &mut c.cancel_delay_minutes, 1, 1440),
+                    ] {
+                        match d.field(name) {
+                            None => {}
+                            Some(Value::Int(v)) if (min..=max).contains(v) => *slot = *v,
+                            _ => self.c.fail(ca, format!("{name} must be {min}..{max}")),
+                        }
+                    }
+                    p.outbox.conditions = Some(c);
+                }
+            } else {
+                self.c.only_blocks(&b.body, &[], &at);
+            }
             self.known(
                 &b.body,
                 switches,

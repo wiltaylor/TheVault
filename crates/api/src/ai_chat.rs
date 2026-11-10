@@ -1868,17 +1868,16 @@ impl Turn {
             }
         };
         crate::ai_browser::cleanup_retired(&self.writer).await;
-        let temporary_browser = self
-            .sub
-            .as_ref()
-            .filter(|s| s.throwaway)
-            .and_then(|_| setup.browser.take())
-            .map(|b| {
-                crate::ai_browser::TemporaryProfile(
-                    b.with_profile(ulid::Ulid::new().to_string()),
-                    self.writer.clone(),
-                )
-            });
+        let temporary_browser = if self.sub.as_ref().is_some_and(|s| s.throwaway) {
+            if let Some(b) = setup.browser.take() {
+                let id = ulid::Ulid::new().to_string();
+                if let Err(e) = self.writer.begin_temporary_browser_profile(&id) {
+                    self.failed(&AiError::new(ErrorKind::Unavailable, e.to_string()), &[]).await;
+                    return;
+                }
+                Some(crate::ai_browser::TemporaryProfile(b.with_profile(id), self.writer.clone()))
+            } else { None }
+        } else { None };
         if let Some(b) = &temporary_browser {
             setup.browser = Some(b.0.clone());
         }
@@ -2408,6 +2407,9 @@ impl Turn {
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                if c.name == "propose_agent_delete" {
+                    crate::ai_browser::cleanup_retired(&self.writer).await;
+                }
                 if let Some(line) = got.summary["gmail_skipped"].as_str() {
                     self.report(|r| r.log.push(line.to_owned()));
                 }
@@ -4137,7 +4139,7 @@ fn propose_or_read(
         "propose_taxonomy_change" => crate::ai_taxonomies::propose_change(w, &call.id, input),
         "propose_taxonomy_delete" => crate::ai_taxonomies::propose_delete(w, &call.id, input),
         "list_agents" => crate::ai_agents::list(w),
-        "get_agent" => crate::ai_agents::get(w, input),
+        "get_agent" => crate::ai_agents::get(w, agent, input),
         "propose_agent_change" => crate::ai_agents::propose_change(w, agent, &call.id, input),
         "propose_agent_delete" => crate::ai_agents::propose_delete(w, agent, &call.id, input),
         "list_skills" => crate::ai_skill_changes::list(w, agent),

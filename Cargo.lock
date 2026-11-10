@@ -3156,6 +3156,7 @@ dependencies = [
  "chrono-tz",
  "croner",
  "query-syntax",
+ "serde",
  "serde_json",
  "store",
  "tempfile",

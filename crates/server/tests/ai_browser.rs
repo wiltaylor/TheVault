@@ -22,6 +22,70 @@ const MODEL: &str = "claude-opus-5";
 const DRIVER: &str = "label = \"Driver\"\n\npermissions {\n  browser = true\n}\n";
 
 #[test]
+fn browser_reset_is_an_owner_action_and_rotates_only_that_agent() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    browser.require_signed_profiles();
+    let api = Api::start(&fake, Some(&browser));
+    api.agent("driver", DRIVER);
+    api.agent("other", DRIVER);
+    api.call(&fake, Some("driver"), "browser_run", json!({"command":"true", "timeout":null}));
+    let old = browser.profiles()[0].clone();
+    api.call(&fake, Some("other"), "browser_run", json!({"command":"true", "timeout":null}));
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    for (name, scope) in [("reset-read", state::Scope::Read), ("reset-write", state::Scope::Write), ("agent-reset", state::Scope::Admin), ("device-reset", state::Scope::Admin)] {
+        let (_, token) = state.create_token(name, scope).unwrap();
+        let response = api.client.post(api.server.url("/api/agents/driver/browser-profile/reset")).bearer_auth(token).json(&json!({})).send().unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{name}");
+        assert_eq!(browser.profiles().len(), 2);
+    }
+    let response = api.client.post(api.server.url("/api/agents/driver/browser-profile/reset")).bearer_auth(api.token()).json(&json!({})).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(browser.profiles().len(), 1);
+    assert!(!browser.profiles().contains(&old));
+    api.call(&fake, Some("driver"), "browser_run", json!({"command":"true", "timeout":null}));
+    assert!(!browser.profiles().contains(&old));
+    assert_eq!(browser.profiles().len(), 2);
+    let login = api.client.post(api.server.url("/api/login")).json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+    let response = api.client.post(api.server.url("/api/agents/driver/browser-profile/reset")).header("cookie", cookie).json(&json!({})).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(browser.profiles().len(), 1);
+}
+
+#[test]
+fn a_crash_during_a_throwaway_retires_its_persisted_profile_on_startup() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    browser.require_signed_profiles();
+    let mut api = Api::start(&fake, Some(&browser));
+    api.agent("parent", "permissions {\n  browser = true\n  subagents {\n    allow = true\n  }\n}\n");
+    let thread: Value = api.client.post(api.server.url("/api/agents/parent/threads")).bearer_auth(api.token()).json(&json!({})).send().unwrap().json().unwrap();
+    fake.push(AnthropicMessage::new().tool_use("child", "start_subagent", json!({"task":"Browse slowly", "agent":null, "instructions":null, "permissions":null, "model":null})));
+    fake.push(AnthropicMessage::new().tool_use("browse", "browser_run", json!({"command":"child", "timeout":null})));
+    fake.push(AnthropicMessage::text("Still running after the browser request.").delay(Duration::from_secs(1)));
+    let response = api.client.post(api.server.url("/api/ai/chat/turns")).bearer_auth(api.token())
+        .json(&json!({"agent":"parent", "thread":thread["id"], "messages":[{"role":"user","content":[{"type":"text","text":"Go"}]}]})).send().unwrap();
+    assert!(response.status().is_success());
+    let began = std::time::Instant::now();
+    while browser.profiles().is_empty() {
+        assert!(began.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let child = browser.profiles()[0].clone();
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    let pending: Vec<String> = serde_json::from_str(&state.meta("browser-temporary").unwrap().unwrap()).unwrap();
+    assert!(pending.contains(&child), "the ID must be durable before the browser request");
+    // TestServer::restart kills the process, so the guard's Drop cannot run.
+    api.server.restart();
+    assert!(browser.profiles().is_empty(), "startup must remove the crashed child's profile");
+    let pending: Vec<String> = serde_json::from_str(&state.meta("browser-temporary").unwrap().unwrap()).unwrap();
+    assert!(pending.is_empty());
+    assert!(browser.requests().iter().any(|r| r.method == "DELETE" && r.header("x-vault-agent") == Some(child.as_str())));
+}
+
+#[test]
 fn signed_profiles_follow_the_agent_through_capture_apply_rename_and_delete() {
     let fake = FakeAnthropic::start();
     let browser = FakeBrowser::start();

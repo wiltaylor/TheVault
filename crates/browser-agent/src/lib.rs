@@ -20,7 +20,7 @@
 //!   name.
 //! - `GET /health` answers `{ok, version, display, playwright_cli}` without a token.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeSet};
 use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
@@ -81,12 +81,14 @@ struct AppState {
     runs: Arc<Semaphore>,
     profiles: Arc<Mutex<()>>,
     profile_locks: Arc<Mutex<HashMap<String, Arc<RwLock<()>>>>>,
+    retired: Arc<Mutex<BTreeSet<String>>>,
 }
 
 /// The service's routes over `config`. Fails when the work or home directory does not exist.
 pub fn router(config: Config) -> io::Result<Router> {
     let work = config.work_dir.canonicalize()?;
     let home = config.home_dir.canonicalize()?;
+    let retired = load_retired(&home)?;
     let lexical_roots = vec![
         lexical(&absolute(&config.work_dir)?),
         lexical(&absolute(&config.home_dir)?),
@@ -99,6 +101,7 @@ pub fn router(config: Config) -> io::Result<Router> {
         runs: Arc::new(Semaphore::new(MAX_RUNS)),
         profiles: Arc::new(Mutex::new(())),
         profile_locks: Arc::new(Mutex::new(HashMap::new())),
+        retired: Arc::new(Mutex::new(retired)),
         config,
     };
     Ok(Router::new()
@@ -178,6 +181,50 @@ fn profile_id<'a>(state: &AppState, headers: &'a HeaderMap) -> ApiResult<&'a str
 const PROFILE_LIMIT: usize = 64;
 const PROFILE_BYTES: u64 = 512 * 1024 * 1024;
 
+const RETIRED_INDEX: &str = ".retired-profile-ids.json";
+
+fn store_retired(home: &Path, ids: &BTreeSet<String>) -> io::Result<()> {
+    let tmp = home.join(format!(".retired-profile-ids-{}.tmp", std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    use std::io::Write;
+    file.write_all(&serde_json::to_vec(ids)?)?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, home.join(RETIRED_INDEX))?;
+    std::fs::File::open(home)?.sync_all()?;
+    Ok(())
+}
+
+fn load_retired(home: &Path) -> io::Result<BTreeSet<String>> {
+    let index = home.join(RETIRED_INDEX);
+    let mut ids = match std::fs::symlink_metadata(&index) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => serde_json::from_slice(&std::fs::read(&index)?)?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeSet::new(),
+        _ => return Err(io::Error::other("retired profile index is not a regular file")),
+    };
+    let markers = home.join(".retired-profiles");
+    match std::fs::symlink_metadata(&markers) {
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {
+            let entries: Vec<_> = std::fs::read_dir(&markers)?.collect::<io::Result<_>>()?;
+            for entry in &entries {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                let meta = std::fs::symlink_metadata(entry.path())?;
+                if !meta.is_file() || meta.file_type().is_symlink() || id.is_empty()
+                    || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                    return Err(io::Error::other("invalid retired profile marker"));
+                }
+                ids.insert(id);
+            }
+            store_retired(home, &ids)?;
+            // Only regular marker files were read. The index is durable before pruning.
+            for entry in entries { std::fs::remove_file(entry.path())?; }
+            std::fs::remove_dir(&markers)?;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        _ => return Err(io::Error::other("retired profile markers are not a real directory")),
+    }
+    Ok(ids)
+}
+
 fn profile_lock(state: &AppState, id: &str) -> Arc<RwLock<()>> {
     state
         .profile_locks
@@ -194,7 +241,7 @@ async fn profile_access(
 ) -> ApiResult<OwnedRwLockReadGuard<()>> {
     let id = profile_id(state, headers)?;
     let guard = profile_lock(state, id).read_owned().await;
-    if std::fs::symlink_metadata(state.home.join(".retired-profiles").join(id)).is_ok() {
+    if state.retired.lock().unwrap_or_else(|e| e.into_inner()).contains(id) {
         return Err(ApiError::new(
             StatusCode::GONE,
             "this browser profile was retired",
@@ -255,7 +302,7 @@ fn scoped(state: &AppState, headers: &HeaderMap, admission: bool) -> ApiResult<A
     if admission && bytes > PROFILE_BYTES {
         return Err(ApiError::new(
             StatusCode::INSUFFICIENT_STORAGE,
-            "browser profile exceeds 512 MiB; reset or remove files before running commands",
+            "browser profile exceeds 512 MiB; use Reset browser profile on the agent's Permissions page before running commands",
         ));
     }
     let home = profile.join("home");
@@ -274,6 +321,7 @@ fn scoped(state: &AppState, headers: &HeaderMap, admission: bool) -> ApiResult<A
         runs: state.runs.clone(),
         profiles: state.profiles.clone(),
         profile_locks: state.profile_locks.clone(),
+        retired: state.retired.clone(),
     })
 }
 
@@ -310,16 +358,10 @@ async fn delete_profile(
     if std::fs::symlink_metadata(&path).is_ok() {
         safe_dir(&path)?;
     }
-    let retired = state.home.join(".retired-profiles");
-    safe_dir(&retired)?;
-    let marker = retired.join(id);
-    if std::fs::symlink_metadata(&marker).is_err() {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&marker)
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
+    let mut retired = state.retired.lock().unwrap_or_else(|e| e.into_inner());
+    retired.insert(id.to_owned());
+    store_retired(&state.home, &retired)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if path.exists() {
         // remove_dir_all does not follow symlinks, including children.
         std::fs::remove_dir_all(&path)
@@ -598,8 +640,8 @@ impl AppState {
                 StatusCode::FORBIDDEN,
                 format!(
                     "{raw} is outside {} and {}",
-                    self.config.work_dir.display(),
-                    self.config.home_dir.display()
+                    self.work.display(),
+                    self.home.display()
                 ),
             )
         };
