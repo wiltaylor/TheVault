@@ -521,7 +521,8 @@ fn edits_during_a_run_wait_for_that_agent_note_before_running_once() {
         }
         r.set_status(&id, "open", &user());
         let (tx,rx) = mpsc::channel();
-        s.spawn(|| { r.advance(31); tx.send(()).unwrap(); });
+        let tick = &r;
+        s.spawn(move || { tick.advance(31); tx.send(()).unwrap(); });
         let returned = rx.recv_timeout(Duration::from_secs(2)).is_ok();
         r.fake.hold.store(false, Ordering::SeqCst);
         returned
