@@ -83,5 +83,6 @@ mod shipped_defaults;
 mod skills;
 mod subagents;
 mod sync;
+mod threat_model;
 mod trash;
 mod web;
