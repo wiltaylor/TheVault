@@ -393,11 +393,28 @@ fn only_sessions_and_paired_device_write_tokens_can_issue_calls() {
         ("writer", "write"),
         ("agent-helper", "write"),
     ] {
-        let token = api.send(
-            "POST",
-            "/api/tokens",
-            json!({ "name": name, "scope": scope }),
-        );
+        let token = if name == "agent-helper" {
+            let issued = api.send(
+                "POST",
+                "/api/agent-codes",
+                json!({ "name": "helper", "scope": scope }),
+            );
+            let redeemed: Value = api
+                .client
+                .post(api.server.url("/api/agent-codes/redeem"))
+                .json(&json!({ "code": issued["code"] }))
+                .send()
+                .unwrap()
+                .json()
+                .unwrap();
+            json!({ "secret": redeemed["token"] })
+        } else {
+            api.send(
+                "POST",
+                "/api/tokens",
+                json!({ "name": name, "scope": scope }),
+            )
+        };
         let response = api
             .client
             .post(api.server.url("/api/agents/calls"))

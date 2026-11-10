@@ -314,18 +314,16 @@ fn find_secret_json(w: &Writer, name: &str) -> Result<Value, ApiError> {
     Ok(secret_json(&find_secret(w, name)?))
 }
 
-/// TV-142 replaces the prefix checks with the stored token kind when integrated.
+/// Login secrets are managed only by sessions or stored user-kind admin tokens.
 fn may_manage_login_secrets(w: &Writer, author: &state::Author) -> Result<bool, state::Error> {
     Ok(match author {
         state::Author::Session(_) => true,
         state::Author::Token(name) => {
-            !name.starts_with("agent-")
-                && !name.starts_with("device-")
-                && w.state().device_for_token(name)?.is_none()
+            w.state().device_for_token(name)?.is_none()
                 && w.state()
                     .list_tokens()?
                     .iter()
-                    .any(|t| t.name == *name && t.scope == state::Scope::Admin)
+                    .any(|t| t.name == *name && t.kind == "user" && t.scope == state::Scope::Admin)
         }
         _ => false,
     })

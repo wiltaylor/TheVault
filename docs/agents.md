@@ -2,6 +2,12 @@
 
 A coding agent with a shell, such as Claude Code or Codex, drives the vault through the `vault` CLI. One command, run on the agent's machine, installs the CLI, gives it a token, and puts the vault skill where the agent reads it. An agent without a shell cannot use this.
 
+A CLI agent using an `agent-<name>` token drafts Outbox items and the user sends them. It can create and edit only its own drafts, cannot mark them ready or write send results, and cannot use an in-app agent's Send without review permission. Calendar invitations, RSVP changes, cancellations and Google event deletes must go through the Outbox for review. This also applies to existing agent tokens.
+
+Token kind is stored as user, device or agent. On upgrade, existing `agent-*` tokens become agent tokens and `device-*` tokens become device tokens, without regard to letter case. This includes user-created tokens with those names. New user tokens cannot use either prefix. Agent tokens are at most write scope, including existing admin-scoped agent tokens, which are downgraded at upgrade and capped whenever they authenticate. They cannot create credentials, change agent definitions or impersonate in-app agents when applying proposals. Their drafts are attributed to the full token name, such as `agent-cli`, separate from the in-app agent `cli`. Agents may delete or restore only their own Outbox drafts.
+
+Agent tokens use proposals through threads, not caller-built `/api/ai/apply` requests, even for their own drafts. They cannot change any integration settings, accounts, keys or connections. New token names cannot use the reserved prefixes in any letter case.
+
 To ask about your notes without an agent, use the AI panel in the web app or the desktop and Android apps, which calls your own AI provider with read-only note tools and shows each edit for you to apply. See [Chat panel](ai.md#chat-panel).
 
 ## Before you start
