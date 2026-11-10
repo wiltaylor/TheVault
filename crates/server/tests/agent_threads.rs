@@ -509,11 +509,29 @@ permissions {
     let (email, version) = api.note("email", "Mail");
     // This test isolates field permissions from the independent incoming-note hold.
     let safety = api.get(&format!("/api/notes/{email}"));
-    api.send(
-        "POST",
-        &format!("/api/notes/{email}/agent-safety/release"),
-        json!({ "fingerprint": safety["agent_safety"]["fingerprint"] }),
-    );
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({ "password": testkit::PASSWORD }))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let released = api
+        .client
+        .post(
+            api.server
+                .url(&format!("/api/notes/{email}/agent-safety/release")),
+        )
+        .header("cookie", cookie)
+        .json(&json!({ "fingerprint": safety["agent_safety"]["fingerprint"] }))
+        .send()
+        .unwrap();
+    assert_eq!(released.status(), StatusCode::OK);
     let (person, _) = api.note("person", "Private person");
     let call = |tool: &str, mut input: Value| -> Value {
         for key in ["fields", "note"] {
