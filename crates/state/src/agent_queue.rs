@@ -32,6 +32,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn review_f2_edit_during_running_job_is_not_deduped() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        let id = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().unwrap();
+        s.claim_trigger_job(id).unwrap();
+        s.begin_trigger_job(id, s.now()).unwrap();
+        assert!(s.enqueue_trigger("clerk", "opened", Some("a"), "{\"title\":\"new\"}", 0).unwrap().is_some());
+    }
+
+    #[test]
+    fn review_f4_terminal_rows_and_old_previews_are_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        for _ in 0..700 {
+            let id = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().unwrap();
+            s.finish_trigger_job(id, "succeeded", None).unwrap();
+            let id = s.enqueue_trigger("clerk", "deleted", None, "{}", 0).unwrap().unwrap();
+            s.finish_trigger_job(id, "succeeded", None).unwrap();
+        }
+        for _ in 0..50 { s.preview_trigger_backfill("owner", "clerk", "opened", "[]").unwrap(); }
+        s.conn().execute("UPDATE trigger_backfill_previews SET expires_ms=?1", [s.now()-WEEK-1]).unwrap();
+        s.due_trigger_jobs(s.now()).unwrap();
+        let jobs: i64 = s.conn().query_row("SELECT count(*) FROM trigger_jobs", [], |r| r.get(0)).unwrap();
+        let previews: i64 = s.conn().query_row("SELECT count(*) FROM trigger_backfill_previews", [], |r| r.get(0)).unwrap();
+        assert_eq!((jobs,previews), (1,0));
+    }
+
+    #[test]
+    fn review_f5_v20_run_seeds_its_note_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let s = State::open(&path, None).unwrap();
+        let note = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let transcript = serde_json::json!({"messages":[{"role":"user", "content":[{"type":"text", "text":format!("Tidy.\nEvent: create of note {note} (type memo, title Roof)")}]}]});
+        let content = format!("transcript = {}\n", serde_json::json!(transcript.to_string()));
+        s.record_version("thread", "agent_thread", &crate::Author::Agent("clerk".into()), &content).unwrap();
+        let run = s.start_agent_run("clerk", "opened").unwrap();
+        s.set_agent_run_thread(run, "thread").unwrap();
+        s.finish_agent_run(run, &crate::AgentRunOutcome::Succeeded, "").unwrap();
+        s.conn().execute_batch("DROP TABLE trigger_jobs; DROP TABLE trigger_queue_drops; DROP TABLE trigger_backfill_previews; DROP TABLE trigger_events;").unwrap();
+        s.conn().pragma_update(None, "user_version", 20).unwrap();
+        drop(s);
+        let s = State::open(&path, None).unwrap();
+        assert!(s.trigger_record_exists("clerk", "opened", note).unwrap());
+    }
+
+    #[test]
     fn backfill_atomically_refuses_a_note_with_a_completed_record() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
