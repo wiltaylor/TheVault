@@ -117,7 +117,12 @@ fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
             .send().unwrap(), 403);
     }
     for action in ["archive", "unarchive"] {
-        let note = expect(api.req("GET", &format!("/api/notes/{id}"), api.admin()).send().unwrap(), 200);
+        let note = expect(
+            api.req("GET", &format!("/api/notes/{id}"), api.admin())
+                .send()
+                .unwrap(),
+            200,
+        );
         expect(
             api.req("POST", &format!("/api/notes/{id}/{action}"), api.admin())
                 .header("If-Match", note["version"].as_str().unwrap())
@@ -137,7 +142,12 @@ fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
         200,
     );
     assert_ne!(read["title"], "Forged");
-    let note = expect(api.req("GET", &format!("/api/notes/{id}"), api.admin()).send().unwrap(), 200);
+    let note = expect(
+        api.req("GET", &format!("/api/notes/{id}"), api.admin())
+            .send()
+            .unwrap(),
+        200,
+    );
     expect(
         api.req("DELETE", &format!("/api/notes/{id}"), api.admin())
             .header("If-Match", note["version"].as_str().unwrap())
