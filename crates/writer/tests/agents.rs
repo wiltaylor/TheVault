@@ -47,6 +47,24 @@ fn none(_: &Agent) -> Vec<Issue> {
 }
 
 #[test]
+fn browser_profile_survives_label_rename_but_not_delete_and_recreate() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.put_agent("browser", "label = \"Before\"\n", none).unwrap();
+    let before = w.browser_profile("browser").unwrap();
+    w.put_agent("browser", "label = \"After\"\n", none).unwrap();
+    assert_eq!(w.browser_profile("browser").unwrap(), before);
+    assert_ne!(w.browser_profile("assistant").unwrap(), before);
+    w.delete_agent("browser").unwrap();
+    assert!(w.browser_profile("browser").is_err());
+    assert_eq!(w.retired_browser_profiles().unwrap(), vec![before.clone()]);
+    w.put_agent("browser", "label = \"New incarnation\"\n", none).unwrap();
+    assert_ne!(w.browser_profile("browser").unwrap(), before);
+    w.browser_profile_removed(&before).unwrap();
+    assert!(w.retired_browser_profiles().unwrap().is_empty());
+}
+
+#[test]
 fn agent_edits_and_deletes_wait_for_checked_note_commits() {
     use std::sync::mpsc;
     use std::time::Duration;

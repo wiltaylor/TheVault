@@ -162,6 +162,7 @@ dependencies = [
  "clients",
  "futures-util",
  "gitsync",
+ "hmac",
  "hyper",
  "hyper-util",
  "image",
@@ -416,10 +417,12 @@ name = "browser-agent"
 version = "0.1.12"
 dependencies = [
  "axum",
+ "hmac",
  "reqwest",
  "rustix",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
 ]

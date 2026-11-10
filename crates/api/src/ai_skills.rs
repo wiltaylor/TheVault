@@ -44,7 +44,7 @@ pub const TOOLS: [&str; 2] = ["use_skill", "read_skill_file"];
 pub const INSTALL_TOOL: &str = "install_skill_in_browser";
 
 /// Where a skill goes in the browser box.
-pub const BOX_SKILLS: &str = "/work/skills";
+pub const BOX_SKILLS: &str = "skills";
 
 /// The prefix of a skill image's key in the turn's images: `skill:<name>/<path>`.
 pub const SKILL_IMAGE: &str = "skill:";

@@ -571,10 +571,11 @@ pub async fn delete(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let n = name.clone();
-    blocking(w, move |w| {
+    blocking(w.clone(), move |w| {
         let _acting = writer::acting_as(&by);
         w.delete_agent(&n)
     })
     .await?;
+    crate::ai_browser::cleanup_retired(&w).await;
     Ok(Json(json!({ "name": name, "deleted": true })))
 }

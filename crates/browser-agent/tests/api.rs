@@ -10,6 +10,79 @@ use tempfile::TempDir;
 
 const TOKEN: &str = "test-token-0123456789abcdef";
 
+fn identity(r: reqwest::RequestBuilder, id: &str) -> reqwest::RequestBuilder {
+    r.bearer_auth(TOKEN).header("x-vault-agent", id).header(
+        "x-vault-agent-signature", browser_agent::identity_signature(TOKEN, id))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn identities_are_required_and_cannot_be_forged() {
+    let b = Agent::start().await;
+    for route in ["/run", "/file?path=x", "/files", "/profile"] {
+        for forged in [false, true] {
+            let client = reqwest::Client::new();
+            let r = match route {
+                "/run" => client.post(b.url(route)).json(&json!({"command":"true"})),
+                "/profile" => client.delete(b.url(route)),
+                _ => client.get(b.url(route)),
+            }.bearer_auth(TOKEN);
+            let r = if forged { r.header("x-vault-agent", "someone-else").header("x-vault-agent-signature", "fake") } else { r };
+            assert_eq!(r.send().await.unwrap().status(), 401, "{route}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn profile_run_and_capture_paths_are_separate() {
+    let b = Agent::start().await;
+    let a = identity(b.http.post(b.url("/run")), "parent")
+        .json(&json!({"command":"mkdir -p captures; printf parent-cookie > captures/session.json; printf parent-storage > \"$HOME/storage.json\""}))
+        .send().await.unwrap();
+    assert_eq!(a.status(), 200);
+    for id in ["agent-b", "throwaway-fresh-run"] {
+        let r: Value = identity(b.http.post(b.url("/run")), id)
+            .json(&json!({"command":"test ! -e captures/session.json && test ! -e \"$HOME/storage.json\""}))
+            .send().await.unwrap().json().await.unwrap();
+        assert_eq!(r["exit"], 0);
+        assert_eq!(identity(b.http.get(b.url("/file?path=captures/session.json")), id).send().await.unwrap().status(), 404);
+        let sibling = b.home.path().join("profiles/parent/work/captures/session.json");
+        assert_eq!(identity(b.http.get(b.url("/file")), id).query(&[("path", sibling)]).send().await.unwrap().status(), 403);
+    }
+    assert_eq!(identity(b.http.get(b.url("/file?path=captures/session.json")), "parent").send().await.unwrap().text().await.unwrap(), "parent-cookie");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_profile_is_confined_and_does_not_follow_symlinks() {
+    let b = Agent::start().await;
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("keep"), "keep").unwrap();
+    let managed = b.home.path().join("profiles/test");
+    std::os::unix::fs::symlink(outside.path(), managed.join("link")).unwrap();
+    let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(!managed.exists());
+    assert!(outside.path().join("keep").exists());
+    std::os::unix::fs::symlink(outside.path(), &managed).unwrap();
+    assert_eq!(identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap().status(), 403);
+    assert!(outside.path().join("keep").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn profile_admission_limits_have_clear_errors_and_allow_cleanup() {
+    let b = Agent::start().await;
+    std::fs::File::create(b.work().join("large")).unwrap().set_len(512 * 1024 * 1024 + 1).unwrap();
+    let r = b.http.post(b.url("/run")).bearer_auth(TOKEN).json(&json!({"command":"true"})).send().await.unwrap();
+    assert_eq!(r.status(), 507);
+    assert!(r.text().await.unwrap().contains("512 MiB"));
+    assert_eq!(identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap().status(), 200);
+    let root = b.home.path().join("profiles");
+    for n in 0..64 { std::fs::create_dir(root.join(format!("profile-{n}"))).unwrap(); }
+    let r = identity(b.http.post(b.url("/run")), "new-profile").json(&json!({"command":"true"})).send().await.unwrap();
+    assert_eq!(r.status(), 507);
+    assert!(r.text().await.unwrap().contains("64"));
+    assert_eq!(std::fs::read_dir(root).unwrap().count(), 64);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn agent_b_cannot_read_agent_a_browser_storage() {
     let b = Agent::start().await;
@@ -18,6 +91,7 @@ async fn agent_b_cannot_read_agent_a_browser_storage() {
     let a = b.http.post(b.url("/run"))
         .bearer_auth(TOKEN)
         .header("x-vault-agent", "agent-a")
+        .header("x-vault-agent-signature", browser_agent::identity_signature(TOKEN, "agent-a"))
         .json(&json!({"command": "printf '%s' '{\"cookies\":[{\"name\":\"session\",\"value\":\"fixture-only\"}]}' > storage-state.json"}))
         .send().await.unwrap();
     assert_eq!(a.status(), 200);
@@ -26,6 +100,7 @@ async fn agent_b_cannot_read_agent_a_browser_storage() {
     let other = b.http.get(b.url("/file"))
         .bearer_auth(TOKEN)
         .header("x-vault-agent", "agent-b")
+        .header("x-vault-agent-signature", browser_agent::identity_signature(TOKEN, "agent-b"))
         .query(&[("path", "storage-state.json")])
         .send().await.unwrap();
     assert_eq!(other.status(), 404, "agent B can read agent A's exported cookies");
@@ -33,15 +108,21 @@ async fn agent_b_cannot_read_agent_a_browser_storage() {
 
 struct Agent {
     base: String,
-    work: TempDir,
+    _work: TempDir,
     home: TempDir,
     http: reqwest::Client,
+    profile_work: std::path::PathBuf,
+    profile_home: std::path::PathBuf,
 }
 
 impl Agent {
     async fn start() -> Agent {
         let work = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
+        let profile_work = home.path().join("profiles/test/work");
+        let profile_home = home.path().join("profiles/test/home");
+        std::fs::create_dir_all(&profile_work).unwrap();
+        std::fs::create_dir_all(&profile_home).unwrap();
         let config = Config {
             token: TOKEN.into(),
             work_dir: work.path().to_path_buf(),
@@ -58,9 +139,16 @@ impl Agent {
         ));
         Agent {
             base,
-            work,
+            _work: work,
             home,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder().default_headers({
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert("x-vault-agent", "test".parse().unwrap());
+                headers.insert("x-vault-agent-signature", browser_agent::identity_signature(TOKEN, "test").parse().unwrap());
+                headers
+            }).build().unwrap(),
+            profile_work,
+            profile_home,
         }
     }
 
@@ -98,11 +186,11 @@ impl Agent {
     }
 
     fn work(&self) -> &Path {
-        self.work.path()
+        &self.profile_work
     }
 
     fn home(&self) -> &Path {
-        self.home.path()
+        &self.profile_home
     }
 }
 

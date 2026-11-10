@@ -35,6 +35,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpListener;
 use tokio::process::Command;
@@ -75,7 +77,8 @@ struct AppState {
     roots: Vec<PathBuf>,
     work: PathBuf,
     home: PathBuf,
-    runs: Semaphore,
+    runs: Arc<Semaphore>,
+    profiles: Arc<Mutex<()>>,
 }
 
 /// The service's routes over `config`. Fails when the work or home directory does not exist.
@@ -91,7 +94,8 @@ pub fn router(config: Config) -> io::Result<Router> {
         lexical_roots,
         work,
         home,
-        runs: Semaphore::new(MAX_RUNS),
+        runs: Arc::new(Semaphore::new(MAX_RUNS)),
+        profiles: Arc::new(Mutex::new(())),
         config,
     };
     Ok(Router::new()
@@ -99,6 +103,7 @@ pub fn router(config: Config) -> io::Result<Router> {
         .route("/run", post(run))
         .route("/file", get(file))
         .route("/files", get(files))
+        .route("/profile", axum::routing::delete(delete_profile))
         .with_state(Arc::new(state)))
 }
 
@@ -128,6 +133,100 @@ impl IntoResponse for ApiError {
 }
 
 type ApiResult<T> = Result<T, ApiError>;
+
+/// An authenticated server-chosen profile identity. The shell never supplies this header.
+pub fn identity_signature(token: &str, identity: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(token.as_bytes()).expect("HMAC accepts any key");
+    mac.update(b"thevault-browser-profile-v1:");
+    mac.update(identity.as_bytes());
+    mac.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn profile_id<'a>(state: &AppState, headers: &'a HeaderMap) -> ApiResult<&'a str> {
+    authorize(state, headers)?;
+    let id = headers.get("x-vault-agent").and_then(|h| h.to_str().ok()).unwrap_or("");
+    let signature = headers.get("x-vault-agent-signature").and_then(|h| h.to_str().ok()).unwrap_or("");
+    if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        || !constant_time_eq(signature.as_bytes(), identity_signature(&state.config.token, id).as_bytes()) {
+        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "a valid signed agent identity is needed"));
+    }
+    Ok(id)
+}
+
+const PROFILE_LIMIT: usize = 64;
+const PROFILE_BYTES: u64 = 512 * 1024 * 1024;
+
+fn safe_dir(path: &Path) -> ApiResult<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() && !m.file_type().is_symlink() => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => std::fs::create_dir(path)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        _ => Err(ApiError::new(StatusCode::FORBIDDEN, "profile path is not a real directory")),
+    }
+}
+
+fn disk_usage(path: &Path) -> io::Result<u64> {
+    let mut bytes = 0u64;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let m = std::fs::symlink_metadata(entry.path())?;
+        bytes = bytes.saturating_add(if m.is_dir() && !m.file_type().is_symlink() {
+            disk_usage(&entry.path())?
+        } else { m.len() });
+        if bytes > PROFILE_BYTES { break; }
+    }
+    Ok(bytes)
+}
+
+fn scoped(state: &AppState, headers: &HeaderMap, admission: bool) -> ApiResult<AppState> {
+    let id = profile_id(state, headers)?;
+    let _guard = state.profiles.lock().unwrap_or_else(|e| e.into_inner());
+    let root = state.home.join("profiles");
+    safe_dir(&root)?;
+    let profile = root.join(id);
+    if !profile.exists() && std::fs::read_dir(&root).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?.count() >= PROFILE_LIMIT {
+        return Err(ApiError::new(StatusCode::INSUFFICIENT_STORAGE, "browser profile limit (64) reached"));
+    }
+    safe_dir(&profile)?;
+    let bytes = disk_usage(&profile).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if admission && bytes > PROFILE_BYTES {
+        return Err(ApiError::new(StatusCode::INSUFFICIENT_STORAGE, "browser profile exceeds 512 MiB; reset or remove files before running commands"));
+    }
+    let home = profile.join("home");
+    let work = profile.join("work");
+    safe_dir(&home)?;
+    safe_dir(&work)?;
+    for dir in [".config", ".cache", ".runtime"] { safe_dir(&home.join(dir))?; }
+    Ok(AppState {
+        config: state.config.clone(),
+        lexical_roots: vec![home.clone(), work.clone()],
+        roots: vec![home.clone(), work.clone()],
+        home, work,
+        runs: state.runs.clone(), profiles: state.profiles.clone(),
+    })
+}
+
+async fn delete_profile(State(state): State<Arc<AppState>>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    let id = profile_id(&state, &headers)?;
+    let root = state.home.join("profiles");
+    let path = root.join(id);
+    if path.exists() {
+        let profile = scoped(&state, &headers, false)?;
+        let outcome = run_command(&profile, "if command -v playwright-cli >/dev/null 2>&1; then playwright-cli close-all; fi", &profile.work, Duration::from_secs(30)).await
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if outcome.exit != 0 {
+            return Err(ApiError::new(StatusCode::CONFLICT, "could not close this profile's browser sessions"));
+        }
+    }
+    let _guard = state.profiles.lock().unwrap_or_else(|e| e.into_inner());
+    if root.exists() { safe_dir(&root)?; }
+    if std::fs::symlink_metadata(&path).is_ok() {
+        safe_dir(&path)?;
+        // remove_dir_all does not follow symlinks, including children.
+        std::fs::remove_dir_all(&path).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    Ok(Json(json!({"ok": true})))
+}
 
 fn authorize(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
     let given = headers
@@ -173,7 +272,7 @@ async fn run(
     headers: HeaderMap,
     body: Result<Json<RunRequest>, JsonRejection>,
 ) -> ApiResult<Json<Value>> {
-    authorize(&state, &headers)?;
+    let state = scoped(&state, &headers, true)?;
     let Json(req) = body.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     if req.command.trim().is_empty() {
         return Err(ApiError::new(
@@ -315,12 +414,17 @@ async fn run_command(
 ) -> io::Result<Outcome> {
     let started = Instant::now();
     let mut child = Command::new("bash")
-        .arg("-lc")
+        .arg("-c")
         .arg(command)
         .current_dir(cwd)
         .env("DISPLAY", &state.config.display)
         .env("HOME", &state.home)
+        .env("XDG_CONFIG_HOME", state.home.join(".config"))
+        .env("XDG_CACHE_HOME", state.home.join(".cache"))
+        .env("XDG_RUNTIME_DIR", state.home.join(".runtime"))
+        .env("TMPDIR", state.home.join(".runtime"))
         .env_remove("BROWSER_TOKEN")
+        .env_remove("VAULT_BROWSER_TOKEN")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -448,7 +552,7 @@ async fn file(
     headers: HeaderMap,
     query: Result<Query<FileQuery>, QueryRejection>,
 ) -> ApiResult<Response> {
-    authorize(&state, &headers)?;
+    let state = scoped(&state, &headers, false)?;
     let Query(query) = query.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     let path = state.resolve(&query.path)?;
     let meta = tokio::fs::metadata(&path)
@@ -533,7 +637,7 @@ async fn files(
     headers: HeaderMap,
     query: Result<Query<FilesQuery>, QueryRejection>,
 ) -> ApiResult<Json<Value>> {
-    authorize(&state, &headers)?;
+    let state = scoped(&state, &headers, false)?;
     let Query(query) = query.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     let dir = match query.dir.as_deref() {
         None | Some("") => state.work.clone(),

@@ -1554,7 +1554,10 @@ fn setup(
             .permissions
             .browser
             .then(crate::ai_browser::BrowserBox::from_env)
-            .flatten(),
+            .flatten()
+            .map(|b| w.browser_profile(&agent.name).map(|id| b.with_profile(id)))
+            .transpose()
+            .map_err(|e| AiError::new(ErrorKind::Unavailable, e.to_string()))?,
     })
 }
 
@@ -1833,7 +1836,7 @@ impl Turn {
         let asks = self.asks;
         let skills = self.skills.section().map(str::to_owned);
         let uses_skills = crate::ai_skills::uses_skills(&agent);
-        let setup = match tokio::task::spawn_blocking(move || {
+        let mut setup = match tokio::task::spawn_blocking(move || {
             setup(
                 &w,
                 scope,
@@ -1859,6 +1862,9 @@ impl Turn {
                 return;
             }
         };
+        crate::ai_browser::cleanup_retired(&self.writer).await;
+        let temporary_browser = self.sub.as_ref().filter(|s| s.throwaway).and_then(|_| setup.browser.take()).map(|b| crate::ai_browser::TemporaryProfile(b.with_profile(ulid::Ulid::new().to_string())));
+        if let Some(b) = &temporary_browser { setup.browser = Some(b.0.clone()); }
         // Only the tools the agent may use (agents G4); a call naming another is not run.
         let mut tools = turn_tools(
             setup.web,

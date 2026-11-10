@@ -79,6 +79,7 @@ pub fn is_browser_tool(name: &str) -> bool {
 pub struct BrowserBox {
     base: String,
     token: String,
+    profile: Option<String>,
 }
 
 impl BrowserBox {
@@ -87,6 +88,7 @@ impl BrowserBox {
     pub fn from_env() -> Option<BrowserBox> {
         let exec = crate::browser::Config::from_env().exec?;
         Some(BrowserBox {
+            profile: None,
             base: exec.as_str().trim_end_matches('/').to_owned(),
             token: std::env::var(TOKEN_VAR)
                 .unwrap_or_default()
@@ -101,10 +103,54 @@ impl BrowserBox {
     }
 
     fn auth(&self, r: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let r = if let Some(id) = &self.profile {
+            use hmac::{Hmac, Mac};
+            let mut mac = Hmac::<sha2::Sha256>::new_from_slice(self.token.as_bytes()).expect("HMAC accepts any key");
+            mac.update(b"thevault-browser-profile-v1:");
+            mac.update(id.as_bytes());
+            let signature: String = mac.finalize().into_bytes().iter().map(|b| format!("{b:02x}")).collect();
+            r.header("x-vault-agent", id).header("x-vault-agent-signature", signature)
+        } else { r };
         if self.token.is_empty() {
             r
         } else {
             r.bearer_auth(&self.token)
+        }
+    }
+
+    pub fn with_profile(mut self, id: String) -> Self {
+        self.profile = Some(id);
+        self
+    }
+
+    pub async fn remove_profile(&self) -> Result<(), String> {
+        let url = self.url("/profile", &[])?;
+        let response = self.auth(http().delete(url)).send().await.map_err(|e| e.to_string())?;
+        if response.status().is_success() { Ok(()) } else { Err(box_error(response).await) }
+    }
+}
+
+/// Ensures normal completion, early return and task cancellation all schedule cleanup.
+pub struct TemporaryProfile(pub BrowserBox);
+
+impl Drop for TemporaryProfile {
+    fn drop(&mut self) {
+        let b = self.0.clone();
+        tokio::spawn(async move {
+            if let Err(e) = b.remove_profile().await {
+                eprintln!("temporary browser profile cleanup failed: {e}");
+            }
+        });
+    }
+}
+
+pub async fn cleanup_retired(w: &Writer) {
+    let Some(b) = BrowserBox::from_env() else { return; };
+    let ids = w.retired_browser_profiles().unwrap_or_default();
+    for id in ids {
+        match b.clone().with_profile(id.clone()).remove_profile().await {
+            Ok(()) => { let _ = w.browser_profile_removed(&id); }
+            Err(e) => eprintln!("retired browser profile cleanup failed: {e}"),
         }
     }
 }
@@ -228,7 +274,7 @@ pub async fn capture(
                 ""
             };
             let command = format!(
-                "mkdir -p /work/captures && playwright-cli {session}screenshot {target}--filename={}{full}",
+                "mkdir -p captures && playwright-cli {session}screenshot {target}--filename={}{full}",
                 shell_word(&path)
             );
             (path, command)
@@ -267,7 +313,7 @@ pub async fn capture(
             }
             let path = format!("captures/image-{stamp}{}", image_extension(&url));
             let command = format!(
-                "mkdir -p /work/captures && curl -fsSL --max-time 120 -A 'Mozilla/5.0' -o {} {}",
+                "mkdir -p captures && curl -fsSL --max-time 120 -A 'Mozilla/5.0' -o {} {}",
                 shell_word(&path),
                 shell_word(&url)
             );
@@ -776,6 +822,7 @@ fn stored(asset: &writer::Asset, path: &str) -> Value {
     json!({
         "op": "download",
         "source": "browser",
+        "browser_profile": b.profile,
         "path": path,
         "asset_id": asset.id,
         "filename": asset.filename,
@@ -921,7 +968,10 @@ pub fn apply_save(w: &Writer, author: &Author, p: &Value) -> Result<Value, Apply
     }
     let b = BrowserBox::from_env().ok_or_else(|| {
         ApplyError::Browser("this server has no browser box (VAULT_BROWSER_URL is not set)".into())
-    })?;
+    })?.with_profile(w.browser_profile(&agent.name)?);
+    if p["browser_profile"].as_str() != b.profile.as_deref() {
+        return Err(ApplyError::Refused("the browser profile has changed or expired".into()));
+    }
     let handle = tokio::runtime::Handle::try_current()
         .map_err(|_| ApplyError::Invalid("a save needs the server's runtime".into()))?;
     let file = w.incoming_file()?;

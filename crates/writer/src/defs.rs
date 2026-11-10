@@ -847,6 +847,32 @@ impl Writer {
         Agent::parse(name, &text).map_err(Error::Invalid)
     }
 
+    /// Local, per-incarnation browser identity. Not part of a synced agent file.
+    pub fn browser_profile(&self, name: &str) -> Result<String> {
+        let _w = self.write_lock();
+        self.read_agent(name)?;
+        let key = format!("browser-profile:{name}");
+        if let Some(id) = self.state().meta(&key)?.filter(|s| !s.is_empty()) {
+            return Ok(id);
+        }
+        let id = ulid::Ulid::new().to_string();
+        self.state().set_meta(&key, &id)?;
+        Ok(id)
+    }
+
+    pub fn retired_browser_profiles(&self) -> Result<Vec<String>> {
+        Ok(self.state().meta("browser-retired")?
+            .and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+    }
+
+    pub fn browser_profile_removed(&self, id: &str) -> Result<()> {
+        let _w = self.write_lock();
+        let mut ids = self.retired_browser_profiles()?;
+        ids.retain(|s| s != id);
+        self.state().set_meta("browser-retired", &serde_json::to_string(&ids).expect("strings serialize"))?;
+        Ok(())
+    }
+
     /// Check `source` as `agents/<name>.wcl` without writing it: the file alone, against the
     /// vault's types, and by `check`, which the caller uses for what only it knows, such as the
     /// tool names the server offers. Returns the canonical text and the agent.
@@ -967,6 +993,14 @@ impl Writer {
         }
         let generation = self.commit(vec![Change::delete(agent_path(name))])?;
         inner.index.advance(generation)?;
+        let key = format!("browser-profile:{name}");
+        if let Some(id) = self.state().meta(&key)?.filter(|s| !s.is_empty()) {
+            // Keep a durable cleanup marker if the browser box is temporarily offline.
+            let mut ids = self.retired_browser_profiles()?;
+            ids.push(id);
+            self.state().set_meta("browser-retired", &serde_json::to_string(&ids).expect("strings serialize"))?;
+            self.state().set_meta(&key, "")?;
+        }
         Ok(())
     }
 

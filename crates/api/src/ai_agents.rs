@@ -519,6 +519,9 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
     }
     if p["op"] == "delete" {
         w.delete_agent(name)?;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(crate::ai_browser::cleanup_retired(w));
+        }
         return Ok(json!({ "op": "agent_delete", "agent_name": name }));
     }
     let after = p["after"]
