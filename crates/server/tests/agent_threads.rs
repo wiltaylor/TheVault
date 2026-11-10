@@ -517,15 +517,12 @@ fn an_agent_applies_its_own_confirm_switches_within_the_callers_scope() {
         json!({ "kind": "agent", "name": "scribe" })
     );
 
-    // A caller with read scope only gets a proposal, whatever the agent's switch says.
+    // Read credentials cannot start a turn, even when the agent permits edits.
     let reader = api.token_of("reader", "read");
-    let now = api.get(&format!("/api/notes/{memo}"))["version"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let events = edit(&reader, Some("scribe"), &now, "Groceries for Monday");
-    assert_eq!(events_named(&events, "proposal").len(), 1, "{events:?}");
-    assert!(events_named(&events, "applied").is_empty());
+    let response = api.request_as(&reader, "POST", "/api/ai/chat",
+        Some(json!({ "agent": "scribe", "messages": [] })));
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
 }
 
 #[test]
@@ -632,9 +629,10 @@ fn thread_routes_list_create_get_rename_and_delete() {
     api.agent("researcher", RESEARCHER);
     let reader = api.token_of("reader", "read");
 
-    // A read token starts a thread and reads it; renaming and deleting need write.
+    // Creation requires write; read can still inspect the thread.
+    let writer = api.token_of("writer", "write");
     let res = api.request_as(
-        &reader,
+        &writer,
         "POST",
         "/api/agents/researcher/threads",
         Some(json!({ "title": "Roofing" })),

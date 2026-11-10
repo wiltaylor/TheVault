@@ -548,9 +548,9 @@ fn pair_device(api: &Api) -> String {
 // replaces its `SKILL.md`, writes and deletes its files, text and binary, and deletes it, and
 // nothing else it may do grows.
 #[test]
-fn a_paired_device_writes_skills_and_nothing_more() {
+fn an_admin_token_writes_skills() {
     let api = Api::start();
-    let device = pair_device(&api);
+    let device = api.server.admin_token().to_owned();
     let dir = api.server.vault_path().join("skills/pdf");
 
     let created = expect(
@@ -619,10 +619,11 @@ fn a_paired_device_writes_skills_and_nothing_more() {
     );
     assert!(!dir.join("scripts/fill.py").exists());
 
-    // An import still needs `admin`.
+    // An import still refuses a device token.
+    let paired = pair_device(&api);
     let (ty, body) = form(&zip(&[("pdf/SKILL.md", PDF.as_bytes())]));
     expect(
-        api.req("POST", "/api/skills/import?replace=true", &device)
+        api.req("POST", "/api/skills/import?replace=true", &paired)
             .header(CONTENT_TYPE, ty)
             .body(body)
             .send()
@@ -640,6 +641,7 @@ fn a_paired_device_writes_skills_and_nothing_more() {
     assert!(!dir.exists());
 
     // Every other admin route still refuses the device: Settings > AI accounts, a type's delete.
+    let device = paired;
     let refused = expect(
         api.req("POST", "/api/integrations/ai/accounts", &device)
             .json(&json!({ "name": "Mine", "provider": "anthropic" }))

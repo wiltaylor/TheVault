@@ -279,12 +279,12 @@ fn an_anthropic_turn_searches_reads_answers_and_replays_unedited() {
         "You chose slate, see [Roof decision](/notes/{id})."
     )));
 
-    // A read token may chat (ai D15).
+    // A write token may chat.
     let res = api
         .client
         .post(api.server.url("/api/tokens"))
         .bearer_auth(api.token())
-        .json(&json!({ "name": "reader", "scope": "read" }))
+        .json(&json!({ "name": "reader", "scope": "write" }))
         .send()
         .unwrap();
     assert_eq!(res.status(), StatusCode::CREATED);
@@ -1899,72 +1899,17 @@ fn with_types_confirmation_off_a_template_change_is_applied_through_the_planned_
 }
 
 #[test]
-fn a_read_caller_only_proposes_and_a_write_caller_has_the_agents_rights() {
+fn a_write_callers_direct_changes_cannot_exceed_write_scope() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     api.anthropic(&fake);
     api.confirm(serde_json::from_str(ALL_OFF).unwrap());
-    let reader = api.token_of("reader", "read");
-    let (id, version) = api.memo("Groceries", "Milk");
-    let calls = [
-        (
-            "propose_edit",
-            json!({ "id": id, "base_version": version, "note": memo_doc("Groceries", "Eggs").to_string() }),
-            "proposal",
-        ),
-        (
-            "propose_create",
-            json!({ "type": "memo", "note": memo_doc("New", "x").to_string() }),
-            "proposal",
-        ),
-        (
-            "propose_archive",
-            json!({ "id": id, "archived": true }),
-            "proposal",
-        ),
-        ("propose_delete", json!({ "id": id }), "proposal"),
-        (
-            "propose_type_change",
-            json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
-            "type_proposal",
-        ),
-    ];
-    for (tool, input, event) in calls.clone() {
-        let fake = FakeAnthropic::start();
-        api.anthropic(&fake);
-        api.confirm(serde_json::from_str(ALL_OFF).unwrap());
-        let events = api.propose_as(&reader, &fake, tool, input);
-        assert_eq!(
-            shape(&events),
-            ["tool", event, "tool_result", "text", "done"],
-            "{tool}: {events:?}"
-        );
-        assert!(
-            result_json(&fake, false)["message"]
-                .as_str()
-                .unwrap()
-                .contains("awaits the user"),
-            "{tool}"
-        );
-    }
-    assert_eq!(api.note(&id)["version"], version.as_str());
-    assert_eq!(api.memos().len(), 1);
-    assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
-
-    // A write token's turn, such as an app's, has the agent's own rights (agents G4): the
-    // Assistant may change types, so with the switch off the type change is made.
     let writer = api.token_of("writer", "write");
-    let (tool, input, _) = calls[4].clone();
-    let fake = FakeAnthropic::start();
-    api.anthropic(&fake);
-    api.confirm(serde_json::from_str(ALL_OFF).unwrap());
-    let events = api.propose_as(&writer, &fake, tool, input);
-    assert_eq!(
-        shape(&events),
-        ["tool", "applied", "tool_result", "text", "done"],
-        "{events:?}"
-    );
-    assert!(api.type_wcl("memo").unwrap().contains("tab \"Details\""));
+    let events = api.propose_as(&writer, &fake, "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }));
+    assert!(shape(&events).contains(&"type_proposal"), "{events:?}");
+    assert!(!shape(&events).contains(&"applied"), "{events:?}");
+    assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));
 }
 
 // The turns form and the apply route (ai D23).
@@ -2046,7 +1991,7 @@ fn a_turn_started_with_post_turns_streams_the_same_events_as_post_chat() {
     let posted = api.chat(sent.clone());
 
     push_search_then_answer(&fake);
-    let reader = api.token_of("reader", "read");
+    let reader = api.token_of("reader", "write");
     let (status, v) = api.start_turn(&reader, json!({ "messages": sent }));
     assert_eq!(status, StatusCode::CREATED, "{v}");
     let turn = v["turn"].as_str().unwrap();

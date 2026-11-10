@@ -315,16 +315,13 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
     if admin { Scope::Admin } else { Scope::Write }
 }
 
-/// The scope a turn's change tools make their changes with when their confirmation switch is
-/// off (ai D22, agents G4): for a caller with `write` and no more, such as an app's device token,
-/// the agent's own, as an unattended run of it has ([`unattended_scope`]), so its switches decide
-/// on the home server whoever runs the turn; otherwise the caller's, so a `read` caller only
-/// ever gets proposals.
+/// Direct changes cannot exceed either the caller's or the agent's authority.
 fn change_scope(caller: Scope, agent: &Agent) -> Scope {
-    if caller.allows(Scope::Write) && !caller.allows(Scope::Admin) {
-        unattended_scope(agent)
-    } else {
+    let agent = unattended_scope(agent);
+    if agent.allows(caller) {
         caller
+    } else {
+        agent
     }
 }
 
@@ -4659,6 +4656,17 @@ pub fn diff(before: &Value, after: &Value) -> Vec<Value> {
 /// here.
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn direct_scope_is_capped_by_caller_and_agent() {
+        let agent = ai::Agent::parse("a", "label = \"A\"\n").unwrap();
+        for scope in [state::Scope::Read, state::Scope::Write, state::Scope::Admin] {
+            let direct = super::change_scope(scope, &agent);
+            assert!(scope.allows(direct));
+            assert!(super::unattended_scope(&agent).allows(direct));
+        }
+        assert_eq!(super::change_scope(state::Scope::Write, &agent), state::Scope::Write);
+        assert_eq!(super::change_scope(state::Scope::Read, &agent), state::Scope::Read);
+    }
     use super::*;
 
     #[test]

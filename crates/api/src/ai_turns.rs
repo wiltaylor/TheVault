@@ -626,6 +626,16 @@ pub async fn apply(
     } else {
         "proposal"
     };
+    if matches!(event, "agent_proposal" | "skill_proposal")
+        && (!scope.allows(Scope::Admin)
+            || matches!(&author, Author::Token(name) if name.starts_with("agent-")))
+    {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "needs_admin",
+            "Agent and skill changes need a session or a non-agent admin token.",
+        ));
+    }
     if !scope.allows(Scope::Admin) {
         let message = match event {
             "type_proposal" => Some(NEEDS_ADMIN_MESSAGE),

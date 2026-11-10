@@ -58,6 +58,52 @@ fn read_tokens_cannot_start_or_change_agent_conversations() {
     }
 }
 
+#[test]
+fn definition_writes_require_session_or_non_agent_admin() {
+    let api = Api::start();
+    let write = api.token("writer-definitions", "write");
+    let agent = api.token("agent-definitions", "admin");
+    let paired = expect(api.req("POST", "/api/devices/pair", Auth::None)
+        .json(&json!({"password": testkit::PASSWORD, "name": "Phone", "platform": "android"}))
+        .send().unwrap(), 201);
+    let device = paired["token"].as_str().unwrap();
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    for auth in [Auth::Bearer(&write), Auth::Bearer(device), Auth::Bearer(&agent)] {
+        for (method, path) in [
+            ("PUT", "/api/agents/clerk"),
+            ("DELETE", "/api/agents/assistant"),
+            ("PUT", "/api/skills/demo"),
+            ("PUT", "/api/skills/demo/files/tools/run.wcl"),
+            ("DELETE", "/api/skills/demo"),
+            ("DELETE", "/api/skills/demo/files/run.wcl"),
+            ("POST", "/api/skills/import"),
+        ] {
+            let res = api.req(method, path, auth).body("label = \"Clerk\"\n").send().unwrap();
+            assert_eq!(res.status().as_u16(), 403, "{method} {path}");
+        }
+        for kind in ["agent", "skill"] {
+            expect(api.req("POST", "/api/ai/apply", auth)
+                .json(&json!({"kind": kind})).send().unwrap(), 403);
+        }
+    }
+    for auth in [api.admin(), Auth::Cookie(&cookie)] {
+        expect(api.req("PUT", "/api/agents/clerk", auth)
+            .json(&json!({"label": "Clerk", "permissions": {"scripts": {"run_code": true}}}))
+            .send().unwrap(), 200);
+        expect(api.req("DELETE", "/api/agents/clerk", auth).send().unwrap(), 200);
+        expect(api.req("PUT", "/api/skills/demo", auth)
+            .body("---\nname: demo\ndescription: Example\n---\nExample\n")
+            .send().unwrap(), 201);
+        expect(api.req("DELETE", "/api/skills/demo", auth).send().unwrap(), 200);
+    }
+    // A writer still starts conversations, but it cannot administer definitions.
+    expect(api.req("POST", "/api/agents/assistant/threads", Auth::Bearer(&write))
+        .json(&json!({})).send().unwrap(), 201);
+    let res = api.req("POST", "/api/ai/chat", Auth::Bearer(&write))
+        .json(&json!({})).send().unwrap();
+    assert_ne!(res.status().as_u16(), 403);
+}
+
 fn seed(vault: &Path) {
     std::fs::create_dir_all(vault.join("types")).unwrap();
     std::fs::write(vault.join("types/task.wcl"), TASK_TYPE).unwrap();
