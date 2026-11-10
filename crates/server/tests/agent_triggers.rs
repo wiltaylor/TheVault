@@ -184,7 +184,11 @@ fn burst_over_the_hourly_limit_eventually_runs_every_note_once() {
     }
     api.advance("PT31S");
     api.advance("PT1H");
-    assert_eq!(fake.message_requests().len(), 65, "overflow must survive until capacity returns");
+    assert_eq!(
+        fake.message_requests().len(),
+        65,
+        "overflow must survive until capacity returns"
+    );
     api.advance("PT1H");
     assert_eq!(fake.message_requests().len(), 65, "no duplicate runs");
 }
