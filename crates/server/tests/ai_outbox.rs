@@ -406,6 +406,27 @@ fn the_draft_tools_create_drafts_resolving_people() {
 }
 
 #[test]
+fn newly_enabled_bare_sender_keeps_items_in_review() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("new_sender", SENDER);
+    api.one(&fake, Some("new_sender"), "draft_email", email_input(json!(["anyone@example.com"])));
+    let result = last_result(&fake, false);
+    assert_eq!(result["status"], "draft", "{result}");
+}
+
+#[test]
+fn kelvin_sign_recipient_does_not_match_ascii_allowlist() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let source = SENDER.replace("send_without_review = true", "send_without_review = true\n conditions { recipients = [\"k@example.com\"]\n email = true\n daily_cap = 2\n }");
+    api.agent("sender", &source);
+    api.one(&fake, Some("sender"), "draft_email", email_input(json!(["\u{212a}@example.com"])));
+    let result = last_result(&fake, false);
+    assert_eq!(result["status"], "draft", "{result}");
+}
+
+#[test]
 fn restricted_sender_keeps_unlisted_recipients_in_review() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
