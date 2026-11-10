@@ -452,7 +452,7 @@ fn safety_agent_tools_and_scripts_do_not_return_held_note_text() {
     assert!(!delivered.contains("PRIVATE_ASSET_TEXT"), "{delivered}");
     assert!(!delivered.contains("PRIVATE_ASSET.txt"), "{delivered}");
     assert!(
-        delivered.contains("notes are held from agents"),
+        delivered.contains("some notes may be held"),
         "{delivered}"
     );
     assert!(
@@ -483,7 +483,7 @@ fn safety_covers_new_backfill_messages_calls_and_invitations_but_not_outgoing() 
         ("call", json!({"title":"Missed call", "direction":"missed"})),
         (
             "event",
-            json!({"title":"Invitation", "my_response":"needs_action"}),
+            json!({"title":"Invitation", "organiser":"outside@example.test", "calendar":"group@example.test"}),
         ),
         (
             "event_series",
@@ -615,7 +615,7 @@ fn safety_review_dispatch_and_attached_context_refuse_held_note() {
     let _ = res.text().unwrap();
     let request = chat.message_requests()[0].json().to_string();
     assert!(!request.contains("Untrusted safety fixture"), "{request}");
-    assert!(request.contains("notes are held from agents"), "{request}");
+    assert!(request.contains("This note is held from agents"), "{request}");
 }
 
 #[test]
