@@ -733,7 +733,7 @@ impl Scheduler {
             })
             .collect();
         for job in jobs {
-            self.persist_trigger(&job, now);
+            self.persist_trigger(&job, now, false);
         }
         for note in processed {
             let _ = self
@@ -807,14 +807,15 @@ impl Scheduler {
         }
     }
 
-    fn persist_trigger(&self, job: &AgentJob, due: i64) -> bool {
+    fn persist_trigger(&self, job: &AgentJob, due: i64, backfill: bool) -> bool {
         let payload = serde_json::json!({
             "prompt": job.prompt, "title": job.title,
             "type": job.note.as_ref().map(|(_, t)| t),
         })
         .to_string();
         let state = self.writer.state();
-        let inserted = match state.enqueue_trigger(
+        let enqueue = if backfill { state::State::enqueue_backfill } else { state::State::enqueue_trigger };
+        let inserted = match enqueue(state,
             &job.agent,
             &job.trigger,
             job.note.as_ref().map(|(id, _)| id.as_str()),
@@ -914,7 +915,7 @@ impl Scheduler {
                 thread: None,
                 origin: None,
             };
-            count += usize::from(self.persist_trigger(&job, self.clock.now_ms()));
+            count += usize::from(self.persist_trigger(&job, self.clock.now_ms(), true));
         }
         self.wake.notify_all();
         Ok(count)

@@ -32,6 +32,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn backfill_atomically_refuses_a_note_with_a_completed_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        let id = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().unwrap();
+        s.finish_trigger_job(id, "succeeded", None).unwrap();
+        assert!(s.enqueue_backfill("clerk", "opened", Some("a"), "{}", 0).unwrap().is_none());
+        assert!(s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().is_some(), "a later ordinary edit may trigger again");
+    }
+
+    #[test]
     fn cap_is_visible_and_notice_is_hourly() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
@@ -226,10 +236,18 @@ impl State {
         payload: &str,
         due: i64,
     ) -> Result<Option<i64>> {
+        self.enqueue_trigger_inner(agent, trigger, note, payload, due, false)
+    }
+
+    pub fn enqueue_backfill(&self, agent: &str, trigger: &str, note: Option<&str>, payload: &str, due: i64) -> Result<Option<i64>> {
+        self.enqueue_trigger_inner(agent, trigger, note, payload, due, true)
+    }
+
+    fn enqueue_trigger_inner(&self, agent: &str, trigger: &str, note: Option<&str>, payload: &str, due: i64, only_missing: bool) -> Result<Option<i64>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         if let Some(note) = note {
-            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND status IN ('waiting','admitted','running'))", params![agent, trigger, note], |r| r.get(0))?;
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND (?4 OR status IN ('waiting','admitted','running')))", params![agent, trigger, note, only_missing], |r| r.get(0))?;
             if exists {
                 return Ok(None);
             }
