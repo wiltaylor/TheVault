@@ -80,7 +80,7 @@ An agent drafts emails, SMS messages and calendar invites with three chat tools.
 |------|----------------|
 | `draft_email` | An email: `to`, `cc` and `bcc` (addresses or person note ids), `subject`, `body` as plain text, `attachments` (asset ids) and `in_reply_to` (the email note it answers, so it joins its thread) |
 | `draft_sms` | An SMS for the phone to send: `to` (a number or a person note id), `body` and `device` (empty for the vault's one Android device with SMS sending on) |
-| `draft_event` | A calendar invite: a new event, or with `event` a change to an existing event note. `title`, `when`, `location`, `attendees`, `description` and `calendar`; for a change an empty value keeps that part. Sent, Google emails the attendees |
+| `draft_event` | A calendar invite: a new event, or with `event` a change to an existing event note. `title`, `when`, `location`, `attendees`, `description` and `calendar`; for a change an empty value keeps that part. `event_action` is empty or `update` for a change, or `delete` to cancel an existing event. `my_response` is empty or an RSVP (`accepted`, `tentative`, `declined`) on an existing invitation. Sent, Google emails the attendees, including a deletion's cancellation |
 
 A person note id resolves to the person's first email address or phone number when the item is drafted; the agent must be allowed to read person notes. Items are written as the agent, the Assistant included, so the Outbox rules hold:
 
