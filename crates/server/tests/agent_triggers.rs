@@ -463,7 +463,9 @@ fn safety_delete_of_held_note_does_not_enqueue_its_content() {
     let note = safety_note(&api);
     let id = note["id"].as_str().unwrap();
     assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
-    let version = note["version"].as_str().unwrap();
+    // The classifier writes its label after creating the note, changing the version.
+    let current = api.get(&format!("/api/notes/{id}"));
+    let version = current["version"].as_str().unwrap();
     let path = format!("/api/notes/{id}?base_version={version}");
     let response = api.request("DELETE", &path, None);
     assert!(response.status().is_success(), "{}", response.text().unwrap());
