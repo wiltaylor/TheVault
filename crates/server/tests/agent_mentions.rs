@@ -526,6 +526,30 @@ fn a_write_token_cannot_deliver_a_session_issued_call() {
 }
 
 #[test]
+fn restoring_a_token_version_cannot_launder_an_issued_call() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("helper", "label = \"Helper\"\n");
+    let id = api.note("memo", "Owner note", &[]);
+    let issued = api.issue(&id, "helper");
+    let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
+    let substituted = call("@Helper attacker request", "helper", &issued);
+    let changed: Value = api.client.put(api.server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(api.server.admin_token())
+        .json(&json!({ "base_version": version, "note": note_json("Token version", &[&substituted]) }))
+        .send().unwrap().error_for_status().unwrap().json().unwrap();
+    api.save(&id, "Owner removes text", &[]);
+    let head = api.get(&format!("/api/notes/{id}"))["version"].clone();
+    api.send("POST", &format!("/api/notes/{id}/restore"), json!({
+        "version": changed["version"], "base_version": head
+    }));
+    fake.push(AnthropicMessage::text("Must not run."));
+    api.advance("PT1S");
+    assert!(fake.message_requests().is_empty(), "restoring an untrusted version must not authorize its call");
+    assert!(api.threads("helper").is_empty());
+}
+
+#[test]
 fn issuance_refuses_disabled_uncallable_agents_and_imported_types() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

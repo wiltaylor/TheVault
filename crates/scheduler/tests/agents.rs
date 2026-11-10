@@ -1073,3 +1073,35 @@ fn a_released_call_refuses_delivery_by_other_principals() {
         );
     }
 }
+
+fn coalesced_hijack_is_refused(by: Author) {
+    let r = Rig::new();
+    r.agent("clerk", CLERK);
+    r.fake.hold.store(true, Ordering::SeqCst);
+    let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
+    for i in 0..room {
+        r.scheduler.dispatch("clerk", &[], &format!("Run {i}"), "Go.").unwrap();
+    }
+    let text = call("@Clerk owner's request", "clerk", CALL);
+    let id = r.note("memo", "Pending", &[&text], &user());
+    r.writer.state().issue_agent_call(CALL, &id, "clerk", "session:owner").unwrap();
+    r.advance(1);
+    assert!(r.writer.state().agent_call(CALL).unwrap().is_none());
+    r.fake.hold.store(false, Ordering::SeqCst);
+    r.fake.wait_turns(room);
+    let substituted = call("@Clerk attacker request", "clerk", CALL);
+    r.save(&id, "Hijacked", &[&substituted], &by);
+    r.save(&id, "Owner typo fix", &[&substituted], &user());
+    r.advance(1);
+    assert_eq!(r.fake.turns().len(), room, "{by:?} followed by owner save must not authorize the substituted request");
+}
+
+#[test]
+fn coalesced_token_and_owner_writes_refuse_the_call() {
+    coalesced_hijack_is_refused(Author::Token("writer".into()));
+}
+
+#[test]
+fn coalesced_agent_and_owner_writes_refuse_the_call() {
+    coalesced_hijack_is_refused(Author::Agent("clerk".into()));
+}
