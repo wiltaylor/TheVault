@@ -23,6 +23,16 @@ use crate::{Invalid, Issue, Schema};
 /// cannot be deleted or disabled.
 pub const ASSISTANT_AGENT: &str = "assistant";
 
+/// Imported content can never commit an agent call, even after an editor save.
+pub const AGENT_CALL_EXCLUDED_TYPES: &[&str] = &[
+    "email",
+    "message",
+    "call",
+    "conversation",
+    "event",
+    "email_thread",
+];
+
 /// The providers an agent file from before AI accounts may name in `provider` (accounts A6). It
 /// reads as the account the migration made for that provider; the home server rewrites it to
 /// `account` on start.
@@ -528,6 +538,9 @@ impl Agent {
     /// from any type through an implicit one named `mention`, with no prompt and no type limit, so
     /// every agent can be called; a mention trigger only adds a prompt or limits the types.
     pub fn mention_trigger(&self, type_name: &str) -> Option<Trigger> {
+        if AGENT_CALL_EXCLUDED_TYPES.contains(&type_name) {
+            return None;
+        }
         let mut any = false;
         for t in &self.triggers {
             if let When::Mention(m) = &t.when {

@@ -287,7 +287,32 @@ impl Api {
             .split(';')
             .next()
             .unwrap();
-        expect(client.post(self.server.url("/api/notes?type=fleeting")).header(reqwest::header::COOKIE, cookie).json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000002)"}}]}]}})).send().unwrap(), 201);
+        let note = expect(
+            client
+                .post(self.server.url("/api/notes?type=fleeting"))
+                .header(reqwest::header::COOKIE, cookie)
+                .json(&json!({ "note": { "fields": { "title": "Request" } } }))
+                .send()
+                .unwrap(),
+            201,
+        );
+        let issued = expect(
+            client
+                .post(self.server.url("/api/agents/calls"))
+                .header(reqwest::header::COOKIE, cookie)
+                .json(&json!({ "note": note["id"], "agent": "clerk" }))
+                .send()
+                .unwrap(),
+            200,
+        );
+        let text = format!(
+            "[@Clerk process mail](agent:clerk?call={})",
+            issued["call"].as_str().unwrap()
+        );
+        expect(client.put(self.server.url(&format!("/api/notes/{}", note["id"].as_str().unwrap())))
+            .header(reqwest::header::COOKIE, cookie)
+            .json(&json!({ "base_version": note["version"], "note": { "fields": { "title": "Request" }, "blocks": [{ "kind": "content", "labels": ["body"], "blocks": [{ "kind": "paragraph", "fields": { "text": text } }] }] } }))
+            .send().unwrap(), 200);
     }
 
     fn wait_run(&self, thread: &str) {
@@ -799,21 +824,7 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         let one = api.email("one");
         let two = api.email("two");
         if mention {
-            // A real session authors the call, as required by the external-text boundary.
-            let client = Client::new();
-            let login = client
-                .post(api.server.url("/api/login"))
-                .json(&json!({"password": testkit::PASSWORD}))
-                .send()
-                .unwrap();
-            assert_eq!(login.status(), 200);
-            let cookie = login.headers()[reqwest::header::SET_COOKIE]
-                .to_str()
-                .unwrap()
-                .split(';')
-                .next()
-                .unwrap();
-            expect(client.post(api.server.url("/api/notes?type=fleeting")).header(reqwest::header::COOKIE, cookie).json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000001)"}}]}]}})).send().unwrap(), 201);
+            api.session_call();
         } else {
             api.edit(&one, json!({"title": "Changed"}));
         }

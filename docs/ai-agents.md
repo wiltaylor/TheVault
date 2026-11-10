@@ -363,7 +363,7 @@ Note events fire on the home server only, after the change is written. A change 
 
 ### Calls from notes
 
-Every enabled agent can be called from a note. Type `@` in the editor and choose **Ask <label>**, which the picker lists before the notes for each agent the note's type may call. The picker becomes a request box, "Ask <label>…": write what the agent should do and press Enter. Shift+Enter starts a new line; Escape, or Enter with nothing written, leaves nothing in the note. An agent with no mention trigger answers a call from any note type except its own threads. A trigger with `mention = true` adds to that: `type` limits which note types may call the agent, and `prompt`, which is optional here, is added before the request. With mention triggers that name types, only those types may call it.
+Every enabled agent can be called from a note. Type `@` in the editor and choose **Ask <label>**, which the picker lists before the notes for each agent the note's type may call. The picker becomes a request box, "Ask <label>…": write what the agent should do and press Enter. Shift+Enter starts a new line; Escape, or Enter with nothing written, leaves nothing in the note. An agent with no mention trigger answers calls except from its own threads and from `email`, `message`, `call`, `conversation`, `event` and `email_thread` notes. A trigger with `mention = true` adds to that: `type` limits which note types may call the agent, and `prompt`, which is optional here, is added before the request. With mention triggers that name types, only those types may call it.
 
 ```wcl
 trigger asked {
@@ -373,7 +373,7 @@ trigger asked {
 }
 ```
 
-Enter commits the call into the note as one link, with an id the editor makes for it, and the note's next save carries it whole:
+Enter asks the home server for a single-use call id bound to the note, agent and signed-in session or paired device. This needs a connection. The editor commits the call as one link, and the note's next save carries it whole:
 
 ```text
 [@Clerk list what to buy for the gutters](agent:clerk?call=01JB8Z4K2MQ7V3X9T5R6W8Y2ZB)
@@ -383,7 +383,7 @@ The editor and the note page show a call as a chip: the agent's icon, `@<label>`
 
 Only a committed call calls. Plain text such as `@clerk tidy this` calls no one, and neither does a call in inline code. A call stands in the text of a note's content: paragraphs, headings, list items, quotes, toggles and admonition titles.
 
-When the server saves a note, it reads the note's calls at once. Each call id it has not seen before is recorded and answered once:
+When the server saves a note, it reads its calls. Only unused server-issued ids for that note and agent can run, and unused ids expire after 24 hours. Forged ids and copied calls cannot authorize a run. Only the owner session or the same paired device token that obtained the id may deliver it. Other devices, API tokens, handlers and tasks refuse the call. Agent-authored writes never call agents, and an agent overwrite permanently refuses a pending call. Calls are forbidden in `email`, `message`, `call`, `conversation`, `event` and `email_thread` notes, even after an editor save. App editor calls run when the note syncs to the home server. Each authorized call is answered once:
 
 1. It opens a thread, with origin `mention`, titled with the note's title and the start of the request.
 2. It starts the run. Its first message is the trigger's prompt, then the request, then the paragraph or list item around the call, then a line naming the note:

@@ -4,7 +4,6 @@
 // Pen button (capture K2). Send to sends the saved capture to an agent (capture K3).
 
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { newUlid } from "../agentCalls";
 import { agentLabel, agents, refreshAgents } from "../agents";
 import { type Block, api } from "../api";
 import { upload } from "../blocks/MediaBlocks";
@@ -108,6 +107,7 @@ export function CaptureModal() {
     queueMicrotask(() => dialog.querySelector<HTMLElement>(".capture-confirm button")?.focus());
   }
 
+  let retained: Awaited<ReturnType<typeof api.createNote>> | undefined;
   async function save() {
     if (empty() || saving()) return;
     setSaving(true);
@@ -119,8 +119,17 @@ export function CaptureModal() {
         ids.push(a.asset);
       }
       const agent = hasBody() ? target() : null;
-      const call = agent ? { agent: agent.name, label: agentLabel(agent), call: newUlid() } : null;
-      const saved = await api.createNote(FLEETING, captureDoc(type(), text(), ids, new Date(), { drawings: drawings(), call }));
+      const hadRetained = retained !== undefined;
+      retained ??= await api.createNote(FLEETING, captureDoc(type(), text(), ids, new Date(), { drawings: drawings() }));
+      let call = null;
+      if (agent) {
+        let issued;
+        try { issued = await api.issueAgentCall(retained.id, agent.name); }
+        catch { throw new Error("Saved to inbox. Calling an agent needs a connection to your server."); }
+        call = { agent: agent.name, label: agentLabel(agent), call: issued.call };
+      }
+      const saved = call || hadRetained ? await api.updateNote(retained.id, captureDoc(type(), text(), ids, new Date(), { drawings: drawings(), call }), retained.version) : retained;
+      retained = saved;
       const title = saved.note.fields.title;
       if (typeof title === "string") knowTitle(saved.id, title, saved.type);
       close();
