@@ -692,8 +692,9 @@ fn apply_as_agent(
 ) -> Result<Value, ApiError> {
     let author = match change["agent"].as_str().filter(|n| !n.is_empty()) {
         Some(name) => {
-            let agent = crate::ai_agents::agent_named(w, name)?
-                .ok_or_else(|| ai_chat::ApplyError::Refused("The proposing agent no longer exists.".into()))?;
+            let agent = crate::ai_agents::agent_named(w, name)?.ok_or_else(|| {
+                ai_chat::ApplyError::Refused("The proposing agent no longer exists.".into())
+            })?;
             if event == "proposal" {
                 let limits = ai_chat::Limits::of(&agent);
                 let type_name = match change["op"].as_str().unwrap_or("update") {

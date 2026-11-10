@@ -71,7 +71,13 @@ fn agent_edits_and_deletes_wait_for_checked_note_commits() {
                         assert!(w.agent("reader").unwrap().enabled);
                         entered_tx.send(()).unwrap();
                         release_rx.recv().unwrap();
-                        assert!(w.agent("reader").unwrap().permissions.change_types.is_none());
+                        assert!(
+                            w.agent("reader")
+                                .unwrap()
+                                .permissions
+                                .change_types
+                                .is_none()
+                        );
                         assert_eq!(w.read_agent("reader").unwrap(), original);
                         Ok::<(), Error>(())
                     },

@@ -3845,15 +3845,19 @@ pub(crate) fn authorize_proposal(
     event: &str,
     p: &Value,
 ) -> Result<(), ApplyError> {
-    let proposer = p["proposer"].as_str().or(match author {
-        Author::Agent(name) | Author::AgentMail(name) => {
-            Some(name.split("/sub:").next().unwrap_or(name))
-        }
-        _ => None,
-    }).or_else(|| p["agent"].as_str());
+    let proposer = p["proposer"]
+        .as_str()
+        .or(match author {
+            Author::Agent(name) | Author::AgentMail(name) => {
+                Some(name.split("/sub:").next().unwrap_or(name))
+            }
+            _ => None,
+        })
+        .or_else(|| p["agent"].as_str());
     if let Some(name) = proposer {
-        let agent = crate::ai_agents::agent_named(w, name)?
-            .ok_or_else(|| ApplyError::Refused(format!("The proposing agent {name} no longer exists.")))?;
+        let agent = crate::ai_agents::agent_named(w, name)?.ok_or_else(|| {
+            ApplyError::Refused(format!("The proposing agent {name} no longer exists."))
+        })?;
         if !agent.enabled {
             return Err(ApplyError::Refused(
                 "The proposing agent is disabled.".into(),
