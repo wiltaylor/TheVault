@@ -111,6 +111,16 @@ paused        = true
             )
     }
 
+    fn release_safety(&self, note: &Value) {
+        let login = self.client.post(self.server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+        let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+        let id = note["id"].as_str().unwrap();
+        let result = expect(self.client.post(self.server.url(&format!("/api/notes/{id}/agent-safety/release")))
+            .header("cookie", cookie).json(&json!({"fingerprint":note["agent_safety"]["fingerprint"]})).send().unwrap(), 200);
+        assert_eq!(result["agent_safety"]["status"], "released");
+    }
+
     /// Run the task now, and return the run.
     fn run(&self) -> Value {
         expect(
@@ -1228,9 +1238,11 @@ fn images_the_time_budget_leaves_out_wait_for_the_next_run() {
     assert!(web.requests().is_empty());
 
     // The next run, with time for images, fetches it into its place.
+    gmail.release_safety(&note);
     gmail.set_settings(json!({ "gmail_mode": "all" }));
     gmail.run_ok();
     let note = gmail.email("later");
+    assert_eq!(note["agent_safety"]["status"], "released", "image completion must preserve release: {note}");
     assert!(note["note"]["fields"].get("images_pending").is_none());
     let blocks = body_blocks(&note);
     assert_eq!(kinds(&blocks), ["paragraph", "image", "paragraph"]);
@@ -1303,6 +1315,9 @@ fn older_bodies_are_reconverted_unless_the_user_edited_them() {
     );
     let gone = old_email(&gmail, "gone", &["Gone", "Line"], json!({ "html": html }));
 
+    gmail.release_safety(&gmail.note(&kept));
+    gmail.release_safety(&gmail.note(&gone));
+
     let run = gmail.run_ok();
     let log = Gmail::log_of(&run);
     assert!(
@@ -1310,6 +1325,8 @@ fn older_bodies_are_reconverted_unless_the_user_edited_them() {
         "{log}"
     );
     let note = gmail.note(&kept);
+    assert_eq!(note["agent_safety"]["status"], "released", "reconversion must preserve release: {note}");
+    assert_eq!(gmail.note(&gone)["agent_safety"]["status"], "released");
     assert_eq!(note["note"]["fields"]["converter"], 2);
     let blocks = body_blocks(&note);
     assert_eq!(

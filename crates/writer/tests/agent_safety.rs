@@ -428,6 +428,26 @@ fn round3_conversion_preserves_pending_and_cleared_same_message_only() {
 }
 
 #[test]
+fn round3_type_migration_refreshes_held_query_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let target = create(&w, "Target");
+    let actor = Author::Session("owner".into());
+    let note = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Migrated", "link":target.id}})), &actor).unwrap();
+    let hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    w.finish_agent_safety(&note.id, &hash, "allowed", "allow").unwrap();
+    let source = w.read_type("email").unwrap();
+    let change = writer::TypeChange { wcl: source.replace("field link", "field related"), renames: std::collections::BTreeMap::from([("link".into(), "related".into())]), migration: None };
+    let plan = w.plan_type_change("email", &change).unwrap();
+    w.apply_type_change("email", &change, &plan.token, &actor).unwrap();
+    assert_eq!(w.agent_safety(&note.id).unwrap().reason, "content_changed");
+    assert!(w.state().held_agent_note_ids().unwrap().contains(&note.id));
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    assert_eq!(w.query_page("from email select title", 10, None).unwrap()["total"], 0);
+}
+
+#[test]
 fn round3_derived_email_thread_title_is_held_with_first_message() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();
