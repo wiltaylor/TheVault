@@ -1137,6 +1137,17 @@ export interface Secret {
   name: string;
   created: number;
   updated: number;
+  kind?: "string" | "login";
+  username?: string;
+  origins?: string[];
+  has_totp?: boolean;
+}
+
+export interface LoginSecretInput {
+  username: string;
+  password: string;
+  totp_seed?: string;
+  origins: string[];
 }
 
 export type Scope = "read" | "write" | "admin";
@@ -2047,6 +2058,8 @@ export const api = {
   secrets: async () => (await request<{ secrets: Secret[] }>("GET", "/api/secrets")).secrets,
   /** Store or replace a secret's value. It is never read back. */
   putSecret: (name: string, value: string) => request<Secret>("PUT", `/api/secrets/${enc(name)}`, { value }),
+  putLoginSecret: (name: string, login: LoginSecretInput) =>
+    request<Secret>("PUT", `/api/secrets/${enc(name)}`, { kind: "login", ...login }),
   deleteSecret: (name: string) => request<unknown>("DELETE", `/api/secrets/${enc(name)}`),
   /** The Google sync's connection and each side's last run. */
   googleStatus: () => request<GoogleStatus>("GET", "/api/integrations/google"),
