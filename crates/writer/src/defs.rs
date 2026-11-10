@@ -845,13 +845,21 @@ impl Writer {
     pub fn agent(&self, name: &str) -> Result<Agent> {
         let text = match self.read_agent(name) {
             Ok(text) => text,
-            Err(e) => { self.revoke_outbox_legacy(name)?; return Err(e); }
+            Err(e) => {
+                self.revoke_outbox_legacy(name)?;
+                return Err(e);
+            }
         };
         let mut agent = match Agent::parse(name, &text) {
             Ok(agent) => agent,
-            Err(e) => { self.revoke_outbox_legacy(name)?; return Err(Error::Invalid(e)); }
+            Err(e) => {
+                self.revoke_outbox_legacy(name)?;
+                return Err(Error::Invalid(e));
+            }
         };
-        if !agent.permissions.outbox.send_without_review || agent.permissions.outbox.conditions.is_some() {
+        if !agent.permissions.outbox.send_without_review
+            || agent.permissions.outbox.conditions.is_some()
+        {
             self.revoke_outbox_legacy(name)?;
         }
         if agent.permissions.outbox.send_without_review
@@ -931,9 +939,17 @@ impl Writer {
     ) -> Result<(String, Agent)> {
         let _w = self.write_lock();
         let mut inner = self.lock();
-        let stored_legacy = self.read_agent(name).ok().and_then(|s| Agent::parse(name, &s).ok())
-            .is_some_and(|a| a.permissions.outbox.send_without_review && a.permissions.outbox.conditions.is_none());
-        if !stored_legacy { self.revoke_outbox_legacy(name)?; }
+        let stored_legacy = self
+            .read_agent(name)
+            .ok()
+            .and_then(|s| Agent::parse(name, &s).ok())
+            .is_some_and(|a| {
+                a.permissions.outbox.send_without_review
+                    && a.permissions.outbox.conditions.is_none()
+            });
+        if !stored_legacy {
+            self.revoke_outbox_legacy(name)?;
+        }
         let (mut text, mut agent) = self.plan_agent(&inner, name, source, check)?;
         if agent.permissions.outbox.send_without_review
             && agent.permissions.outbox.conditions.is_none()
@@ -977,7 +993,9 @@ impl Writer {
         }
         let generation = self.commit(vec![Change::write(agent_path(name), text.as_bytes())])?;
         inner.index.advance(generation)?;
-        if agent.permissions.outbox.conditions.is_some() || !agent.permissions.outbox.send_without_review {
+        if agent.permissions.outbox.conditions.is_some()
+            || !agent.permissions.outbox.send_without_review
+        {
             self.state
                 .set_meta(&format!("outbox-legacy:{name}"), "false")?;
         }

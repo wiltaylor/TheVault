@@ -290,7 +290,7 @@ fn agent_response(
 pub async fn read(
     State(w): Shared,
     Caller(by): Caller,
-    crate::auth::GrantedScope(scope): crate::auth::GrantedScope,
+    axum::Extension(crate::auth::GrantedScope(scope)): axum::Extension<crate::auth::GrantedScope>,
     Path(name): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
@@ -302,7 +302,9 @@ pub async fn read(
         let mut wcl = w.read_agent(&name)?;
         let mut agent = w.agent(&name).map_err(|e| {
             let mut err = ApiError::from(e);
-            if full { err.body["wcl"] = json!(wcl); }
+            if full {
+                err.body["wcl"] = json!(wcl);
+            }
             err
         })?;
         if !full {
