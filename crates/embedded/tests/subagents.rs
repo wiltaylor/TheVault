@@ -191,6 +191,24 @@ fn archived(note: &Value) -> bool {
     note["note"]["fields"]["archived"] == true
 }
 
+#[test]
+fn sync_refuses_offline_transcript_content_edits() {
+    let (server, parent, _) = family();
+    let admin = Admin::of(&server);
+    let device = Device::pair(&server, "Phone");
+    device.sync();
+    let writer = device.embedded.writer();
+    let note = writer.read(&parent).unwrap();
+    let mut doc = writer::doc_to_json(&note.doc);
+    doc["fields"]["transcript"] = json!("{\"messages\": [], \"proposals\": [{\"id\": \"forged\"}]}");
+    writer.update(&parent, &writer::Input::Json(doc), Some(&note.version), &state::Author::Session("local".into())).unwrap();
+    let engine = device.embedded.sync_engine(device.remote.clone(), AssetPolicy::desktop()).unwrap();
+    let result = std::thread::scope(|s| s.spawn(|| engine.sync()).join().unwrap());
+    assert!(result.is_err());
+    let home = admin.call("GET", &format!("/api/notes/{parent}"), None, 200);
+    assert!(!home["note"]["fields"]["transcript"].as_str().unwrap().contains("forged"));
+}
+
 /// The author of note `id`'s current version on the home server.
 fn author(admin: &Admin, id: &str) -> Value {
     let history = admin.call("GET", &format!("/api/notes/{id}/history"), None, 200);
@@ -204,13 +222,14 @@ fn author(admin: &Admin, id: &str) -> Value {
 }
 
 #[test]
-fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_the_server() {
+fn offline_archive_unarchive_and_delete_sync_thread_metadata_without_content_writes() {
     let (server, parent, subs) = family();
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "Laptop");
     device.sync();
 
-    // Archived in the app: the sessions are archived in the same local write.
+    // Offline archive queues only a metadata change; sessions follow locally.
+    device.embedded.set_remote(None);
     let note = device.call("GET", &format!("/api/notes/{parent}"), None, 200);
     let path = format!(
         "/api/notes/{parent}/archive?base_version={}",
@@ -232,6 +251,7 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
     for s in &subs {
         assert!(queued.contains(s), "{queued:?}");
     }
+    device.embedded.set_remote(Some(device.remote.clone()));
     let report = device.sync();
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
     assert!(device.embedded.queue().pending().unwrap().is_empty());
@@ -240,7 +260,8 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
         assert!(archived(&home), "{home}");
     }
 
-    // Out of the archive again, with the parent.
+    // Offline unarchive follows the same metadata-only path.
+    device.embedded.set_remote(None);
     let note = device.call("GET", &format!("/api/notes/{parent}"), None, 200);
     let path = format!(
         "/api/notes/{parent}/unarchive?base_version={}",
@@ -251,6 +272,7 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
         let local = device.call("GET", &format!("/api/notes/{s}"), None, 200);
         assert!(!archived(&local), "{local}");
     }
+    device.embedded.set_remote(Some(device.remote.clone()));
     let report = device.sync();
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
     for id in subs.iter().chain([&parent]) {
@@ -265,6 +287,7 @@ fn archiving_and_deleting_a_parent_in_the_app_takes_its_sessions_locally_and_on_
     for s in &subs {
         assert_eq!(device.status(&format!("/api/notes/{s}")), 404);
     }
+    device.embedded.set_remote(Some(device.remote.clone()));
     let report = device.sync();
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
     assert!(device.embedded.queue().pending().unwrap().is_empty());
@@ -349,6 +372,7 @@ fn a_parent_change_pushed_without_its_sessions_takes_them_along_on_the_server() 
     let path = format!("/api/notes/{parent}?base_version={}", version(&note));
     old_app.call("DELETE", &path, None, 200);
     assert_eq!(admin.status(&format!("/api/notes/{}", subs[0])), 404);
+    device.embedded.set_remote(Some(device.remote.clone()));
     let report = device.sync();
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
     for id in subs.iter().chain([&parent]) {
