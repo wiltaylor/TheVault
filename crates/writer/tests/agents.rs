@@ -54,6 +54,7 @@ fn agent_edits_and_deletes_wait_for_checked_note_commits() {
         let dir = tempfile::tempdir().unwrap();
         let w = with_email(dir.path());
         w.put_agent("reader", "", none).unwrap();
+        let original = w.read_agent("reader").unwrap();
         let input = writer::Input::Json(serde_json::json!({ "fields": { "title": "Checked" } }));
         let author = state::Author::Agent("reader".into());
         let (entered_tx, entered_rx) = mpsc::channel();
@@ -70,6 +71,14 @@ fn agent_edits_and_deletes_wait_for_checked_note_commits() {
                         assert!(w.agent("reader").unwrap().enabled);
                         entered_tx.send(()).unwrap();
                         release_rx.recv().unwrap();
+                        assert!(
+                            w.agent("reader")
+                                .unwrap()
+                                .permissions
+                                .change_types
+                                .is_none()
+                        );
+                        assert_eq!(w.read_agent("reader").unwrap(), original);
                         Ok::<(), Error>(())
                     },
                 )
