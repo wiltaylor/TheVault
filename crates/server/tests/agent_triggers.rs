@@ -163,11 +163,7 @@ fn review5_agent_token_rest_reads_of_held_note() {
     let id = note["id"].as_str().unwrap();
     let held = safety_wait(&api, id);
     assert_eq!(held["agent_safety"]["status"], "held");
-    let token = api.send(
-        "POST",
-        "/api/tokens",
-        json!({"name":"agent-cli", "scope":"write"}),
-    );
+    let token = api.external_agent_token();
     let mut leaks = Vec::new();
     for path in [
         format!("/api/notes/{id}"),
@@ -311,7 +307,7 @@ macro_rules! held_rest_route {
             let note = safety_note(&api);
             let id = note["id"].as_str().unwrap();
             assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
-            let token = api.send("POST", "/api/tokens", json!({"name":"agent-cli", "scope":"write"}));
+            let token = api.external_agent_token();
             let path = $path.replace("{id}", id);
             let response = api.client.get(api.server.url(&path))
                 .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap();
@@ -346,11 +342,7 @@ fn safety_rest_list_and_post_query_exclude_held_notes() {
     let note = safety_note(&api);
     let id = note["id"].as_str().unwrap();
     assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
-    let token = api.send(
-        "POST",
-        "/api/tokens",
-        json!({"name":"agent-cli", "scope":"write"}),
-    );
+    let token = api.external_agent_token();
     for request in [
         api.client.get(api.server.url("/api/notes")),
         api.client
@@ -395,11 +387,7 @@ fn safety_rest_asset_download_of_held_attachment_is_refused() {
         safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["status"],
         "held"
     );
-    let token = api.send(
-        "POST",
-        "/api/tokens",
-        json!({"name":"agent-cli", "scope":"write"}),
-    );
+    let token = api.external_agent_token();
     let response = api
         .client
         .get(api.server.url(&format!("/api/assets/{asset}")))
@@ -1004,6 +992,18 @@ fn safety_review_server_holds_preexisting_notes_by_default() {
 }
 
 impl Api {
+    fn external_agent_token(&self) -> Value {
+        let issued = self.send(
+            "POST",
+            "/api/agent-codes",
+            json!({"name":"cli", "scope":"write"}),
+        );
+        let response: Value = self.client.post(self.server.url("/api/agent-codes/redeem"))
+            .json(&json!({"code":issued["code"]})).send().unwrap()
+            .error_for_status().unwrap().json().unwrap();
+        json!({"secret":response["token"]})
+    }
+
     fn start(fake: &FakeAnthropic) -> Api {
         let server = TestServer::start_with_args(
             |vault| {
