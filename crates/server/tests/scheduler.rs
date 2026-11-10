@@ -585,13 +585,18 @@ fn login_mutations_refuse_agent_device_and_write_tokens() {
         let path = api.server.vault_path().join(".vault/state.db");
         let state = state::State::open(&path, None).unwrap();
         let secret = if let Some(name) = name.strip_prefix("agent-") {
-            let code = state.create_agent_code(name, scope.parse().unwrap(), 60_000).unwrap();
+            let code = state
+                .create_agent_code(name, scope.parse().unwrap(), 60_000)
+                .unwrap();
             state.redeem_agent_code(&code.code).unwrap().unwrap().1
         } else {
             let (_, secret) = state.create_token(name, scope.parse().unwrap()).unwrap();
             if name.starts_with("device-") {
                 // A pre-upgrade device token may retain admin scope, never user-kind rights.
-                rusqlite::Connection::open(&path).unwrap().execute("UPDATE tokens SET kind='device' WHERE name=?1", [name]).unwrap();
+                rusqlite::Connection::open(&path)
+                    .unwrap()
+                    .execute("UPDATE tokens SET kind='device' WHERE name=?1", [name])
+                    .unwrap();
             }
             secret
         };
