@@ -1131,6 +1131,33 @@ impl Engine {
             Some(text) => Some(parse(id, &note.type_name, text)?),
             None => None,
         };
+        if note.type_name == "agent_thread" {
+            // Transcripts are server-owned. Offline metadata changes use the same narrow
+            // archive routes as online callers, never a full transcript PUT.
+            let content = |doc: &Doc| {
+                let mut value = doc_to_json(doc);
+                if let Some(fields) = value.get_mut("fields").and_then(Json::as_object_mut) {
+                    fields.remove("archived");
+                    fields.remove("updated");
+                }
+                value
+            };
+            if p.base_deleted
+                || base_doc
+                    .as_ref()
+                    .is_none_or(|base| content(base) != content(&local_doc))
+            {
+                return Err(Error::Protocol(
+                    "Agent transcripts cannot be created, edited or restored by device sync."
+                        .into(),
+                ));
+            }
+            let saved = self.server_note(id)?;
+            let saved = self.carry_archive(id, saved, base_doc.as_ref(), &local_doc)?;
+            self.settle(id, &note.version, &saved)?;
+            report.pushed.push(id.clone());
+            return Ok(());
+        }
         let mut base_version = p.base_version.clone();
         if p.base_deleted && base_version.is_some() {
             base_version = self.restore(id)?;

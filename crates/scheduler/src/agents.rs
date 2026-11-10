@@ -101,12 +101,22 @@ pub trait AgentRunner: Send + Sync {
     ) -> Result<String, String>;
 
     /// Run one turn of `agent` on thread `thread` whose user message is `prompt`.
-    fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str) -> TurnReport;
+    fn run_turn(
+        &self,
+        agent: &Agent,
+        thread: &str,
+        prompt: &str,
+        scope: Option<state::Scope>,
+        caller: Option<&Author>,
+    ) -> TurnReport;
 }
 
 /// One run to start: an agent's trigger, the first message and the thread's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentJob {
+    /// Caller ceiling for explicitly dispatched runs. Autonomous runs use the agent scope.
+    pub scope: Option<state::Scope>,
+    pub caller: Option<Author>,
     pub agent: String,
     pub trigger: String,
     pub prompt: String,
@@ -267,6 +277,8 @@ impl AgentPlan {
                 title: run_title(trigger, now, Some(&schedule.timezone)),
                 thread: None,
                 origin: None,
+                scope: None,
+                caller: None,
             });
         }
         for h in std::mem::take(&mut self.heard) {
@@ -652,6 +664,8 @@ impl Scheduler {
                 title: run_title(&e.trigger.name, now, None),
                 thread: None,
                 origin: None,
+                scope: None,
+                caller: None,
             });
         }
         let mut starts: Vec<AgentJob> = called_runs
@@ -787,6 +801,8 @@ impl Scheduler {
                 ),
                 thread: None,
                 origin: Some(MENTION_ORIGIN),
+                scope: None,
+                caller: None,
             };
             if self.plan().agents.over_limit(&agent.name, now) {
                 let admitted = self.plan().agents.admit(job.clone(), now);
@@ -898,6 +914,8 @@ impl Scheduler {
         notes: &[String],
         title: &str,
         prompt: &str,
+        scope: state::Scope,
+        caller: Author,
     ) -> Result<String, DispatchRefused> {
         let runner = self.runner.get().ok_or(DispatchRefused::NoRunner)?.clone();
         let now = self.clock.now_ms();
@@ -919,6 +937,8 @@ impl Scheduler {
             title: title.to_owned(),
             thread: Some(thread.clone()),
             origin: Some(DISPATCH_ORIGIN),
+            scope: Some(scope),
+            caller: Some(caller),
         };
         let admitted = {
             let mut plan = self.plan();
@@ -1003,7 +1023,8 @@ impl Scheduler {
                 if let Err(e) = state.set_agent_run_thread(id, &thread) {
                     eprintln!("agent {:?}: recording the run's thread: {e}", agent.name);
                 }
-                let r = runner.run_turn(&agent, &thread, &job.prompt);
+                let r =
+                    runner.run_turn(&agent, &thread, &job.prompt, job.scope, job.caller.as_ref());
                 (r.outcome, r.log, Some(thread))
             }
             Err(e) => (Err(e), Vec::new(), None),

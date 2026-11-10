@@ -42,6 +42,320 @@ template default {
 
 const WCL: &str = "text/plain; charset=utf-8";
 
+#[test]
+fn apply_and_encoded_note_routes_cannot_write_server_transcripts() {
+    let api = Api::start();
+    let token = api.token("thread-probes", "write");
+    let thread = expect(
+        api.req("POST", "/api/agents/assistant/threads", api.admin())
+            .json(&json!({}))
+            .send()
+            .unwrap(),
+        201,
+    );
+    let id = thread["id"].as_str().unwrap();
+    let encoded = format!("%{:02X}{}", id.as_bytes()[0], &id[1..]);
+    let note = expect(
+        api.req("GET", &format!("/api/notes/{id}"), api.admin())
+            .send()
+            .unwrap(),
+        200,
+    );
+    let base = note["version"].as_str().unwrap();
+    let mut forged = note["note"].clone();
+    forged["fields"]["title"] = json!("Forged transcript");
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    for auth in [Auth::Bearer(&token), api.admin(), Auth::Cookie(&cookie)] {
+        for agent in [Value::Null, json!("assistant")] {
+            for change in [
+                json!({"op": "update", "note_id": id, "base_version": base, "after": forged, "agent": agent}),
+                json!({"op": "create", "type": "agent_thread", "after": forged, "agent": agent}),
+            ] {
+                expect(
+                    api.req("POST", "/api/ai/apply", auth)
+                        .json(&change)
+                        .send()
+                        .unwrap(),
+                    403,
+                );
+            }
+        }
+        expect(
+            api.req("PUT", &format!("/api/notes/{encoded}"), auth)
+                .header("If-Match", base)
+                .json(&json!({"note": forged}))
+                .send()
+                .unwrap(),
+            403,
+        );
+        expect(
+            api.req("POST", &format!("/api/notes/{encoded}/restore"), auth)
+                .json(&json!({"version": base, "base_version": base}))
+                .send()
+                .unwrap(),
+            403,
+        );
+        expect(
+            api.req("PUT", &format!("/api/notes/{encoded}/canvas/body.0"), auth)
+                .header("If-Match", base)
+                .header(CONTENT_TYPE, WCL)
+                .body("canvas {}\n")
+                .send()
+                .unwrap(),
+            403,
+        );
+    }
+    let unchanged = expect(
+        api.req("GET", &format!("/api/notes/{id}"), api.admin())
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(unchanged["version"], base);
+}
+
+#[test]
+fn agent_admin_tokens_cannot_mint_credentials_or_reconfigure_authority() {
+    let api = Api::start();
+    let token = api.token("agent-restricted", "admin");
+    for (method, path) in [
+        ("POST", "/api/tokens"),
+        ("POST", "/api/agent-codes"),
+        ("POST", "/api/devices/pair-codes"),
+        ("PUT", "/api/integrations/ai/settings"),
+        ("PUT", "/api/integrations/gitsync/settings"),
+        ("PUT", "/api/integrations/gitsync/token"),
+        ("PUT", "/api/integrations/gitsync/ssh-key"),
+        ("PUT", "/api/integrations/gitsync/key"),
+        ("POST", "/api/integrations/gitsync/run"),
+        ("DELETE", "/api/integrations/gitsync"),
+    ] {
+        let response = api
+            .req(method, path, Auth::Bearer(&token))
+            .json(&json!({}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 403, "{method} {path}");
+    }
+}
+
+#[test]
+fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
+    let api = Api::start();
+    let thread = expect(
+        api.req("POST", "/api/agents/assistant/threads", api.admin())
+            .json(&json!({}))
+            .send()
+            .unwrap(),
+        201,
+    );
+    let id = thread["id"].as_str().unwrap();
+    let writer = api.token("thread-write", "write");
+    let admin = api.token("thread-admin", "admin");
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    for auth in [
+        Auth::Bearer(&writer),
+        Auth::Bearer(&admin),
+        Auth::Cookie(&cookie),
+    ] {
+        expect(
+            api.req("POST", "/api/notes?type=agent_thread", auth)
+                .json(&json!({"note": {"fields": {"title": "Forged"}}}))
+                .send()
+                .unwrap(),
+            403,
+        );
+        expect(
+            api.req("PUT", &format!("/api/notes/{id}"), auth)
+                .json(&json!({"note": {"fields": {"title": "Forged"}}}))
+                .send()
+                .unwrap(),
+            403,
+        );
+        for op in [
+            json!({"op": "create", "type": "agent_thread", "note": {"fields": {"title": "Forged"}}}),
+            json!({"op": "update", "id": id, "note": {"fields": {"title": "Forged"}}}),
+            json!({"op": "delete", "id": id}),
+            json!({"op": "upsert", "type": "agent_thread", "key": "title", "note": {"fields": {"title": "Forged"}}}),
+        ] {
+            expect(
+                api.req("POST", "/api/batch", auth)
+                    .json(&json!({"ops": [op]}))
+                    .send()
+                    .unwrap(),
+                403,
+            );
+        }
+        expect(api.req("POST", "/api/upsert", auth)
+            .json(&json!({"type": "agent_thread", "key": "title", "note": {"fields": {"title": "Forged"}}}))
+            .send().unwrap(), 403);
+    }
+    for action in ["archive", "unarchive"] {
+        let note = expect(
+            api.req("GET", &format!("/api/notes/{id}"), api.admin())
+                .send()
+                .unwrap(),
+            200,
+        );
+        expect(
+            api.req("POST", &format!("/api/notes/{id}/{action}"), api.admin())
+                .header("If-Match", note["version"].as_str().unwrap())
+                .send()
+                .unwrap(),
+            200,
+        );
+    }
+    let read = expect(
+        api.req(
+            "GET",
+            &format!("/api/agents/assistant/threads/{id}"),
+            api.admin(),
+        )
+        .send()
+        .unwrap(),
+        200,
+    );
+    assert_ne!(read["title"], "Forged");
+    let note = expect(
+        api.req("GET", &format!("/api/notes/{id}"), api.admin())
+            .send()
+            .unwrap(),
+        200,
+    );
+    expect(
+        api.req("DELETE", &format!("/api/notes/{id}"), api.admin())
+            .header("If-Match", note["version"].as_str().unwrap())
+            .send()
+            .unwrap(),
+        200,
+    );
+    expect(
+        api.req("POST", &format!("/api/trash/{id}/restore"), api.admin())
+            .send()
+            .unwrap(),
+        403,
+    );
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    expect(
+        api.req(
+            "POST",
+            &format!("/api/trash/{id}/restore"),
+            Auth::Cookie(&cookie),
+        )
+        .send()
+        .unwrap(),
+        200,
+    );
+}
+
+#[test]
+fn read_tokens_cannot_start_or_change_agent_conversations() {
+    let api = Api::start();
+    let token = api.token("reader-chat", "read");
+    for path in [
+        "/api/agents/assistant/threads",
+        "/api/ai/chat",
+        "/api/ai/chat/turns",
+        "/api/ai/discard",
+    ] {
+        let response = api
+            .req("POST", path, Auth::Bearer(&token))
+            .json(&json!({}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 403, "{path}");
+    }
+}
+
+#[test]
+fn definition_writes_require_session_or_non_agent_admin() {
+    let api = Api::start();
+    let write = api.token("writer-definitions", "write");
+    let agent = api.token("agent-definitions", "admin");
+    let paired = expect(
+        api.req("POST", "/api/devices/pair", Auth::None)
+            .json(&json!({"password": testkit::PASSWORD, "name": "Phone", "platform": "android"}))
+            .send()
+            .unwrap(),
+        201,
+    );
+    let device = paired["token"].as_str().unwrap();
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    for auth in [
+        Auth::Bearer(&write),
+        Auth::Bearer(device),
+        Auth::Bearer(&agent),
+    ] {
+        for (method, path) in [
+            ("PUT", "/api/agents/clerk"),
+            ("DELETE", "/api/agents/assistant"),
+            ("PUT", "/api/skills/demo"),
+            ("PUT", "/api/skills/demo/files/tools/run.wcl"),
+            ("DELETE", "/api/skills/demo"),
+            ("DELETE", "/api/skills/demo/files/run.wcl"),
+            ("POST", "/api/skills/import"),
+        ] {
+            let res = api
+                .req(method, path, auth)
+                .body("label = \"Clerk\"\n")
+                .send()
+                .unwrap();
+            assert_eq!(res.status().as_u16(), 403, "{method} {path}");
+        }
+        for kind in ["agent", "skill"] {
+            expect(
+                api.req("POST", "/api/ai/apply", auth)
+                    .json(&json!({"kind": kind}))
+                    .send()
+                    .unwrap(),
+                403,
+            );
+        }
+    }
+    for auth in [api.admin(), Auth::Cookie(&cookie)] {
+        expect(
+            api.req("PUT", "/api/agents/clerk", auth)
+                .json(&json!({"label": "Clerk", "permissions": {"scripts": {"run_code": true}}}))
+                .send()
+                .unwrap(),
+            200,
+        );
+        expect(
+            api.req("DELETE", "/api/agents/clerk", auth).send().unwrap(),
+            200,
+        );
+        expect(
+            api.req("PUT", "/api/skills/demo", auth)
+                .body("---\nname: demo\ndescription: Example\n---\nExample\n")
+                .send()
+                .unwrap(),
+            201,
+        );
+        expect(
+            api.req("DELETE", "/api/skills/demo", auth).send().unwrap(),
+            200,
+        );
+    }
+    // A writer still starts conversations, but it cannot administer definitions.
+    expect(
+        api.req(
+            "POST",
+            "/api/agents/assistant/threads",
+            Auth::Bearer(&write),
+        )
+        .json(&json!({}))
+        .send()
+        .unwrap(),
+        201,
+    );
+    let res = api
+        .req("POST", "/api/ai/chat", Auth::Bearer(&write))
+        .json(&json!({}))
+        .send()
+        .unwrap();
+    assert_ne!(res.status().as_u16(), 403);
+}
+
 fn seed(vault: &Path) {
     std::fs::create_dir_all(vault.join("types")).unwrap();
     std::fs::write(vault.join("types/task.wcl"), TASK_TYPE).unwrap();
@@ -84,6 +398,12 @@ impl Api {
 
     /// Create a token with the admin token and return its secret.
     fn token(&self, name: &str, scope: &str) -> String {
+        if let Some(name) = name.strip_prefix("agent-") {
+            // Legacy admin install codes must remain restricted after upgrade.
+            let state = state::State::open(&self.server.vault_path().join(".vault/state.db"), None).unwrap();
+            let code = state.create_agent_code(name, scope.parse().unwrap(), 60_000).unwrap();
+            return state.redeem_agent_code(&code.code).unwrap().unwrap().1;
+        }
         let res = self
             .req("POST", "/api/tokens", self.admin())
             .json(&json!({ "name": name, "scope": scope }))

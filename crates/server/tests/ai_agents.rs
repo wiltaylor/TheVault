@@ -156,6 +156,12 @@ impl Api {
     }
 
     fn token_of(&self, name: &str, scope: &str) -> String {
+        if let Some(name) = name.strip_prefix("agent-") {
+            // Legacy admin install codes must remain restricted after upgrade.
+            let state = state::State::open(&self.server.vault_path().join(".vault/state.db"), None).unwrap();
+            let code = state.create_agent_code(name, scope.parse().unwrap(), 60_000).unwrap();
+            return state.redeem_agent_code(&code.code).unwrap().unwrap().1;
+        }
         let res = self
             .client
             .post(self.server.url("/api/tokens"))
@@ -591,40 +597,23 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     assert!(api.agent_wcl("helper").is_some());
     assert_eq!(last_result(&fake, false)["applied"], true);
 
-    // A write token's turn, such as an app's, has the agent's own rights (agents G4): the
-    // Assistant may change agents, so the switch off deletes at once.
-    let write = api.token_of("phone", "write");
-    fake.push(AnthropicMessage::new().tool_use(
-        "toolu_d",
-        "propose_agent_delete",
-        json!({ "name": "helper" }),
-    ));
-    fake.push(AnthropicMessage::text("Deleted."));
-    let events = api.chat_as(&write, None);
-    assert!(find(&events, "agent_proposal").is_none(), "{events:?}");
-    assert_eq!(last(&events, "applied")["op"], "agent_delete");
-    assert!(api.agent_wcl("helper").is_none());
-
-    // A read token's turn only proposes, whatever the switch says, and a write token's apply of
-    // a proposal no thread holds is refused.
-    api.put_agent("helper", HELPER);
-    let read = api.token_of("reader", "read");
-    fake.push(AnthropicMessage::new().tool_use(
-        "toolu_r",
-        "propose_agent_delete",
-        json!({ "name": "helper" }),
-    ));
-    fake.push(AnthropicMessage::text("Proposed."));
-    let events = api.chat_as(&read, None);
-    let p = last(&events, "agent_proposal").clone();
-    let (status, body) = api.apply_as(&write, &p);
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"], "needs_admin");
-    assert_eq!(body["message"], "Apply agent changes in the web app.");
-    assert!(api.agent_wcl("helper").is_some());
-
-    // Restore the switch for the rest.
-    api.anthropic(&fake, json!({ "agents": true }));
+    // A write caller cannot inherit the Assistant's admin authority.
+    for (name, scope) in [("phone", "write"), ("agent-chat", "admin")] {
+        let write = api.token_of(name, scope);
+        fake.push(AnthropicMessage::new().tool_use(
+            "toolu_d",
+            "propose_agent_delete",
+            json!({ "name": "helper" }),
+        ));
+        fake.push(AnthropicMessage::text("Proposed."));
+        let events = api.chat_as(&write, None);
+        let p = last(&events, "agent_proposal").clone();
+        assert!(find(&events, "applied").is_none(), "{events:?}");
+        assert!(api.agent_wcl("helper").is_some());
+        let (status, body) = api.apply_as(&write, &p);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "needs_admin");
+    }
 }
 
 #[test]

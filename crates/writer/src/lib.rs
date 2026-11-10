@@ -34,6 +34,7 @@
 //! joins the write in progress, so it commits with it or not at all (D30).
 
 mod activity;
+mod agent_threads;
 mod asset_use;
 mod assets;
 mod batch;
@@ -74,6 +75,7 @@ use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
 pub use activity::{Acting, acting_as};
+pub use agent_threads::AgentThreadRuntime;
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
@@ -232,6 +234,9 @@ pub enum Error {
     /// A request that is malformed in a way the other variants do not cover.
     #[error("{0}")]
     BadRequest(String),
+    /// Agent transcripts are writable only through the dedicated server runtime capability.
+    #[error("Agent threads can only be written through the agent runtime.")]
+    ServerOwnedThread,
     /// Something other than a note that the request names does not exist.
     #[error("{0}")]
     Missing(String),
@@ -964,6 +969,7 @@ impl Writer {
             author,
             Some(archived),
             Some(&own),
+            matches!(author, Author::Session(_)),
         )?;
         // The note existed before; it keeps the time it was first created.
         if let (Some(created), Some(doc)) = (created, change.doc.as_mut()) {
@@ -1023,6 +1029,7 @@ impl Writer {
             author,
             Some(archived),
             None,
+            true,
         )?;
         let check = || self.check_base(id, &type_name, &old, base);
         self.apply(inner, vec![change], &check, author).map(first)
@@ -1050,6 +1057,7 @@ impl Writer {
             author,
             Some(archived),
             None,
+            true,
         )?;
         self.stage(change, author)
     }
@@ -1387,7 +1395,7 @@ impl Writer {
         old: Option<&str>,
         author: &Author,
     ) -> Result<NoteChange> {
-        self.prepare_put_as(inner, id, type_name, doc, old, author, None, None)
+        self.prepare_put_as(inner, id, type_name, doc, old, author, None, None, false)
     }
 
     /// [`Writer::prepare_put`] that sets the note's archived state to `archived`, or keeps the
@@ -1405,7 +1413,11 @@ impl Writer {
         author: &Author,
         archived: Option<bool>,
         computed_from: Option<&Doc>,
+        runtime_thread: bool,
     ) -> Result<NoteChange> {
+        if type_name == "agent_thread" && !runtime_thread {
+            return Err(Error::ServerOwnedThread);
+        }
         let ty = inner
             .schema
             .type_def(type_name)

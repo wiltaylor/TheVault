@@ -16,6 +16,25 @@ use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
+/// Transcripts are server records, not user-editable notes.
+pub(crate) fn writable_type(type_name: &str) -> Result<(), ApiError> {
+    if type_name == crate::agent_threads::THREAD_TYPE {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "server_owned",
+            "Agent threads can only be written through the agent runtime.",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn writable_note(w: &Writer, id: &str) -> Result<(), ApiError> {
+    if let Ok(note) = w.read(id) {
+        writable_type(&note.type_name)?;
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct TypeQuery {
     #[serde(rename = "type")]
@@ -240,6 +259,7 @@ pub async fn create(
         (Some(t), _) | (None, Some(t)) => t,
         (None, None) => return Err(ApiError::bad_request("name the note's type with ?type=")),
     };
+    writable_type(&type_name)?;
     let saved = blocking(w, move |w| w.create(&type_name, &sub.input, &author)).await?;
     Ok(saved_response(StatusCode::CREATED, &headers, saved))
 }
@@ -294,6 +314,7 @@ pub async fn update(
                 return Err(ApiError::bad_request("name the note's type with ?type="));
             }
         };
+        writable_type(&type_name)?;
         let saved = blocking(w, move |w| {
             w.create_with_id(&id, &type_name, &sub.input, &author)
         })
@@ -499,7 +520,21 @@ pub async fn restore_from_trash(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let saved = blocking(w, move |w| w.restore_from_trash(&id, &author)).await?;
+    let saved = blocking(w, move |w| {
+        if !matches!(author, state::Author::Session(_))
+            && w.trash()?
+                .iter()
+                .any(|n| n.note_id == id && n.note_type == crate::agent_threads::THREAD_TYPE)
+        {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "human_only",
+                "Only a signed-in session can restore agent threads.",
+            ));
+        }
+        w.restore_from_trash(&id, &author).map_err(ApiError::from)
+    })
+    .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 
