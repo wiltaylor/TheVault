@@ -405,9 +405,9 @@ fn reviewed_event_rsvp_and_delete_reach_google_through_outbox() {
         ),
     );
     api.settle();
-    let sent = api.one_write_after(1);
-    assert_eq!(sent.method, "DELETE");
-    assert_eq!(sent.id, "standup");
+    let deletes: Vec<_> = api.google.requests().into_iter().filter(|r| r.method == "DELETE").collect();
+    assert_eq!(deletes.len(), 1, "{deletes:?}");
+    assert_eq!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
     assert!(api.gone(&deletion));
 }
 
