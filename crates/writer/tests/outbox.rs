@@ -41,6 +41,72 @@ fn user() -> Author {
 }
 
 #[test]
+fn explicit_send_conditions_check_every_recipient_and_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.put_agent("sender", r#"permissions {
+      outbox {
+        send_without_review = true
+        conditions {
+          recipients = [" ANN@example.com ", "+15551234567"]
+          email = true
+          sms = true
+          daily_cap = 10
+        }
+      }
+    }"#, |_| Vec::new()).unwrap();
+    for extra in [json!({"cc": ["bad@example.com"]}), json!({"bcc": ["bad@example.com"]}), json!({"to": ["bad@example.com"]}), json!({"kind": "event", "attendees_raw": ["ann@example.com"]})] {
+        let mut note = email(extra);
+        note["fields"]["status"] = json!("ready");
+        let id = create(&w, &agent("sender"), note).unwrap();
+        assert_eq!(status(&w, &id), "draft");
+    }
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready", "cc": ["ann@EXAMPLE.com"]}))).unwrap();
+    assert_eq!(status(&w, &id), "ready");
+    let id = create(&w, &agent("sender"), json!({"fields": {"kind": "sms", "title": "SMS", "phone": "+1 (555) 123-4567", "status": "ready"}})).unwrap();
+    assert_eq!(status(&w, &id), "ready");
+}
+
+#[test]
+fn explicit_empty_conditions_fail_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.put_agent("sender", "permissions { outbox { send_without_review = true\n conditions {}\n }\n }", |_| Vec::new()).unwrap();
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &id), "draft");
+}
+
+#[test]
+fn legacy_sender_has_cap_delay_cancellation_and_new_deadline_on_retry() {
+    use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
+    struct Clock(AtomicI64);
+    impl state::Clock for Clock {
+        fn now_ms(&self) -> i64 { self.0.load(Ordering::SeqCst) }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(Clock(AtomicI64::new(1_000_000)));
+    let w = open(dir.path()).with_clock(clock.clone());
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(w.state().outbox_deadline(&id).unwrap(), Some(1_300_000));
+    assert!(edit(&w, &id, &handler(), json!({"status": "sending"})).is_err());
+    edit(&w, &id, &user(), json!({"status": "draft"})).unwrap();
+    clock.0.store(1_060_000, Ordering::SeqCst);
+    edit(&w, &id, &user(), json!({"status": "ready"})).unwrap();
+    assert_eq!(w.state().outbox_deadline(&id).unwrap(), Some(1_360_000));
+    for _ in 0..18 {
+        let item = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+        assert_eq!(status(&w, &item), "ready");
+    }
+    let over = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &over), "draft");
+    clock.0.store(1_360_000, Ordering::SeqCst);
+    edit(&w, &id, &handler(), json!({"status": "sending"})).unwrap();
+    clock.0.store(86_400_000, Ordering::SeqCst);
+    let next = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &next), "ready");
+}
+
+#[test]
 fn gmail_capability_does_not_bypass_calendar_review() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());

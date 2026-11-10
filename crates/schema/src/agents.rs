@@ -312,15 +312,24 @@ pub struct OutboxConditions {
 
 impl Default for OutboxConditions {
     fn default() -> Self {
-        Self { recipients: Vec::new(), email: false, sms: false, event: false,
-            daily_cap: 0, cancel_delay_minutes: 5 }
+        Self {
+            recipients: Vec::new(),
+            email: false,
+            sms: false,
+            event: false,
+            daily_cap: 0,
+            cancel_delay_minutes: 5,
+        }
     }
 }
 
 impl Outbox {
     pub fn limits(&self) -> OutboxConditions {
         self.conditions.clone().unwrap_or(OutboxConditions {
-            email: true, sms: true, event: true, daily_cap: 20,
+            email: true,
+            sms: true,
+            event: true,
+            daily_cap: 20,
             ..OutboxConditions::default()
         })
     }
@@ -865,10 +874,20 @@ impl Agent {
                     out.push_str("    conditions {\n");
                     field(&mut out, "      ", "recipients", &list(&c.recipients));
                     for (name, value) in [("email", c.email), ("sms", c.sms), ("event", c.event)] {
-                        field(&mut out, "      ", name, if value { "true" } else { "false" });
+                        field(
+                            &mut out,
+                            "      ",
+                            name,
+                            if value { "true" } else { "false" },
+                        );
                     }
                     field(&mut out, "      ", "daily_cap", &c.daily_cap.to_string());
-                    field(&mut out, "      ", "cancel_delay_minutes", &c.cancel_delay_minutes.to_string());
+                    field(
+                        &mut out,
+                        "      ",
+                        "cancel_delay_minutes",
+                        &c.cancel_delay_minutes.to_string(),
+                    );
                     out.push_str("    }\n");
                 }
                 out.push_str("  }\n");
@@ -1164,30 +1183,62 @@ impl Reader<'_> {
                 self.c.only_blocks(&b.body, &["conditions"], &at);
                 for block in &b.body.blocks {
                     if p.outbox.conditions.is_some() || !block.labels.is_empty() {
-                        self.c.fail(&at, "conditions must appear once without labels");
+                        self.c
+                            .fail(&at, "conditions must appear once without labels");
                     }
                     let d = &block.body;
                     let ca = "permissions.outbox.conditions";
                     self.c.only_blocks(d, &[], ca);
-                    self.known(d, &["recipients", "email", "sms", "event", "daily_cap", "cancel_delay_minutes"], &format!("{ca}."), "unknown send condition");
+                    self.known(
+                        d,
+                        &[
+                            "recipients",
+                            "email",
+                            "sms",
+                            "event",
+                            "daily_cap",
+                            "cancel_delay_minutes",
+                        ],
+                        &format!("{ca}."),
+                        "unknown send condition",
+                    );
                     let mut c = OutboxConditions::default();
                     if let Some(v) = d.field("recipients") {
                         match v {
-                            Value::List(items) if items.iter().all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())) => {
-                                c.recipients = items.iter().map(|v| v.as_str().unwrap().trim().to_owned()).collect();
+                            Value::List(items)
+                                if items
+                                    .iter()
+                                    .all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty())) =>
+                            {
+                                c.recipients = items
+                                    .iter()
+                                    .map(|v| v.as_str().unwrap().trim().to_owned())
+                                    .collect();
                             }
-                            _ => self.c.fail(ca, "recipients must be a list of addresses or E.164 numbers"),
+                            _ => self.c.fail(
+                                ca,
+                                "recipients must be a list of addresses or E.164 numbers",
+                            ),
                         }
                     }
-                    for (name, slot) in [("email", &mut c.email), ("sms", &mut c.sms), ("event", &mut c.event)] {
+                    for (name, slot) in [
+                        ("email", &mut c.email),
+                        ("sms", &mut c.sms),
+                        ("event", &mut c.event),
+                    ] {
                         match d.field(name) {
-                            None => {}, Some(Value::Bool(v)) => *slot = *v,
+                            None => {}
+                            Some(Value::Bool(v)) => *slot = *v,
                             _ => self.c.fail(ca, "kind controls must be booleans"),
                         }
                     }
-                    for (name, slot, min, max) in [("daily_cap", &mut c.daily_cap, 0, 10000), ("cancel_delay_minutes", &mut c.cancel_delay_minutes, 1, 1440)] {
+                    for (name, slot, min, max) in [
+                        ("daily_cap", &mut c.daily_cap, 0, 10000),
+                        ("cancel_delay_minutes", &mut c.cancel_delay_minutes, 1, 1440),
+                    ] {
                         match d.field(name) {
-                            None => {}, Some(Value::Int(v)) if (min..=max).contains(v) => *slot = *v,
+                            None => {}
+                            Some(Value::Int(v)) if (min..=max).contains(v) => *slot = *v,
                             _ => self.c.fail(ca, format!("{name} must be {min}..{max}")),
                         }
                     }

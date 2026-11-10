@@ -420,7 +420,11 @@ fn create(w: &Writer, agent: &Agent, d: Drafted) -> ToolOut {
         }
     };
     let actual = Input::Wcl(saved.wcl.clone()).parse("outbox").ok();
-    let status = actual.as_ref().and_then(|d| d.field("status")).and_then(schema::Value::as_str).unwrap_or("draft");
+    let status = actual
+        .as_ref()
+        .and_then(|d| d.field("status"))
+        .and_then(schema::Value::as_str)
+        .unwrap_or("draft");
     let bypass = status == "ready";
     let what = match d.kind {
         "email" => "email",
