@@ -9,6 +9,7 @@
 mod activity;
 mod agent_calls;
 mod agent_runs;
+mod agent_queue;
 mod auth;
 mod changes;
 mod classifiers;
@@ -43,6 +44,7 @@ pub use activity::{
 };
 pub use agent_calls::AgentCall;
 pub use agent_runs::{AgentRun, AgentRunId, AgentRunOutcome};
+pub use agent_queue::{TriggerJob, TriggerQueueStats, TRIGGER_QUEUE_CAP};
 pub use auth::{AgentCode, Scope, TokenInfo};
 pub use changes::{ChangeKey, ChangePage, Journaled};
 pub use commands::{
@@ -166,7 +168,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -604,7 +606,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=19 => {
+        0..=20 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -675,6 +677,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 19 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_call_ids (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, principal TEXT NOT NULL, expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS agent_call_refusals (call TEXT NOT NULL, note TEXT NOT NULL, agent TEXT NOT NULL, created_ms INTEGER NOT NULL, PRIMARY KEY(call,note));")?;
+            }
+            if version <= 20 {
+                tx.execute_batch(agent_queue::SCHEMA)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

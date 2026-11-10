@@ -175,6 +175,31 @@ function RunList(props: { agent: string; runs: AgentRun[] | undefined; loading: 
 }
 
 /** The Triggers tab. */
+function Backfill(props: { agent: string; trigger: string; refresh: () => void }) {
+  const [limit, setLimit] = createSignal(100);
+  const [preview, setPreview] = createSignal<{ count: number; selected: number; preview: string } | null>(null);
+  const [message, setMessage] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  async function run(confirm: boolean) {
+    setBusy(true);
+    try {
+      const result = await api.triggerBackfill(props.agent, props.trigger,
+        confirm && preview() ? { preview: preview()!.preview } : { limit: limit() });
+      if (confirm) { setMessage(`${result.queued} jobs queued.`); setPreview(null); props.refresh(); }
+      else { setPreview(result); setMessage(""); }
+    } catch (e) { setMessage(errorText(e)); }
+    finally { setBusy(false); }
+  }
+  return <div>
+    <label>Backfill newest notes <input type="number" min="1" max="1000" value={limit()}
+      onInput={(e) => { setLimit(e.currentTarget.valueAsNumber); setPreview(null); }} /></label>
+    <button type="button" disabled={busy()} onClick={() => void run(false)}>Count matching notes</button>
+    <Show when={preview()}>{(p) => <p>{p().count} matching notes have no trigger record. Run on the newest {p().selected}?
+      <button type="button" disabled={busy()} onClick={() => void run(true)}>Confirm backfill</button></p>}</Show>
+    <p role="status">{message()}</p>
+  </div>;
+}
+
 export function TriggersTab(p: AgentTabProps) {
   const [runs, { refetch }] = createResource(
     () => ({ name: p.agent.name, wcl: p.agent.wcl }),
@@ -232,6 +257,7 @@ export function TriggersTab(p: AgentTabProps) {
 
   return (
     <section class="agent-tab" aria-label="Triggers">
+      <Show when={runs()?.ok?.queue}>{(q) => <p role="status">Queue: {q().waiting} waiting, {q().failed} failed, {q().expired} expired, {q().dropped} dropped.</p>}</Show>
       <p class="muted">
         A trigger runs {p.agent.label || p.agent.name} on its own: on a schedule, when notes change, or when a note calls
         it. Each run starts a new thread whose first message is the trigger's prompt. A note change made by an agent
@@ -408,6 +434,9 @@ export function TriggersTab(p: AgentTabProps) {
                 </button>
               </div>
               <RunList agent={p.agent.name} runs={runsOf(t().name)} loading={runs.loading} />
+              <Show when={t().kind === "event" && !p.dirty}>
+                <Backfill agent={p.agent.name} trigger={t().name} refresh={() => void refetch()} />
+              </Show>
             </fieldset>
           )}
         </Index>
