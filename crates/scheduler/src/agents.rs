@@ -221,7 +221,34 @@ enum Admitted {
     Refused,
 }
 
+#[cfg(test)]
+mod persistence_retry_tests {
+    use super::*;
+
+    #[test]
+    fn persistence_retry_buffer_is_capped_and_discards_oldest() {
+        let mut plan = AgentPlan::default();
+        for i in 0..=state::TRIGGER_QUEUE_CAP {
+            plan.retry_persistence(AgentJob {
+                op: Some("create".to_owned()), durable: None, note: Some((i.to_string(), "memo".to_owned())),
+                agent: "clerk".to_owned(), trigger: "opened".to_owned(), prompt: i.to_string(),
+                title: String::new(), thread: None, origin: None,
+            });
+        }
+        assert_eq!(plan.persist_retry.len(), 10_000);
+        assert_eq!(plan.persist_retry.first().unwrap().prompt, "1");
+        assert_eq!(plan.persist_retry.last().unwrap().prompt, "10000");
+    }
+}
+
 impl AgentPlan {
+    fn retry_persistence(&mut self, job: AgentJob) {
+        if self.persist_retry.len() >= state::TRIGGER_QUEUE_CAP as usize {
+            let oldest = self.persist_retry.remove(0);
+            eprintln!("trigger persistence retry buffer full: discarding oldest in-memory retry for agent {:?}, trigger {:?}; durable event remains unacknowledged", oldest.agent, oldest.trigger);
+        }
+        self.persist_retry.push(job);
+    }
     /// Take the agents as read now. A schedule that did not change keeps its next firing; a new
     /// or changed one fires next at the first time after `now`.
     fn set_agents(&mut self, agents: Vec<Agent>, now: i64) {
@@ -751,7 +778,7 @@ impl Scheduler {
                 if let Some((id, _)) = &job.note {
                     failed_notes.push(id.clone());
                 }
-                self.plan().agents.persist_retry.push(job);
+                self.plan().agents.retry_persistence(job);
             }
         }
         for note in processed {

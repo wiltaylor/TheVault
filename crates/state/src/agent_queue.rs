@@ -399,7 +399,7 @@ pub struct TriggerQueueStats {
 }
 
 fn prune_terminal(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute("DELETE FROM trigger_jobs WHERE status IN ('succeeded','failed','expired','cancelled') AND (note IS NULL OR id NOT IN (SELECT max(id) FROM trigger_jobs WHERE note IS NOT NULL AND status IN ('succeeded','failed','expired','cancelled') GROUP BY agent,trigger,note))", [])?;
+    conn.execute("DELETE FROM trigger_jobs WHERE status IN ('succeeded','failed','expired','cancelled') AND (note IS NULL OR (id NOT IN (SELECT max(id) FROM trigger_jobs WHERE note IS NOT NULL AND status IN ('succeeded','failed','expired','cancelled') GROUP BY agent,trigger,note) AND id NOT IN (SELECT max(id) FROM trigger_jobs WHERE note IS NOT NULL AND status='succeeded' GROUP BY agent,trigger,note)))", [])?;
     Ok(())
 }
 
@@ -604,10 +604,18 @@ impl State {
         let conn = self.conn();
         conn.execute("UPDATE trigger_jobs SET status='expired',message='wait exceeded seven days' WHERE id=?1 AND status='admitted' AND queued_ms<=?2", params![id,now-WEEK])?;
         prune_terminal(&conn)?;
-        Ok(conn.execute(
-            "UPDATE trigger_jobs SET status='running' WHERE id=?1 AND status='admitted'",
+        let started = conn.execute(
+            "UPDATE trigger_jobs SET status='running' WHERE id=?1 AND status='admitted' AND NOT EXISTS (SELECT 1 FROM trigger_jobs other WHERE other.status='running' AND other.agent=trigger_jobs.agent AND other.note=trigger_jobs.note)",
             [id],
-        )? == 1)
+        )? == 1;
+        if !started {
+            let waits: Option<u32> = conn.query_row("SELECT waits FROM trigger_jobs WHERE id=?1 AND status='admitted'", [id], |r| r.get(0)).optional()?;
+            if let Some(waits) = waits {
+                let delay = (30_000_i64 * (1_i64 << waits.min(5))).min(900_000);
+                conn.execute("UPDATE trigger_jobs SET status='waiting', due_ms=?2, waits=waits+1 WHERE id=?1 AND status='admitted'", params![id,now+delay])?;
+            }
+        }
+        Ok(started)
     }
 
     pub fn finish_trigger_job(&self, id: i64, status: &str, message: Option<&str>) -> Result<()> {

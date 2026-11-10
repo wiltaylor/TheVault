@@ -500,6 +500,33 @@ fn an_agent_runs_at_most_two_at_once_and_queues_the_rest() {
 }
 
 #[test]
+fn edits_during_a_run_wait_for_that_agent_note_before_running_once() {
+    let r = Rig::new();
+    r.agent("watcher", WATCHER);
+    let id = r.create("memo", "Roof", "open", &user());
+    r.fake.hold.store(true, Ordering::SeqCst);
+    let second_tick_returned = thread::scope(|s| {
+        s.spawn(|| r.advance(31));
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        while r.fake.running.load(Ordering::SeqCst) == 0 {
+            if std::time::Instant::now() >= until { r.fake.hold.store(false, Ordering::SeqCst); panic!("first job did not start"); }
+            thread::sleep(Duration::from_millis(5));
+        }
+        r.set_status(&id, "open", &user());
+        let (tx,rx) = mpsc::channel();
+        s.spawn(|| { r.advance(31); tx.send(()).unwrap(); });
+        let returned = rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        r.fake.hold.store(false, Ordering::SeqCst);
+        returned
+    });
+    assert!(second_tick_returned, "same-note job must defer instead of entering the held runner");
+    assert_eq!(r.fake.most.load(Ordering::SeqCst), 1);
+    r.advance(31);
+    assert_eq!(r.fake.turns().len(), 2);
+    assert_eq!(r.fake.most.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn an_agent_starts_at_most_sixty_runs_an_hour_and_retries_the_overflow() {
     let r = Rig::new();
     r.agent("any", ANY);
