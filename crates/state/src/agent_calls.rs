@@ -34,6 +34,19 @@ impl State {
         Ok(())
     }
 
+    /// The persisted issuance boundary and principal for a note's reserved call.
+    pub fn agent_call_issuance(
+        &self,
+        call: &str,
+        note: &str,
+        agent: &str,
+    ) -> Result<Option<(i64, String)>> {
+        Ok(self.conn().query_row(
+            "SELECT expires_ms - 86400000, principal FROM agent_call_ids WHERE call=?1 AND note=?2 AND agent=?3",
+            params![call, note, agent], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?)
+    }
+
     /// Atomically consume an unused capability bound to this note and agent.
     pub fn consume_agent_call(
         &self,

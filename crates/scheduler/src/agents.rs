@@ -745,6 +745,7 @@ impl Scheduler {
                 continue;
             }
             if matches!(version.author, Author::Agent(_))
+                || !self.call_versions_trusted(id, &call.call, &call.agent)
                 || !state
                     .consume_agent_call(&call.call, id, &call.agent, &version.author)
                     .unwrap_or(false)
@@ -856,6 +857,34 @@ impl Scheduler {
             }
         }
         admits
+    }
+
+    /// A later issuer save cannot launder an earlier foreign write. Use persisted
+    /// history rather than pending scans, which are coalesced and lost on restart.
+    fn call_versions_trusted(&self, note: &str, call: &str, agent: &str) -> bool {
+        let state = self.writer.state();
+        let Ok(Some((issued_ms, principal))) = state.agent_call_issuance(call, note, agent) else {
+            return false;
+        };
+        let Ok(versions) = state.history(note) else {
+            return false;
+        };
+        for version in versions.into_iter().filter(|v| v.at_ms >= issued_ms) {
+            let (kind, name) = version.author.parts();
+            if format!("{kind}:{name}") == principal {
+                continue;
+            }
+            let Ok(doc) = schema::Doc::parse(&version.content, note) else {
+                return false;
+            };
+            if mentions::calls(&doc)
+                .iter()
+                .any(|found| found.call.call == call)
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// Run notes sent to `agent` (TV-77 D1): open a thread of origin [`DISPATCH_ORIGIN`] about

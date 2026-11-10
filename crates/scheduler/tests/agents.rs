@@ -1080,11 +1080,16 @@ fn coalesced_hijack_is_refused(by: Author) {
     r.fake.hold.store(true, Ordering::SeqCst);
     let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
     for i in 0..room {
-        r.scheduler.dispatch("clerk", &[], &format!("Run {i}"), "Go.").unwrap();
+        r.scheduler
+            .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+            .unwrap();
     }
     let text = call("@Clerk owner's request", "clerk", CALL);
     let id = r.note("memo", "Pending", &[&text], &user());
-    r.writer.state().issue_agent_call(CALL, &id, "clerk", "session:owner").unwrap();
+    r.writer
+        .state()
+        .issue_agent_call(CALL, &id, "clerk", "session:owner")
+        .unwrap();
     r.advance(1);
     assert!(r.writer.state().agent_call(CALL).unwrap().is_none());
     r.fake.hold.store(false, Ordering::SeqCst);
@@ -1093,7 +1098,11 @@ fn coalesced_hijack_is_refused(by: Author) {
     r.save(&id, "Hijacked", &[&substituted], &by);
     r.save(&id, "Owner typo fix", &[&substituted], &user());
     r.advance(1);
-    assert_eq!(r.fake.turns().len(), room, "{by:?} followed by owner save must not authorize the substituted request");
+    assert_eq!(
+        r.fake.turns().len(),
+        room,
+        "{by:?} followed by owner save must not authorize the substituted request"
+    );
 }
 
 #[test]

@@ -540,13 +540,41 @@ fn restoring_a_token_version_cannot_launder_an_issued_call() {
         .send().unwrap().error_for_status().unwrap().json().unwrap();
     api.save(&id, "Owner removes text", &[]);
     let head = api.get(&format!("/api/notes/{id}"))["version"].clone();
-    api.send("POST", &format!("/api/notes/{id}/restore"), json!({
-        "version": changed["version"], "base_version": head
-    }));
+    api.send(
+        "POST",
+        &format!("/api/notes/{id}/restore"),
+        json!({
+            "version": changed["version"], "base_version": head
+        }),
+    );
     fake.push(AnthropicMessage::text("Must not run."));
     api.advance("PT1S");
-    assert!(fake.message_requests().is_empty(), "restoring an untrusted version must not authorize its call");
+    assert!(
+        fake.message_requests().is_empty(),
+        "restoring an untrusted version must not authorize its call"
+    );
     assert!(api.threads("helper").is_empty());
+}
+
+#[test]
+fn restart_does_not_forget_a_foreign_version_that_carried_the_call() {
+    let fake = FakeAnthropic::start();
+    let mut api = Api::start(&fake);
+    api.agent("helper", "label = \"Helper\"\n");
+    let (id, asked, issued) = api.called_note("Pending", "@Helper owner request", "helper", &[]);
+    let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
+    let substituted = call("@Helper attacker request", "helper", &issued);
+    api.client.put(api.server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(api.server.admin_token())
+        .json(&json!({ "base_version": version, "note": note_json("Token version", &[&substituted]) }))
+        .send().unwrap().error_for_status().unwrap();
+    api.server.restart();
+    // Even putting back the owner's original request must not erase the foreign delivery.
+    api.save(&id, "Owner after restart", &[&asked]);
+    fake.push(AnthropicMessage::text("Must not run."));
+    api.advance("PT1S");
+    assert!(fake.message_requests().is_empty());
+    assert!(api.get(&format!("/api/agents/calls/{issued}"))["thread"].is_null());
 }
 
 #[test]
