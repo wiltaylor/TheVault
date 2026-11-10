@@ -166,7 +166,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -604,7 +604,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=22 => {
+        0..=23 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -676,6 +676,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             if version <= 19 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_call_ids (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, principal TEXT NOT NULL, expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS agent_call_refusals (call TEXT NOT NULL, note TEXT NOT NULL, agent TEXT NOT NULL, created_ms INTEGER NOT NULL, PRIMARY KEY(call,note));")?;
             }
+            if version <= 23 {
             let has_token_kind: bool = tx.query_row(
                 "SELECT EXISTS (SELECT 1 FROM pragma_table_info('tokens') WHERE name = 'kind')",
                 [],
@@ -683,6 +684,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             )?;
             if !has_token_kind {
                 tx.execute_batch("ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','device','agent')); UPDATE tokens SET kind = CASE WHEN substr(name,1,6) = 'agent-' THEN 'agent' WHEN substr(name,1,7) = 'device-' THEN 'device' ELSE 'user' END;")?;
+            }
             }
             if version <= 21 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);

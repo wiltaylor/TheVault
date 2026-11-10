@@ -128,7 +128,7 @@ pub struct GrantedScope(pub Scope);
 
 /// Agent-kind credentials become Agent authors at authentication, never by token name.
 pub(crate) fn is_agent_token(author: &Author) -> bool {
-    matches!(author, Author::Agent(_))
+    matches!(author, Author::Agent(name) if name.starts_with("agent-"))
 }
 
 /// Whether `path` is `/api/devices/{id}/push`, `/api/devices/{id}/bases` or
@@ -433,10 +433,8 @@ pub async fn authenticate(
                 path,
                 "/api/tokens" | "/api/agent-codes" | "/api/devices/pair-codes"
             ))
-        || (*req.method() == Method::PUT && path == "/api/integrations/ai/settings")
         || (!matches!(*req.method(), Method::GET | Method::HEAD)
-            && (path == "/api/integrations/gitsync"
-                || path.starts_with("/api/integrations/gitsync/")));
+            && (path == "/api/integrations" || path.starts_with("/api/integrations/")));
     if !granted.scope.allows(needed) || (agent_admin_route && is_agent_token(&granted.author)) {
         return ApiError::new(
             StatusCode::FORBIDDEN,

@@ -479,3 +479,39 @@ fn p10_legacy_admin_agent_token_cannot_change_ai_accounts() {
     ];
     assert!(statuses.iter().all(|status| status.as_u16() == 403), "{statuses:?}");
 }
+
+#[test]
+fn legacy_reserved_agent_files_warn_at_startup_and_in_settings_data() {
+    let server = TestServer::start_seeded(|vault| {
+        std::fs::create_dir_all(vault.join("agents")).unwrap();
+        for name in ["user", "agent-old", "device-old", "ordinary"] {
+            std::fs::write(vault.join(format!("agents/{name}.wcl")), "label = \"Legacy\"\n").unwrap();
+        }
+    });
+    let admin = client(server.admin_token());
+    let (s, list) = body(admin.get(server.url("/api/agents")).send().unwrap());
+    assert_eq!(s, 200);
+    let warnings = list["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 3);
+    let lines = server.stderr_lines();
+    for name in ["user", "agent-old", "device-old"] {
+        assert_eq!(warnings.iter().filter(|w| w.as_str().unwrap().contains(&format!("Agent {name:?} "))).count(), 1);
+        assert_eq!(lines.iter().filter(|line| line.contains(&format!("warning: agent {name:?} "))).count(), 1);
+    }
+    for name in ["Agent-ops", "DEVICE-x"] {
+        assert_eq!(admin.post(server.url("/api/tokens")).json(&json!({ "name": name, "scope": "write" })).send().unwrap().status(), 400);
+    }
+}
+
+#[test]
+fn agent_integration_guard_covers_methods_paths_and_future_routes() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let agent = install(&server, &admin, "cli", "admin");
+    for path in ["/api/integrations", "/api/integrations/future", "/api/integrations/ai/accounts?x=1", "/api/integrations/ai/accounts/", "/api/integrations/%61i/accounts"] {
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            let res = agent.request(method.parse().unwrap(), server.url(path)).json(&json!({})).send().unwrap();
+            assert_eq!(res.status(), 403, "{method} {path}");
+        }
+    }
+}

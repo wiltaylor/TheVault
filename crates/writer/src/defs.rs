@@ -819,6 +819,17 @@ impl Writer {
 
     // ---- agents ---------------------------------------------------------------------------
 
+    /// Existing files whose names collide with reserved Outbox identities, including names
+    /// too old or invalid to appear in the normal agent list.
+    pub fn reserved_agent_names(&self) -> Result<Vec<String>> {
+        let mut names: Vec<_> = self.definitions("agents")?.into_iter()
+            .map(|(name, _)| name)
+            .filter(|name| name == "user" || name.starts_with("agent-") || name.starts_with("device-"))
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
     /// Every `agents/<name>.wcl` with a valid name, parsed, sorted by name. A file that does not
     /// parse is listed with its problems.
     pub fn agents(&self) -> Result<Vec<(String, std::result::Result<Agent, Invalid>)>> {

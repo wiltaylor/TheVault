@@ -13,8 +13,8 @@ const NOTE_B: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[test]
-fn token_kinds_migrate_from_19_20_and_22_without_losing_credentials() {
-    for version in [19, 20, 22] {
+fn token_kinds_migrate_from_19_20_22_and_23_without_losing_credentials() {
+    for version in [19, 20, 22, 23] {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("state.db");
         let state = State::open(&path, None).unwrap();
@@ -1316,7 +1316,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 23);
+    assert_eq!(version, 24);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.
