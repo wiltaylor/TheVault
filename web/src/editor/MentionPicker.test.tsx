@@ -120,6 +120,24 @@ describe("the @ picker", () => {
     r.unmount();
   });
 
+  it("shows the server refusal without committing a call and lets the request be retried", async () => {
+    vi.mocked(api.issueAgentCall).mockRejectedValueOnce(new ApiError(400, {
+      error: "invalid", message: "this agent cannot be called from this note",
+    }));
+    const r = mount([{ kind: "paragraph", fields: { text: "" } }]);
+    const box = await ask(r);
+    fireEvent.input(box, { target: { value: "tidy this" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await r.findByText("this agent cannot be called from this note")).toBeVisible();
+    expect(box.value).toBe("tidy this");
+    expect(JSON.stringify(r.onChange.mock.calls)).not.toContain("agent:");
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(r.queryByTestId("mention-picker")).toBeNull());
+    expect(api.issueAgentCall).toHaveBeenCalledTimes(2);
+    expect((r.onChange.mock.lastCall![0] as Block[])[0]!.fields!.text).toMatch(CALL_TEXT);
+    r.unmount();
+  });
+
   it("keeps the request and explains the connection requirement when issuance fails", async () => {
     vi.mocked(api.issueAgentCall).mockRejectedValue(new Error("offline"));
     const r = mount([{ kind: "paragraph", fields: { text: "" } }]);

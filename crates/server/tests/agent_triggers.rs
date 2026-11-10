@@ -846,6 +846,236 @@ trigger opened {
 "#;
 
 #[test]
+fn burst_over_the_hourly_limit_eventually_runs_every_note_once() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    for i in 0..65 {
+        fake.push(AnthropicMessage::text("Done."));
+        api.memo(&format!("Memo {i}"), "open");
+    }
+    api.advance("PT31S");
+    api.advance("PT1H");
+    assert_eq!(
+        fake.message_requests().len(),
+        65,
+        "overflow must survive until capacity returns"
+    );
+    api.advance("PT1H");
+    assert_eq!(fake.message_requests().len(), 65, "no duplicate runs");
+}
+
+#[test]
+fn a_debouncing_event_survives_a_server_restart() {
+    let fake = FakeAnthropic::start();
+    let mut api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    let (id, _) = api.memo("Before restart", "open");
+    api.server.restart();
+    fake.push(AnthropicMessage::text("Done."));
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 1);
+    assert!(first_user_text(&fake, 0).contains(&id));
+    api.advance("PT1H");
+    assert_eq!(fake.message_requests().len(), 1);
+}
+
+#[test]
+fn a_provider_failure_gets_three_retries_then_stays_failed() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    for _ in 0..4 {
+        fake.push(AnthropicReply::error(
+            400,
+            "invalid_request_error",
+            "No credit",
+        ));
+    }
+    api.memo("Fail", "open");
+    for by in ["PT31S", "PT30S", "PT60S", "PT120S"] {
+        api.advance(by);
+    }
+    assert_eq!(fake.message_requests().len(), 4);
+    assert_eq!(api.runs("clerk")["queue"]["failed"], 1);
+    api.advance("PT1H");
+    assert_eq!(fake.message_requests().len(), 4);
+}
+
+#[test]
+fn review_f1_a_failure_after_a_tool_call_never_replays_the_change() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    for _ in 0..4 {
+        fake.push(AnthropicMessage::new().tool_use("toolu_create", "propose_create", json!({
+            "type": "memo", "note": json!({"fields":{"title":"Side effect", "status":"closed"}}).to_string()
+        })));
+        fake.push(AnthropicReply::error(
+            400,
+            "invalid_request_error",
+            "No credit",
+        ));
+    }
+    api.memo("Trigger", "open");
+    for by in ["PT31S", "PT30S", "PT60S", "PT120S"] {
+        api.advance(by);
+    }
+    assert_eq!(
+        fake.message_requests().len(),
+        2,
+        "a partial turn must not be replayed"
+    );
+    let notes = api.get("/api/notes?type=memo");
+    assert_eq!(
+        notes["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["title"] == "Side effect")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn backfill_requires_a_session_and_a_preview_and_skips_records_and_nonmatches() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let (older, _) = api.memo("Older", "open");
+    let (newest, _) = api.memo("Newest", "open");
+    api.memo("Closed", "closed");
+    api.advance("PT31S");
+    api.agent("clerk", CLERK);
+    let path = "/api/agents/clerk/triggers/opened/backfill";
+    let denied = api.request("POST", path, Some(json!({"limit": 1})));
+    assert_eq!(denied.status(), 403);
+    let token = api.send(
+        "POST",
+        "/api/tokens",
+        json!({"name": "agent-clerk", "scope": "write"}),
+    );
+    let denied = api
+        .client
+        .post(api.server.url(path))
+        .bearer_auth(token["secret"].as_str().unwrap())
+        .json(&json!({"limit": 1}))
+        .send()
+        .unwrap();
+    assert_eq!(denied.status(), 403, "agent tokens cannot backfill");
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    assert!(login.status().is_success());
+    let cookie = login.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let post = |body: Value| {
+        api.client
+            .post(api.server.url(path))
+            .header(reqwest::header::COOKIE, &cookie)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+    let invalid = post(json!({"preview": "not-issued"}));
+    assert_eq!(invalid.status(), 400);
+    let preview: Value = post(json!({"limit": 1}))
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(preview["count"], 2);
+    assert_eq!(preview["selected"], 1);
+    fake.push(AnthropicMessage::text("Done."));
+    let confirmed: Value = post(json!({"preview": preview["preview"]}))
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(confirmed["queued"], 1);
+    assert_eq!(post(json!({"preview": preview["preview"]})).status(), 400);
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 1);
+    assert!(first_user_text(&fake, 0).contains(&newest));
+    assert!(!first_user_text(&fake, 0).contains(&older));
+    let preview: Value = post(json!({"limit": 1000}))
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        preview["count"], 1,
+        "a queued or completed note has a record"
+    );
+}
+
+#[test]
+fn review_f6_backfill_preview_keeps_success_after_a_failing_edit_run() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    let (id, _) = api.memo("Roof", "open");
+    fake.push(AnthropicMessage::text("Done."));
+    api.advance("PT31S");
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    assert!(login.status().is_success());
+    let cookie = login.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let preview = || {
+        api.client
+            .post(api.server.url("/api/agents/clerk/triggers/opened/backfill"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .json(&json!({"limit":100}))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .unwrap()
+    };
+    assert_eq!(preview()["count"], 0);
+    let note = api.get(&format!("/api/notes/{id}"));
+    api.send("PUT", &format!("/api/notes/{id}"), json!({"base_version":note["version"], "note":{"fields":{"title":"Roof changed", "status":"open"}}}));
+    for _ in 0..4 {
+        fake.push(AnthropicReply::error(
+            400,
+            "invalid_request_error",
+            "No credit",
+        ));
+    }
+    for by in ["PT31S", "PT30S", "PT60S", "PT120S"] {
+        api.advance(by);
+    }
+    assert_eq!(
+        api.runs("clerk")["triggers"][0]["runs"][0]["outcome"],
+        "failed"
+    );
+    assert_eq!(
+        preview()["count"],
+        0,
+        "later failure must not erase the successful note record"
+    );
+}
+
+#[test]
 fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
