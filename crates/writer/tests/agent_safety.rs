@@ -400,6 +400,34 @@ fn round3_omission_count_is_scoped_to_the_query() {
 }
 
 #[test]
+fn round3_conversion_preserves_pending_and_cleared_same_message_only() {
+    for pending in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let w = open(dir.path());
+        w.activate_agent_safety().unwrap();
+        let body = |text: &str| Input::Json(serde_json::json!({"fields":{"title":"Same message", "gmail_ref":"immutable-id"},"blocks":[{"kind":"content","labels":["body"],"blocks":[{"kind":"paragraph","fields":{"text":text}}]}]}));
+        let note = w.create("email", &body("Image placeholder"), &Author::Task("google_gmail".into())).unwrap();
+        let old = w.agent_safety(&note.id).unwrap().fingerprint;
+        if pending {
+            let n = w.read(&note.id).unwrap();
+            w.register_agent_safety(&note.id, "email", &n.doc).unwrap();
+        } else {
+            w.finish_agent_safety(&note.id, &old, "allowed", "allow").unwrap();
+        }
+        let converted = w.update(&note.id, &body("Completed image rendering"), Some(&note.version), &Author::Task("google_gmail".into())).unwrap();
+        if pending {
+            assert_eq!(w.agent_safety(&note.id).unwrap().status, "pending");
+            assert!(w.finish_agent_safety(&note.id, &old, "allowed", "allow").unwrap());
+        }
+        assert!(w.agent_may_read(&note.id));
+        assert!(!w.release_agent_safety(&note.id, &old, &Author::Session("owner".into())).unwrap());
+        w.update(&note.id, &body("Untrusted content edit"), Some(&converted.version), &Author::Session("owner".into())).unwrap();
+        assert!(!w.agent_may_read(&note.id));
+        assert!(!w.finish_agent_safety(&note.id, &old, "allowed", "allow").unwrap());
+    }
+}
+
+#[test]
 fn round3_derived_email_thread_title_is_held_with_first_message() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();

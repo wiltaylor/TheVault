@@ -2915,6 +2915,13 @@ Its `reason` choice writes `agent_safety_reason`. The `withhold` list defaults t
 not withheld unless the user adds them to that list. A classification is not proof of safety.
 The deterministic communication/script/calendar restrictions remain independent.
 
+Derived `email_thread` and `conversation` notes also receive one decision for their own
+title/content. This costs **one extra decision per new thread**, not per later message.
+They remain held until that decision allows them and their first committed member is clear.
+The server pins that member in state. A session release overrides both holds. Later edits
+invalidate the relevant verdict. Contact-derived conversation names therefore cannot borrow
+a message verdict that never reviewed the name.
+
 Pending, missing, invalid, failed and timed-out decisions withhold the note from agents, not
 the user. The request timeout is 30 seconds, with one attempt and no automatic retry. The
 existing durable pending queue resumes queued work after restart, not an interrupted call.
@@ -2922,6 +2929,13 @@ No valid definition or a lost dispatch leaves the note held. The decision is ser
 and bound to a fingerprint of the content. Editable classification fields cannot clear it.
 Content changes invalidate clearance with reason `content_changed`, without automatic
 reclassification. Routine labels/processed writes preserve clearance. A pending provider
+result also survives same-message image completion/reconversion by the trusted `google_gmail`
+task. The Gmail id must be unchanged, as must all projected content except body, HTML asset
+identity and attachments. Gmail message ids identify immutable original messages. Only that
+server task can carry the verdict to the new rendering fingerprint, including a pending
+verdict. Ordinary session, agent and other-task content edits still invalidate it. User release
+always requires the current fingerprint, never a conversion alias. The task's code is trusted
+server code, not a note-supplied conversion flag. A pending provider
 result cannot undo a user release. Unqueued notes and interrupted attempts recovered at
 startup show held/`unclassified`, not a perpetually polling pending state. Payloads larger
 than 128 KiB of serialized projected state are held as `too_large`, with no provider call.
@@ -2940,7 +2954,9 @@ replay. Mentions and subsequent releases do not replay an arrival.
 
 An indexed server-state held-ID set is maintained on note commits and verdicts. Agent
 queries use this set without reading/hashing every vault file or taking the writer lock.
-Read tools report a fixed count of held notes so omission is visible. On devices the gate
+Read tools report the count omitted by that query or backlink call, not the vault-wide total.
+The SQL planner applies exclusions before pagination. Normal startup and the held inventory
+use cached safety hashes and indexed metadata without parsing every note. On devices the gate
 is not locally active: note reads omit safety status, and held-list/release routes require
 the home web app rather than claiming a device-local release succeeded.
 

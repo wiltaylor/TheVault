@@ -121,6 +121,43 @@ pub fn fingerprint(kind: &str, doc: &Doc) -> String {
 }
 
 impl Writer {
+    /// Gmail messages are immutable by Gmail id. Only the trusted sync task may carry a
+    /// decision across a local rendering change of that same message. This is not an
+    /// editable note flag and is never available to an agent/session write.
+    pub(crate) fn carry_safety_conversion(&self, id: &str, kind: &str, next: &Doc, actor: &state::Author) -> Result<()> {
+        if kind != "email" || !matches!(actor, state::Author::Task(name) if name == "google_gmail") {
+            return Ok(());
+        }
+        let Some(old) = self.state().head(id)? else { return Ok(()); };
+        let Ok(old) = Doc::parse(&old.content, "previous email") else { return Ok(()); };
+        let source = old.field("gmail_ref").and_then(schema::Value::as_str);
+        if source.is_none_or(str::is_empty) || source != next.field("gmail_ref").and_then(schema::Value::as_str) {
+            return Ok(());
+        }
+        let without_rendering = |doc: &Doc| {
+            let mut value = classified_content(doc);
+            if let Some(fields) = value["fields"].as_object_mut() {
+                fields.remove("html");
+                fields.remove("attachments");
+            }
+            if let Some(blocks) = value["blocks"].as_array_mut() {
+                blocks.retain(|b| b["labels"][0] != "body");
+            }
+            value
+        };
+        if without_rendering(&old) != without_rendering(next) { return Ok(()); }
+        let before = fingerprint(kind, &old);
+        let after = fingerprint(kind, next);
+        if before == after { return Ok(()); }
+        let Some(raw) = self.state().meta(&format!("agent_safety.note.{id}"))? else { return Ok(()); };
+        let Ok(mut safety) = serde_json::from_str::<Safety>(&raw) else { return Ok(()); };
+        if safety.fingerprint != before { return Ok(()); }
+        self.state().set_meta(&format!("agent_safety.conversion.{id}.{before}"), &after)?;
+        safety.fingerprint = after;
+        // Preserve held/pending as well as clearance. No new arrival is emitted here.
+        self.state().set_agent_safety_result(id, &serde_json::to_string(&safety).expect("safety"), safety.allowed())?;
+        Ok(())
+    }
     fn safety_member_cleared(&self, id: &str) -> Result<bool> {
         let Some(member) = self.state().meta(&format!("agent_safety.member.{id}"))? else { return Ok(false); };
         Ok(self.state().indexed_agent_note_allowed(&member)?)
@@ -409,7 +446,15 @@ impl Writer {
     ) -> Result<bool> {
         let _guard = self.write_lock();
         let note = self.read(id)?;
-        if fingerprint(&note.type_name, &note.doc) != hash {
+        let current = fingerprint(&note.type_name, &note.doc);
+        let mut equivalent = hash.to_owned();
+        // Bound corrupt state/chains. Only the trusted conversion path records these edges.
+        for _ in 0..32 {
+            if equivalent == current { break; }
+            let Some(next) = self.state().meta(&format!("agent_safety.conversion.{id}.{equivalent}"))? else { break; };
+            equivalent = next;
+        }
+        if current != equivalent || (status == "released" && current != hash) {
             return Ok(false);
         }
         if status != "released"
@@ -423,7 +468,7 @@ impl Writer {
         let safety = Safety {
             status: status.into(),
             reason: reason.into(),
-            fingerprint: hash.into(),
+            fingerprint: current,
         };
         self.state().set_agent_safety_result(
             id,

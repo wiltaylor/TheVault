@@ -1607,6 +1607,9 @@ impl Writer {
                     acts.push((by.clone(), act, id.clone()));
                     // The version below is not recorded yet, so the head is still the note as it
                     // was before this write, as for the person and Outbox changes above.
+                    if event == Event::Update {
+                        self.carry_safety_conversion(&id, &type_name, &doc, by)?;
+                    }
                     let previous = match event {
                         Event::Update
                             if inner.schema.type_def(&type_name).is_some_and(|t| {
