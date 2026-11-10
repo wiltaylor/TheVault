@@ -661,6 +661,13 @@ function PermissionsTab(p: AgentTabProps) {
         </div>
         <h3>Sub agents</h3>
         <SubagentsSection agent={p.agent.name} subagents={perms().subagents} set={setSubagents} />
+        <h3>Gmail</h3>
+        <label class="ai-confirm-switch">
+          <input type="checkbox" role="switch" checked={perms().gmail_actions ?? false}
+            onChange={(e) => setPerms({ gmail_actions: e.currentTarget.checked })} />{" "}
+          Allow Gmail archive and trash actions
+        </label>
+        <p class="muted">Off by default. Only foreground chats can use this permission, never trigger or mention runs. Gmail permanently removes trashed messages after 30 days.</p>
         <h3>Browser</h3>
         <div class="ai-confirm">
           <label class="ai-confirm-switch">

@@ -139,6 +139,12 @@ field inbox_catch_up {
   hidden      = true
 }
 
+handler "after_create" {
+  script        = "google_mail"
+  allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com"]
+  secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_trashed"]
+}
+
 handler "after_update" {
   script        = "google_mail"
   allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com"]

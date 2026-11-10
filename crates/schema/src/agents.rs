@@ -114,6 +114,8 @@ pub struct Agent {
 /// An agent's own permissions (agents G4). Nothing is inherited from Settings > AI.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Permissions {
+    /// Allow interactive note actions to archive or trash messages in Gmail. Off by default.
+    pub gmail_actions: bool,
     /// The tools the agent may use; `None` is every tool the server offers.
     pub tools: Option<Vec<String>>,
     pub confirm: Confirm,
@@ -736,6 +738,9 @@ impl Agent {
             if p.browser {
                 field(&mut out, "  ", "browser", "true");
             }
+            if p.gmail_actions {
+                field(&mut out, "  ", "gmail_actions", "true");
+            }
             // Likewise written only when set (skills S6).
             if let Some(skills) = &p.skills {
                 field(&mut out, "  ", "skills", &list(skills));
@@ -986,11 +991,14 @@ impl Reader<'_> {
     fn permissions(&mut self, d: &Doc) -> Permissions {
         self.known(
             d,
-            &["tools", "types", "browser", "skills"],
+            &["tools", "types", "browser", "skills", "gmail_actions"],
             "permissions.",
             "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... }, outbox { ... }, scripts { ... } or subagents { ... }",
         );
         let mut p = Permissions {
+            gmail_actions: self
+                .bool(d, "gmail_actions", "permissions.gmail_actions")
+                .unwrap_or(false),
             tools: self.names_by(d, "tools", "permissions.tools", "tool", is_tool_name),
             types: self.names(d, "types", "permissions.types", "type"),
             browser: self
