@@ -1,7 +1,7 @@
 //! S1 with the fake Google server: the shipped `email` type's `google_mail` handlers send the
-//! user's mail actions to Gmail, one way (TV-25). Done archives the message, delete trashes it,
-//! and nothing else does: no undo, no restore, no write by the sync or another task, no catch-up,
-//! nothing without `gmail.modify`. A vault-trashed email is never imported again.
+//! user's mail actions to Gmail. Done archives the message, delete trashes it, restore untrashes
+//! it. Agents need an explicit foreground permission. No task, catch-up, trigger or mention
+//! archives or trashes mail. Restoring without gmail.modify reports a failure and keeps the ref.
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};

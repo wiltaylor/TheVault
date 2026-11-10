@@ -2759,7 +2759,7 @@ fn step_0012_gives_an_edited_email_type_the_handlers_and_keeps_the_edits() {
     let after = read(root, path).unwrap();
     assert!(after.contains("tab \"Mail\""), "{after}");
     assert!(after.contains("field my_note"), "{after}");
-    assert_eq!(after.matches("\"google_mail\"").count(), 2, "{after}");
+    assert_eq!(after.matches("\"google_mail\"").count(), 3, "{after}");
     let handlers = after.find("handler \"after_update\"").unwrap();
     assert!(
         handlers < after.find("template default").unwrap(),
