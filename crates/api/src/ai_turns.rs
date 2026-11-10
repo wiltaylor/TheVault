@@ -573,7 +573,7 @@ pub async fn apply(
     State(a): State<Arc<Ai>>,
     Caller(author): Caller,
     Extension(GrantedScope(scope)): Extension<GrantedScope>,
-    Json(change): Json<Value>,
+    Json(mut change): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     if !change.is_object() {
         return Err(ApiError::bad_request(
