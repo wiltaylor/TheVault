@@ -290,6 +290,10 @@ fn owner_retry_reports_limits_and_event_rsvp_checks_organiser_and_result() {
     let event = w.create("event", &Input::Json(json!({"fields": {"title": "Invite", "attendees_raw": ["ann@example.com"], "organiser": "boss@example.com"}})), &user()).unwrap();
     let rsvp = create(&w, &agent("sender"), json!({"fields": {"title": "RSVP", "kind": "event", "status": "ready", "event": event.id, "my_response": "accepted"}})).unwrap();
     assert_eq!(status(&w, &rsvp), "draft");
+    for action in ["update", "delete"] {
+        let id = create(&w, &agent("sender"), json!({"fields": {"title": "Incoming event", "kind": "event", "status": "ready", "event": event.id, "event_action": action}})).unwrap();
+        assert_eq!(status(&w, &id), "draft");
+    }
     let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
     edit(&w, &id, &user(), json!({"status": "draft"})).unwrap();
     assert!(refused(edit(&w, &id, &user(), json!({"status": "ready"}))).contains("daily limit"));

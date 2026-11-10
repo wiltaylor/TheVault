@@ -307,8 +307,7 @@ pub async fn read(
             }
             err
         })?;
-        if !full {
-            agent.permissions.outbox.conditions = None;
+        if !full && agent.permissions.outbox.conditions.take().is_some() {
             wcl = agent.to_wcl();
         }
         let account = crate::ai_settings::agent_account_name(w, &agent);
