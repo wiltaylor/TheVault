@@ -1847,7 +1847,10 @@ impl Writer {
             if text("status") != Some("draft") || text("drafted_by") != Some(name.as_str()) {
                 return Err(Error::Invalid(Invalid {
                     file: "outbox".into(),
-                    issues: vec![Issue::new("status", "agents may delete or restore only their own Outbox drafts")],
+                    issues: vec![Issue::new(
+                        "status",
+                        "agents may delete or restore only their own Outbox drafts",
+                    )],
                 }));
             }
         }

@@ -385,20 +385,80 @@ fn agent_token_owns_only_its_drafts_and_legacy_admin_cannot_grant() {
     let admin = client(server.admin_token());
     let agent = install(&server, &admin, "cli", "admin");
     for path in ["/api/tokens", "/api/agent-codes", "/api/devices/pair-codes"] {
-        assert_eq!(agent.post(server.url(path)).json(&json!({"name":"escape", "scope":"write"})).send().unwrap().status(), 403);
+        assert_eq!(
+            agent
+                .post(server.url(path))
+                .json(&json!({"name":"escape", "scope":"write"}))
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
     }
-    assert_eq!(agent.put(server.url("/api/agents/sender")).body(SENDER).send().unwrap().status(), 403);
+    assert_eq!(
+        agent
+            .put(server.url("/api/agents/sender"))
+            .body(SENDER)
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
     for name in ["user", "agent-clerk", "device-clerk"] {
-        assert!(admin.put(server.url(&format!("/api/agents/{name}"))).body(CLERK).send().unwrap().status().is_client_error());
+        assert!(
+            admin
+                .put(server.url(&format!("/api/agents/{name}")))
+                .body(CLERK)
+                .send()
+                .unwrap()
+                .status()
+                .is_client_error()
+        );
     }
-    let (s, made) = body(agent.post(server.url("/api/notes?type=outbox")).json(&json!({"note":{"fields":{"title":"Draft", "kind":"email", "subject":"Review"}}})).send().unwrap());
+    let (s, made) = body(
+        agent
+            .post(server.url("/api/notes?type=outbox"))
+            .json(&json!({"note":{"fields":{"title":"Draft", "kind":"email", "subject":"Review"}}}))
+            .send()
+            .unwrap(),
+    );
     assert_eq!(s, 201);
     assert_eq!(made["note"]["fields"]["drafted_by"], "agent-cli");
     let id = made["id"].as_str().unwrap();
     let url = server.url(&format!("/api/notes/{id}"));
     let other = install(&server, &admin, "other", "write");
-    assert!(other.delete(&url).query(&[("base_version",made["version"].as_str().unwrap())]).send().unwrap().status().is_client_error());
-    assert!(agent.delete(&url).query(&[("base_version",made["version"].as_str().unwrap())]).send().unwrap().status().is_success());
-    assert!(other.post(server.url(&format!("/api/trash/{id}/restore"))).send().unwrap().status().is_client_error());
-    assert!(agent.post(server.url(&format!("/api/trash/{id}/restore"))).send().unwrap().status().is_success());
+    assert!(
+        other
+            .delete(&url)
+            .query(&[("base_version", made["version"].as_str().unwrap())])
+            .send()
+            .unwrap()
+            .status()
+            .is_client_error()
+    );
+    assert!(
+        agent
+            .delete(&url)
+            .query(&[("base_version", made["version"].as_str().unwrap())])
+            .send()
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    assert!(
+        other
+            .post(server.url(&format!("/api/trash/{id}/restore")))
+            .send()
+            .unwrap()
+            .status()
+            .is_client_error()
+    );
+    assert!(
+        agent
+            .post(server.url(&format!("/api/trash/{id}/restore")))
+            .send()
+            .unwrap()
+            .status()
+            .is_success()
+    );
 }
