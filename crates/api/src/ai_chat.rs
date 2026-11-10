@@ -4658,7 +4658,7 @@ pub fn diff(before: &Value, after: &Value) -> Vec<Value> {
 mod tests {
     #[test]
     fn direct_scope_is_capped_by_caller_and_agent() {
-        let agent = ai::Agent::parse("a", "label = \"A\"\n").unwrap();
+        let agent = schema::Agent::parse("a", "label = \"A\"\n").unwrap();
         for scope in [state::Scope::Read, state::Scope::Write, state::Scope::Admin] {
             let direct = super::change_scope(scope, &agent);
             assert!(scope.allows(direct));

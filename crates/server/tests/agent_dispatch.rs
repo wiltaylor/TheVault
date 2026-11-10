@@ -93,13 +93,19 @@ fn a_write_dispatch_cannot_make_admin_changes_even_with_confirmation_off() {
     let run = api.wait_run(thread);
     assert_eq!(run["detail"]["outcome"], "succeeded", "{run}");
     let stored = api.get(&format!("/api/agents/keeper/threads/{thread}"));
-    assert!(stored["proposals"].as_array().unwrap().iter().any(|p| {
-        p["event"] == "type_proposal" && p["status"] == "pending"
-    }));
-    assert!(api.get("/api/types/memo")["wcl"]
-        .as_str()
-        .unwrap()
-        .contains("tab \"Main\""));
+    assert!(
+        stored["proposals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| { p["event"] == "type_proposal" && p["status"] == "pending" })
+    );
+    assert!(
+        api.get("/api/types/memo")["wcl"]
+            .as_str()
+            .unwrap()
+            .contains("tab \"Main\"")
+    );
 }
 
 struct Api {
