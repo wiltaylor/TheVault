@@ -2780,6 +2780,31 @@ fn step_0012_gives_an_edited_email_type_the_handlers_and_keeps_the_edits() {
     assert_eq!(read(root, path).unwrap(), after);
 }
 
+#[test]
+fn step_0013_adds_restore_to_an_email_type_with_existing_mail_handlers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let path = "types/email.wcl";
+    let current = read(root, path).unwrap();
+    let start = current.find("handler \"after_create\"").unwrap();
+    let end = current.find("handler \"after_update\"").unwrap();
+    let old = format!("{}{}", &current[..start], &current[end..]);
+    std::fs::write(root.join(path), old).unwrap();
+    let w = open(root);
+    assert_eq!(
+        run_step_again(&w, "0013_email_gmail_restore"),
+        ["test_0013_email_gmail_restore"]
+    );
+    let handlers = &w.schema().type_def("email").unwrap().handlers.clone();
+    assert_eq!(handlers.len(), 3);
+    assert!(
+        handlers
+            .iter()
+            .any(|h| h.event == "after_create" && h.script == "google_mail")
+    );
+}
+
 /// The `call` type as 0.1.14-alpha.23 shipped it, before `processed`.
 const CALL_0_1_14: &str = include_str!("fixtures/shipped/call_0_1_14.wcl");
 

@@ -768,11 +768,23 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         assert_eq!(api.emails().len(), 1);
         assert!(api.google.mail_actions().is_empty(), "mention={mention}");
         assert!(api.server.secret_json("google_gmail_trashed").is_null());
-        let runs = expect(api.req("GET", "/api/agents/clerk/runs").send().unwrap(), 200);
-        assert!(runs.to_string().contains("Gmail action skipped"), "{runs:#}");
+        let runs = expect(
+            api.req("GET", "/api/agents/clerk/runs").send().unwrap(),
+            200,
+        );
+        assert!(
+            runs.to_string().contains("Gmail action skipped"),
+            "{runs:#}"
+        );
         let result = fake.message_requests()[1].json().to_string();
-        assert!(result.contains("the note change was applied only in the vault"), "{result}");
-        assert!(result.contains("needs a user Apply or an opted-in foreground chat"), "{result}");
+        assert!(
+            result.contains("the note change was applied only in the vault"),
+            "{result}"
+        );
+        assert!(
+            result.contains("needs a user Apply or an opted-in foreground chat"),
+            "{result}"
+        );
     }
 }
 
@@ -812,4 +824,23 @@ fn a_missing_message_or_missing_scope_does_not_clear_the_restore_ref() {
                 .any(|n| n["title"] == "Gmail did not untrash an email")
         );
     }
+}
+
+#[test]
+fn explicit_apply_can_archive_mail_with_autonomous_gmail_actions_off() {
+    let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+    expect(
+        api.req("PUT", "/api/agents/clerk")
+            .body("label = \"Clerk\"\n")
+            .send()
+            .unwrap(),
+        200,
+    );
+    let one = api.email("one");
+    let mut note = api.note(&one);
+    note["note"]["fields"]["processed"] = json!(true);
+    expect(api.req("POST", "/api/ai/apply").json(&json!({"id": "approved", "agent": "clerk", "op": "update", "note_id": one, "base_version": note["version"], "after": note["note"]})).send().unwrap(), 200);
+    api.settle();
+    assert_eq!(api.note(&one)["note"]["fields"]["processed"], true);
+    assert_eq!(api.google.mail_actions(), [modify("one")]);
 }

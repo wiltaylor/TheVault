@@ -3460,7 +3460,10 @@ fn run_tool(
                 made.summary["gmail_skipped"] = json!(notice);
                 made.summary["message"] = json!(notice);
                 if let Ok(mut content) = serde_json::from_str::<Value>(&made.content) {
-                    content["message"] = json!(format!("{} {notice}", content["message"].as_str().unwrap_or_default()));
+                    content["message"] = json!(format!(
+                        "{} {notice}",
+                        content["message"].as_str().unwrap_or_default()
+                    ));
                     content["gmail_skipped"] = json!(notice);
                     made.content = content.to_string();
                 }
