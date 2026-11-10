@@ -1257,7 +1257,7 @@ impl Direct {
     /// Whether the change in event `event` with data `p` is made rather than proposed.
     fn covers(self, event: &str, p: &Value) -> bool {
         match event {
-            "type_proposal" => self.types,
+            "type_proposal" => self.types && !type_handlers_changed(p),
             "taxonomy_proposal" => self.taxonomies,
             // Turning on an agent's Run wscript code waits for an admin's Apply, whatever the
             // switch says (script-tools T1), and so do Run saved scripts and tasks and granting
@@ -1272,7 +1272,9 @@ impl Direct {
             // The tools of [`ALWAYS_PROPOSE`]: always the user's Apply (TV-32 Q2 O1).
             "script_proposal" | "task_proposal" | "device_file_proposal" => false,
             "agent_memory_proposal" => self.memories,
-            "skill_proposal" => self.skills,
+            "skill_proposal" => self.skills && !p["path"].as_str().is_some_and(|s| {
+                s == "tools" || s.starts_with("tools/") || s == "scripts" || s.starts_with("scripts/")
+            }),
             "proposal" => match p["op"].as_str().unwrap_or("update") {
                 "update" | "create" => self.notes,
                 "archive" | "unarchive" => self.archive,
@@ -3680,6 +3682,7 @@ pub(crate) fn apply_change_with_admin(
             return Ok(json!({ "op": "type_delete", "type_name": name }));
         }
         let after = member("after")?;
+        type_handler_secrets(name, after).map_err(ApplyError::Refused)?;
         if before.is_none() {
             w.put_type(name, after)?;
             return Ok(json!({ "op": "type_create", "type_name": name }));
@@ -4417,6 +4420,36 @@ fn block_format() -> ToolOut {
     type_out(json!({ "format": block_format_text() }), Vec::new(), None)
 }
 
+/// Handler bindings are code grants, not ordinary type edits. Recompute from the WCL rather
+/// than trusting a flag in the proposal body.
+fn type_handlers_changed(p: &Value) -> bool {
+    if p["op"] == "delete" {
+        return false;
+    }
+    let name = p["name"].as_str().unwrap_or_default();
+    let Ok(after) = schema::TypeDef::parse(name, p["after"].as_str().unwrap_or_default()) else {
+        return true;
+    };
+    let before = match p["before"].as_str() {
+        Some(source) => match schema::TypeDef::parse(name, source) {
+            Ok(t) => t.handlers,
+            Err(_) => return true,
+        },
+        None => Vec::new(),
+    };
+    before != after.handlers
+}
+
+fn type_handler_secrets(name: &str, source: &str) -> Result<(), String> {
+    let ty = schema::TypeDef::parse(name, source).map_err(|e| e.to_string())?;
+    for h in ty.handlers {
+        if let Some(why) = state::proposed_secrets_refused(&h.secrets) {
+            return Err(why);
+        }
+    }
+    Ok(())
+}
+
 /// `propose_type_change`: check the type file as the type write would, without writing it, and
 /// hand it to the user (ai D18). Invalid WCL goes back to the model with the issues.
 fn propose_type(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, ToolOut> {
@@ -4426,6 +4459,7 @@ fn propose_type(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, Too
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| ToolOut::error("wcl must be the whole type file as WCL text"))?;
     let before = w.read_type(name).ok();
+    type_handler_secrets(name, wcl).map_err(ToolOut::error)?;
     let check = w.check_type(name, wcl).map_err(|e| {
         let message = e.to_string();
         let details = ApiError::from(e).body;

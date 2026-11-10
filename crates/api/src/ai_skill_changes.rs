@@ -54,6 +54,19 @@ pub const PROPOSE_TOOLS: [&str; 4] = [
 /// size, like a binary one.
 const DIFF_LIMIT: u64 = 256 * 1024;
 
+/// Skill tools never receive script secrets, including user-uploaded and binary files.
+pub(crate) fn check_tool_secrets(path: &str, bytes: &[u8]) -> Result<(), String> {
+    let Some(name) = path.strip_prefix("tools/").and_then(|s| s.strip_suffix(".wcl")) else {
+        return Ok(());
+    };
+    let source = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+    let tool = schema::ScriptTool::parse(name, source).map_err(|e| e.to_string())?;
+    if !tool.secrets.is_empty() {
+        return Err("skill tools may not receive secrets".into());
+    }
+    Ok(())
+}
+
 /// What the model reads before writing a `SKILL.md`.
 const FORMAT: &str = "A skill is a folder skills/<name>/ holding SKILL.md and any other files, conventionally scripts/, references/ and assets/ (the Agent Skills specification, https://agentskills.io/specification). SKILL.md is YAML frontmatter between two `---` lines, then Markdown instructions. Frontmatter: `name` (required, 1 to 64 characters, lowercase a-z, 0-9 and hyphens, not starting or ending with a hyphen, no `--`, equal to the folder name), `description` (required, 1 to 1024 characters: what the skill does and when to use it), `license` (optional), `compatibility` (optional, 1 to 500 characters), `metadata` (optional, a map of string keys to string values) and `allowed-tools` (optional, a space-separated string, recorded but granting nothing). The body is what use_skill answers: write instructions an agent can follow, pointing to the skill's other files by their paths from the folder. Limits: 200 files and 20 MiB a skill, 2 MiB a text file read into a model, no symlinks.";
 
@@ -321,6 +334,7 @@ pub(crate) fn propose_file(
             ));
         }
     };
+    check_tool_secrets(&path, &bytes).map_err(ToolOut::error)?;
     let exists = w
         .check_skill_file(name, &path, bytes.len() as u64)
         .map_err(|e| {
@@ -560,6 +574,7 @@ pub(crate) fn apply_skill(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
                     "there is no skill {name:?} yet: apply its SKILL.md first"
                 ))));
             }
+            check_tool_secrets(&path, &bytes).map_err(ApplyError::Refused)?;
             let file = w.put_skill_file(name, &path, &bytes)?;
             Ok(json!({ "op": "skill_file", "skill_name": name, "path": file.path }))
         }

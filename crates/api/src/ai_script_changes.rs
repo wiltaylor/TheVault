@@ -137,12 +137,13 @@ pub(crate) fn shared_paths_refused(
     w: &Writer,
     script: &str,
     except_task: Option<&str>,
+    except_tool: Option<&str>,
 ) -> Option<String> {
     if let Some(why) = shipped_script_refused(script) {
         return Some(why);
     }
     let with_paths: Vec<String> = w
-        .script_runs_as(script, None)
+        .script_runs_as(script, except_tool)
         .unwrap_or_default()
         .into_iter()
         .filter(|u| !(u.kind == "task" && Some(u.name.as_str()) == except_task))
@@ -579,7 +580,7 @@ pub(crate) fn propose_change(
             None,
         ));
     }
-    if let Some(why) = shared_paths_refused(w, name, None) {
+    if let Some(why) = shared_paths_refused(w, name, None, None) {
         return Err(refused(why));
     }
     if let Some(why) = sms_send_refused(name, before.as_deref(), after) {
@@ -722,7 +723,7 @@ pub(crate) fn apply_script(w: &Writer, p: &Value, admin: bool) -> Result<Value, 
         }
         // A change is refused while a run of the script has folders (TV-87). A delete is not.
         if after.is_some()
-            && let Some(why) = shared_paths_refused(w, name, None)
+            && let Some(why) = shared_paths_refused(w, name, None, None)
         {
             return Err(ApplyError::Refused(why));
         }

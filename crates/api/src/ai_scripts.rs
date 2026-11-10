@@ -549,7 +549,7 @@ pub(crate) fn propose_change(
     // A new script source is refused while a run of the script has folders (TV-89, TV-87, TV-32
     // Q3): the agent's code would reach them. A tool has no folders of its own, so none is left out.
     if script_after.is_some()
-        && let Some(why) = crate::ai_script_changes::shared_paths_refused(w, &tool.script, None)
+        && let Some(why) = crate::ai_script_changes::shared_paths_refused(w, &tool.script, None, Some(name))
     {
         return Err(refused(why));
     }
@@ -726,6 +726,10 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
     let after = p["after"]
         .as_str()
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
+    let parsed = ScriptTool::parse(name, after).map_err(|e| ApplyError::Invalid(e.to_string()))?;
+    if script != Some(parsed.script.as_str()) {
+        return Err(ApplyError::Refused("the proposal script does not match its tool file".into()));
+    }
     let script_after = p["script_after"].as_str();
     let h = host(w);
     w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
@@ -749,7 +753,7 @@ pub(crate) fn apply_tool(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
         }
         // A new script source is refused while a run of the script has folders (TV-89, TV-87).
         if let (Some(_), Some(s)) = (script_after, script)
-            && let Some(why) = crate::ai_script_changes::shared_paths_refused(w, s, None)
+            && let Some(why) = crate::ai_script_changes::shared_paths_refused(w, s, None, Some(name))
         {
             return Err(ApplyError::Refused(why));
         }

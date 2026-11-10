@@ -314,6 +314,8 @@ impl Writer {
         for (task, text) in self.task_files()? {
             let file = crate::defs::task_path(&task);
             let Ok(doc) = Doc::parse(&text, &file) else {
+                // User-written malformed tasks cannot run. If the user repairs one later,
+                // its grants become visible then, not retroactively to earlier proposals.
                 continue;
             };
             if doc.field("script").and_then(Value::as_str) != Some(name) {

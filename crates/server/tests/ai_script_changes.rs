@@ -22,6 +22,52 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, PASSWORD, TestAccount, Te
 const MODEL: &str = "claude-opus-5";
 
 #[test]
+fn every_privileged_default_run_is_guarded_through_every_agent_route() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
+    // A user-owned copy bound by a shipped handler must be guarded by grants, not its name.
+    let mail = api.script("google_mail").unwrap();
+    api.ok("PUT", "/api/scripts/mail_copy", json!({"source": mail}));
+    api.put_text("/api/types/email", &writer::DEFAULT_EMAIL_TYPE.replace("google_mail", "mail_copy"));
+    api.put_text("/api/skills/probe", "---\nname: probe\ndescription: Test\n---\n");
+    let mut guarded = Vec::new();
+    // Read the actual installed runs, not SHIPPED_FILES: a new handler/task can name a script
+    // absent from that list. Runs include every type handler, task and device binding.
+    for name in api.get("/api/scripts")["scripts"].as_array().unwrap() {
+        let name = name.as_str().unwrap();
+        api.one(&fake, "get_script", json!({"name": name}));
+        let (_, got) = last_result(&fake);
+        if got["runs_as"].as_array().unwrap().iter().any(|r| {
+            ["handler", "task", "device"].contains(&r["kind"].as_str().unwrap())
+                && (!r["secrets"].as_array().unwrap().is_empty() || !r["allow_domains"].as_array().unwrap().is_empty())
+        }) {
+            guarded.push(name.to_owned());
+        }
+    }
+    assert!(guarded.iter().any(|n| n == "mail_copy"));
+    assert!(guarded.len() >= 5, "{guarded:?}");
+    for name in guarded {
+        let source = format!("{}\n// agent edit\n", api.script(&name).unwrap());
+        let tool = format!("description = \"Test\"\nscript = \"{name}\"\nfunction = \"run\"\n");
+        let task = format!("schedule = \"0 0 1 1 *\"\nscript = \"{name}\"\n");
+        let device = PHONE_FILE.replace("phone_test", &name);
+        for (method, event, input) in [
+            ("propose_script_change", "script_proposal", json!({"name": name, "source": source})),
+            ("propose_tool_change", "tool_proposal", json!({"name": "attempt", "wcl": tool, "script_source": source})),
+            ("propose_task_change", "task_proposal", json!({"name": "attempt", "wcl": task, "script_source": source})),
+            ("propose_device_file_change", "device_file_proposal", json!({"platform": "android", "wcl": device, "scripts": [{"name": name, "source": source}]})),
+            ("propose_skill_file_change", "skill_proposal", json!({"name": "probe", "path": format!("scripts/{name}.ws"), "text": source, "base64": null})),
+            ("propose_type_change", "type_proposal", json!({"name": "attempt", "wcl": ITEM.replace("stamp", &name)})),
+        ] {
+            let events = api.one(&fake, method, input);
+            assert!(find(&events, "applied").is_none(), "{name} {method}: {events:?}");
+            assert!(find(&events, event).is_some() || last_result(&fake).0, "{name} {method}: {events:?}");
+        }
+    }
+}
+
+#[test]
 fn handler_binding_cannot_grant_google_secrets_or_bypass_apply() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
@@ -34,6 +80,35 @@ fn handler_binding_cannot_grant_google_secrets_or_bypass_apply() {
     let events = api.one(&fake, "propose_type_change", json!({"name": "item", "wcl": ITEM}));
     assert!(find(&events, "type_proposal").is_some(), "{events:?}");
     assert!(find(&events, "applied").is_none(), "{events:?}");
+    let mut p = find(&events, "type_proposal").unwrap().clone();
+    p["after"] = json!(with_secret);
+    assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
+    // An existing shipped binding cannot be switched to agent code with Google grants.
+    let rebound = writer::DEFAULT_EMAIL_TYPE.replace("google_mail", "stamp");
+    let events = api.one(&fake, "propose_type_change", json!({"name": "email", "wcl": rebound}));
+    assert!(find(&events, "type_proposal").is_none(), "{events:?}");
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(last_result(&fake).0);
+}
+
+#[test]
+fn a_tools_own_hosts_allow_held_source_edits_but_not_forged_script_names() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
+    api.ok("PUT", "/api/tools/echo", json!({"wcl": ECHO}));
+    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
+    let changed = format!("{STAMP}\n// edit\n");
+    let events = api.one(&fake, "propose_tool_change", json!({"name": "echo", "wcl": ECHO, "script_source": changed}));
+    assert!(find(&events, "applied").is_none());
+    let p = find(&events, "tool_proposal").unwrap().clone();
+    for script in [Value::Null, json!("google_mail")] {
+        let mut forged = p.clone();
+        forged["script"] = script;
+        assert_eq!(api.apply_as(&api.token(), &forged).0, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::OK);
+    assert_eq!(api.script("stamp").as_deref(), Some(changed.as_str()));
 }
 
 #[test]
@@ -748,7 +823,7 @@ fn device_commands_are_refused_for_script_task_and_tool_proposals_and_apply() {
 }
 
 const ECHO: &str =
-    "description = \"Echo the parameters.\"\nscript = \"stamp\"\nfunction = \"call\"\n";
+    "description = \"Echo the parameters.\"\nscript = \"stamp\"\nfunction = \"call\"\nallow_domains = [\"echo.example.com\"]\n";
 
 /// Every confirmation switch off.
 fn all_off() -> Value {
@@ -893,7 +968,7 @@ impl Api {
         self.ok("PUT", "/api/scripts/stamp", json!({ "source": STAMP }));
         self.put_text("/api/types/item", ITEM);
         self.put_text("/api/tasks/nightly", NIGHTLY);
-        self.ok("PUT", "/api/tools/echo", json!({ "wcl": ECHO }));
+        self.ok("PUT", "/api/tools/echo", json!({ "wcl": ECHO.replace("allow_domains = [\"echo.example.com\"]\n", "") }));
     }
 
     /// One tool call by the Assistant as the admin, then an answer: the turn's events.
@@ -1227,7 +1302,7 @@ fn a_tool_proposal_shows_what_else_runs_its_script() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.seed_users();
-    let open = format!("{ECHO}allow_domains = [\"*\"]\n");
+    let open = ECHO.replace("echo.example.com", "*");
     let events = api.one(
         &fake,
         "propose_tool_change",
@@ -1425,7 +1500,7 @@ fn a_tool_applied_after_what_runs_its_script_changed_is_stale() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.seed_users();
-    let open = format!("{ECHO}allow_domains = [\"*\"]\n");
+    let open = ECHO.replace("echo.example.com", "*");
     let events = api.one(
         &fake,
         "propose_tool_change",

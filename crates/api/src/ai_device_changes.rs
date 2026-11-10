@@ -107,7 +107,7 @@ fn checked(
         let was_on_platform = old
             .as_ref()
             .is_some_and(|f| f.scripts().contains(&name.as_str()));
-        if changing && let Some(why) = scripts::shared_paths_refused(w, &name, None) {
+        if changing && let Some(why) = scripts::shared_paths_refused(w, &name, None, None) {
             return Err(ApplyError::Refused(why));
         }
         // Bringing existing code onto this platform is a new capability, not a kept call site.
