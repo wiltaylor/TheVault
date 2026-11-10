@@ -35,10 +35,22 @@ mod tests {
     fn backfill_atomically_refuses_a_note_with_a_completed_record() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
-        let id = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().unwrap();
+        let id = s
+            .enqueue_trigger("clerk", "opened", Some("a"), "{}", 0)
+            .unwrap()
+            .unwrap();
         s.finish_trigger_job(id, "succeeded", None).unwrap();
-        assert!(s.enqueue_backfill("clerk", "opened", Some("a"), "{}", 0).unwrap().is_none());
-        assert!(s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().is_some(), "a later ordinary edit may trigger again");
+        assert!(
+            s.enqueue_backfill("clerk", "opened", Some("a"), "{}", 0)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0)
+                .unwrap()
+                .is_some(),
+            "a later ordinary edit may trigger again"
+        );
     }
 
     #[test]
@@ -239,11 +251,26 @@ impl State {
         self.enqueue_trigger_inner(agent, trigger, note, payload, due, false)
     }
 
-    pub fn enqueue_backfill(&self, agent: &str, trigger: &str, note: Option<&str>, payload: &str, due: i64) -> Result<Option<i64>> {
+    pub fn enqueue_backfill(
+        &self,
+        agent: &str,
+        trigger: &str,
+        note: Option<&str>,
+        payload: &str,
+        due: i64,
+    ) -> Result<Option<i64>> {
         self.enqueue_trigger_inner(agent, trigger, note, payload, due, true)
     }
 
-    fn enqueue_trigger_inner(&self, agent: &str, trigger: &str, note: Option<&str>, payload: &str, due: i64, only_missing: bool) -> Result<Option<i64>> {
+    fn enqueue_trigger_inner(
+        &self,
+        agent: &str,
+        trigger: &str,
+        note: Option<&str>,
+        payload: &str,
+        due: i64,
+        only_missing: bool,
+    ) -> Result<Option<i64>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         if let Some(note) = note {

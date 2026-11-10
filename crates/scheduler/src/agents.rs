@@ -814,8 +814,13 @@ impl Scheduler {
         })
         .to_string();
         let state = self.writer.state();
-        let enqueue = if backfill { state::State::enqueue_backfill } else { state::State::enqueue_trigger };
-        let inserted = match enqueue(state,
+        let enqueue = if backfill {
+            state::State::enqueue_backfill
+        } else {
+            state::State::enqueue_trigger
+        };
+        let inserted = match enqueue(
+            state,
             &job.agent,
             &job.trigger,
             job.note.as_ref().map(|(id, _)| id.as_str()),
