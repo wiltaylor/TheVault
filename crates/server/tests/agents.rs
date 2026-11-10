@@ -73,11 +73,13 @@ fn agent_code_token_cannot_create_ready_outbox_item() {
         .post(server.url("/api/notes?type=outbox"))
         .json(&json!({ "note": { "fields": {
             "title": "Unreviewed mail", "kind": "email", "status": "ready",
-            "to": ["outside@example.com"], "body": "Must wait for review"
+            "to": ["outside@example.com"], "subject": "Must wait for review"
         }}}))
         .send()
         .unwrap();
-    assert!(response.status().is_client_error(), "agent token sent an unreviewed item: {}", response.text().unwrap());
+    let status = response.status();
+    let body = response.text().unwrap();
+    assert!(status.is_client_error() && body.contains("agent"), "expected agent review refusal, got {status}: {body}");
 }
 
 #[test]
