@@ -985,7 +985,11 @@ fn a_dispatch_defers_a_durable_trigger_run_waiting_in_a_full_queue() {
     assert_eq!(r.fake.turns().len(), room);
     assert!(r.fake.turns().iter().any(|t| t.1 == sent), "{sent} ran");
     r.advance(31);
-    assert_eq!(r.fake.turns().len(), room + 1, "the displaced trigger is retried");
+    assert_eq!(
+        r.fake.turns().len(),
+        room + 1,
+        "the displaced trigger is retried"
+    );
 }
 
 #[test]

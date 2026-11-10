@@ -434,10 +434,10 @@ impl AgentPlan {
                 if dropped.durable.is_some() {
                     self.displaced.push(dropped);
                 } else {
-                eprintln!(
-                    "agent {:?}: {MAX_QUEUED} runs are waiting, so the newest run with no thread, of trigger {:?}, was dropped",
-                    dropped.agent, dropped.trigger
-                );
+                    eprintln!(
+                        "agent {:?}: {MAX_QUEUED} runs are waiting, so the newest run with no thread, of trigger {:?}, was dropped",
+                        dropped.agent, dropped.trigger
+                    );
                 }
             }
         }
@@ -455,7 +455,7 @@ impl AgentPlan {
                 }
                 lane.started.push_back(now);
                 Some(j)
-            },
+            }
             None => {
                 lane.running = lane.running.saturating_sub(1);
                 None
@@ -490,16 +490,26 @@ impl Scheduler {
         }
         if let Ok(events) = self.writer.state().trigger_events() {
             for payload in events {
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { continue };
-                let op = match v["op"].as_str() { Some("create") => "create", Some("update") => "update", Some("delete") => "delete", _ => continue };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                    continue;
+                };
+                let op = match v["op"].as_str() {
+                    Some("create") => "create",
+                    Some("update") => "update",
+                    Some("delete") => "delete",
+                    _ => continue,
+                };
                 let deleting = v["deleting"].as_object().map(|_| Deleting {
                     title: v["deleting"]["title"].as_str().unwrap_or("").to_owned(),
-                    matched: serde_json::from_value(v["deleting"]["matched"].clone()).unwrap_or_default(),
+                    matched: serde_json::from_value(v["deleting"]["matched"].clone())
+                        .unwrap_or_default(),
                 });
                 self.plan().agents.heard.push(Heard {
-                    op, id: v["id"].as_str().unwrap_or("").to_owned(),
+                    op,
+                    id: v["id"].as_str().unwrap_or("").to_owned(),
                     type_name: v["type"].as_str().unwrap_or("").to_owned(),
-                    at: v["at"].as_i64().unwrap_or(0), deleting,
+                    at: v["at"].as_i64().unwrap_or(0),
+                    deleting,
                 });
             }
         }
@@ -508,10 +518,19 @@ impl Scheduler {
                 eprintln!("agent runs left running: {e}");
             }
             self.reload_agents();
-            if let Ok(starts) = self.writer.state().recent_agent_starts(self.clock.now_ms() - HOUR_MS) {
+            if let Ok(starts) = self
+                .writer
+                .state()
+                .recent_agent_starts(self.clock.now_ms() - HOUR_MS)
+            {
                 let mut plan = self.plan();
                 for (agent, at) in starts {
-                    plan.agents.lanes.entry(agent).or_default().started.push_back(at);
+                    plan.agents
+                        .lanes
+                        .entry(agent)
+                        .or_default()
+                        .started
+                        .push_back(at);
                 }
             }
             self.wake.notify_all();
@@ -717,40 +736,56 @@ impl Scheduler {
             self.persist_trigger(&job, now);
         }
         for note in processed {
-            let _ = self.writer.state().acknowledge_trigger_event(&note, now - DEBOUNCE_MS);
+            let _ = self
+                .writer
+                .state()
+                .acknowledge_trigger_event(&note, now - DEBOUNCE_MS);
         }
         let _ = self.writer.state().prune_trigger_events(now - DEBOUNCE_MS);
         let state = self.writer.state();
         match state.due_trigger_jobs(now) {
-            Ok(queued) => for row in queued {
-                let Ok(payload) = serde_json::from_str::<serde_json::Value>(&row.payload) else {
-                    let _ = state.finish_trigger_job(row.id, "failed", Some("invalid queue payload"));
-                    continue;
-                };
-                let job = AgentJob {
-                    durable: Some(row.id),
-                    note: row.note.map(|id| (id, payload["type"].as_str().unwrap_or("").to_owned())),
-                    agent: row.agent,
-                    trigger: row.trigger,
-                    prompt: payload["prompt"].as_str().unwrap_or("").to_owned(),
-                    title: payload["title"].as_str().unwrap_or("").to_owned(),
-                    thread: None,
-                    origin: None,
-                };
-                let mut plan = self.plan();
-                // Never admit into a full lane: durable overflow stays on disk.
-                let blocked = plan.agents.over_limit(&job.agent, now)
-                    || plan.agents.lanes.get(&job.agent).is_some_and(|l| l.running >= MAX_RUNNING && l.queue.len() >= MAX_QUEUED);
-                if blocked {
-                    let _ = state.retry_trigger_job(row.id, now, None);
-                } else if state.claim_trigger_job(row.id).unwrap_or(false) {
-                    match plan.agents.admit(job, now) {
-                        Admitted::Start(job) => starts.push(job),
-                        Admitted::Queued => {},
-                        _ => { let _ = state.retry_trigger_job(row.id, now, None); }
+            Ok(queued) => {
+                for row in queued {
+                    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&row.payload)
+                    else {
+                        let _ = state.finish_trigger_job(
+                            row.id,
+                            "failed",
+                            Some("invalid queue payload"),
+                        );
+                        continue;
+                    };
+                    let job = AgentJob {
+                        durable: Some(row.id),
+                        note: row
+                            .note
+                            .map(|id| (id, payload["type"].as_str().unwrap_or("").to_owned())),
+                        agent: row.agent,
+                        trigger: row.trigger,
+                        prompt: payload["prompt"].as_str().unwrap_or("").to_owned(),
+                        title: payload["title"].as_str().unwrap_or("").to_owned(),
+                        thread: None,
+                        origin: None,
+                    };
+                    let mut plan = self.plan();
+                    // Never admit into a full lane: durable overflow stays on disk.
+                    let blocked = plan.agents.over_limit(&job.agent, now)
+                        || plan.agents.lanes.get(&job.agent).is_some_and(|l| {
+                            l.running >= MAX_RUNNING && l.queue.len() >= MAX_QUEUED
+                        });
+                    if blocked {
+                        let _ = state.retry_trigger_job(row.id, now, None);
+                    } else if state.claim_trigger_job(row.id).unwrap_or(false) {
+                        match plan.agents.admit(job, now) {
+                            Admitted::Start(job) => starts.push(job),
+                            Admitted::Queued => {}
+                            _ => {
+                                let _ = state.retry_trigger_job(row.id, now, None);
+                            }
+                        }
                     }
                 }
-            },
+            }
             Err(e) => eprintln!("reading trigger queue: {e}"),
         }
         for job in tell {
@@ -764,7 +799,10 @@ impl Scheduler {
         let jobs = std::mem::take(&mut self.plan().agents.displaced);
         for job in jobs {
             if let Some(id) = job.durable {
-                let _ = self.writer.state().retry_trigger_job(id, self.clock.now_ms(), None);
+                let _ = self
+                    .writer
+                    .state()
+                    .retry_trigger_job(id, self.clock.now_ms(), None);
             }
         }
     }
@@ -773,13 +811,26 @@ impl Scheduler {
         let payload = serde_json::json!({
             "prompt": job.prompt, "title": job.title,
             "type": job.note.as_ref().map(|(_, t)| t),
-        }).to_string();
+        })
+        .to_string();
         let state = self.writer.state();
-        let inserted = match state.enqueue_trigger(&job.agent, &job.trigger, job.note.as_ref().map(|(id, _)| id.as_str()), &payload, due) {
+        let inserted = match state.enqueue_trigger(
+            &job.agent,
+            &job.trigger,
+            job.note.as_ref().map(|(id, _)| id.as_str()),
+            &payload,
+            due,
+        ) {
             Ok(id) => id.is_some(),
-            Err(e) => { eprintln!("persisting trigger: {e}"); false }
+            Err(e) => {
+                eprintln!("persisting trigger: {e}");
+                false
+            }
         };
-        if state.trigger_drop_notice(&job.agent, self.clock.now_ms()).unwrap_or(false) {
+        if state
+            .trigger_drop_notice(&job.agent, self.clock.now_ms())
+            .unwrap_or(false)
+        {
             let _ = state.add_notification(&NewNotification {
                 title: format!("{} trigger queue is full", job.agent),
                 body: Some("The 10,000 waiting job cap was reached. New jobs were refused. The dropped count is shown with the agent's triggers.".to_owned()),
@@ -796,39 +847,72 @@ impl Scheduler {
     fn trigger_note_allowed(&self, id: &str, ty: &str, event: &schema::NoteEvent) -> bool {
         (event.types.is_empty() || event.types.iter().any(|t| t == ty))
             && (!is_agent_type(ty) || !event.types.is_empty())
-            && self.note_matches(id, ty, event.condition_expr().as_ref()).is_some()
+            && self
+                .note_matches(id, ty, event.condition_expr().as_ref())
+                .is_some()
     }
 
     /// Newest matching notes without any trigger record. Also used when confirming the
     /// preview, so edits, deletions, new records and safety decisions take effect.
-    pub fn trigger_backfill_candidates(&self, name: &str, trigger: &str) -> Result<Vec<(String, String)>, String> {
+    pub fn trigger_backfill_candidates(
+        &self,
+        name: &str,
+        trigger: &str,
+    ) -> Result<Vec<(String, String)>, String> {
         let agent = self.writer.agent(name).map_err(|e| e.to_string())?;
-        if !agent.enabled { return Err("agent is disabled".to_owned()); }
+        if !agent.enabled {
+            return Err("agent is disabled".to_owned());
+        }
         let t = agent.trigger(trigger).ok_or("trigger not found")?;
-        let TriggerWhen::NoteEvent(e) = &t.when else { return Err("backfill needs a note event trigger".to_owned()); };
+        let TriggerWhen::NoteEvent(e) = &t.when else {
+            return Err("backfill needs a note event trigger".to_owned());
+        };
         let mut notes = self.writer.list(None).map_err(|e| e.to_string())?;
         notes.reverse();
         let mut found = Vec::new();
         for note in notes {
             if !self.trigger_note_allowed(&note.id, &note.type_name, e)
-                || self.writer.state().trigger_record_exists(name, trigger, &note.id).map_err(|e| e.to_string())? { continue; }
+                || self
+                    .writer
+                    .state()
+                    .trigger_record_exists(name, trigger, &note.id)
+                    .map_err(|e| e.to_string())?
+            {
+                continue;
+            }
             found.push((note.id, note.type_name));
         }
         Ok(found)
     }
 
-    pub fn trigger_backfill(&self, name: &str, trigger: &str, notes: &[(String, String)]) -> Result<usize, String> {
+    pub fn trigger_backfill(
+        &self,
+        name: &str,
+        trigger: &str,
+        notes: &[(String, String)],
+    ) -> Result<usize, String> {
         let current = self.trigger_backfill_candidates(name, trigger)?;
         let agent = self.writer.agent(name).map_err(|e| e.to_string())?;
         let t = agent.trigger(trigger).ok_or("trigger not found")?;
         let mut count = 0;
         for (id, ty) in notes.iter().take(1000).filter(|n| current.contains(n)) {
-            let title = self.writer.title(id).map_err(|e| e.to_string())?.unwrap_or_default();
+            let title = self
+                .writer
+                .title(id)
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
             let job = AgentJob {
-                durable: None, note: Some((id.clone(), ty.clone())),
-                agent: name.to_owned(), trigger: trigger.to_owned(),
-                prompt: format!("{}\nEvent: backfill of note {id} (type {ty}, title {title:?})", t.prompt),
-                title: run_title(trigger, self.clock.now_ms(), None), thread: None, origin: None,
+                durable: None,
+                note: Some((id.clone(), ty.clone())),
+                agent: name.to_owned(),
+                trigger: trigger.to_owned(),
+                prompt: format!(
+                    "{}\nEvent: backfill of note {id} (type {ty}, title {title:?})",
+                    t.prompt
+                ),
+                title: run_title(trigger, self.clock.now_ms(), None),
+                thread: None,
+                origin: None,
             };
             count += usize::from(self.persist_trigger(&job, self.clock.now_ms()));
         }
@@ -1120,7 +1204,10 @@ impl Scheduler {
     pub(crate) fn agent_work(&self, mut job: AgentJob) {
         loop {
             self.run_agent_job(&job);
-            let next = self.plan().agents.next_queued(&job.agent, self.clock.now_ms());
+            let next = self
+                .plan()
+                .agents
+                .next_queued(&job.agent, self.clock.now_ms());
             match next {
                 Some(j) => job = j,
                 None => break,
@@ -1139,7 +1226,11 @@ impl Scheduler {
             Ok(a) if a.enabled => a,
             _ => {
                 if let Some(id) = job.durable {
-                    let _ = self.writer.state().finish_trigger_job(id, "cancelled", Some("agent missing or disabled"));
+                    let _ = self.writer.state().finish_trigger_job(
+                        id,
+                        "cancelled",
+                        Some("agent missing or disabled"),
+                    );
                 }
                 return;
             }
@@ -1147,19 +1238,28 @@ impl Scheduler {
         let state = self.writer.state();
         if let Some(id) = job.durable {
             match state.begin_trigger_job(id, self.clock.now_ms()) {
-                Ok(true) => {},
+                Ok(true) => {}
                 Ok(false) => return,
-                Err(e) => { eprintln!("starting durable trigger: {e}"); return; }
+                Err(e) => {
+                    eprintln!("starting durable trigger: {e}");
+                    return;
+                }
             }
-            let matches = agent.trigger(&job.trigger).is_some_and(|t| {
-                match (&job.note, &t.when) {
-                    (Some((note, ty)), TriggerWhen::NoteEvent(e)) => self.trigger_note_allowed(note, ty, e),
+            let matches = agent
+                .trigger(&job.trigger)
+                .is_some_and(|t| match (&job.note, &t.when) {
+                    (Some((note, ty)), TriggerWhen::NoteEvent(e)) => {
+                        self.trigger_note_allowed(note, ty, e)
+                    }
                     (None, _) => true,
                     _ => false,
-                }
-            });
+                });
             if !matches {
-                let _ = state.finish_trigger_job(id, "cancelled", Some("note no longer matches trigger"));
+                let _ = state.finish_trigger_job(
+                    id,
+                    "cancelled",
+                    Some("note no longer matches trigger"),
+                );
                 return;
             }
         }
@@ -1168,7 +1268,8 @@ impl Scheduler {
             Err(e) => {
                 eprintln!("agent {:?}: recording the run failed: {e}", agent.name);
                 if let Some(queued) = job.durable {
-                    let _ = state.retry_trigger_job(queued, self.clock.now_ms(), Some(&e.to_string()));
+                    let _ =
+                        state.retry_trigger_job(queued, self.clock.now_ms(), Some(&e.to_string()));
                 }
                 return;
             }
@@ -1205,10 +1306,14 @@ impl Scheduler {
         if let Some(queued) = job.durable {
             let result = match &outcome {
                 AgentRunOutcome::Succeeded => state.finish_trigger_job(queued, "succeeded", None),
-                AgentRunOutcome::Failed(message) => state.retry_trigger_job(queued, self.clock.now_ms(), Some(message)),
+                AgentRunOutcome::Failed(message) => {
+                    state.retry_trigger_job(queued, self.clock.now_ms(), Some(message))
+                }
                 AgentRunOutcome::Running => unreachable!(),
             };
-            if let Err(e) = result { eprintln!("finishing trigger queue job: {e}"); }
+            if let Err(e) = result {
+                eprintln!("finishing trigger queue job: {e}");
+            }
         }
         let (word, message) = match &outcome {
             AgentRunOutcome::Failed(m) => ("failed", Some(m.as_str())),

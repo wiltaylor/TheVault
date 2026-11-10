@@ -214,10 +214,16 @@ fn a_provider_failure_gets_three_retries_then_stays_failed() {
     let api = Api::start(&fake);
     api.agent("clerk", CLERK);
     for _ in 0..4 {
-        fake.push(AnthropicReply::error(400, "invalid_request_error", "No credit"));
+        fake.push(AnthropicReply::error(
+            400,
+            "invalid_request_error",
+            "No credit",
+        ));
     }
     api.memo("Fail", "open");
-    for by in ["PT31S", "PT30S", "PT60S", "PT120S"] { api.advance(by); }
+    for by in ["PT31S", "PT30S", "PT60S", "PT120S"] {
+        api.advance(by);
+    }
     assert_eq!(fake.message_requests().len(), 4);
     assert_eq!(api.runs("clerk")["queue"]["failed"], 1);
     api.advance("PT1H");
@@ -236,31 +242,71 @@ fn backfill_requires_a_session_and_a_preview_and_skips_records_and_nonmatches() 
     let path = "/api/agents/clerk/triggers/opened/backfill";
     let denied = api.request("POST", path, Some(json!({"limit": 1})));
     assert_eq!(denied.status(), 403);
-    let token = api.send("POST", "/api/tokens", json!({"name": "agent-clerk", "scope": "write"}));
-    let denied = api.client.post(api.server.url(path)).bearer_auth(token["secret"].as_str().unwrap())
-        .json(&json!({"limit": 1})).send().unwrap();
+    let token = api.send(
+        "POST",
+        "/api/tokens",
+        json!({"name": "agent-clerk", "scope": "write"}),
+    );
+    let denied = api
+        .client
+        .post(api.server.url(path))
+        .bearer_auth(token["secret"].as_str().unwrap())
+        .json(&json!({"limit": 1}))
+        .send()
+        .unwrap();
     assert_eq!(denied.status(), 403, "agent tokens cannot backfill");
-    let login = api.client.post(api.server.url("/api/login"))
-        .json(&json!({"password": testkit::PASSWORD})).send().unwrap();
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
     assert!(login.status().is_success());
-    let cookie = login.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned();
-    let post = |body: Value| api.client.post(api.server.url(path))
-        .header(reqwest::header::COOKIE, &cookie).json(&body).send().unwrap();
+    let cookie = login.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let post = |body: Value| {
+        api.client
+            .post(api.server.url(path))
+            .header(reqwest::header::COOKIE, &cookie)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
     let invalid = post(json!({"preview": "not-issued"}));
     assert_eq!(invalid.status(), 400);
-    let preview: Value = post(json!({"limit": 1})).error_for_status().unwrap().json().unwrap();
+    let preview: Value = post(json!({"limit": 1}))
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
     assert_eq!(preview["count"], 2);
     assert_eq!(preview["selected"], 1);
     fake.push(AnthropicMessage::text("Done."));
-    let confirmed: Value = post(json!({"preview": preview["preview"]})).error_for_status().unwrap().json().unwrap();
+    let confirmed: Value = post(json!({"preview": preview["preview"]}))
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
     assert_eq!(confirmed["queued"], 1);
     assert_eq!(post(json!({"preview": preview["preview"]})).status(), 400);
     api.advance("PT31S");
     assert_eq!(fake.message_requests().len(), 1);
     assert!(first_user_text(&fake, 0).contains(&newest));
     assert!(!first_user_text(&fake, 0).contains(&older));
-    let preview: Value = post(json!({"limit": 1000})).error_for_status().unwrap().json().unwrap();
-    assert_eq!(preview["count"], 1, "a queued or completed note has a record");
+    let preview: Value = post(json!({"limit": 1000}))
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(
+        preview["count"], 1,
+        "a queued or completed note has a record"
+    );
 }
 
 #[test]
