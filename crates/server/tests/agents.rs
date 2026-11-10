@@ -79,7 +79,10 @@ fn agent_code_token_cannot_create_ready_outbox_item() {
         .unwrap();
     let status = response.status();
     let body = response.text().unwrap();
-    assert!(status.is_client_error() && body.contains("agent"), "expected agent review refusal, got {status}: {body}");
+    assert!(
+        status.is_client_error() && body.contains("agent"),
+        "expected agent review refusal, got {status}: {body}"
+    );
 }
 
 #[test]
@@ -94,14 +97,24 @@ fn agent_code_token_drafts_but_cannot_approve_or_forge_results() {
     })), 201);
     assert_eq!(made["note"]["fields"]["status"], "draft");
     assert_eq!(made["note"]["fields"]["drafted_by"], "cli");
-    for (field, value) in [("status", json!("ready")), ("drafted_by", json!("user")), ("sent_ref", json!("forged"))] {
+    for (field, value) in [
+        ("status", json!("ready")),
+        ("drafted_by", json!("user")),
+        ("sent_ref", json!("forged")),
+    ] {
         let mut note = made["note"].clone();
         note["fields"][field] = value;
-        let res = agent.put(server.url(&format!("/api/notes/{}", made["id"].as_str().unwrap())))
-            .json(&json!({ "note": note, "base": made["version"] })).send().unwrap();
+        let res = agent
+            .put(server.url(&format!("/api/notes/{}", made["id"].as_str().unwrap())))
+            .json(&json!({ "note": note, "base_version": made["version"] }))
+            .send()
+            .unwrap();
         let status = res.status();
         let body = res.text().unwrap();
-        assert!(status.is_client_error() && body.contains("agent"), "{field}: {status}: {body}");
+        assert!(
+            status.is_client_error() && body.contains("agent"),
+            "{field}: {status}: {body}"
+        );
     }
 }
 
@@ -117,18 +130,33 @@ fn agent_code_token_calendar_changes_require_outbox() {
         "when": { "start": "2026-04-03", "end": "2026-04-03" }, "my_response": "needs_action"
     }}})), 201);
     let url = server.url(&format!("/api/notes/{}", made["id"].as_str().unwrap()));
-    for (field, value) in [("my_response", json!("accepted")), ("attendees_raw", json!(["ann@example.com"])), ("status", json!("cancelled")), ("send_updates", json!("all"))] {
+    for (field, value) in [
+        ("my_response", json!("accepted")),
+        ("attendees_raw", json!(["ann@example.com"])),
+        ("status", json!("cancelled")),
+        ("send_updates", json!("all")),
+    ] {
         let mut note = made["note"].clone();
         note["fields"][field] = value;
-        let res = agent.put(&url).json(&json!({ "note": note, "base": made["version"] })).send().unwrap();
+        let res = agent
+            .put(&url)
+            .json(&json!({ "note": note, "base_version": made["version"] }))
+            .send()
+            .unwrap();
         let status = res.status();
         let body = res.text().unwrap();
-        assert!(status.is_client_error() && body.contains("agent"), "{field}: {status}: {body}");
+        assert!(
+            status.is_client_error() && body.contains("agent"),
+            "{field}: {status}: {body}"
+        );
     }
     let res = agent.delete(&url).send().unwrap();
     let status = res.status();
     let body = res.text().unwrap();
-    assert!(status.is_client_error() && body.contains("agent"), "delete: {status}: {body}");
+    assert!(
+        status.is_client_error() && body.contains("agent"),
+        "delete: {status}: {body}"
+    );
 }
 
 #[test]
