@@ -297,40 +297,33 @@ impl Writer {
             chrono::DateTime::parse_from_rfc3339(date)
                 .map_err(|_| crate::Error::BadRequest("Invalid creation date filter".into()))
         };
-        let since = since.map(parse).transpose()?;
-        let until = until.map(parse).transpose()?;
+        since.map(parse).transpose()?;
+        until.map(parse).transpose()?;
         let held = self.state().held_agent_note_ids()?;
-        let cached = self.state().indexed_agent_safety()?;
+        let held_json = serde_json::to_string(&held).expect("held ids");
         let notes = self
             .read_index(|index, _| {
                 let mut stmt = index
                     .connection()
-                    .prepare("SELECT id,type,created FROM notes WHERE (?1 IS NULL OR type=?1)")?;
-                stmt.query_map([kind], |r| {
+                    .prepare("SELECT n.id,n.type,n.created FROM json_each(?1) h JOIN notes n ON n.id=h.value
+                        WHERE (?2 IS NULL OR n.type=?2)
+                        AND (?3 IS NULL OR julianday(n.created)>=julianday(?3))
+                        AND (?4 IS NULL OR julianday(n.created)<=julianday(?4))")?;
+                stmt.query_map(rusqlite::params![held_json, kind, since, until], |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         (r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?),
                     ))
                 })?
-                .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()
+                .collect::<rusqlite::Result<Vec<_>>>()
             })
             .map_err(index::Error::from)?;
         let mut out = Vec::new();
-        for (id, hash, stored) in cached {
-            if !held.contains(&id) {
-                continue;
-            }
-            let Some((type_name, created)) = notes.get(&id) else {
+        for (id, (type_name, created)) in notes {
+            let Some(hash) = self.state().indexed_agent_safety_hash(&id)? else {
                 continue;
             };
-            let date = created
-                .as_deref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
-            if since.is_some_and(|s| date.is_none_or(|d| d < s))
-                || until.is_some_and(|s| date.is_none_or(|d| d > s))
-            {
-                continue;
-            }
+            let stored = self.state().meta(&format!("agent_safety.note.{id}"))?;
             let mut safety = stored
                 .and_then(|v| serde_json::from_str::<Safety>(&v).ok())
                 .unwrap_or(Safety {
