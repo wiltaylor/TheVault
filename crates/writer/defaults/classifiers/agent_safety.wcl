@@ -1,4 +1,4 @@
-types    = ["email", "message", "call", "event"]
+types    = ["email", "message", "call", "event", "event_series"]
 model    = "typesafe/jev-1.13"
 fields   = ["title", "body"]
 withhold = ["prompt_injection", "scam", "sensitive_credentials"]

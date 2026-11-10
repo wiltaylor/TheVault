@@ -185,6 +185,7 @@ struct Lane {
 /// What the agent triggers know right now, kept in the scheduler's plan.
 #[derive(Default)]
 pub(crate) struct AgentPlan {
+    pub(crate) safety_ready: bool,
     /// The enabled agents whose files parse, by name.
     agents: BTreeMap<String, Agent>,
     /// When each schedule trigger next fires, by agent and trigger, with the schedule it was
@@ -331,7 +332,7 @@ impl AgentPlan {
     /// The soonest time something is due: a schedule firing, a waiting note change, or now when
     /// changes were heard and not yet matched.
     pub(crate) fn next_due(&self, now: i64) -> Option<i64> {
-        if !self.heard.is_empty() || !self.mentions.is_empty() {
+        if self.safety_ready || !self.heard.is_empty() || !self.mentions.is_empty() {
             return Some(now);
         }
         self.next
@@ -549,7 +550,10 @@ impl Scheduler {
         let mut plan = self.plan();
         for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
             let deleting = plan.agents.deleting.remove(&s.id);
-            if let Ok(doc) = Doc::parse(&s.wcl, "agent event") {
+            let Ok(doc) = Doc::parse(&s.wcl, "agent event") else {
+                continue;
+            };
+            {
                 let safety = self.writer.agent_safety_doc(&s.id, &s.type_name, &doc);
                 if !safety.as_ref().is_ok_and(|safety| {
                     safety.allowed()
@@ -636,19 +640,25 @@ impl Scheduler {
         self.reload_agents();
         let now = self.clock.now_ms();
         // Clearance is a single durable arrival event, not replay of arbitrary note edits.
-        if let Ok(ids) = self.writer.state().take_agent_safety_clearances() {
-            for id in ids {
-                if self.writer.agent_may_read(&id)
-                    && let Ok(note) = self.writer.read(&id)
-                {
-                    self.plan().agents.heard.push(Heard {
-                        op: "create",
-                        id,
-                        type_name: note.type_name,
-                        at: now,
-                        deleting: None,
-                    });
-                }
+        self.plan().agents.safety_ready = false;
+        let clearances = self
+            .writer
+            .state()
+            .agent_safety_clearances()
+            .unwrap_or_default();
+        let mut admitted_clearances = Vec::new();
+        for id in &clearances {
+            if self.writer.agent_may_read(id)
+                && let Ok(note) = self.writer.read(id)
+            {
+                self.plan().agents.heard.push(Heard {
+                    op: "create",
+                    id: id.clone(),
+                    type_name: note.type_name,
+                    at: now.saturating_sub(DEBOUNCE_MS),
+                    deleting: None,
+                });
+                admitted_clearances.push(id.clone());
             }
         }
         let (mut jobs, events) = self.plan().agents.take_due(now);
@@ -711,6 +721,10 @@ impl Scheduler {
                     Admitted::Dropped | Admitted::Refused => {}
                 }
             }
+        }
+        // Only acknowledge after trigger matching and admission, not before debounce.
+        for id in admitted_clearances {
+            let _ = self.writer.state().acknowledge_agent_safety_clearance(&id);
         }
         for job in &skipped {
             self.record_skipped(job);

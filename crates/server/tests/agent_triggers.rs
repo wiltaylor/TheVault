@@ -377,7 +377,23 @@ fn safety_agent_tools_and_scripts_do_not_return_held_note_text() {
     let chat = FakeAnthropic::start();
     let api = safety_setup(&chat, &decisions, "router");
     decisions.push(safety_reply("sensitive_credentials"));
-    let note = safety_note(&api);
+    let asset: Value = api
+        .client
+        .post(api.server.url("/api/assets?filename=PRIVATE_ASSET.txt"))
+        .bearer_auth(api.server.admin_token())
+        .body("PRIVATE_ASSET_TEXT")
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let asset = asset["id"].as_str().unwrap();
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Untrusted safety fixture", "attachments":[asset], "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
     let id = note["id"].as_str().unwrap();
     assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
     api.agent("auditor", "label = \"Auditor\"\npermissions { scripts { run_code = true } }\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Read notes.\" }\n");
@@ -386,6 +402,8 @@ fn safety_agent_tools_and_scripts_do_not_return_held_note_text() {
         .tool_use("held_query", "query_notes", json!({"query":"from email select title"}))
         .tool_use("held_search", "search_notes", json!({"text":"fixture", "limit":10}))
         .tool_use("held_links", "backlinks", json!({"id":id}))
+        .tool_use("held_find", "find_assets", json!({"text":"PRIVATE_ASSET"}))
+        .tool_use("held_asset", "read_asset", json!({"id":asset}))
         .tool_use("held_script", "run_script", json!({"code":format!("use vault\nfn main() -> Result[Value, string] {{ vault::get(\"{id}\") }}\n"), "function":null,"args":null})));
     chat.push(AnthropicMessage::text("Held."));
     api.memo("Audit", "open");
@@ -393,6 +411,12 @@ fn safety_agent_tools_and_scripts_do_not_return_held_note_text() {
     let requests = chat.message_requests();
     assert_eq!(requests.len(), 2);
     let delivered = requests[1].json().to_string();
+    assert!(!delivered.contains("PRIVATE_ASSET_TEXT"), "{delivered}");
+    assert!(!delivered.contains("PRIVATE_ASSET.txt"), "{delivered}");
+    assert!(
+        delivered.contains("notes are held from agents"),
+        "{delivered}"
+    );
     assert!(
         !delivered.contains("Untrusted safety fixture"),
         "{delivered}"
@@ -422,6 +446,10 @@ fn safety_covers_new_backfill_messages_calls_and_invitations_but_not_outgoing() 
         (
             "event",
             json!({"title":"Invitation", "my_response":"needs_action"}),
+        ),
+        (
+            "event_series",
+            json!({"title":"Recurring invitation", "organiser":"outside@example.test", "calendar":"me@example.test", "rule":["RRULE:FREQ=DAILY"], "starts":{"start":"2026-11-10", "end":"2026-11-10"}}),
         ),
     ] {
         decisions.push(safety_reply("prompt_injection"));
@@ -458,7 +486,152 @@ fn safety_covers_new_backfill_messages_calls_and_invitations_but_not_outgoing() 
     decisions.push(safety_reply("scam"));
     let sentinel = safety_note(&api);
     safety_wait(&api, sentinel["id"].as_str().unwrap());
-    assert_eq!(decisions.requests().len(), 4);
+    assert_eq!(decisions.requests().len(), 5);
+}
+
+#[test]
+fn safety_review_workflow_preserves_clearance_but_body_changes_hold_without_retry() {
+    let decisions = testkit::FakeDecisions::start();
+    let chat = FakeAnthropic::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("allow"));
+    chat.push(AnthropicMessage::text("Received."));
+    let note = safety_note(&api);
+    let id = note["id"].as_str().unwrap();
+    assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "allowed");
+    for (field, value) in [
+        ("labels", json!(["system/INBOX"])),
+        ("processed", json!(true)),
+        ("images_pending", json!(false)),
+    ] {
+        let current = api.get(&format!("/api/notes/{id}"));
+        let mut content = current["note"].clone();
+        content["fields"][field] = value;
+        api.send(
+            "PUT",
+            &format!("/api/notes/{id}"),
+            json!({"note":content, "base_version":current["version"]}),
+        );
+        assert_eq!(
+            api.get(&format!("/api/notes/{id}"))["agent_safety"]["status"],
+            "allowed"
+        );
+    }
+    let current = api.get(&format!("/api/notes/{id}"));
+    let mut content = current["note"].clone();
+    content["blocks"] = json!([{"kind":"content", "labels":["body"], "blocks":[{"kind":"paragraph", "fields":{"text":"New untrusted content"}}]}]);
+    api.send(
+        "PUT",
+        &format!("/api/notes/{id}"),
+        json!({"note":content,"base_version":current["version"]}),
+    );
+    assert_eq!(
+        api.get(&format!("/api/notes/{id}"))["agent_safety"]["reason"],
+        "content_changed"
+    );
+    api.advance("PT35S");
+    assert_eq!(decisions.requests().len(), 1);
+}
+
+#[test]
+fn safety_review_oversized_and_unconfigured_notes_are_held_without_polling() {
+    let decisions = testkit::FakeDecisions::start();
+    let chat = FakeAnthropic::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{"title":"Large", "snippet":"x".repeat(130*1024)}}}),
+    );
+    assert_eq!(
+        safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["reason"],
+        "too_large"
+    );
+    assert!(decisions.requests().is_empty());
+    std::fs::remove_file(api.server.vault_path().join("classifiers/agent_safety.wcl")).unwrap();
+    let note = safety_note(&api);
+    let visible = safety_wait(&api, note["id"].as_str().unwrap());
+    assert_eq!(visible["agent_safety"]["status"], "held");
+    assert_eq!(visible["agent_safety"]["reason"], "unclassified");
+}
+
+#[test]
+fn safety_review_dispatch_and_attached_context_refuse_held_note() {
+    let decisions = testkit::FakeDecisions::start();
+    let chat = FakeAnthropic::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("scam"));
+    let note = safety_note(&api);
+    let id = note["id"].as_str().unwrap();
+    assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
+    let res = api.request(
+        "POST",
+        "/api/agents/reader/dispatch",
+        Some(json!({"notes":[id],"request":"Read it"})),
+    );
+    assert!(!res.status().is_success());
+    assert!(chat.message_requests().is_empty());
+    chat.push(AnthropicMessage::text("Review the held note."));
+    let res = api.request("POST", "/api/ai/chat", Some(json!({"agent":"reader", "note_id":id, "messages":[{"role":"user","content":[{"type":"text","text":"What is open?"}]}]})));
+    assert!(res.status().is_success(), "{}", res.text().unwrap());
+    let _ = res.text().unwrap();
+    let request = chat.message_requests()[0].json().to_string();
+    assert!(!request.contains("Untrusted safety fixture"), "{request}");
+    assert!(request.contains("notes are held from agents"), "{request}");
+}
+
+#[test]
+fn safety_review_mentions_and_subagent_reads_are_held() {
+    let decisions = testkit::FakeDecisions::start();
+    let chat = FakeAnthropic::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    api.agent("callee", "label = \"Callee\"\n");
+    decisions.push(safety_reply("prompt_injection"));
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{
+        "fields":{"title":"PRIVATE_HELD_TITLE"},
+        "blocks":[{"kind":"content", "labels":["body"], "blocks":[{"kind":"paragraph", "fields":{"text":"[@Callee read this](agent:callee?call=01JB8Z4K2MQ7V3X9T5R6W8Y2ZB)"}}]}]
+    }}));
+    let id = note["id"].as_str().unwrap();
+    assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
+    api.advance("PT35S");
+    assert!(chat.message_requests().is_empty());
+    api.agent("chief", "label = \"Chief\"\npermissions { subagents { allow = true } }\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Audit\" }\n");
+    chat.push(AnthropicMessage::new().tool_use("start", "start_subagent", json!({"task":"Inspect the note", "instructions":null, "agent":null, "permissions":null,"model":null})));
+    chat.push(AnthropicMessage::new().tool_use("read", "get_note", json!({"id":id})));
+    chat.push(AnthropicMessage::text("Held."));
+    chat.push(AnthropicMessage::text("Done."));
+    api.memo("Audit", "open");
+    api.advance("PT35S");
+    let requests = chat.message_requests();
+    assert_eq!(requests.len(), 4);
+    let child = requests[2].json().to_string();
+    assert!(!child.contains("PRIVATE_HELD_TITLE"), "{child}");
+    assert!(child.contains("held from agents"), "{child}");
+}
+
+#[test]
+fn safety_review_server_holds_preexisting_notes_by_default() {
+    const ID: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
+    let server = TestServer::start_with_args(
+        |vault| {
+            std::fs::create_dir_all(vault.join("types")).unwrap();
+            std::fs::write(vault.join("types/email.wcl"), "label = \"Email\"\n").unwrap();
+            std::fs::create_dir_all(vault.join("notes/email")).unwrap();
+            std::fs::write(
+                vault.join(format!("notes/email/{ID}.wcl")),
+                "title = \"Legacy mail\"\n",
+            )
+            .unwrap();
+        },
+        &[OsStr::new("--test-clock"), OsStr::new(START)],
+    );
+    let api = Api {
+        server,
+        client: Client::new(),
+    };
+    let note = api.get(&format!("/api/notes/{ID}"));
+    assert_eq!(note["agent_safety"]["status"], "held");
+    assert_eq!(note["agent_safety"]["reason"], "predates_activation");
 }
 
 impl Api {

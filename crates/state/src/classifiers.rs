@@ -8,6 +8,7 @@ impl State {
     pub fn activate_agent_safety(&self, at: i64, existing: &[String]) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_safety_index (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, held INTEGER NOT NULL);")?;
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM meta WHERE key='agent_safety.activation_ms')",
             [],
@@ -18,6 +19,11 @@ impl State {
                 tx.execute(
                     "INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'1')",
                     [format!("agent_safety.legacy.{id}")],
+                )?;
+                // These notes already had their arrival before activation.
+                tx.execute(
+                    "INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'1')",
+                    [format!("agent_safety.delivered.{id}")],
                 )?;
             }
             tx.execute(
@@ -35,6 +41,12 @@ impl State {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [format!("agent_safety.note.{id}"), value.to_owned()])?;
+        let hash = serde_json::from_str::<serde_json::Value>(value)
+            .ok()
+            .and_then(|v| v["fingerprint"].as_str().map(str::to_owned))
+            .unwrap_or_default();
+        tx.execute("INSERT INTO agent_safety_index(id,fingerprint,held) VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,held=excluded.held",
+            rusqlite::params![id, hash, !cleared])?;
         if cleared {
             let first = tx.execute(
                 "INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'1')",
@@ -51,22 +63,41 @@ impl State {
         Ok(())
     }
 
-    pub fn take_agent_safety_clearances(&self) -> Result<Vec<String>> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let ids = {
-            let mut stmt = tx.prepare(
-                "SELECT value FROM meta WHERE key LIKE 'agent_safety.clearance.%' ORDER BY key",
-            )?;
-            stmt.query_map([], |r| r.get(0))?
-                .collect::<std::result::Result<Vec<String>, _>>()?
-        };
-        tx.execute(
-            "DELETE FROM meta WHERE key LIKE 'agent_safety.clearance.%'",
-            [],
+    pub fn agent_safety_clearances(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT value FROM meta WHERE key LIKE 'agent_safety.clearance.%' ORDER BY key",
         )?;
-        tx.commit()?;
-        Ok(ids)
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn acknowledge_agent_safety_clearance(&self, id: &str) -> Result<()> {
+        self.conn().execute(
+            "DELETE FROM meta WHERE key=?1",
+            [format!("agent_safety.clearance.{id}")],
+        )?;
+        Ok(())
+    }
+
+    pub fn index_agent_safety(&self, id: &str, hash: &str, held: bool) -> Result<()> {
+        self.conn().execute("INSERT INTO agent_safety_index(id,fingerprint,held) VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,held=excluded.held",
+            rusqlite::params![id, hash, held])?;
+        Ok(())
+    }
+
+    pub fn held_agent_note_ids(&self) -> Result<std::collections::HashSet<String>> {
+        if self.meta("agent_safety.activation_ms")?.is_none() {
+            return Ok(Default::default());
+        }
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT id FROM agent_safety_index WHERE held=1 AND NOT (
+            EXISTS(SELECT 1 FROM meta WHERE key='agent_safety.pre_existing_mode' AND value='legacy_allowed')
+            AND EXISTS(SELECT 1 FROM meta WHERE key='agent_safety.legacy.' || id))")?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?)
     }
 
     pub fn queue_classifications(&self, payloads: &[String]) -> Result<()> {
@@ -79,6 +110,22 @@ impl State {
             )?;
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    pub fn classification_queued(&self, id: &str) -> Result<bool> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM classifier_pending WHERE json_extract(payload,'$.id')=?1)",
+            [id],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn forget_agent_safety_index(&self, id: &str) -> Result<()> {
+        if self.meta("agent_safety.activation_ms")?.is_some() {
+            self.conn()
+                .execute("DELETE FROM agent_safety_index WHERE id=?1", [id])?;
+        }
         Ok(())
     }
 

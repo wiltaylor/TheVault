@@ -5,6 +5,20 @@ import { AgentSafetyBanner } from "./AgentSafetyBanner";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+it("shows unclassified and oversized holds without polling", async () => {
+  vi.useFakeTimers();
+  try {
+    const read = vi.spyOn(api, "note");
+    render(() => <AgentSafetyBanner id="note" safety={{ status: "held", reason: "unclassified", fingerprint: "hash" }} />);
+    expect(screen.getByText(/has not been queued/)).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(read).not.toHaveBeenCalled();
+    cleanup();
+    render(() => <AgentSafetyBanner id="note" safety={{ status: "held", reason: "too_large", fingerprint: "hash" }} />);
+    expect(screen.getByText(/128 KiB/)).toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
+
 it("shows a held reason and releases only the reviewed fingerprint", async () => {
   const release = vi.spyOn(api, "releaseAgentSafety").mockResolvedValue({ agent_safety: { status: "released", reason: "user_released", fingerprint: "hash" } });
   render(() => <AgentSafetyBanner id="note" safety={{ status: "held", reason: "prompt_injection", fingerprint: "hash" }} />);

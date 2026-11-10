@@ -1367,6 +1367,7 @@ fn setup(
         system.push_str(&memories);
     }
     if let Some(id) = note_id
+        .as_deref()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .filter(|id| w.agent_may_read(id))
@@ -1382,6 +1383,12 @@ fn setup(
              title {title:?}. \"This note\" means it; read it with get_note.\n",
             n.type_name
         ));
+    }
+    if note_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty() && !w.agent_may_read(id))
+    {
+        system.push_str("\n1 notes are held from agents; the user can review and release them.\n");
     }
     // What the agent can do with wscript, so it opens the wscript skill first (script-tools T5).
     let scripts = if change_scope(scope, agent).allows(Scope::Write) {
@@ -3918,7 +3925,21 @@ fn propose_or_read(
         }
         other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
     };
-    result.unwrap_or_else(|e| e)
+    let mut out = result.unwrap_or_else(|e| e);
+    if matches!(
+        call.name.as_str(),
+        "search_notes" | "query_notes" | "backlinks"
+    ) {
+        match w.state().held_agent_note_ids() {
+            Ok(ids) if !ids.is_empty() => out.content.push_str(&format!(
+                "\n{} notes are held from agents; the user can review and release them.",
+                ids.len()
+            )),
+            Err(_) => return ToolOut::error("Safety status unavailable"),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// `propose_edit`: check the edit with a dry-run batch and hand it to the user (ai D14).

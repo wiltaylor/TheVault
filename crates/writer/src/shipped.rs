@@ -78,7 +78,10 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
     ShippedFile {
         path: "classifiers/agent_safety.wcl",
         source: include_str!("../defaults/classifiers/agent_safety.wcl"),
-        hashes: &["c8259b1fdca6f8e750006f31bbd1af8406c87657ec09342a554d94e40ba2b3f8"],
+        hashes: &[
+            "c8259b1fdca6f8e750006f31bbd1af8406c87657ec09342a554d94e40ba2b3f8",
+            "3357ff825a4979a4103bfcf390dfd7e513ca48de7a6b1c9a8108cdc709a9a54a",
+        ],
     },
     ShippedFile {
         path: "classifiers/scam.wcl",

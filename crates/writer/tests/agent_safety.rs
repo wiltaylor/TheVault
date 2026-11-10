@@ -30,10 +30,12 @@ fn activation_inventory_is_not_note_date_and_both_legacy_modes_work() {
         .set_meta("agent_safety.pre_existing_mode", "legacy_allowed")
         .unwrap();
     assert!(w.agent_may_read(&old.id));
+    assert!(!w.state().held_agent_note_ids().unwrap().contains(&old.id));
     w.state()
         .set_meta("agent_safety.pre_existing_mode", "held")
         .unwrap();
     assert!(!w.agent_may_read(&old.id));
+    assert!(w.state().held_agent_note_ids().unwrap().contains(&old.id));
     assert_eq!(
         w.agent_safety(&old.id).unwrap().reason,
         "predates_activation"
@@ -60,14 +62,21 @@ fn clearance_is_content_bound_and_enqueued_once_even_after_restart() {
     );
     assert!(w.agent_may_read(&note.id));
     assert_eq!(
-        w.state().take_agent_safety_clearances().unwrap(),
+        w.state().agent_safety_clearances().unwrap(),
         vec![note.id.clone()]
     );
+    assert_eq!(
+        w.state().agent_safety_clearances().unwrap(),
+        vec![note.id.clone()]
+    );
+    w.state()
+        .acknowledge_agent_safety_clearance(&note.id)
+        .unwrap();
     assert!(
         w.finish_agent_safety(&note.id, &hash, "released", "user_released")
             .unwrap()
     );
-    assert!(w.state().take_agent_safety_clearances().unwrap().is_empty());
+    assert!(w.state().agent_safety_clearances().unwrap().is_empty());
     w.update(
         &note.id,
         &Input::Json(serde_json::json!({"fields":{"title":"Changed"}})),
@@ -85,7 +94,7 @@ fn clearance_is_content_bound_and_enqueued_once_even_after_restart() {
     let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
     let w = Writer::open(vault, state).unwrap();
     assert!(!w.agent_may_read(&note.id));
-    assert!(w.state().take_agent_safety_clearances().unwrap().is_empty());
+    assert!(w.state().agent_safety_clearances().unwrap().is_empty());
 }
 
 #[test]
@@ -160,4 +169,131 @@ fn forged_annotation_cannot_clear_missing_or_failed_decision() {
     w.finish_agent_safety(&note.id, &hash, "held", "decision_failed")
         .unwrap();
     assert!(!w.agent_may_read(&note.id));
+}
+
+#[test]
+fn review_routine_workflow_writes_keep_clearance() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let note = create(&w, "Incoming");
+    let hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    w.finish_agent_safety(&note.id, &hash, "allowed", "allow")
+        .unwrap();
+    for fields in [
+        serde_json::json!({"title":"Incoming", "labels":["system/INBOX"]}),
+        serde_json::json!({"title":"Incoming", "processed":true}),
+        serde_json::json!({"title":"Incoming", "images_pending":false}),
+    ] {
+        let version = w.read(&note.id).unwrap().version;
+        w.update(
+            &note.id,
+            &Input::Json(serde_json::json!({"fields":fields})),
+            Some(&version),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
+        assert!(
+            w.agent_may_read(&note.id),
+            "workflow write invalidated clearance: {fields}"
+        );
+    }
+    let version = w.read(&note.id).unwrap().version;
+    w.update(
+        &note.id,
+        &Input::Json(serde_json::json!({"fields":{"title":"Changed content"}})),
+        Some(&version),
+        &Author::Session("owner".into()),
+    )
+    .unwrap();
+    assert_eq!(w.agent_safety(&note.id).unwrap().reason, "content_changed");
+}
+
+#[test]
+fn review_legacy_release_never_replays_arrival() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let note = create(&w, "Already arrived");
+    w.activate_agent_safety().unwrap();
+    let hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    assert!(
+        w.release_agent_safety(&note.id, &hash, &Author::Session("owner".into()))
+            .unwrap()
+    );
+    assert!(w.state().agent_safety_clearances().unwrap().is_empty());
+}
+
+#[test]
+fn review_invited_series_is_in_scope() {
+    let doc = schema::Doc::parse("title = \"Untrusted recurring invitation\"\norganiser = \"outside@example.test\"\ncalendar = \"me@example.test\"\n", "series.wcl").unwrap();
+    assert!(writer::agent_safety::incoming("event_series", &doc));
+}
+
+#[test]
+fn review_sync_snapshot_is_not_classified_content() {
+    let a = schema::Doc::parse("title = \"Invitation\"\ndict snapshot { title = \"Before sync\" }\n", "event.wcl").unwrap();
+    let b = schema::Doc::parse("title = \"Invitation\"\ndict snapshot { title = \"After sync\" }\n", "event.wcl").unwrap();
+    assert_eq!(writer::agent_safety::fingerprint("event", &a), writer::agent_safety::fingerprint("event", &b));
+    assert!(!writer::agent_safety::classified_content(&a).to_string().contains("Before sync"));
+}
+
+#[test]
+fn review_index_excludes_many_held_notes_without_reading_their_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let held: Vec<_> = (0..64).map(|n| create(&w, &format!("Held {n}"))).collect();
+    let visible = create(&w, "Allowed");
+    let hash = w.agent_safety(&visible.id).unwrap().fingerprint;
+    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow")
+        .unwrap();
+    for note in &held {
+        // A per-note read/parse would fail: queries must use the committed index instead.
+        std::fs::write(
+            dir.path().join(format!("notes/email/{}.wcl", note.id)),
+            [0xff],
+        )
+        .unwrap();
+    }
+    assert_eq!(w.state().held_agent_note_ids().unwrap().len(), 64);
+    let _acting = writer::acting_as(&Author::Agent("test".into()));
+    let rows = w.query_page("from email select title", 100, None).unwrap();
+    assert_eq!(rows["total"], 1);
+    assert!(rows.to_string().contains("Allowed"));
+}
+
+#[test]
+fn review_agent_created_note_has_no_clearance_arrival() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let note = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Agent wrote this"}})),
+            &Author::Agent("test".into()),
+        )
+        .unwrap();
+    let hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    w.finish_agent_safety(&note.id, &hash, "allowed", "allow")
+        .unwrap();
+    assert!(w.state().agent_safety_clearances().unwrap().is_empty());
+}
+
+#[test]
+fn review_interrupted_pending_is_held_without_retry_on_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let note = create(&w, "Pending");
+    let read = w.read(&note.id).unwrap();
+    w.register_agent_safety(&note.id, &read.type_name, &read.doc).unwrap();
+    assert_eq!(w.agent_safety(&note.id).unwrap().status, "pending");
+    drop(w);
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let safety = w.agent_safety(&note.id).unwrap();
+    assert_eq!(safety.status, "held");
+    assert_eq!(safety.reason, "unclassified");
+    assert!(w.state().agent_safety_clearances().unwrap().is_empty());
 }

@@ -35,17 +35,42 @@ pub fn incoming(kind: &str, doc: &Doc) -> bool {
         "event" => fields["my_response"]
             .as_str()
             .is_some_and(|s| !s.is_empty()),
+        // Calendar sync retains the organiser address on the series, but not my_response.
+        // Unknown ownership is conservative: only an exact own-calendar address exempts it.
+        "event_series" => {
+            fields["organiser"].as_str().is_some_and(|s| !s.is_empty())
+                && fields["organiser"] != fields["calendar"]
+        }
         _ => false,
     }
 }
 
-/// All content and fields, except server timestamps and the shipped classifier's annotations.
-pub fn fingerprint(kind: &str, doc: &Doc) -> String {
+/// The same content projection is sent to Jev and hashed. Workflow and sync bookkeeping
+/// are not evidence. Unknown/custom fields remain evidence rather than silently bypassing it.
+pub fn classified_content(doc: &Doc) -> serde_json::Value {
     let mut note = doc_to_json(doc);
+    if let Some(blocks) = note["blocks"].as_array_mut() {
+        blocks.retain(|block| !matches!(block["labels"][0].as_str(), Some("snapshot" | "inline_images")));
+    }
     if let Some(fields) = note["fields"].as_object_mut() {
-        for key in ["updated", "created"] {
-            fields.remove(key);
-        }
+        fields.retain(|key, _| {
+            !key.ends_with("_ref")
+                && !matches!(
+                    key.as_str(),
+                    "created"
+                        | "updated"
+                        | "labels"
+                        | "processed"
+                        | "images_pending"
+                        | "inline_images"
+                        | "converter"
+                        | "inbox_catch_up"
+                        | "etag"
+                        | "snapshot"
+                        | "my_response"
+                        | "archived"
+                )
+        });
         if fields
             .get("scam_probability")
             .and_then(serde_json::Value::as_f64)
@@ -76,10 +101,20 @@ pub fn fingerprint(kind: &str, doc: &Doc) -> String {
             }
         }
     }
-    format!("{:x}", Sha256::digest(format!("{kind}:{}", note)))
+    note
+}
+
+pub fn fingerprint(kind: &str, doc: &Doc) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{kind}:{}", classified_content(doc)))
+    )
 }
 
 impl Writer {
+    pub fn set_agent_safety_wake(&self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        *self.safety_wake.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake);
+    }
     /// Reusable by explicit single/bulk user actions, never by an agent or sync token.
     pub fn release_agent_safety(
         &self,
@@ -173,6 +208,18 @@ impl Writer {
                     )?;
                 }
             }
+            let note = self.read(&id)?;
+            let mut safety = self.agent_safety_doc(&id, &note.type_name, &note.doc)?;
+            if safety.status == "pending" && !self.state().classification_queued(&id)? {
+                safety.status = "held".into();
+                safety.reason = "unclassified".into();
+                self.state().set_agent_safety_result(
+                    &id,
+                    &serde_json::to_string(&safety).expect("safety"),
+                    false,
+                )?;
+            }
+            self.refresh_agent_safety_index(&id, &note.type_name, &note.doc)?;
         }
         Ok(())
     }
@@ -218,7 +265,7 @@ impl Writer {
             }
             return Ok(result("held", "invalid_state"));
         }
-        Ok(result("pending", "awaiting_decision"))
+        Ok(result("held", "unclassified"))
     }
 
     pub fn agent_safety(&self, id: &str) -> Result<Safety> {
@@ -228,6 +275,26 @@ impl Writer {
 
     pub fn agent_may_read(&self, id: &str) -> bool {
         self.agent_safety(id).is_ok_and(|s| s.allowed())
+    }
+
+    /// Called with the commit lock before publishing an updated index row. No vault scan.
+    pub(crate) fn refresh_agent_safety_index(&self, id: &str, kind: &str, doc: &Doc) -> Result<()> {
+        if self.state().meta("agent_safety.activation_ms")?.is_some() {
+            let safety = self.agent_safety_doc(id, kind, doc)?;
+            if safety.reason == "unclassified" {
+                self.state().set_agent_safety_result(
+                    id,
+                    &serde_json::to_string(&safety).expect("safety"),
+                    false,
+                )?;
+            }
+            self.state().index_agent_safety(
+                id,
+                &safety.fingerprint,
+                !safety.allowed() || safety.status == "legacy",
+            )?;
+        }
+        Ok(())
     }
 
     pub fn agent_may_read_asset(&self, id: &str) -> bool {
@@ -242,7 +309,9 @@ impl Writer {
             && self
                 .state()
                 .meta(&format!("agent_safety.note.{id}"))?
-                .is_none()
+                .is_none_or(|v| {
+                    serde_json::from_str::<Safety>(&v).is_ok_and(|s| s.reason == "unclassified")
+                })
         {
             let safety = Safety {
                 status: "pending".into(),
@@ -289,6 +358,14 @@ impl Writer {
             &serde_json::to_string(&safety).expect("safety"),
             safety.allowed(),
         )?;
+        if let Some(wake) = self
+            .safety_wake
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            wake();
+        }
         Ok(true)
     }
 }

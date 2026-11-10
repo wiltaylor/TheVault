@@ -23,25 +23,16 @@ fn syntax(e: query::ParseError) -> String {
 }
 
 fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<query::Page, String> {
-    let _guard = agent_reading().then(|| w.write_lock());
-    let excluded = if agent_reading() {
-        Some(
-            w.list_with(None, Archived::Include)
-                .map_err(err)?
-                .into_iter()
-                .filter(|n| !w.agent_may_read(&n.id))
-                .map(|n| n.id)
-                .collect::<std::collections::HashSet<_>>(),
-        )
-    } else {
-        None
-    };
     w.read_index(|index, schema| {
+        let excluded = if agent_reading() {
+            Some(w.state().held_agent_note_ids().map_err(err)?)
+        } else {
+            None
+        };
         let mut ctx = query::Context::new(index, schema);
         ctx.excluded_notes = excluded.as_ref();
-        query::run(q, &ctx, &page)
+        query::run(q, &ctx, &page).map_err(err)
     })
-    .map_err(err)
 }
 
 fn agent_reading() -> bool {
@@ -50,7 +41,6 @@ fn agent_reading() -> bool {
 }
 
 fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
-    let _guard = agent_reading().then(|| w.write_lock());
     if agent_reading() && !w.agent_may_read(id) {
         return Err("Note is held from agents".into());
     }
@@ -120,7 +110,6 @@ fn grow(t: &mut Taxonomy, path: &str) -> Result<bool, String> {
 /// The write path itself: every change a script makes goes through `writer` (D30).
 impl Vault for Writer {
     fn get(&self, id: &str) -> Result<Json, String> {
-        let _guard = agent_reading().then(|| self.write_lock());
         if agent_reading() && !self.agent_may_read(id) {
             return Err("Note is held from agents".into());
         }

@@ -521,6 +521,7 @@ pub struct Writer {
     /// [`Writer::upgrade_shipped_defaults`] with [`Upkeep::Home`]: the derived writes that must
     /// happen once, such as an event series' occurrences, happen only there.
     home: std::sync::atomic::AtomicBool,
+    safety_wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// Whether `line` of a note file is the top-level `archived = true`, which the canonical layout
@@ -573,6 +574,7 @@ impl Writer {
             drafts: Mutex::new(HashMap::new()),
             definitions: std::sync::atomic::AtomicU64::new(0),
             home: std::sync::atomic::AtomicBool::new(false),
+            safety_wake: Mutex::new(None),
         })
     }
 
@@ -1661,6 +1663,33 @@ impl Writer {
         if let Some(schema) = grown {
             inner.index.set_schema(&schema)?;
             inner.schema = schema;
+        }
+        for update in &updates {
+            if let Update::Put {
+                id, type_name, doc, ..
+            } = update
+            {
+                self.refresh_agent_safety_index(id, type_name, doc)?;
+            }
+            if let Update::Delete { id } = update {
+                self.state.forget_agent_safety_index(id)?;
+            }
+        }
+        for s in &saved {
+            if s.restored && let Ok(doc) = Doc::parse(&s.wcl, "restored note") {
+                let mut safety = self.agent_safety_doc(&s.id, &s.type_name, &doc)?;
+                if safety.status == "pending" {
+                    safety.status = "held".into();
+                    safety.reason = "unclassified".into();
+                    self.state.set_agent_safety_result(&s.id, &serde_json::to_string(&safety).expect("safety"), false)?;
+                }
+            }
+            if s.event == Event::Create
+                && matches!(s.author.as_ref().unwrap_or(author), Author::Agent(_))
+            {
+                self.state
+                    .set_meta(&format!("agent_safety.delivered.{}", s.id), "1")?;
+            }
         }
         inner.index.update(&inner.schema, &updates)?;
         inner.index.advance(generation)?;

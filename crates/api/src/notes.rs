@@ -251,7 +251,11 @@ pub async fn read(
 ) -> Result<Response, ApiError> {
     let (note, safety) = blocking(w, move |w| {
         let note = w.read(&id)?;
-        let safety = w.agent_safety_doc(&id, &note.type_name, &note.doc)?;
+        let safety = if w.state().meta("agent_safety.activation_ms")?.is_some() {
+            json!({"agent_safety": w.agent_safety_doc(&id, &note.type_name, &note.doc)?})
+        } else {
+            json!({})
+        };
         Ok::<_, writer::Error>((note, safety))
     })
     .await?;
@@ -262,7 +266,7 @@ pub async fn read(
         &note.type_name,
         &note.version,
         note.wcl,
-        json!({"agent_safety": safety}),
+        safety,
     ))
 }
 

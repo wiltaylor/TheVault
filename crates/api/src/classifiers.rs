@@ -53,7 +53,10 @@ impl Binding {
                     match writer.state().take_classification() {
                         Ok(Some(payload)) => {
                             match serde_json::from_str::<Pending>(&payload) {
-                                Ok(pending) => classify(&writer, &pending.saved(), &mut invalid),
+                                Ok(pending) => {
+                                    let safety_only = pending.safety_only;
+                                    classify(&writer, &pending.saved(), safety_only, &mut invalid)
+                                },
                                 Err(_) => tracing::error!(target: "ai", "classifier: outcome=error:pending_payload"),
                             }
                             continue;
@@ -83,29 +86,21 @@ impl Hooks for ClassifierHooks {
             self.inner.after(saved, author, schema);
             return;
         };
-        for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
-            if s.event == Event::Create
-                && !s.restored
-                && let Ok(doc) = Doc::parse(&s.wcl, "incoming note")
-                && writer
-                    .register_agent_safety(&s.id, &s.type_name, &doc)
-                    .is_err()
-            {
-                tracing::error!(target: "ai", "agent safety registration failed note={}", s.id);
-            }
-        }
         self.inner.after(saved, author, schema);
         let types = classifier_types(&writer);
         let payloads: Vec<_> = saved
             .iter()
-            .flat_map(|s| std::iter::once(s).chain(&s.also))
-            .filter(|s| s.event == Event::Create && !s.restored && types.contains(&s.type_name))
-            .map(|s| {
+            .flat_map(|s| std::iter::once((s, false)).chain(s.also.iter().map(|s| (s, true))))
+            .filter(|(s, _)| {
+                s.event == Event::Create && !s.restored && types.contains(&s.type_name)
+            })
+            .map(|(s, safety_only)| {
                 serde_json::to_string(&Pending {
                     id: s.id.clone(),
                     type_name: s.type_name.clone(),
                     version: s.version.clone(),
                     wcl: s.wcl.clone(),
+                    safety_only,
                 })
                 .expect("pending snapshot")
             })
@@ -115,6 +110,25 @@ impl Hooks for ClassifierHooks {
         }
         let queued = writer.state().queue_classifications(&payloads).is_ok();
         if queued {
+            let safety_types = writer
+                .vault()
+                .read_text("classifiers/agent_safety.wcl")
+                .ok()
+                .and_then(|s| Classifier::parse("agent_safety", &s).ok())
+                .map(|c| c.types)
+                .unwrap_or_default();
+            for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
+                if s.event == Event::Create
+                    && !s.restored
+                    && safety_types.contains(&s.type_name)
+                    && let Ok(doc) = Doc::parse(&s.wcl, "incoming note")
+                    && writer
+                        .register_agent_safety(&s.id, &s.type_name, &doc)
+                        .is_err()
+                {
+                    tracing::error!(target: "ai", "agent safety registration failed note={}", s.id);
+                }
+            }
             // The bounded channel is just a coalescing wakeup, never the work queue.
             let _ = self.sender.try_send(());
         } else {
@@ -163,6 +177,8 @@ fn classifier_types(writer: &Writer) -> HashSet<String> {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Pending {
+    #[serde(default)]
+    safety_only: bool,
     id: String,
     type_name: String,
     version: String,
@@ -185,7 +201,12 @@ impl Pending {
     }
 }
 
-fn classify(writer: &Writer, saved: &Saved, invalid: &mut HashMap<String, Option<[u8; 32]>>) {
+fn classify(
+    writer: &Writer,
+    saved: &Saved,
+    safety_only: bool,
+    invalid: &mut HashMap<String, Option<[u8; 32]>>,
+) {
     let Ok(entries) = std::fs::read_dir(writer.vault().root().join("classifiers")) else {
         eprintln!("classifier: note={} outcome=error:definitions", saved.id);
         return;
@@ -203,6 +224,9 @@ fn classify(writer: &Writer, saved: &Saved, invalid: &mut HashMap<String, Option
     names.sort();
     invalid.retain(|name, _| names.contains(name));
     for name in names {
+        if safety_only && name != "agent_safety" {
+            continue;
+        }
         let source = writer
             .vault()
             .read_text(&format!("classifiers/{name}.wcl"))
@@ -348,8 +372,8 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         decisions::validate_credential(&credential)?;
         let mut request = request(saved, config)?;
         if safety_hash.is_some() {
-            // Security classification includes every field/block, not a lossy snippet.
-            request.state = writer::doc_to_json(
+            // Exactly the projection used by the clearance fingerprint.
+            request.state = writer::agent_safety::classified_content(
                 &Doc::parse(&saved.wcl, "safety snapshot")
                     .map_err(|_| AiError::invalid("Invalid safety snapshot"))?,
             );
@@ -370,6 +394,12 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
             return None;
         }
     };
+    if let Some(hash) = &safety_hash
+        && request.state.to_string().len() > 128 * 1024
+    {
+        let _ = writer.finish_agent_safety(&saved.id, hash, "held", "too_large");
+        return None;
+    }
     let began = Instant::now();
     let mut result = decisions::decide(&credential, &request, Duration::from_secs(30));
     match &result {

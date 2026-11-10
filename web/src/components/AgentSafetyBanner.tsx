@@ -12,6 +12,8 @@ const reasons: Record<string, string> = {
   invalid_decision: "No valid safety decision was returned.",
   content_changed: "The content changed after its safety decision.",
   predates_activation: "This note predates the gate and has not been reviewed.",
+  unclassified: "This note has not been queued for a safety decision.",
+  too_large: "This note exceeds the safety decision size limit (128 KiB).",
 };
 
 export function AgentSafetyBanner(props: { id: string; safety?: AgentSafety }) {
