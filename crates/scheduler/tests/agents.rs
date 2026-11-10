@@ -1110,7 +1110,14 @@ fn a_released_call_refuses_delivery_by_other_principals() {
         let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
         for i in 0..room {
             r.scheduler
-                .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+                .dispatch(
+                    "clerk",
+                    &[],
+                    &format!("Run {i}"),
+                    "Go.",
+                    state::Scope::Admin,
+                    state::Author::Session("owner".into()),
+                )
                 .unwrap();
         }
         let text = call("@Clerk owner's request", "clerk", CALL);
@@ -1151,7 +1158,14 @@ fn coalesced_hijack_is_refused(by: Author) {
     let room = scheduler::MAX_RUNNING + scheduler::MAX_QUEUED;
     for i in 0..room {
         r.scheduler
-            .dispatch("clerk", &[], &format!("Run {i}"), "Go.")
+            .dispatch(
+                "clerk",
+                &[],
+                &format!("Run {i}"),
+                "Go.",
+                state::Scope::Admin,
+                state::Author::Session("owner".into()),
+            )
             .unwrap();
     }
     let text = call("@Clerk owner's request", "clerk", CALL);
