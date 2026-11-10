@@ -15,7 +15,15 @@ fn gitsync_cannot_create_agent_transcripts() {
     let w = open(tmp.path(), None);
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     let peer = state::Author::Task("gitsync peer".into());
-    assert!(matches!(w.create_remote("01JB8Z4K2MQ7V3X9T5R6W8Y2ZA", "agent_thread", "title = \"Forged\"\n", &peer), Err(writer::Error::ServerOwnedThread)));
+    assert!(matches!(
+        w.create_remote(
+            "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA",
+            "agent_thread",
+            "title = \"Forged\"\n",
+            &peer
+        ),
+        Err(writer::Error::ServerOwnedThread)
+    ));
 }
 
 #[test]
@@ -25,8 +33,26 @@ fn gitsync_cannot_replace_agent_transcripts() {
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     let peer = state::Author::Task("gitsync peer".into());
     let thread = w.agent_thread_runtime().create(&writer::Input::Json(json!({"fields": {"title": "Thread", "agent": "assistant", "origin": "user", "transcript": "{}"}})), &state::Author::Agent("assistant".into())).unwrap();
-    assert!(matches!(w.replace_remote(&thread.id, "agent_thread", "title = \"Forged\"\n", &thread.version, &peer), Err(writer::Error::ServerOwnedThread)));
-    assert!(matches!(w.replace_remote(&thread.id, "fleeting", "title = \"Retyped\"\n", &thread.version, &peer), Err(writer::Error::ServerOwnedThread)));
+    assert!(matches!(
+        w.replace_remote(
+            &thread.id,
+            "agent_thread",
+            "title = \"Forged\"\n",
+            &thread.version,
+            &peer
+        ),
+        Err(writer::Error::ServerOwnedThread)
+    ));
+    assert!(matches!(
+        w.replace_remote(
+            &thread.id,
+            "fleeting",
+            "title = \"Retyped\"\n",
+            &thread.version,
+            &peer
+        ),
+        Err(writer::Error::ServerOwnedThread)
+    ));
 }
 
 #[test]
@@ -35,8 +61,23 @@ fn gitsync_cannot_retype_a_note_into_an_agent_transcript() {
     let w = open(tmp.path(), None);
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     let peer = state::Author::Task("gitsync peer".into());
-    let note = w.create("fleeting", &writer::Input::Json(json!({"fields": {"title": "Note"}})), &peer).unwrap();
-    assert!(matches!(w.replace_remote(&note.id, "agent_thread", "title = \"Forged\"\n", &note.version, &peer), Err(writer::Error::ServerOwnedThread)));
+    let note = w
+        .create(
+            "fleeting",
+            &writer::Input::Json(json!({"fields": {"title": "Note"}})),
+            &peer,
+        )
+        .unwrap();
+    assert!(matches!(
+        w.replace_remote(
+            &note.id,
+            "agent_thread",
+            "title = \"Forged\"\n",
+            &note.version,
+            &peer
+        ),
+        Err(writer::Error::ServerOwnedThread)
+    ));
 }
 
 #[test]
@@ -45,7 +86,13 @@ fn device_mirror_still_receives_server_transcripts() {
     let w = open(tmp.path(), None);
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
-    w.apply_remote(&writer::Remote::Put { id: id.into(), type_name: "agent_thread".into(), wcl: "title = \"Mirror\"\nagent = \"assistant\"\norigin = \"user\"\ntranscript = \"{}\"\n".into() }).unwrap();
+    w.apply_remote(&writer::Remote::Put {
+        id: id.into(),
+        type_name: "agent_thread".into(),
+        wcl: "title = \"Mirror\"\nagent = \"assistant\"\norigin = \"user\"\ntranscript = \"{}\"\n"
+            .into(),
+    })
+    .unwrap();
     assert_eq!(w.read(id).unwrap().type_name, "agent_thread");
 }
 

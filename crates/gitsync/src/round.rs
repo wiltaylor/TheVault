@@ -612,7 +612,9 @@ impl Round<'_> {
                 }
             };
             // Transcripts are local runtime records, never peer-authored content.
-            if type_name == writer::AGENT_THREAD_TYPE || entry.note_type == writer::AGENT_THREAD_TYPE {
+            if type_name == writer::AGENT_THREAD_TYPE
+                || entry.note_type == writer::AGENT_THREAD_TYPE
+            {
                 continue;
             }
             match parse_note(&type_name, &entry.id, &wcl) {

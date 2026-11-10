@@ -18,7 +18,8 @@ use state::Author;
 use store::Change;
 
 use crate::{
-    AGENT_THREAD_TYPE, Error, Event, Inner, Input, Result, Saved, Writer, feed::synced_file, first, note_path,
+    AGENT_THREAD_TYPE, Error, Event, Inner, Input, Result, Saved, Writer, feed::synced_file, first,
+    note_path,
 };
 
 /// The author of the versions a device records for notes it received from the home server.

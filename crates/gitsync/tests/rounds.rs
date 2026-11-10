@@ -15,7 +15,12 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     let b = Instance::start("B");
     let key = SyncKey::parse(&b.generate_key()).unwrap();
     b.configure(&repo.url(), "from *", "from *", json!({}));
-    let own = b.call("POST", "/api/agents/assistant/threads", Some(json!({})), 201);
+    let own = b.call(
+        "POST",
+        "/api/agents/assistant/threads",
+        Some(json!({})),
+        201,
+    );
     let own = s(&own["id"]);
     let memo_id = b.create(&memo("Ordinary", "share", "yes"));
 
@@ -23,23 +28,41 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     let peer = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
     let incoming = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
     let layout = Layout::new(&key, peer);
-    let mut manifest = Manifest::new(Named { vault_id: peer.into(), name: "Old peer".into() });
+    let mut manifest = Manifest::new(Named {
+        vault_id: peer.into(),
+        name: "Old peer".into(),
+    });
     let text = "title = \"Forged by peer\"\nagent = \"assistant\"\norigin = \"user\"\ntranscript = \"{}\"\n";
     manifest.notes.push(gitsync::NoteEntry {
-        id: incoming.into(), note_type: "agent_thread".into(), origin: peer.into(),
-        hash: gitsync::pack::sha256_hex(text.as_bytes()), path: layout.note(incoming), assets: vec![],
+        id: incoming.into(),
+        note_type: "agent_thread".into(),
+        origin: peer.into(),
+        hash: gitsync::pack::sha256_hex(text.as_bytes()),
+        path: layout.note(incoming),
+        assets: vec![],
     });
-    manifest.types.push(gitsync::DefEntry { name: "agent_thread".into(), path: layout.type_def("agent_thread") });
+    manifest.types.push(gitsync::DefEntry {
+        name: "agent_thread".into(),
+        path: layout.type_def("agent_thread"),
+    });
     let mut files = BTreeMap::new();
-    files.insert(layout.note(incoming), gitsync::pack::seal_note(&key, "agent_thread", text.as_bytes()));
+    files.insert(
+        layout.note(incoming),
+        gitsync::pack::seal_note(&key, "agent_thread", text.as_bytes()),
+    );
     let thread_type = b.get("/api/types/agent_thread");
-    files.insert(layout.type_def("agent_thread"), key.seal(s(&thread_type["wcl"]).as_bytes()));
+    files.insert(
+        layout.type_def("agent_thread"),
+        key.seal(s(&thread_type["wcl"]).as_bytes()),
+    );
     files.insert(layout.manifest(), manifest.seal(&key));
     let temp = tempfile::tempdir().unwrap();
     let git = Git::new(temp.path().join("repo"), Auth::None).unwrap();
     git.ensure_bare_clone(&repo.url()).unwrap();
     let tree = git.write_tree(&files).unwrap();
-    let commit = git.commit_tree(&tree, "old peer transcript fixture").unwrap();
+    let commit = git
+        .commit_tree(&tree, "old peer transcript fixture")
+        .unwrap();
     git.force_push(&commit, &layout.branch()).unwrap();
 
     // This vault's own old published branch also held a thread. Removing its export must
@@ -50,23 +73,44 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     let own_note = b.note(own).unwrap();
     let own_version = own_note["version"].clone();
     let own_text = s(&own_note["wcl"]);
-    let mut old_manifest = Manifest::new(Named { vault_id: own_vault.into(), name: "B".into() });
-    old_manifest.notes.push(gitsync::NoteEntry {
-        id: own.into(), note_type: "agent_thread".into(), origin: own_vault.into(),
-        hash: gitsync::pack::sha256_hex(own_text.as_bytes()), path: own_layout.note(own), assets: vec![],
+    let mut old_manifest = Manifest::new(Named {
+        vault_id: own_vault.into(),
+        name: "B".into(),
     });
-    old_manifest.types.push(gitsync::DefEntry { name: "agent_thread".into(), path: own_layout.type_def("agent_thread") });
+    old_manifest.notes.push(gitsync::NoteEntry {
+        id: own.into(),
+        note_type: "agent_thread".into(),
+        origin: own_vault.into(),
+        hash: gitsync::pack::sha256_hex(own_text.as_bytes()),
+        path: own_layout.note(own),
+        assets: vec![],
+    });
+    old_manifest.types.push(gitsync::DefEntry {
+        name: "agent_thread".into(),
+        path: own_layout.type_def("agent_thread"),
+    });
     let mut old_files = BTreeMap::new();
-    old_files.insert(own_layout.note(own), gitsync::pack::seal_note(&key, "agent_thread", own_text.as_bytes()));
-    old_files.insert(own_layout.type_def("agent_thread"), key.seal(s(&thread_type["wcl"]).as_bytes()));
+    old_files.insert(
+        own_layout.note(own),
+        gitsync::pack::seal_note(&key, "agent_thread", own_text.as_bytes()),
+    );
+    old_files.insert(
+        own_layout.type_def("agent_thread"),
+        key.seal(s(&thread_type["wcl"]).as_bytes()),
+    );
     old_files.insert(own_layout.manifest(), old_manifest.seal(&key));
     let old_tree = git.write_tree(&old_files).unwrap();
-    let old_commit = git.commit_tree(&old_tree, "old local export fixture").unwrap();
+    let old_commit = git
+        .commit_tree(&old_tree, "old local export fixture")
+        .unwrap();
     git.force_push(&old_commit, &own_layout.branch()).unwrap();
 
     let report = b.sync();
     assert!(ids(&report, "created").is_empty(), "{report}");
-    assert!(report["warnings"].as_array().unwrap().is_empty(), "{report}");
+    assert!(
+        report["warnings"].as_array().unwrap().is_empty(),
+        "{report}"
+    );
     assert!(b.note(incoming).is_none());
     assert_eq!(b.note(own).unwrap()["version"], own_version);
     assert!(b.note(&memo_id).is_some());
