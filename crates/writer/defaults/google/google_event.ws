@@ -967,7 +967,7 @@ fn sending_items(id: string) -> List[string] {
     let out: List[string] = []
     for row in rows {
         let f = row.get("fields").unwrap_or(Value::Null)
-        if text_of(f, "event") == id || text_of(f, "result") == id {
+        if text_of(f, "event") == id || text_of(f, "result") == id || (text_of(f, "event_action") == "delete" && text_of(f, "sent_ref") == id) {
             out.push(text_of(row, "id"))
         }
     }
@@ -985,10 +985,25 @@ fn now_text() -> string {
 // note as their copy. The `outbox_send` handler then removes them (outbox X14).
 fn sent_items(id: string, google_id: string) {
     for item in sending_items(id) {
+        let item_fields = match vault::get(item) {
+            Ok(n) => n.get("note").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null),
+            Err(_) => continue,
+        }
         let f = #{
             "sent_ref": Value::String(google_id),
             "sent_at": Value::String(now_text()),
-            "result": Value::String(id),
+        }
+        match vault::get(id) {
+            Ok(_) => { f["result"] = Value::String(id) },
+            Err(_) => {
+                if text_of(item_fields, "event_action") != "delete" {
+                    match vault::patch(item, Value::Map(#{ "status": Value::String("failed"), "error": Value::String("The event was deleted before this change was sent.") }), "") {
+                        Ok(_) => {},
+                        Err(e) => vault::log("Outbox item " + item + " was not marked failed: " + e),
+                    }
+                    continue
+                }
+            },
         }
         match vault::patch(item, Value::Map(f), "") {
             Ok(_) => vault::log("Outbox item " + item + " was sent as " + google_id + "."),
@@ -1017,6 +1032,7 @@ fn after_delete(event: Value) -> Result[(), string] {
     let fields = event.get("note").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
     let google_ref = text_of(fields, "google_ref")
     if google_ref == "" {
+        sent_items(text_of(event, "id"), "local")
         return Ok(())
     }
     let series_ref = text_of(fields, "series_ref")
@@ -1031,12 +1047,17 @@ fn after_delete(event: Value) -> Result[(), string] {
     }
     let ctx = connect()?
     if !ctx.ok {
+        failed_items(text_of(event, "id"), "Google Calendar is not connected.")
         return Ok(())
     }
-    let reply = call(ctx, "DELETE", event_url(ctx, calendar_of(ctx, fields), google_ref), "", Value::Null)?
+    let author = event.get("author").unwrap_or(Value::Null)
+    let updates = if text_of(author, "kind") == "handler" && text_of(author, "name") == "outbox_send" { "?sendUpdates=all" } else { "" }
+    let reply = call(ctx, "DELETE", event_url(ctx, calendar_of(ctx, fields), google_ref) + updates, "", Value::Null)?
     let status = status_of(reply)
     if status == 200 || status == 204 || status == 404 || status == 410 {
+        sent_items(text_of(event, "id"), google_ref)
         return Ok(())
     }
+    failed_items(text_of(event, "id"), failure("events.delete of " + google_ref, reply))
     Err(failure("events.delete of " + google_ref, reply))
 }

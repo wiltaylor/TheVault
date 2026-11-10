@@ -163,6 +163,16 @@ fn after_create(note: Value) -> Result[(), string] {
 }
 
 fn after_update(note: Value) -> Result[(), string] {
+    let fields = fields_of(note)
+    let previous = note.get("previous").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
+    // Reference unlinking happens before the deleted event's after_delete handler runs.
+    // Catch a pending update here while the old target is still in the payload.
+    if text_of(fields, "kind") == "event" && text_of(fields, "status") == "sending" && text_of(fields, "event_action") != "delete" &&
+        ((text_of(previous, "event") != "" && text_of(fields, "event") == "") ||
+         (text_of(previous, "result") != "" && text_of(fields, "result") == "")) {
+        vault::patch(text_of(note, "id"), Value::Map(#{ "status": Value::String("failed"), "error": Value::String("The event was deleted before this change was sent.") }), "")?
+        return Ok(())
+    }
     handle(note)
 }
 
@@ -220,7 +230,8 @@ fn settle(id: string) -> Result[(), string] {
         Err(_) => return Ok(()),
     }
     let fields = fields_of(item)
-    if text_of(fields, "status") != "sending" || text_of(fields, "sent_at") == "" || text_of(fields, "result") == "" {
+    let deleted = text_of(fields, "kind") == "event" && text_of(fields, "event_action") == "delete" && text_of(fields, "sent_ref") != ""
+    if text_of(fields, "status") != "sending" || text_of(fields, "sent_at") == "" || (text_of(fields, "result") == "" && !deleted) {
         return Ok(())
     }
     match vault::delete(id, text_of(item, "version")) {
@@ -274,6 +285,9 @@ fn send_event(item: Value) -> Result[Sent, string] {
     let description = content_of(item, "description")
     let attendees = strings_of(fields, "attendees_raw")
     if target == "" {
+        if text_of(fields, "event_action") == "delete" || text_of(fields, "my_response") != "" {
+            return Err("An RSVP or deletion needs an existing event.")
+        }
         let title = text_of(fields, "title").trim()
         if title == "" {
             return Err("The new event has no title.")
@@ -312,6 +326,11 @@ fn send_event(item: Value) -> Result[Sent, string] {
     if text_of(event, "type") != "event" {
         return Err("The note to change is not an event.")
     }
+    if text_of(fields, "event_action") == "delete" {
+        vault::patch(text_of(item, "id"), Value::Map(#{ "sent_ref": Value::String(target) }), "")?
+        vault::delete(target, text_of(event, "version"))?
+        return Ok(Sent { done: false, sent_ref: "", result: "" })
+    }
     let body = event.get("note").unwrap_or(Value::Null)
     let f: Map[string, Value] = match body.get("fields") {
         Some(Value::Map(m)) => m,
@@ -328,6 +347,10 @@ fn send_event(item: Value) -> Result[Sent, string] {
     let title = text_of(fields, "title").trim()
     if title != "" {
         f["title"] = Value::String(title)
+    }
+    let response = text_of(fields, "my_response")
+    if response != "" {
+        f["my_response"] = Value::String(response)
     }
     if start != "" || end != "" {
         let from = if start == "" { end } else { start }
