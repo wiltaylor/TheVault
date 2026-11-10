@@ -539,6 +539,29 @@ fn round3_http_agent_read_redacts_conditions_for_both_agent_scopes() {
 }
 
 #[test]
+fn round4_sync_feed_redacts_conditions_for_agent_and_plain_tokens() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let source = SENDER.replace("send_without_review = true", "send_without_review = true\n conditions { recipients = [\"private@example.com\"]\n email = true\n daily_cap = 2\n }");
+    api.agent("sender", &source);
+    let mut tokens = vec![api.token_of("plain_reader", "read"), api.token_of("plain_writer", "write")];
+    for scope in ["read", "write"] {
+        let issued = api.send("POST", "/api/agent-codes", json!({"name": format!("sync_{scope}"), "scope": scope}));
+        let response: Value = api.client.post(api.server.url("/api/agent-codes/redeem")).json(&json!({"code": issued["code"]})).send().unwrap().json().unwrap();
+        tokens.push(response["token"].as_str().unwrap().to_owned());
+    }
+    for token in tokens {
+        let response = api.client.get(api.server.url("/api/sync/changes?since=0&limit=1000")).bearer_auth(token).send().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let feed: Value = response.json().unwrap();
+        let entry = feed["changes"].as_array().unwrap().iter().find(|e| e["path"] == "agents/sender.wcl").unwrap();
+        assert!(!entry.to_string().contains("private@example.com"), "{entry}");
+        assert_eq!(entry["conditions_hidden"], true, "{entry}");
+    }
+    assert!(api.get("/api/sync/changes?since=0&limit=1000").to_string().contains("private@example.com"));
+}
+
+#[test]
 fn only_an_agent_with_send_without_review_drafts_approved_items() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
