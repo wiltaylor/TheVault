@@ -5,6 +5,19 @@ use schema::{
     TriggerWhen,
 };
 
+#[test]
+fn gmail_actions_are_opt_in_and_round_trip() {
+    let off = Agent::parse("clerk", "label = \"Clerk\"\n").unwrap();
+    assert!(!off.permissions.gmail_actions);
+    let on = Agent::parse(
+        "clerk",
+        "label = \"Clerk\"\npermissions { gmail_actions = true\n}\n",
+    )
+    .unwrap();
+    assert!(on.permissions.gmail_actions);
+    assert!(on.to_wcl().contains("gmail_actions"));
+}
+
 const FULL: &str = r#"label         = "Inbox triage"
 description   = "Files new email."
 icon          = "bot"

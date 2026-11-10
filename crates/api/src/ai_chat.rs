@@ -2228,7 +2228,10 @@ impl Turn {
                 let w = self.writer.clone();
                 // Only a foreground chat may opt into Gmail effects. Sub agents and every
                 // unattended origin (including mentions) keep the ordinary agent author.
-                let author = if !self.unattended && setup.agent.permissions.gmail_actions {
+                let author = if !self.unattended
+                    && self.sub.is_none()
+                    && setup.agent.permissions.gmail_actions
+                {
                     Author::AgentMail(setup.agent.name.clone())
                 } else if matches!(self.author, Author::Agent(_)) {
                     self.author.clone()

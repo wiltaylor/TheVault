@@ -728,7 +728,7 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         let one = api.email("one");
         let two = api.email("two");
         if mention {
-            expect(api.req("POST", "/api/notes?type=note").json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000001)"}}]}]}})).send().unwrap(), 200);
+            expect(api.req("POST", "/api/notes?type=fleeting").json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000001)"}}]}]}})).send().unwrap(), 200);
         } else {
             api.edit(&one, json!({"title": "Changed"}));
         }
@@ -754,5 +754,43 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         assert_eq!(api.emails().len(), 1);
         assert!(api.google.mail_actions().is_empty(), "mention={mention}");
         assert!(api.server.secret_json("google_gmail_trashed").is_null());
+    }
+}
+
+#[test]
+fn a_missing_message_or_missing_scope_does_not_clear_the_restore_ref() {
+    for missing_message in [true, false] {
+        let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+        let one = api.email("one");
+        api.delete(&one);
+        if missing_message {
+            api.google.delete_message("one");
+        } else {
+            let settings = json!({"gmail_labels": ["INBOX"], "scopes": [READONLY_SCOPE], "endpoints": api.google.endpoints()});
+            expect(
+                api.req("PUT", "/api/secrets/google_settings")
+                    .json(&json!({"value": settings.to_string()}))
+                    .send()
+                    .unwrap(),
+                200,
+            );
+        }
+        expect(
+            api.req("POST", &format!("/api/trash/{one}/restore"))
+                .send()
+                .unwrap(),
+            200,
+        );
+        assert_eq!(api.server.settle_handlers().len(), 1);
+        assert_eq!(
+            api.server.secret_json("google_gmail_trashed"),
+            json!(["one"])
+        );
+        assert_eq!(api.note(&one)["note"]["fields"]["gmail_ref"], "one");
+        assert!(
+            api.notifications()
+                .iter()
+                .any(|n| n["title"] == "Gmail did not untrash an email")
+        );
     }
 }
