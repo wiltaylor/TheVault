@@ -237,7 +237,7 @@ fn backfill_requires_a_session_and_a_preview_and_skips_records_and_nonmatches() 
     let denied = api.request("POST", path, Some(json!({"limit": 1})));
     assert_eq!(denied.status(), 403);
     let token = api.send("POST", "/api/tokens", json!({"name": "agent-clerk", "scope": "write"}));
-    let denied = api.client.post(api.server.url(path)).bearer_auth(token["token"].as_str().unwrap())
+    let denied = api.client.post(api.server.url(path)).bearer_auth(token["secret"].as_str().unwrap())
         .json(&json!({"limit": 1})).send().unwrap();
     assert_eq!(denied.status(), 403, "agent tokens cannot backfill");
     let login = api.client.post(api.server.url("/api/login"))
