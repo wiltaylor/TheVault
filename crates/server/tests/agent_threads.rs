@@ -408,6 +408,32 @@ fn read_access_does_not_authorize_changes() {
 }
 
 #[test]
+fn change_permissions_cover_type_and_taxonomy_rewrites() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let taxonomy = "label = \"Stage\"\nterm \"Todo\"\nterm \"Done\"\n";
+    let response = api.client.put(api.server.url("/api/taxonomies/stage")).bearer_auth(api.token()).header("content-type", "text/plain").body(taxonomy).send().unwrap();
+    assert!(response.status().is_success(), "{}", response.text().unwrap());
+    let memo_type = format!("{MEMO}\nfield stage {{\n kind = \"taxonomy\"\n taxonomy = \"stage\"\n}}\n");
+    let response = api.client.put(api.server.url("/api/types/memo")).bearer_auth(api.token()).header("content-type", "text/plain").body(memo_type.clone()).send().unwrap();
+    assert!(response.status().is_success(), "{}", response.text().unwrap());
+    api.send("POST", "/api/notes?type=memo", json!({ "note": { "fields": { "title": "Private", "stage": "Todo" } } }));
+    let restricted = "label = \"Reader\"\npermissions {\n types = [\"memo\"]\n change_types = []\n confirm { types = false\n taxonomies = false }\n}\n";
+    api.agent("reader", restricted);
+    for (tool, input) in [
+        ("propose_type_change", json!({ "name": "memo", "wcl": memo_type.replace("Memo", "Changed") })),
+        ("propose_taxonomy_change", json!({ "name": "stage", "wcl": taxonomy.replace("Todo", "Open"), "renames": [{ "from": "Todo", "to": "Open" }] })),
+    ] {
+        fake.clear_requests();
+        fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+        let result = tool_result(&fake, 1);
+        assert_eq!(result["is_error"], true, "{tool}: {result}");
+    }
+}
+
+#[test]
 fn field_permissions_allow_processed_but_not_subject_body_create_archive_or_delete() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
