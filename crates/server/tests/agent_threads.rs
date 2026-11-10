@@ -507,6 +507,13 @@ permissions {
 "#;
     api.agent("triage", restricted);
     let (email, version) = api.note("email", "Mail");
+    // This test isolates field permissions from the independent incoming-note hold.
+    let safety = api.get(&format!("/api/notes/{email}"));
+    api.send(
+        "POST",
+        &format!("/api/notes/{email}/agent-safety/release"),
+        json!({ "fingerprint": safety["agent_safety"]["fingerprint"] }),
+    );
     let (person, _) = api.note("person", "Private person");
     let call = |tool: &str, mut input: Value| -> Value {
         for key in ["fields", "note"] {

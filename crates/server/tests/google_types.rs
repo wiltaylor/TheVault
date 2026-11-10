@@ -242,7 +242,10 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
     assert_eq!(field(email, "inbox_catch_up")["hidden"], true);
 
     let thread = find(&types, "email_thread");
-    assert_eq!(field_names(thread), ["participants", "thread_ref"]);
+    assert_eq!(
+        field_names(thread),
+        ["agent_safety_reason", "participants", "thread_ref"]
+    );
     assert_eq!(field(thread, "participants")["target"], "person");
     assert_eq!(field(thread, "participants")["multiple"], true);
     assert_eq!(field(thread, "thread_ref")["hidden"], true);
