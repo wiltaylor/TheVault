@@ -546,6 +546,7 @@ fn a_committed_call_is_answered_at_once_and_once_without_touching_the_note() {
         call("@Clerk check the gutters", "clerk", CALL)
     );
     let id = r.note("memo", "Roof", &[&text], &user());
+    r.writer.state().issue_agent_call(CALL, &id, "clerk", "session:owner").unwrap();
     let version = r.writer.read(&id).unwrap().version;
     r.advance(1);
     let threads = r.fake.threads.lock().unwrap().clone();
@@ -590,10 +591,23 @@ fn a_committed_call_is_answered_at_once_and_once_without_touching_the_note() {
     assert_eq!(r.fake.turns().len(), 1);
     // A new call does.
     let again = call("@clerk and the shed", "clerk", CALL2);
+    r.writer.state().issue_agent_call(CALL2, &id, "clerk", "session:owner").unwrap();
     r.save(&id, "Roof", &[&edited, &again], &user());
     r.advance(1);
     assert_eq!(r.fake.turns().len(), 2);
     assert!(r.fake.turns()[1].2.starts_with("and the shed\n"));
+}
+
+#[test]
+fn a_handler_rewrite_preserves_an_issued_editor_call() {
+    let r = Rig::new();
+    r.agent("clerk", CLERK);
+    let text = call("@Clerk answer", "clerk", CALL);
+    let id = r.note("memo", "Original", &[&text], &user());
+    r.writer.state().issue_agent_call(CALL, &id, "clerk", "session:owner").unwrap();
+    r.save(&id, "Handler stamped", &[&text], &Author::Handler("stamp".into()));
+    r.advance(1);
+    assert_eq!(r.fake.turns().len(), 1);
 }
 
 #[test]
@@ -616,7 +630,7 @@ fn plain_text_and_an_agent_s_own_calls_call_no_one() {
     r.note("memo", "Roof", &[&call("@Clerk look", "clerk", CALL)], &by);
     r.advance(10);
     assert!(r.fake.turns().is_empty());
-    assert_eq!(r.writer.state().agent_call(CALL).unwrap(), None);
+    assert!(r.writer.state().agent_call(CALL).unwrap().unwrap().thread.is_none());
 }
 
 #[test]
@@ -960,6 +974,7 @@ fn a_call_refused_by_a_full_queue_is_not_recorded_and_the_next_save_asks_again()
         call("@Clerk check the gutters", "clerk", CALL)
     );
     let id = r.note("memo", "Roof", &[&text], &user());
+    r.writer.state().issue_agent_call(CALL, &id, "clerk", "session:owner").unwrap();
     r.advance(1);
     // No thread opened for it, and nothing recorded: the call is not answered.
     assert_eq!(r.fake.threads.lock().unwrap().len(), room);

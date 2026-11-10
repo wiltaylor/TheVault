@@ -51,6 +51,31 @@ impl State {
         )?)
     }
 
+    /// Release an admission that opened no run. Answered ids cannot be released.
+    pub fn release_agent_call(&self, call: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE agent_call_ids SET used=0 WHERE call=?1 AND NOT EXISTS(SELECT 1 FROM agent_calls WHERE call=?1)",
+            [call],
+        )?;
+        Ok(())
+    }
+
+    /// Keep an observed copy's refusal separate from the legitimate capability's answer.
+    pub fn refuse_agent_call_copy(&self, call: &str, note: &str, agent: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO agent_call_refusals (call,note,agent,created_ms) VALUES (?1,?2,?3,?4)",
+            params![call, note, agent, self.now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn refused_agent_call(&self, call: &str) -> Result<Option<AgentCall>> {
+        Ok(self.conn().query_row(
+            "SELECT call,agent,note,created_ms FROM agent_call_refusals WHERE call=?1",
+            [call], |r| Ok(AgentCall { call: r.get(0)?, agent: r.get(1)?, note: r.get(2)?, thread: None, created_ms: r.get(3)? }),
+        ).optional()?)
+    }
+
     /// Records call `call` of `agent` from note `note`, answered by `thread`. Answers false, and
     /// changes nothing, when the call is recorded already.
     pub fn record_agent_call(

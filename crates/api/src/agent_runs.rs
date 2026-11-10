@@ -276,7 +276,12 @@ pub async fn call(
     State(w): State<Arc<Writer>>,
     Path(call): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let found = blocking(w, move |w| Ok::<_, ApiError>(w.state().agent_call(&call)?)).await?;
+    let found = blocking(w, move |w| {
+        Ok::<_, ApiError>(match w.state().agent_call(&call)? {
+            Some(answered) => Some(answered),
+            None => w.state().refused_agent_call(&call)?,
+        })
+    }).await?;
     let Some(c) = found else {
         return Err(ApiError::new(
             StatusCode::NOT_FOUND,

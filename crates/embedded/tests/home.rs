@@ -339,6 +339,22 @@ fn the_event_stream_carries_the_servers_notifications_and_the_devices_note_chang
 }
 
 #[test]
+fn the_app_forwards_call_issuance_before_its_note_has_synced() {
+    let server = TestServer::start_seeded(seed);
+    let device = Device::pair(&server, "Laptop");
+    let local = device.call("POST", "/api/notes?type=memo", Some(json!({
+        "note": { "fields": { "title": "Local editor" } }
+    })), 201);
+    let issued = device.call("POST", "/api/agents/calls", Some(json!({
+        "note": local["id"], "agent": "assistant"
+    })), 200);
+    assert!(issued["call"].as_str().is_some_and(|s| s.len() == 26));
+    device.sync();
+    let home = Admin::of(&server).call("GET", &format!("/api/notes/{}", local["id"].as_str().unwrap()), None, 200);
+    assert_eq!(home["note"]["fields"]["title"], "Local editor");
+}
+
+#[test]
 fn offline_or_unpaired_the_server_routes_say_so_and_the_notes_still_work() {
     let server = TestServer::start_seeded(seed);
     let device = Device::pair(&server, "Laptop");

@@ -741,6 +741,7 @@ impl Scheduler {
                 .agent_call_bound_elsewhere(&call.call, id, &call.agent)
                 .unwrap_or(true)
             {
+                let _ = state.refuse_agent_call_copy(&call.call, id, &call.agent);
                 continue;
             }
             if matches!(version.author, Author::Agent(_))
@@ -797,6 +798,7 @@ impl Scheduler {
             }
             // Full queue: no thread is opened, and the call is not recorded (TV-86 F2).
             if self.plan().agents.room(&agent.name, now).is_err() {
+                let _ = state.release_agent_call(&call.call);
                 eprintln!(
                     "agent {:?}: call {} in note {id} is not run: its queue is full; the next save of the note asks again",
                     agent.name, call.call
@@ -812,6 +814,7 @@ impl Scheduler {
                 Ok(t) => t,
                 Err(e) => {
                     // Not recorded: the next save tries again.
+                    let _ = state.release_agent_call(&call.call);
                     eprintln!(
                         "agent {:?}: the thread for call {} in note {id} could not be opened: {e}",
                         agent.name, call.call
