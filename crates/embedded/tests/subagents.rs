@@ -235,7 +235,15 @@ fn sync_refuses_offline_transcript_content_edits() {
     let result = std::thread::scope(|s| s.spawn(|| engine.sync()).join().unwrap());
     let report = result.unwrap();
     assert!(report.held.iter().any(|held| held.note_id == parent));
-    assert!(device.embedded.queue().pending().unwrap().iter().any(|p| p.note_id == parent));
+    assert!(
+        device
+            .embedded
+            .queue()
+            .pending()
+            .unwrap()
+            .iter()
+            .any(|p| p.note_id == parent)
+    );
     let home = admin.call("GET", &format!("/api/notes/{parent}"), None, 200);
     assert!(
         !home["note"]["fields"]["transcript"]
