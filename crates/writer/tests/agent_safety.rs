@@ -313,3 +313,34 @@ fn review_interrupted_pending_is_held_without_retry_on_restart() {
     assert_eq!(safety.reason, "unclassified");
     assert!(w.state().agent_safety_clearances().unwrap().is_empty());
 }
+
+#[test]
+fn round3_agent_write_cannot_return_or_change_held_note_reached_through_ref() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let hidden = create(&w, "PRIVATE_INJECTION_TEXT");
+    let visible = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Reviewed", "link":hidden.id}})), &Author::Session("owner".into())).unwrap();
+    let hash = w.agent_safety(&visible.id).unwrap().fingerprint;
+    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow").unwrap();
+    let actor = Author::Agent("reader".into());
+    let _acting = writer::acting_as(&actor);
+    let reference = w.get(&visible.id).unwrap()["note"]["fields"]["link"].as_str().unwrap().to_owned();
+    assert!(w.get(&reference).is_err());
+    let result = script_core::Vault::set_archived(&w, &reference, true, &actor);
+    assert!(result.is_err(), "agent write leaked held note: {result:?}");
+    assert_eq!(w.read(&hidden.id).unwrap().version, hidden.version);
+}
+
+#[test]
+fn round3_derived_email_thread_title_is_held_with_first_message() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("types")).unwrap();
+    std::fs::write(dir.path().join("types/email_thread.wcl"), "label = \"Thread\"\ntemplate default { tab Main { slot title } }\n").unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let actor = Author::Session("owner".into());
+    let thread = w.create("email_thread", &Input::Json(serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT"}})), &actor).unwrap();
+    w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"PRIVATE_SUBJECT", "thread":thread.id}})), &actor).unwrap();
+    assert!(!w.agent_may_read(&thread.id), "derived unclassified subject reached an agent");
+}
