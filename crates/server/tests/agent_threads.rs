@@ -424,7 +424,9 @@ permissions {
     let (person, _) = api.note("person", "Private person");
     let call = |tool: &str, mut input: Value| -> Value {
         for key in ["fields", "note"] {
-            if input[key].is_object() { input[key] = json!(input[key].to_string()); }
+            if input[key].is_object() {
+                input[key] = json!(input[key].to_string());
+            }
         }
         fake.clear_requests();
         fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
@@ -450,14 +452,8 @@ permissions {
             "propose_create",
             json!({ "type": "email", "note": { "fields": { "title": "New email" } } }),
         ),
-        (
-            "propose_archive",
-            json!({ "id": email, "archived": true }),
-        ),
-        (
-            "propose_delete",
-            json!({ "id": email }),
-        ),
+        ("propose_archive", json!({ "id": email, "archived": true })),
+        ("propose_delete", json!({ "id": email })),
     ] {
         let result = call(tool, input);
         assert_eq!(result["is_error"], true, "{tool}: {result}");

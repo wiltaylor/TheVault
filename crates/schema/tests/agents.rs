@@ -52,10 +52,29 @@ fn separate_change_permissions_round_trip_and_default_to_legacy() {
     assert_eq!(agent.permissions.change_types, Some(vec!["email".into()]));
     assert_eq!(agent.permissions.change_fields["email"], ["processed"]);
     assert_eq!(Agent::parse("reader", &agent.to_wcl()).unwrap(), agent);
-    for value in ["true", "{ email: true }", "{ email: [\"bad name\"] }", "{ email: [\"processed\", \"processed\"] }"] {
-        assert!(Agent::parse("reader", &format!("permissions {{\n change_fields = {value}\n}}\n")).is_err(), "{value}");
+    for value in [
+        "true",
+        "{ email: true }",
+        "{ email: [\"bad name\"] }",
+        "{ email: [\"processed\", \"processed\"] }",
+    ] {
+        assert!(
+            Agent::parse(
+                "reader",
+                &format!("permissions {{\n change_fields = {value}\n}}\n")
+            )
+            .is_err(),
+            "{value}"
+        );
     }
-    assert!(Agent::parse("reader", "permissions { change_types = [] }").unwrap().permissions.change_types.unwrap().is_empty());
+    assert!(
+        Agent::parse("reader", "permissions { change_types = [] }")
+            .unwrap()
+            .permissions
+            .change_types
+            .unwrap()
+            .is_empty()
+    );
 }
 
 const EMAIL: &str = r#"label = "Email"

@@ -559,7 +559,9 @@ mod tests {
 
     #[test]
     fn agent_grants_cannot_widen_change_types_or_fields() {
-        let parent = agent("permissions {\n types = [\"email\", \"person\"]\n change_types = [\"email\"]\n change_fields = { email: [\"processed\"] }\n}\n");
+        let parent = agent(
+            "permissions {\n types = [\"email\", \"person\"]\n change_types = [\"email\"]\n change_fields = { email: [\"processed\"] }\n}\n",
+        );
         let broad = agent("permissions { types = [\"email\", \"person\"] }\n");
         assert!(!escalation(&parent, &broad).is_empty());
         assert!(escalation(&parent, &parent).is_empty());
