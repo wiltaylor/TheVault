@@ -63,6 +63,24 @@ fn issue(server: &TestServer, admin: &Client, name: &str, scope: &str) -> Value 
 }
 
 #[test]
+fn agent_code_token_cannot_create_ready_outbox_item() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let issued = issue(&server, &admin, "cli", "write");
+    let token = expect(redeem(&server, issued["code"].as_str().unwrap()), 201);
+    let agent = client(token["token"].as_str().unwrap());
+    let response = agent
+        .post(server.url("/api/notes?type=outbox"))
+        .json(&json!({ "note": { "fields": {
+            "title": "Unreviewed mail", "kind": "email", "status": "ready",
+            "to": ["outside@example.com"], "body": "Must wait for review"
+        }}}))
+        .send()
+        .unwrap();
+    assert!(response.status().is_client_error(), "agent token sent an unreviewed item: {}", response.text().unwrap());
+}
+
+#[test]
 fn only_an_admin_issues_an_install_code_and_it_carries_the_one_line_command() {
     let server = TestServer::start_seeded(seed);
     let admin = client(server.admin_token());
