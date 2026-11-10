@@ -408,6 +408,10 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0012_email_gmail_handlers",
         run: email_gmail_handlers,
     },
+    UpgradeStep {
+        id: "0013_email_gmail_restore",
+        run: email_gmail_restore,
+    },
 ];
 
 /// On every start of the home server (types T6): every field of every type file that says
@@ -1698,6 +1702,27 @@ fn event_google_handler(w: &Writer) -> Result<()> {
 
 /// The script the shipped `email` type's mail action handlers name (TV-25).
 const EMAIL_HANDLER_SCRIPT: &str = "google_mail";
+
+/// Add the restore handler to an existing built-in email type without changing notes or
+/// replacing user edits to its other handlers.
+fn email_gmail_restore(w: &Writer) -> Result<()> {
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(EMAIL_TYPE) else { return Ok(()); };
+    if !w.is_built_in_def(ty) || ty.handlers.iter().any(|h| h.script == EMAIL_HANDLER_SCRIPT && h.event == "after_create") {
+        return Ok(());
+    }
+    let path = type_path(EMAIL_TYPE);
+    let shipped = store::parse_data_only(DEFAULT_EMAIL_TYPE, &path)?;
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    let handler = shipped.items.into_iter().find(|i| block(i, "handler").is_some_and(|b| label(b) == Some("after_create"))).expect("shipped email restore handler");
+    ast.items.push(handler);
+    let change = TypeChange { wcl: store::to_canonical(&ast), ..TypeChange::default() };
+    let plan = w.plan_type_change(EMAIL_TYPE, &change)?;
+    if plan.changes.is_empty() {
+        w.apply_type_change(EMAIL_TYPE, &change, &plan.token, &Author::Task(SERVER_AUTHOR.to_owned()))?;
+    }
+    Ok(())
+}
 
 /// Step `0012_email_gmail_handlers` (TV-25): an `email` type from before mail actions has no
 /// handler naming `google_mail`, and the seeding only ever adds fields to a type the vault has.

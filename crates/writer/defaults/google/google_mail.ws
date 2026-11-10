@@ -15,8 +15,7 @@ use json
 //   `google_gmail_trashed` secret, so the Gmail sync never imports the message again, whether or
 //   not Gmail was reached.
 //
-// Nothing goes back the other way, and nothing undoes an action: unticking `processed` or
-// restoring an email from the vault's trash sends nothing.
+// Restoring an email untrashes it at Google. Unticking `processed` does not undo archiving.
 //
 // The loop guard: a write by a scheduled task, such as the `google_gmail` sync, or by a handler
 // sends nothing. The handler sees who wrote the note in its argument's `author`. The inbox's
@@ -89,8 +88,9 @@ fn secret_json(name: string) -> Value {
 
 // Whether the write was the user's: anything but a scheduled task or a handler (the loop guard).
 fn by_user(note: Value) -> bool {
-    let kind = text_of(note.get("author").unwrap_or(Value::Null), "kind")
-    kind != "" && kind != "task" && kind != "handler"
+    let author = note.get("author").unwrap_or(Value::Null)
+    let kind = text_of(author, "kind")
+    kind == "session" || kind == "token" || (kind == "agent" && is_true(author, "gmail_actions"))
 }
 
 // `s` percent-encoded for a URL path segment or a form value.
@@ -180,6 +180,9 @@ fn act(gmail: Gmail, id: string, action: string, body: string) -> Result[(), str
         return Ok(())
     }
     if r.status == 404 {
+        if action == "untrash" {
+            return Err("Gmail no longer has this message. It may have been permanently deleted; the vault copy was restored but Google could not restore it.")
+        }
         vault::log("Gmail has no message " + id + " any more: nothing to " + action + ".")
         return Ok(())
     }
@@ -211,6 +214,30 @@ fn after_update(note: Value) -> Result[(), string] {
     }
     let body = Value::Map(#{ "removeLabelIds": Value::List([Value::String("INBOX")]) })
     reported(note, "archive", text_of(note, "id"), send(id, "modify", json::to_string(body)))
+}
+
+fn after_create(note: Value) -> Result[(), string] {
+    if !is_true(note, "restored") || !by_user(note) {
+        return Ok(())
+    }
+    let id = text_of(fields_at(note, "note"), "gmail_ref")
+    if id == "" {
+        return Ok(())
+    }
+    reported(note, "untrash", text_of(note, "id"), restore_mail(id))
+}
+
+fn restore_mail(id: string) -> Result[(), string] {
+    let gmail = connect()?
+    if !gmail.ok {
+        return Err("Reconnect Google with gmail.modify to restore this message in Gmail. Its trash still expires after 30 days.")
+    }
+    act(gmail, id, "untrash", "")?
+    let refs = match secret_json("google_gmail_trashed") {
+        Value::List(items) => items.filter(|v| v.as_string().unwrap_or("") != id),
+        _ => [],
+    }
+    secrets::set("google_gmail_trashed", json::to_string(Value::List(refs)))
 }
 
 fn after_delete(note: Value) -> Result[(), string] {

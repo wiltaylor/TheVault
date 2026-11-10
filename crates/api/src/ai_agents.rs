@@ -212,6 +212,9 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
                 .to_owned(),
         );
     }
+    if tp.gmail_actions && !bp.gmail_actions {
+        problems.push("it would turn on Gmail actions, which are off for this agent".to_owned());
+    }
     // Skills (skills S6): only those this agent is offered itself; an absent list is every skill.
     match (&bp.skills, &tp.skills) {
         (Some(_), None) => problems.push(

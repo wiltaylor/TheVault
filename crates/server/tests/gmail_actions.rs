@@ -7,7 +7,7 @@ use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use testkit::fake_google::{DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN};
-use testkit::{FakeGoogle, MailAction, TestServer};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, FakeGoogle, MailAction, TestAccount, TestServer};
 
 const MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
 const READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
@@ -109,7 +109,7 @@ impl Api {
         // The shipped type and task, with the fake's host allowed as the Google tests do.
         let allow = format!("allow_domains = [\"{}\", ", api.google.host());
         let email = api.file("types/email.wcl");
-        assert_eq!(email.matches("allow_domains = [").count(), 2, "{email}");
+        assert_eq!(email.matches("allow_domains = [").count(), 3, "{email}");
         expect(
             api.req("PUT", "/api/types/email")
                 .body(email.replace("allow_domains = [", &allow))
@@ -617,4 +617,45 @@ fn a_gmail_error_fails_the_handler_run_with_its_message() {
     assert_eq!(items.len(), 1, "{items:#?}");
     assert_eq!(items[0]["title"], "Gmail did not archive an email");
     assert_eq!(items[0]["note"], one.as_str());
+}
+
+#[test]
+fn interactive_agents_need_the_gmail_switch_for_archive_and_trash() {
+    for allowed in [false, true] {
+        let api = Api::start(&["one", "two"], &[MODIFY_SCOPE]);
+        let fake = FakeAnthropic::start();
+        for (name, value) in AiSeed::new().account(TestAccount::anthropic(&fake).model("claude-opus-5")).secrets() {
+            expect(api.req("PUT", &format!("/api/secrets/{name}")).json(&json!({"value": value})).send().unwrap(), 200);
+        }
+        expect(api.req("PUT", "/api/agents/clerk").body(format!("label = \"Clerk\"\npermissions {{\n gmail_actions = {allowed}\n confirm {{ notes = false\n delete = false\n }}\n}}\n")).send().unwrap(), 200);
+        let one = api.email("one");
+        let two = api.email("two");
+        let mut note = api.note(&one);
+        note["note"]["fields"]["processed"] = json!(true);
+        fake.push(AnthropicMessage::new().tool_use("edit", "propose_edit", json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()})));
+        fake.push(AnthropicMessage::new().tool_use("delete", "propose_delete", json!({"id": two})));
+        fake.push(AnthropicMessage::text("Done."));
+        let response = api.req("POST", "/api/ai/chat").json(&json!({"agent": "clerk", "messages": [{"role": "user", "content": "Process one and delete two."}]})).send().unwrap();
+        assert_eq!(response.status(), 200);
+        let stream = response.text().unwrap();
+        assert!(stream.contains("event: applied"), "{stream}");
+        api.settle();
+        assert_eq!(api.note(&one)["note"]["fields"]["processed"], true);
+        assert_eq!(api.emails().len(), 1);
+        assert_eq!(api.google.mail_actions(), if allowed { vec![modify("one"), trash("two")] } else { vec![] });
+    }
+}
+
+#[test]
+fn failed_restore_keeps_the_vault_copy_and_reports_google_failure() {
+    let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+    let one = api.email("one");
+    api.delete(&one);
+    api.google.set_action_error(Some((403, "Restore refused")));
+    expect(api.req("POST", &format!("/api/trash/{one}/restore")).send().unwrap(), 200);
+    let failed = api.server.settle_handlers();
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert!(failed[0].contains("untrash"), "{failed:?}");
+    assert_eq!(api.note(&one)["note"]["fields"]["gmail_ref"], "one");
+    assert!(api.notifications().iter().any(|n| n["title"] == "Gmail did not untrash an email"));
 }

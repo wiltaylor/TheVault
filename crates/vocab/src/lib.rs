@@ -54,6 +54,9 @@ pub enum Author {
     /// A named agent (agents G11): every change an agent's tools make, whether it applies them
     /// itself or the user applies its proposal. Its writes never fire note event triggers.
     Agent(String),
+    /// An interactive agent write explicitly allowed to reach Gmail. This capability is
+    /// transient: persisted authors still read back as ordinary agents.
+    AgentMail(String),
 }
 
 impl Author {
@@ -64,7 +67,7 @@ impl Author {
             Author::Token(n) => ("token", n),
             Author::Handler(n) => ("handler", n),
             Author::Task(n) => ("task", n),
-            Author::Agent(n) => ("agent", n),
+            Author::Agent(n) | Author::AgentMail(n) => ("agent", n),
         }
     }
 

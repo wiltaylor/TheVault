@@ -124,7 +124,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0009_outbox_statuses",
             "0010_ai_accounts",
             "0011_email_template",
-            "0012_email_gmail_handlers"
+            "0012_email_gmail_handlers",
+            "0013_email_gmail_restore"
         ]
     );
     let fields: Vec<&str> = done
@@ -483,7 +484,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0009_outbox_statuses",
             "0010_ai_accounts",
             "0011_email_template",
-            "0012_email_gmail_handlers"
+            "0012_email_gmail_handlers",
+            "0013_email_gmail_restore"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.

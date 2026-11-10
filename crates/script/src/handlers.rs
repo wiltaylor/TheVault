@@ -348,7 +348,8 @@ impl Shared {
         let chain = inherited();
         let mut queue = Vec::new();
         for s in saved {
-            let (kind, name) = s.author.as_ref().unwrap_or(author).parts();
+            let by = s.author.as_ref().unwrap_or(author);
+            let (kind, name) = by.parts();
             let event = format!("after_{}", event_name(s.event));
             for h in handlers_of(schema, &s.type_name, &event) {
                 let mut links = chain.clone();
@@ -365,7 +366,8 @@ impl Shared {
                     "version": s.version,
                     "wcl": s.wcl,
                     "previous": s.previous,
-                    "author": { "kind": kind, "name": name },
+                    "restored": s.restored,
+                    "author": { "kind": kind, "name": name, "gmail_actions": matches!(by, Author::AgentMail(_)) },
                     "script": h.script,
                     "function": h.function,
                     "allow_domains": h.allow_domains,
@@ -483,6 +485,7 @@ impl Shared {
                 "version": text("version"),
                 "note": doc_to_json(&doc),
                 "previous": previous,
+                "restored": p.get("restored").cloned().unwrap_or(Json::Bool(false)),
                 "author": p.get("author").cloned().unwrap_or(Json::Null),
             })];
             job.allow_domains = list("allow_domains");
