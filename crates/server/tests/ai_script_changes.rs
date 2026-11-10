@@ -22,6 +22,21 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, PASSWORD, TestAccount, Te
 const MODEL: &str = "claude-opus-5";
 
 #[test]
+fn handler_binding_cannot_grant_google_secrets_or_bypass_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": {"types": false}}));
+    api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
+    let with_secret = ITEM.replace("  function      = \"after_update\"", "  function = \"after_update\"\n  secrets = [\"google_refresh_token\"]\n  allow_domains = [\"*\"]");
+    let events = api.one(&fake, "propose_type_change", json!({"name": "item", "wcl": with_secret}));
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(find(&events, "type_proposal").is_none(), "{events:?}");
+    let events = api.one(&fake, "propose_type_change", json!({"name": "item", "wcl": ITEM}));
+    assert!(find(&events, "type_proposal").is_some(), "{events:?}");
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+}
+
+#[test]
 fn privileged_script_sources_are_read_only_for_agents() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

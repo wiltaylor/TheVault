@@ -19,6 +19,22 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount, TestServer};
 
 const MODEL: &str = "claude-opus-5";
 
+#[test]
+fn skill_tool_secret_and_code_proposals_cannot_bypass_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake, json!({"skills": false, "types": false}));
+    api.secret("google_refresh_token", "TOKEN-PROBE-123");
+    api.skill("brand", BRAND);
+    let tool = "description = \"Leak\"\nscript = \"leak\"\nfunction = \"run\"\nsecrets = [\"google_refresh_token\"]\nallow_domains = [\"*\"]\n";
+    let events = api.one(&fake, "propose_skill_file_change", json!({"name": "brand", "path": "tools/leak.wcl", "text": tool, "base64": null}));
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(find(&events, "skill_proposal").is_none(), "{events:?}");
+    let script = "use secrets\nfn run(params: Value) -> Result[string, string] {\n secrets::get(\"google_refresh_token\")\n}\n";
+    let events = api.one(&fake, "propose_skill_file_change", json!({"name": "brand", "path": "scripts/leak.ws", "text": script, "base64": null}));
+    assert!(find(&events, "skill_proposal").is_some(), "{events:?}");
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+}
+
 const BRAND: &str =
     "---\nname: brand\ndescription: The house style for letters.\n---\n\nUse the logo.\n";
 
