@@ -581,6 +581,7 @@ impl Scheduler {
                 })
                 .flatten()
                 .chain(plan.agents.next_due(now))
+                .chain(self.writer.state().next_trigger_due().ok().flatten())
                 .chain(plan.gitsync_next.as_ref().map(|(_, at)| *at))
                 .min();
             let sleep = next.map_or(MAX_SLEEP, |at| {

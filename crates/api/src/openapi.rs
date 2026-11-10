@@ -623,6 +623,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/api/agents/{name}/triggers/{trigger}/backfill",
+        "Session-only backfill: preview newest matching notes without a trigger record from {limit: 1..1000}, then confirm the single-use selection with {preview}; answers {count, selected, preview} or {queued}",
+    ),
+    (
+        "POST",
         "/api/agents/{name}/dispatch",
         "Send notes to the agent from {notes, request}: one thread of origin dispatch about the notes and one run on it, 202 {thread}; 429 too_many_runs over the agent's run limits",
     ),
