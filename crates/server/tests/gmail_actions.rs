@@ -768,6 +768,11 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         assert_eq!(api.emails().len(), 1);
         assert!(api.google.mail_actions().is_empty(), "mention={mention}");
         assert!(api.server.secret_json("google_gmail_trashed").is_null());
+        let runs = expect(api.req("GET", "/api/agents/clerk/runs").send().unwrap(), 200);
+        assert!(runs.to_string().contains("Gmail action skipped"), "{runs:#}");
+        let result = fake.message_requests()[1].json().to_string();
+        assert!(result.contains("the note change was applied only in the vault"), "{result}");
+        assert!(result.contains("needs a user Apply or an opted-in foreground chat"), "{result}");
     }
 }
 

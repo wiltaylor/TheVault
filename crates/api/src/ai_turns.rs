@@ -717,8 +717,9 @@ fn apply_as_agent(
             // U4).
             match change["sub"].as_u64() {
                 Some(n) => Author::Agent(format!("{}/sub:{n}", agent.name)),
-                None if agent.permissions.gmail_actions => Author::AgentMail(agent.name),
-                None => Author::Agent(agent.name),
+                // This is the authenticated caller's explicit Apply, not an unattended
+                // tool write. Human approval may reach Gmail even with autonomous mail off.
+                None => Author::AgentMail(agent.name),
             }
         }
         None => caller,

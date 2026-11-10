@@ -2250,6 +2250,9 @@ impl Turn {
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                if let Some(line) = got.summary["gmail_skipped"].as_str() {
+                    self.report(|r| r.log.push(line.to_owned()));
+                }
                 if let Some((name, p)) = got.proposal
                     && !self.emit(name, p).await
                 {
@@ -3451,7 +3454,18 @@ fn run_tool(
             } else {
                 author.clone()
             };
-            make(w, &author, event, &p, out.summary)
+            let mut made = make(w, &author, event, &p, out.summary);
+            if email && !gmail_actions && !made.is_error {
+                let notice = "Gmail action skipped: the note change was applied only in the vault. Gmail archive/trash needs a user Apply or an opted-in foreground chat, never a trigger or mention run.";
+                made.summary["gmail_skipped"] = json!(notice);
+                made.summary["message"] = json!(notice);
+                if let Ok(mut content) = serde_json::from_str::<Value>(&made.content) {
+                    content["message"] = json!(format!("{} {notice}", content["message"].as_str().unwrap_or_default()));
+                    content["gmail_skipped"] = json!(notice);
+                    made.content = content.to_string();
+                }
+            }
+            made
         }
         Some(_) if held == Held::Drop => ToolOut::error(HELD_REFUSAL),
         _ => out,
