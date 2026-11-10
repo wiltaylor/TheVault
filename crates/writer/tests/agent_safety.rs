@@ -381,6 +381,25 @@ fn round3_agent_query_keeps_sql_plan_on_large_index() {
 }
 
 #[test]
+fn round3_omission_count_is_scoped_to_the_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    create(&w, "Hidden");
+    let visible = create(&w, "Visible");
+    let hash = w.agent_safety(&visible.id).unwrap().fingerprint;
+    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow").unwrap();
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    w.take_agent_omissions();
+    w.query_page("from email select title", 10, None).unwrap();
+    assert_eq!(w.take_agent_omissions(), 1);
+    w.query_page("from email where title == \"Visible\" select title", 10, None).unwrap();
+    assert_eq!(w.take_agent_omissions(), 0);
+    w.query_page("from email where title == \"Missing\" select title", 10, None).unwrap();
+    assert_eq!(w.take_agent_omissions(), 0);
+}
+
+#[test]
 fn round3_derived_email_thread_title_is_held_with_first_message() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();

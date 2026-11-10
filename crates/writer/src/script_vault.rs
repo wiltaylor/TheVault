@@ -11,6 +11,17 @@ use state::Author;
 
 use crate::{Archived, Input, Saved, Writer, doc_to_json};
 
+thread_local! {
+    static OMITTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl Writer {
+    /// Consume the omissions of the current synchronous agent tool call.
+    pub fn take_agent_omissions(&self) -> usize {
+        OMITTED.with(|n| n.replace(0))
+    }
+}
+
 fn err(e: impl ToString) -> String {
     e.to_string()
 }
@@ -31,7 +42,14 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
         };
         let mut ctx = query::Context::new(index, schema);
         ctx.excluded_notes = excluded.as_ref();
-        query::run(q, &ctx, &page).map_err(err)
+        let result = query::run(q, &ctx, &page).map_err(err)?;
+        if page.cursor.is_none() && excluded.as_ref().is_some_and(|ids| !ids.is_empty()) {
+            // Only totals cross this boundary, never the unfiltered row content.
+            ctx.excluded_notes = None;
+            let all = query::run(q, &ctx, &query::PageRequest { cursor: None, size: 1 }).map_err(err)?;
+            OMITTED.with(|n| n.set(n.get() + all.total.saturating_sub(result.total)));
+        }
+        Ok(result)
     })
 }
 
@@ -84,7 +102,9 @@ fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
         })
         .map_err(err)?;
     if agent_reading() {
+        let before = rows.len();
         rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
+        OMITTED.with(|n| n.set(n.get() + before - rows.len()));
     }
     Ok(rows)
 }

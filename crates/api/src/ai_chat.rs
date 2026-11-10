@@ -3832,6 +3832,7 @@ fn propose_or_read(
     call: &ToolCall,
 ) -> ToolOut {
     let _acting = writer::acting_as(&Author::Agent(agent.name.clone()));
+    w.take_agent_omissions();
     if let Some(e) = &call.error {
         return ToolOut::error(e.clone());
     }
@@ -3988,13 +3989,12 @@ fn propose_or_read(
         call.name.as_str(),
         "search_notes" | "query_notes" | "backlinks"
     ) {
-        match w.state().held_agent_note_ids() {
-            Ok(ids) if !ids.is_empty() => out.content.push_str(&format!(
+        let omitted = w.take_agent_omissions();
+        if omitted > 0 {
+            out.content.push_str(&format!(
                 "\n{} notes are held from agents; the user can review and release them.",
-                ids.len()
-            )),
-            Err(_) => return ToolOut::error("Safety status unavailable"),
-            _ => {}
+                omitted
+            ));
         }
     }
     out
