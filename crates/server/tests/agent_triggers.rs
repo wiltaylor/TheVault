@@ -353,18 +353,54 @@ fn review_f6_backfill_preview_keeps_success_after_a_failing_edit_run() {
     let (id, _) = api.memo("Roof", "open");
     fake.push(AnthropicMessage::text("Done."));
     api.advance("PT31S");
-    let login = api.client.post(api.server.url("/api/login")).json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap();
     assert!(login.status().is_success());
-    let cookie = login.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned();
-    let preview = || api.client.post(api.server.url("/api/agents/clerk/triggers/opened/backfill"))
-        .header(reqwest::header::COOKIE, &cookie).json(&json!({"limit":100})).send().unwrap().error_for_status().unwrap().json::<Value>().unwrap();
+    let cookie = login.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let preview = || {
+        api.client
+            .post(api.server.url("/api/agents/clerk/triggers/opened/backfill"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .json(&json!({"limit":100}))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .unwrap()
+    };
     assert_eq!(preview()["count"], 0);
     let note = api.get(&format!("/api/notes/{id}"));
     api.send("PUT", &format!("/api/notes/{id}"), json!({"base_version":note["version"], "note":{"fields":{"title":"Roof changed", "status":"open"}}}));
-    for _ in 0..4 { fake.push(AnthropicReply::error(400,"invalid_request_error","No credit")); }
-    for by in ["PT31S","PT30S","PT60S","PT120S"] { api.advance(by); }
-    assert_eq!(api.runs("clerk")["triggers"][0]["runs"][0]["outcome"], "failed");
-    assert_eq!(preview()["count"], 0, "later failure must not erase the successful note record");
+    for _ in 0..4 {
+        fake.push(AnthropicReply::error(
+            400,
+            "invalid_request_error",
+            "No credit",
+        ));
+    }
+    for by in ["PT31S", "PT30S", "PT60S", "PT120S"] {
+        api.advance(by);
+    }
+    assert_eq!(
+        api.runs("clerk")["triggers"][0]["runs"][0]["outcome"],
+        "failed"
+    );
+    assert_eq!(
+        preview()["count"],
+        0,
+        "later failure must not erase the successful note record"
+    );
 }
 
 #[test]

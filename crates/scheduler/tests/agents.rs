@@ -516,18 +516,27 @@ fn edits_during_a_run_wait_for_that_agent_note_before_running_once() {
         s.spawn(|| r.advance(31));
         let until = std::time::Instant::now() + Duration::from_secs(10);
         while r.fake.running.load(Ordering::SeqCst) == 0 {
-            if std::time::Instant::now() >= until { r.fake.hold.store(false, Ordering::SeqCst); panic!("first job did not start"); }
+            if std::time::Instant::now() >= until {
+                r.fake.hold.store(false, Ordering::SeqCst);
+                panic!("first job did not start");
+            }
             thread::sleep(Duration::from_millis(5));
         }
         r.set_status(&id, "open", &user());
-        let (tx,rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         let tick = &r;
-        s.spawn(move || { tick.advance(31); tx.send(()).unwrap(); });
+        s.spawn(move || {
+            tick.advance(31);
+            tx.send(()).unwrap();
+        });
         let returned = rx.recv_timeout(Duration::from_secs(2)).is_ok();
         r.fake.hold.store(false, Ordering::SeqCst);
         returned
     });
-    assert!(second_tick_returned, "same-note job must defer instead of entering the held runner");
+    assert!(
+        second_tick_returned,
+        "same-note job must defer instead of entering the held runner"
+    );
     assert_eq!(r.fake.most.load(Ordering::SeqCst), 1);
     r.advance(31);
     assert_eq!(r.fake.turns().len(), 2);

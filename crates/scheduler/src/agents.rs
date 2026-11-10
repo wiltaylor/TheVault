@@ -240,10 +240,17 @@ mod persistence_retry_tests {
         let mut plan = AgentPlan::default();
         for i in 0..=state::TRIGGER_QUEUE_CAP {
             plan.retry_persistence(AgentJob {
-                scope: None, caller: None,
-                op: Some("create".to_owned()), durable: None, note: Some((i.to_string(), "memo".to_owned())),
-                agent: "clerk".to_owned(), trigger: "opened".to_owned(), prompt: i.to_string(),
-                title: String::new(), thread: None, origin: None,
+                scope: None,
+                caller: None,
+                op: Some("create".to_owned()),
+                durable: None,
+                note: Some((i.to_string(), "memo".to_owned())),
+                agent: "clerk".to_owned(),
+                trigger: "opened".to_owned(),
+                prompt: i.to_string(),
+                title: String::new(),
+                thread: None,
+                origin: None,
             });
         }
         assert_eq!(plan.persist_retry.len(), 10_000);
@@ -256,7 +263,10 @@ impl AgentPlan {
     fn retry_persistence(&mut self, job: AgentJob) {
         if self.persist_retry.len() >= state::TRIGGER_QUEUE_CAP as usize {
             let oldest = self.persist_retry.remove(0);
-            eprintln!("trigger persistence retry buffer full: discarding oldest in-memory retry for agent {:?}, trigger {:?}; durable event remains unacknowledged", oldest.agent, oldest.trigger);
+            eprintln!(
+                "trigger persistence retry buffer full: discarding oldest in-memory retry for agent {:?}, trigger {:?}; durable event remains unacknowledged",
+                oldest.agent, oldest.trigger
+            );
         }
         self.persist_retry.push(job);
     }
@@ -822,7 +832,8 @@ impl Scheduler {
                         continue;
                     };
                     let job = AgentJob {
-                        scope: None, caller: None,
+                        scope: None,
+                        caller: None,
                         op: payload["op"].as_str().map(str::to_owned),
                         durable: Some(row.id),
                         note: row
@@ -991,7 +1002,8 @@ impl Scheduler {
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             let job = AgentJob {
-                scope: None, caller: None,
+                scope: None,
+                caller: None,
                 op: Some(
                     match &t.when {
                         TriggerWhen::NoteEvent(e) if e.on.iter().any(|op| op == "create") => {
