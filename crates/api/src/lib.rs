@@ -324,7 +324,10 @@ fn build() -> Built {
         .get("/api/agents/{name}", agent_files::read)
         .put("/api/agents/{name}", agent_files::put)
         .delete("/api/agents/{name}", agent_files::delete)
-        .post("/api/agents/{name}/browser-profile/reset", agent_files::reset_browser_profile)
+        .post(
+            "/api/agents/{name}/browser-profile/reset",
+            agent_files::reset_browser_profile,
+        )
         .get("/api/skills", skills::list)
         .post_up_to("/api/skills/import", skills::MAX_IMPORT, skills::import)
         .get("/api/skills/{name}", skills::read)

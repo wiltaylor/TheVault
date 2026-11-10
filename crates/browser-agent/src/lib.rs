@@ -20,7 +20,7 @@
 //!   name.
 //! - `GET /health` answers `{ok, version, display, playwright_cli}` without a token.
 
-use std::collections::{HashMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
@@ -184,8 +184,17 @@ const PROFILE_BYTES: u64 = 512 * 1024 * 1024;
 const RETIRED_INDEX: &str = ".retired-profile-ids.json";
 
 fn store_retired(home: &Path, ids: &BTreeSet<String>) -> io::Result<()> {
-    let tmp = home.join(format!(".retired-profile-ids-{}.tmp", std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()));
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let tmp = home.join(format!(
+        ".retired-profile-ids-{}.tmp",
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)?;
     use std::io::Write;
     file.write_all(&serde_json::to_vec(ids)?)?;
     file.sync_all()?;
@@ -197,9 +206,15 @@ fn store_retired(home: &Path, ids: &BTreeSet<String>) -> io::Result<()> {
 fn load_retired(home: &Path) -> io::Result<BTreeSet<String>> {
     let index = home.join(RETIRED_INDEX);
     let mut ids = match std::fs::symlink_metadata(&index) {
-        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => serde_json::from_slice(&std::fs::read(&index)?)?,
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+            serde_json::from_slice(&std::fs::read(&index)?)?
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeSet::new(),
-        _ => return Err(io::Error::other("retired profile index is not a regular file")),
+        _ => {
+            return Err(io::Error::other(
+                "retired profile index is not a regular file",
+            ));
+        }
     };
     let markers = home.join(".retired-profiles");
     match std::fs::symlink_metadata(&markers) {
@@ -208,19 +223,28 @@ fn load_retired(home: &Path) -> io::Result<BTreeSet<String>> {
             for entry in &entries {
                 let id = entry.file_name().to_string_lossy().into_owned();
                 let meta = std::fs::symlink_metadata(entry.path())?;
-                if !meta.is_file() || meta.file_type().is_symlink() || id.is_empty()
-                    || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                if !meta.is_file()
+                    || meta.file_type().is_symlink()
+                    || id.is_empty()
+                    || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                {
                     return Err(io::Error::other("invalid retired profile marker"));
                 }
                 ids.insert(id);
             }
             store_retired(home, &ids)?;
             // Only regular marker files were read. The index is durable before pruning.
-            for entry in entries { std::fs::remove_file(entry.path())?; }
+            for entry in entries {
+                std::fs::remove_file(entry.path())?;
+            }
             std::fs::remove_dir(&markers)?;
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        _ => return Err(io::Error::other("retired profile markers are not a real directory")),
+        _ => {
+            return Err(io::Error::other(
+                "retired profile markers are not a real directory",
+            ));
+        }
     }
     Ok(ids)
 }
@@ -241,7 +265,12 @@ async fn profile_access(
 ) -> ApiResult<OwnedRwLockReadGuard<()>> {
     let id = profile_id(state, headers)?;
     let guard = profile_lock(state, id).read_owned().await;
-    if state.retired.lock().unwrap_or_else(|e| e.into_inner()).contains(id) {
+    if state
+        .retired
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(id)
+    {
         return Err(ApiError::new(
             StatusCode::GONE,
             "this browser profile was retired",

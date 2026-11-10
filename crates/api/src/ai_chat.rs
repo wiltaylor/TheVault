@@ -1872,12 +1872,20 @@ impl Turn {
             if let Some(b) = setup.browser.take() {
                 let id = ulid::Ulid::new().to_string();
                 if let Err(e) = self.writer.begin_temporary_browser_profile(&id) {
-                    self.failed(&AiError::new(ErrorKind::Unavailable, e.to_string()), &[]).await;
+                    self.failed(&AiError::new(ErrorKind::Unavailable, e.to_string()), &[])
+                        .await;
                     return;
                 }
-                Some(crate::ai_browser::TemporaryProfile(b.with_profile(id), self.writer.clone()))
-            } else { None }
-        } else { None };
+                Some(crate::ai_browser::TemporaryProfile(
+                    b.with_profile(id),
+                    self.writer.clone(),
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if let Some(b) = &temporary_browser {
             setup.browser = Some(b.0.clone());
         }

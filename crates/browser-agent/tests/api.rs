@@ -20,33 +20,81 @@ fn identity(r: reqwest::RequestBuilder, id: &str) -> reqwest::RequestBuilder {
 #[tokio::test(flavor = "multi_thread")]
 async fn retired_index_survives_restart_and_prunes_legacy_marker_files() {
     let b = Agent::start().await;
-    assert_eq!(identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap().status(), 200);
+    assert_eq!(
+        identity(b.http.delete(b.url("/profile")), "test")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
     let markers = b.home.path().join(".retired-profiles");
     std::fs::create_dir(&markers).unwrap();
     std::fs::write(markers.join("legacy-retired"), "").unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let config = Config { token: TOKEN.into(), work_dir: b._work.path().to_path_buf(), home_dir: b.home.path().to_path_buf(), display: ":1".into(), playwright_cli: None };
+    let config = Config {
+        token: TOKEN.into(),
+        work_dir: b._work.path().to_path_buf(),
+        home_dir: b.home.path().to_path_buf(),
+        display: ":1".into(),
+        playwright_cli: None,
+    };
     // Construct synchronously to prove migration happened before requests are served.
     let router = browser_agent::router(config).unwrap();
     assert!(!markers.exists());
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
     for id in ["test", "legacy-retired"] {
-        assert_eq!(identity(b.http.post(format!("{base}/run")), id).json(&json!({"command":"true"})).send().await.unwrap().status(), 410);
+        assert_eq!(
+            identity(b.http.post(format!("{base}/run")), id)
+                .json(&json!({"command":"true"}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            410
+        );
     }
-    let ids: Vec<String> = serde_json::from_slice(&std::fs::read(b.home.path().join(".retired-profile-ids.json")).unwrap()).unwrap();
+    let ids: Vec<String> = serde_json::from_slice(
+        &std::fs::read(b.home.path().join(".retired-profile-ids.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(ids, ["legacy-retired", "test"]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn resetting_an_over_quota_profile_admits_an_empty_new_identity() {
     let b = Agent::start().await;
-    std::fs::File::create(b.work().join("oversized")).unwrap().set_len(512 * 1024 * 1024 + 1).unwrap();
+    std::fs::File::create(b.work().join("oversized"))
+        .unwrap()
+        .set_len(512 * 1024 * 1024 + 1)
+        .unwrap();
     let (status, message) = b.run_status(json!({"command":"true"})).await;
     assert_eq!(status, 507);
-    assert!(message["error"].as_str().unwrap().contains("Reset browser profile"));
-    assert_eq!(identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap().status(), 200);
-    let r: Value = identity(b.http.post(b.url("/run")), "reset-new-id").json(&json!({"command":"test ! -e oversized && test ! -e storage-state.json"})).send().await.unwrap().json().await.unwrap();
+    assert!(
+        message["error"]
+            .as_str()
+            .unwrap()
+            .contains("Reset browser profile")
+    );
+    assert_eq!(
+        identity(b.http.delete(b.url("/profile")), "test")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let r: Value = identity(b.http.post(b.url("/run")), "reset-new-id")
+        .json(&json!({"command":"test ! -e oversized && test ! -e storage-state.json"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(r["exit"], 0);
 }
 

@@ -71,24 +71,38 @@ fn browser_profile_survives_label_rename_but_not_delete_and_recreate() {
 fn browser_reset_and_crash_recovery_retire_only_their_own_profiles() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    w.put_agent("browser", "label = \"Browser\"\n", none).unwrap();
+    w.put_agent("browser", "label = \"Browser\"\n", none)
+        .unwrap();
     w.put_agent("other", "label = \"Other\"\n", none).unwrap();
     let old = w.browser_profile("browser").unwrap();
     let other = w.browser_profile("other").unwrap();
-    assert_eq!(w.reset_browser_profile("browser").unwrap(), Some(old.clone()));
+    assert_eq!(
+        w.reset_browser_profile("browser").unwrap(),
+        Some(old.clone())
+    );
     assert_ne!(w.browser_profile("browser").unwrap(), old);
     assert_eq!(w.browser_profile("other").unwrap(), other);
     w.begin_temporary_browser_profile("crashed-child").unwrap();
-    assert_eq!(w.temporary_browser_profiles().unwrap(), vec!["crashed-child"]);
+    assert_eq!(
+        w.temporary_browser_profiles().unwrap(),
+        vec!["crashed-child"]
+    );
     // Dropping an ordinary writer is not a server startup or the temporary-profile guard.
     drop(w);
     let vault = Vault::open(dir.path()).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
     let w = Writer::open(vault, state).unwrap();
-    assert_eq!(w.temporary_browser_profiles().unwrap(), vec!["crashed-child"]);
+    assert_eq!(
+        w.temporary_browser_profiles().unwrap(),
+        vec!["crashed-child"]
+    );
     w.recover_temporary_browser_profiles().unwrap();
     assert!(w.temporary_browser_profiles().unwrap().is_empty());
-    assert!(w.retired_browser_profiles().unwrap().contains(&"crashed-child".to_owned()));
+    assert!(
+        w.retired_browser_profiles()
+            .unwrap()
+            .contains(&"crashed-child".to_owned())
+    );
     assert_eq!(w.browser_profile("other").unwrap(), other);
 }
 

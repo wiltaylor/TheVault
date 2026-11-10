@@ -923,13 +923,19 @@ impl Writer {
         let _w = self.write_lock();
         let mut ids = self.temporary_browser_profiles()?;
         ids.push(id.to_owned());
-        self.state().set_meta("browser-temporary", &serde_json::to_string(&ids).expect("strings serialize"))?;
+        self.state().set_meta(
+            "browser-temporary",
+            &serde_json::to_string(&ids).expect("strings serialize"),
+        )?;
         Ok(())
     }
 
     pub fn temporary_browser_profiles(&self) -> Result<Vec<String>> {
-        Ok(self.state().meta("browser-temporary")?
-            .and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+        Ok(self
+            .state()
+            .meta("browser-temporary")?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default())
     }
 
     /// Home-server startup only, never on an ordinary writer opened by a CLI or app.
@@ -969,7 +975,10 @@ impl Writer {
         // Retired first, pending second: a crash between writes is safe to retry.
         let mut pending = self.temporary_browser_profiles()?;
         pending.retain(|s| s != id);
-        self.state().set_meta("browser-temporary", &serde_json::to_string(&pending).expect("strings serialize"))?;
+        self.state().set_meta(
+            "browser-temporary",
+            &serde_json::to_string(&pending).expect("strings serialize"),
+        )?;
         Ok(())
     }
 

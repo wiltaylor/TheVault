@@ -170,7 +170,9 @@ impl FakeBrowser {
         *lock(&self.shared.cleanup_failure) = fail;
     }
 
-    pub fn profiles(&self) -> Vec<String> { lock(&self.shared.profiles).iter().cloned().collect() }
+    pub fn profiles(&self) -> Vec<String> {
+        lock(&self.shared.profiles).iter().cloned().collect()
+    }
 
     /// Answer the next `/run` with `run`.
     pub fn push_run(&self, run: BrowserRun) {
@@ -254,7 +256,9 @@ fn answer(s: &Shared, r: &Request) -> Reply {
             Reply::json(200, &json!({"ok": true}))
         }
         ("POST", "/run") => {
-            if let Some(id) = r.header("x-vault-agent") { lock(&s.profiles).insert(id.to_owned()); }
+            if let Some(id) = r.header("x-vault-agent") {
+                lock(&s.profiles).insert(id.to_owned());
+            }
             let body = r.json();
             let command = body["command"].as_str().unwrap_or_default().to_owned();
             if command.trim().is_empty() {

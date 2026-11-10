@@ -120,7 +120,9 @@ fn main() -> anyhow::Result<()> {
     writer
         .upgrade_shipped_defaults(writer::Upkeep::Home)
         .context("bringing the vault's shipped defaults up to date")?;
-    api::recover_browser_profiles(&writer).await.context("recovering temporary browser profiles")?;
+    api::recover_browser_profiles(&writer)
+        .await
+        .context("recovering temporary browser profiles")?;
     handlers.start(&writer);
     classifiers.start(&writer).context("starting classifiers")?;
     // The script hosts' HTTP clients block, so they are made outside the async runtime. Tasks

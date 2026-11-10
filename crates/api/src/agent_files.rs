@@ -21,7 +21,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use schema::{
     Agent, AgentPermissions, Invalid, Issue, MentionTrigger, NoteEvent, Schedule, Trigger,
@@ -592,19 +592,32 @@ pub async fn reset_browser_profile(
     let id = blocking(w.clone(), move |w| {
         let allowed = match &by {
             state::Author::Session(_) => true,
-            state::Author::Token(token) => !crate::auth::is_agent_token(&by)
-                && !token.starts_with("device-")
-                && w.state().device_for_token(token)?.is_none()
-                && w.state().list_tokens()?.iter().any(|t| t.name == *token && t.scope == state::Scope::Admin),
+            state::Author::Token(token) => {
+                !crate::auth::is_agent_token(&by)
+                    && !token.starts_with("device-")
+                    && w.state().device_for_token(token)?.is_none()
+                    && w.state()
+                        .list_tokens()?
+                        .iter()
+                        .any(|t| t.name == *token && t.scope == state::Scope::Admin)
+            }
             _ => false,
         };
         if !allowed {
-            return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden", "Reset browser profile requires an owner session or admin user token"));
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "Reset browser profile requires an owner session or admin user token",
+            ));
         }
         Ok::<_, ApiError>(w.reset_browser_profile(&name)?)
-    }).await?;
+    })
+    .await?;
     crate::ai_browser::cleanup_retired(&w).await;
-    let pending = id.is_some_and(|id| w.retired_browser_profiles().is_ok_and(|ids| ids.contains(&id)));
+    let pending = id.is_some_and(|id| {
+        w.retired_browser_profiles()
+            .is_ok_and(|ids| ids.contains(&id))
+    });
     Ok(Json(json!({"reset": true, "cleanup_pending": pending})))
 }
 
