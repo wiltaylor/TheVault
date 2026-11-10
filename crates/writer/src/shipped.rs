@@ -81,6 +81,7 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
         hashes: &[
             "c8259b1fdca6f8e750006f31bbd1af8406c87657ec09342a554d94e40ba2b3f8",
             "3357ff825a4979a4103bfcf390dfd7e513ca48de7a6b1c9a8108cdc709a9a54a",
+            "ce14e51093680e6cf67dff766994afee3e441bb1884ab942914783e217670e83",
         ],
     },
     ShippedFile {
