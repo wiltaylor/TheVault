@@ -229,7 +229,6 @@ impl Writer {
             _ => return Ok(()),
         };
         let Ok(agent) = self.agent(name) else {
-            set(doc, "status", "draft");
             return Ok(());
         };
         let policy = &agent.permissions.outbox;
