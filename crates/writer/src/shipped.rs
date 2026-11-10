@@ -43,8 +43,8 @@ use wcl_lang::ast::{Block, Expr, Item, Source};
 
 use crate::builtin::{
     BUILT_IN_TAXONOMIES, BUILT_IN_TYPES, DEFAULT_EMAIL_TYPE, DEFAULT_EVENT_TYPE,
-    DEFAULT_MESSAGE_TYPE, DEFAULT_OUTBOX_TYPE, DEFAULT_PERSON_TYPE, EMAIL_TYPE, EVENT_TYPE,
-    MESSAGE_TYPE, OUTBOX_TYPE, PERSON_TYPE, TYPES_NEEDING_PERSON,
+    DEFAULT_MESSAGE_TYPE, DEFAULT_PERSON_TYPE, EMAIL_TYPE, EVENT_TYPE, MESSAGE_TYPE, OUTBOX_TYPE,
+    PERSON_TYPE, TYPES_NEEDING_PERSON,
 };
 use crate::defs::taxonomy_path;
 use crate::types::{NativeMigration, TypeChange, rebuild_schema};
@@ -213,6 +213,8 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "5be2897cde964dfe62213b22db49856e2dff6cc4a6d35f9057ceebd09a2284b8",
             "1fdc331fcbcefb5df07233a2eb2b2075784824d41c1d31f27375860053877680",
             "c468775afaa9cbce770b6bf18e8f72f3d517ba1e9f9d1ff5e10af91a3ee59a3f",
+            "ae1e8226181e8001720b620bd5da05c5e3574f8389fc0d1934fcd4ea54b6e5a1",
+            "bc9c5b42a6e9b25642a0f6037059e6ec9bdda49a37c962a15da9a85b448229ab",
         ],
     },
     // The Google Calendar write-back of event series, named by the shipped `event_series` type's
@@ -236,6 +238,8 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "f12e9fd3756b775fd84b7ab739ffd4e6e2e69a0160dcc5a96d5a5bc45551fab4",
             "344cd1b82f892cbf2823e97b9fed84ff75432da4b76de620b9c567b070b8882d",
             "e84c8da7e1825c5f7e976956c124aff923e73b63524e8b75e1df7a28a27765b1",
+            "fd0a2569b6962ad9401cfd9b45fabd0f60587c8a907a59e56c054ef48b5c9a8b",
+            "c49ce64d1666a4c06ed700f7a177758c809af1cf6750cecbd4b36c6da41424b4",
         ],
     },
     // The built-in agent, the chat panel's default (agents G6).
@@ -701,6 +705,11 @@ fn dicts_not_labels(w: &Writer) -> Result<()> {
 /// step `0009_outbox_statuses` replaces.
 const OUTBOX_TYPE_3A489B0: &str = include_str!("../defaults/old/outbox_3a489b0.wcl");
 
+// Historical template upgrades run before additive field seeding. Keep their target pinned,
+// so the later RSVP/delete slots are added only after their fields exist (TV-136).
+const OUTBOX_BEFORE_CALENDAR_REVIEW: &str =
+    include_str!("../defaults/old/outbox_before_calendar_review.wcl");
+
 /// The `status` options of the `outbox` type before outbox X14.
 const OLD_OUTBOX_STATUSES: [&str; 7] = [
     "draft", "review", "approved", "sending", "sent", "failed", "rejected",
@@ -815,7 +824,7 @@ fn outbox_statuses(w: &Writer) -> Result<()> {
     }
     let path = type_path(name);
     let old: Source = store::parse_data_only(OUTBOX_TYPE_3A489B0, &path)?;
-    let shipped: Source = store::parse_data_only(DEFAULT_OUTBOX_TYPE, &path)?;
+    let shipped: Source = store::parse_data_only(OUTBOX_BEFORE_CALENDAR_REVIEW, &path)?;
     let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
     let status_field = |i: &Item| block(i, "field").and_then(label) == Some("status");
     let Some(at) = item_at(&ast, &status_field) else {
@@ -898,7 +907,7 @@ fn outbox_template(w: &Writer) -> Result<()> {
         "0008_outbox_template",
         OUTBOX_TYPE,
         OUTBOX_TYPE_5E81292,
-        DEFAULT_OUTBOX_TYPE,
+        OUTBOX_BEFORE_CALENDAR_REVIEW,
     )
 }
 

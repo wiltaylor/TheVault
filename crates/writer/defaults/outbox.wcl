@@ -107,6 +107,19 @@ field event {
   target      = "*"
 }
 
+field event_action {
+  kind        = "select"
+  label       = "Event action"
+  options     = ["update", "delete"]
+  description = "Empty or update changes the event. Delete removes it from Google after review."
+}
+
+field my_response {
+  kind    = "select"
+  label   = "Your response"
+  options = ["accepted", "tentative", "declined"]
+}
+
 field when {
   kind  = "date_range"
   label = "When"
@@ -178,6 +191,12 @@ template default {
           when = "kind == \"sms\""
         }
         slot "event" {
+          when = "kind == \"event\""
+        }
+        slot "event_action" {
+          when = "kind == \"event\""
+        }
+        slot "my_response" {
           when = "kind == \"event\""
         }
         slot "when" {
