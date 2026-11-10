@@ -889,9 +889,10 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
         generation(root).trim().parse::<u64>().unwrap(),
         before + 4 + 3 + 1
     );
-    // Message gains classifier fields and processed. Call gains processed and agent safety.
+    // Message/call gain workflow fields. Conversation gains derived-title safety.
     assert!(
         done.fields_added.iter().all(|(t, f)| t == "person"
+            || (t == "conversation" && f == "agent_safety_reason")
             || ((t == "message" || t == "call")
                 && matches!(f.as_str(), "processed" | "agent_safety_reason"))
             || (t == "message"
