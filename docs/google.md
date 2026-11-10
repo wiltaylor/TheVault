@@ -174,16 +174,19 @@ What you do with an email in TheVault goes back to Gmail (TV-25). This reverses 
 |---|---|
 | Mark an email done, so `processed` turns on | The message is archived: `messages.modify` removes the `INBOX` label. It keeps its other labels and stays in All Mail |
 | Delete an email | The message moves to Gmail's trash with `messages.trash`. Gmail deletes it for good after 30 days |
+| Restore an email from the vault trash | Requests `messages.untrash`, then removes its suppressed sync reference only after Google succeeds |
 
-It goes one way only:
+Mail actions have these limits:
 
 - Nothing in Gmail changes the vault through these actions. Archiving or trashing a message in Gmail does not mark its note done or delete it. The sync still brings label changes and archives a note whose message Gmail deleted for good, as before.
-- Nothing is undone. Turning `processed` off again or restoring the email from the vault's trash sends nothing. Turning `processed` on again later archives the message again.
+- Turning `processed` off again does not undo archiving. Turning it on again later archives the message again. Restoring from the vault trash also requests a Google restore. The local copy remains restored if Google fails, and the bell explains the failure. A missing message or a connected account without `gmail.modify` keeps the suppressed reference. With Google disconnected, restore logs a skip and keeps the reference without raising a failure notification.
 - **Mark older processed…** in the inbox sends nothing to Gmail, also when it marks an email again that you unticked after an earlier run. Each run writes its own id to the hidden field `inbox_catch_up` with `processed`, and a write that changes that field is not sent.
 - Writes by the Gmail sync, by any scheduled task and by handlers send nothing, so the sync and the mail actions never feed each other.
-- A deleted email is never imported again, also when Gmail was not reached: its Gmail id goes into the secret `google_gmail_trashed`, which the sync skips. The sync also skips any message in Gmail's trash.
+- A user- or agent-deleted email is not imported again while its Gmail id is in `google_gmail_trashed`, also when Gmail was not reached or the agent's Gmail permission was off. This suppression is local and does not require permission to change Gmail. A successful restore clears the reference. The sync also skips any message in Gmail's trash. The suppression list keeps the newest 2000 refs.
 
-The action runs on the home server, from the `email` type's handlers in `scripts/google_mail.ws`. An action taken in the desktop or Android app is sent once the change syncs to the server; offline, it waits in the app's queue. A message Gmail no longer has counts as done. Any other Gmail error fails the handler run, which the server records with Gmail's message, and the bell shows "Gmail did not archive an email" or "Gmail did not trash an email" on the email. The action is not retried, so do it in Gmail.
+Each agent's **Allow Gmail archive and trash actions** switch (`permissions.gmail_actions`) defaults off. Without it, autonomous agent edits and deletes stay local. Trigger, mention, dispatch and sub-agent runs cannot use this permission, even when it is on. Triage can mark a vault email processed while the message remains in Gmail's inbox. The tool result and run trail explain the skipped Gmail action. An authenticated user's explicit Apply of a proposal, including a sub-agent proposal, may reach Gmail regardless of the switch.
+
+The action runs on the home server, from the `email` type's handlers in `scripts/google_mail.ws`. An action taken in the desktop or Android app is sent once the change syncs to the server; offline, it waits in the app's queue. A message Gmail no longer has counts as done for archive and trash, but not for restore. A Gmail error fails the handler run, which the server records with Gmail's message, and the bell shows "Gmail did not archive an email", "Gmail did not trash an email" or "Gmail did not untrash an email". The action is not retried, so check it in Gmail.
 
 ### Reconnect for mail actions
 

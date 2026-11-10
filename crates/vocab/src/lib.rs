@@ -54,6 +54,9 @@ pub enum Author {
     /// A named agent (agents G11): every change an agent's tools make, whether it applies them
     /// itself or the user applies its proposal. Its writes never fire note event triggers.
     Agent(String),
+    /// An interactive agent write explicitly allowed to reach Gmail. This capability is
+    /// transient: persisted authors still read back as ordinary agents.
+    AgentMail(String),
 }
 
 impl Author {
@@ -64,7 +67,7 @@ impl Author {
             Author::Token(n) => ("token", n),
             Author::Handler(n) => ("handler", n),
             Author::Task(n) => ("task", n),
-            Author::Agent(n) => ("agent", n),
+            Author::Agent(n) | Author::AgentMail(n) => ("agent", n),
         }
     }
 
@@ -141,5 +144,16 @@ mod tests {
         }
         assert_eq!(Author::Agent("triage".into()).parts(), ("agent", "triage"));
         assert_eq!(Author::from_parts("robot", "x".into()), None);
+    }
+
+    #[test]
+    fn persisted_authors_cannot_grant_gmail_actions() {
+        let author = Author::AgentMail("clerk".into());
+        let (kind, name) = author.parts();
+        assert_eq!(
+            Author::from_parts(kind, name.to_owned()),
+            Some(Author::Agent("clerk".into()))
+        );
+        assert_eq!(Author::from_parts("agent_mail", "clerk".into()), None);
     }
 }
