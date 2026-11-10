@@ -132,7 +132,8 @@ pub(crate) fn shipped_script_refused(script: &str) -> Option<String> {
 }
 
 /// Refuse agent source edits that inherit folders, secrets or host grants from any run.
-/// The task being replaced is excluded because its proposed grants are checked separately.
+/// The task or tool being replaced is excluded because its proposed grants are checked
+/// separately and a source change always waits for Apply.
 pub(crate) fn shared_paths_refused(
     w: &Writer,
     script: &str,

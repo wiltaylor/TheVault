@@ -4459,7 +4459,6 @@ fn propose_type(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, Too
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| ToolOut::error("wcl must be the whole type file as WCL text"))?;
     let before = w.read_type(name).ok();
-    type_handler_secrets(name, wcl).map_err(ToolOut::error)?;
     let check = w.check_type(name, wcl).map_err(|e| {
         let message = e.to_string();
         let details = ApiError::from(e).body;
@@ -4472,6 +4471,7 @@ fn propose_type(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, Too
         .to_string();
         out
     })?;
+    type_handler_secrets(name, &check.wcl).map_err(ToolOut::error)?;
     let issues: Vec<Value> = check
         .warnings
         .iter()

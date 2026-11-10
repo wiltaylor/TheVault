@@ -195,6 +195,12 @@ Agents run wscript four ways (script-tools T1 to T6). The built-in `wscript` ski
 
 Safety:
 
+Skill tools receive no script secrets, including tools uploaded by the user. Agent proposals
+for files under a skill's `tools/` or `scripts/` always wait for Apply, even with skill
+confirmation off. Type proposals that add, remove or change handler bindings also always
+wait for Apply. Handler grants cannot name secrets reserved for the server, including the
+Google credentials. These checks run again when applying a proposal (TV-135).
+
 Agent-granted HTTP (`run_script`, `run_saved_script`) refuses local addresses, including names resolving to them, unless `ai_settings.fetch_private` is enabled. Use a user script tool or task naming the LAN host instead. User-file grants, including `"*"`, are unchanged. Guarded agent HTTP does not use environment proxies.
 
 - **Run wscript code is full access.** The code reaches every `vault` function on every note type (the agent's `permissions.types` do not limit it), HTTP to public addresses only (unless `ai_settings.fetch_private` is enabled) when the agent may read web pages (`permissions.web.read`, and none otherwise), and the `ai` module. It reads no script secret, whatever the agent may do: a script tool or a task names the secrets it may read (TV-99). It runs for up to five minutes and 50 million instructions. Its changes are made at once, as the agent, with no proposal. Only an admin grants it: agent files need `admin`, an agent may propose it for another agent only when it has it itself, an agent never changes its own file, and such a change always waits for an admin's Apply, whatever the agent's "Ask before changing agents" switch says; a `write` token from an app gets "Only an admin turns on Run wscript code".
