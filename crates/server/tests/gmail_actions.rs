@@ -135,6 +135,37 @@ impl Api {
         );
         api.run_gmail();
         assert_eq!(api.emails().len(), messages.len());
+        // This suite tests the independent Gmail permission boundary, after the user has
+        // reviewed the synthetic mail. Do not disable or forge the incoming safety gate.
+        let session = Client::new();
+        let login = session
+            .post(api.server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap();
+        assert_eq!(login.status(), 200);
+        let cookie = login.headers()[reqwest::header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        for row in api.emails() {
+            let id = row["id"].as_str().unwrap();
+            let note = api.note(id);
+            expect(
+                session
+                    .post(
+                        api.server
+                            .url(&format!("/api/notes/{id}/agent-safety/release")),
+                    )
+                    .header(reqwest::header::COOKIE, cookie)
+                    .json(&json!({"fingerprint":note["agent_safety"]["fingerprint"]}))
+                    .send()
+                    .unwrap(),
+                200,
+            );
+        }
         api
     }
 
@@ -815,7 +846,8 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
                 .unwrap();
             expect(client.post(api.server.url("/api/notes?type=fleeting")).header(reqwest::header::COOKIE, cookie).json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000001)"}}]}]}})).send().unwrap(), 201);
         } else {
-            api.edit(&one, json!({"title": "Changed"}));
+            // A workflow update preserves the reviewed content fingerprint.
+            api.edit(&one, json!({"labels": ["system/INBOX", "system/UNREAD"]}));
         }
         let mut note = api.note(&one);
         note["note"]["fields"]["processed"] = json!(true);
