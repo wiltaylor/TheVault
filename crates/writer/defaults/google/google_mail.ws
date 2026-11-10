@@ -228,6 +228,13 @@ fn after_create(note: Value) -> Result[(), string] {
 }
 
 fn restore_mail(id: string) -> Result[(), string] {
+    match secrets::get("google_refresh_token") {
+        Ok(_) => {},
+        Err(_) => {
+            vault::log("Google is not connected: the vault copy was restored, no Gmail restore was sent, and the suppressed sync reference was kept.")
+            return Ok(())
+        },
+    }
     let gmail = connect()?
     if !gmail.ok {
         return Err("Reconnect Google with gmail.modify to restore this message in Gmail. Its trash still expires after 30 days.")
@@ -241,7 +248,9 @@ fn restore_mail(id: string) -> Result[(), string] {
 }
 
 fn after_delete(note: Value) -> Result[(), string] {
-    if !by_user(note) {
+    // Local suppression is independent of permission to send an HTTP request to Gmail.
+    let kind = text_of(note.get("author").unwrap_or(Value::Null), "kind")
+    if kind == "" || kind == "task" || kind == "handler" {
         return Ok(())
     }
     let id = text_of(fields_at(note, "note"), "gmail_ref")
@@ -251,7 +260,12 @@ fn after_delete(note: Value) -> Result[(), string] {
     // The trash is sent also when the ref cannot be remembered, and each failure raises its own
     // notification, not tied to the email, which is in the vault's trash.
     let remembered = remember_trashed(id)
-    let sent = reported(note, "trash", "", send(id, "trash", ""))
+    let sent = if by_user(note) {
+        reported(note, "trash", "", send(id, "trash", ""))
+    } else {
+        vault::log("Gmail trash skipped: the local delete is remembered so sync does not import it again. Gmail actions need user Apply or an opted-in foreground chat.")
+        Ok(())
+    }
     match remembered {
         Ok(_) => sent,
         Err(e) => {

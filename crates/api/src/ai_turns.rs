@@ -722,6 +722,7 @@ fn apply_as_agent(
                         .and_then(|id| w.read(id).ok())
                         .is_some_and(|n| n.type_name == "email"));
             match change["sub"].as_u64() {
+                Some(n) if email => Author::AgentMail(format!("{}/sub:{n}", agent.name)),
                 Some(n) => Author::Agent(format!("{}/sub:{n}", agent.name)),
                 // This is the authenticated caller's explicit Apply, not an unattended
                 // tool write. Human approval may reach Gmail even with autonomous mail off.

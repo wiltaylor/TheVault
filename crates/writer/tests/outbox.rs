@@ -67,6 +67,22 @@ fn gmail_capability_does_not_bypass_calendar_review() {
     ));
 }
 
+#[test]
+fn gmail_capability_retains_outbox_draft_review_and_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let drafter = Author::AgentMail("drafter".into());
+    let id = create(&w, &drafter, email(json!({}))).unwrap();
+    assert_eq!(status(&w, &id), "draft");
+    assert!(create(&w, &drafter, email(json!({"status": "ready"}))).is_err());
+    assert!(edit(&w, &id, &drafter, json!({"status": "ready"})).is_err());
+    let other = create(&w, &agent("sender"), email(json!({}))).unwrap();
+    assert!(edit(&w, &other, &drafter, json!({"subject": "Not mine"})).is_err());
+    let sender = Author::AgentMail("sender".into());
+    let ready = create(&w, &sender, email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &ready), "ready");
+}
+
 fn agent(name: &str) -> Author {
     Author::Agent(name.into())
 }

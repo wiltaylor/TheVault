@@ -257,6 +257,20 @@ impl Api {
             200,
         )
     }
+
+    fn model(&self, fake: &FakeAnthropic) {
+        for (name, value) in AiSeed::new().account(TestAccount::anthropic(fake).model("claude-opus-5")).secrets() {
+            expect(self.req("PUT", &format!("/api/secrets/{name}")).json(&json!({"value": value})).send().unwrap(), 200);
+        }
+    }
+
+    fn session_call(&self) {
+        let client = Client::new();
+        let login = client.post(self.server.url("/api/login")).json(&json!({"password": testkit::PASSWORD})).send().unwrap();
+        assert_eq!(login.status(), 200);
+        let cookie = login.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap();
+        expect(client.post(self.server.url("/api/notes?type=fleeting")).header(reqwest::header::COOKIE, cookie).json(&json!({"note": {"fields": {"title": "Request"}, "blocks": [{"kind": "content", "labels": ["body"], "blocks": [{"kind": "paragraph", "fields": {"text": "[@Clerk process mail](agent:clerk?call=01JA0000000000000000000002)"}}]}]}})).send().unwrap(), 201);
+    }
 }
 
 #[test]
@@ -772,7 +786,10 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         assert_eq!(api.note(&one)["note"]["fields"]["processed"], true);
         assert_eq!(api.emails().len(), 1);
         assert!(api.google.mail_actions().is_empty(), "mention={mention}");
-        assert!(api.server.secret_json("google_gmail_trashed").is_null());
+        assert_eq!(api.server.secret_json("google_gmail_trashed"), json!(["two"]));
+        api.google.set_history_not_found(true);
+        api.run_gmail();
+        assert_eq!(api.emails().len(), 1, "a trigger or mention delete must survive relisting");
         let runs = expect(
             api.req("GET", "/api/agents/clerk/runs").send().unwrap(),
             200,
@@ -848,4 +865,87 @@ fn explicit_apply_can_archive_mail_with_autonomous_gmail_actions_off() {
     api.settle();
     assert_eq!(api.note(&one)["note"]["fields"]["processed"], true);
     assert_eq!(api.google.mail_actions(), [modify("one")]);
+}
+
+#[test]
+fn disconnected_restore_keeps_the_ref_without_a_failure_notification() {
+    let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+    let one = api.email("one");
+    api.delete(&one);
+    expect(api.req("DELETE", "/api/secrets/google_refresh_token").send().unwrap(), 200);
+    expect(api.req("POST", &format!("/api/trash/{one}/restore")).send().unwrap(), 200);
+    api.settle();
+    assert_eq!(api.note(&one)["note"]["fields"]["gmail_ref"], "one");
+    assert_eq!(api.server.secret_json("google_gmail_trashed"), json!(["one"]));
+    assert_eq!(api.google.mail_actions(), [trash("one")]);
+    assert!(api.notifications().is_empty());
+}
+
+#[test]
+fn dispatch_cannot_reach_gmail_and_explicit_apply_of_a_mention_proposal_can() {
+    for mention in [false, true] {
+        let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+        let fake = FakeAnthropic::start();
+        api.model(&fake);
+        expect(api.req("PUT", "/api/agents/clerk").body(format!("label = \"Clerk\"\npermissions {{ gmail_actions = true\n confirm {{ notes = {mention}\n }}\n}}\ntrigger asked {{ mention = true\n}}\n")).send().unwrap(), 200);
+        let one = api.email("one");
+        let mut note = api.note(&one);
+        note["note"]["fields"]["processed"] = json!(true);
+        fake.push(AnthropicMessage::new().tool_use("edit", "propose_edit", json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()})));
+        fake.push(AnthropicMessage::text("Handled locally or proposed."));
+        if mention {
+            api.session_call();
+        } else {
+            expect(api.req("POST", "/api/agents/clerk/dispatch").json(&json!({"notes": [one], "request": "Process this mail."})).send().unwrap(), 202);
+        }
+        expect(api.req("POST", "/api/test/clock").json(&json!({"advance": "PT40S"})).send().unwrap(), 200);
+        api.settle();
+        assert_eq!(fake.message_requests().len(), 2);
+        assert!(api.google.mail_actions().is_empty());
+        assert_eq!(api.note(&one)["note"]["fields"]["processed"], !mention);
+        if mention {
+            let threads = expect(api.req("GET", "/api/agents/clerk/threads").send().unwrap(), 200);
+            let thread = threads["threads"][0]["id"].as_str().unwrap();
+            let stored = expect(api.req("GET", &format!("/api/agents/clerk/threads/{thread}")).send().unwrap(), 200);
+            let proposal = stored["proposals"].as_array().unwrap().iter().find(|p| p["status"] == "pending").unwrap()["data"].clone();
+            expect(api.req("POST", "/api/ai/apply").json(&proposal).send().unwrap(), 200);
+            api.settle();
+            assert_eq!(api.google.mail_actions(), [modify("one")]);
+        }
+    }
+}
+
+#[test]
+fn opted_in_foreground_subagent_stays_local_but_user_apply_can_reach_gmail() {
+    for autonomous in [true, false] {
+        let api = Api::start(&["one"], &[MODIFY_SCOPE]);
+        let fake = FakeAnthropic::start();
+        api.model(&fake);
+        expect(api.req("PUT", "/api/agents/clerk").body(format!("label = \"Clerk\"\npermissions {{ gmail_actions = true\n confirm {{ notes = {}\n }}\n subagents {{ allow = true\n }}\n}}\n", !autonomous)).send().unwrap(), 200);
+        let one = api.email("one");
+        let mut note = api.note(&one);
+        note["note"]["fields"]["processed"] = json!(true);
+        let thread = expect(api.req("POST", "/api/agents/clerk/threads").json(&json!({})).send().unwrap(), 201)["id"].as_str().unwrap().to_owned();
+        fake.push(AnthropicMessage::new().tool_use("sub", "start_subagent", json!({"task": "Process this mail", "instructions": null, "agent": null, "permissions": null, "model": null})));
+        fake.push(AnthropicMessage::new().tool_use("edit", "propose_edit", json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()})));
+        fake.push(AnthropicMessage::text("Done or proposed."));
+        fake.push(AnthropicMessage::text("Over to you."));
+        let response = api.req("POST", "/api/ai/chat").json(&json!({"agent": "clerk", "thread": thread, "messages": [{"role": "user", "content": [{"type": "text", "text": "Delegate processing this mail."}]}]})).send().unwrap();
+        assert_eq!(response.status(), 200);
+        let stream = response.text().unwrap();
+        api.settle();
+        assert_eq!(fake.message_requests().len(), 4, "{stream}");
+        assert!(api.google.mail_actions().is_empty());
+        assert_eq!(api.note(&one)["note"]["fields"]["processed"], autonomous);
+        if !autonomous {
+            let stored = expect(api.req("GET", &format!("/api/agents/clerk/threads/{thread}")).send().unwrap(), 200);
+            let proposal = stored["proposals"].as_array().unwrap().iter().find(|p| p["status"] == "pending").unwrap()["data"].clone();
+            assert_eq!(proposal["sub"], 1);
+            expect(api.req("POST", "/api/ai/apply").json(&proposal).send().unwrap(), 200);
+            api.settle();
+            assert_eq!(api.google.mail_actions(), [modify("one")]);
+            let history = expect(api.req("GET", &format!("/api/notes/{one}/history")).send().unwrap(), 200);
+            assert_eq!(history["versions"].as_array().unwrap().last().unwrap()["author"]["name"], "clerk/sub:1");
+        }
+    }
 }
