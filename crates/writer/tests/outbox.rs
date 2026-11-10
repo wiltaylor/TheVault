@@ -64,6 +64,53 @@ fn only_preupgrade_names_get_legacy_limits_and_saving_conditions_revokes_them() 
     assert_eq!(status(&w, &id), "draft");
 }
 
+#[test]
+fn round3_outside_delete_then_api_recreate_does_not_restore_legacy() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let bare = w.read_agent("sender").unwrap();
+    std::fs::remove_file(dir.path().join("agents/sender.wcl")).unwrap();
+    w.put_agent("sender", &bare, |_| Vec::new()).unwrap();
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &id), "draft");
+}
+
+#[test]
+fn round3_missing_legacy_file_is_revoked_before_outside_recreation() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let bare = w.read_agent("sender").unwrap();
+    std::fs::remove_file(dir.path().join("agents/sender.wcl")).unwrap();
+    assert!(w.agent("sender").is_err());
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    std::fs::write(dir.path().join("agents/sender.wcl"), bare).unwrap();
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &id), "draft");
+}
+
+#[test]
+fn round3_outside_conditions_then_removal_does_not_restore_legacy() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let bare = w.read_agent("sender").unwrap();
+    std::fs::write(dir.path().join("agents/sender.wcl"), bare.replace("send_without_review = true", "send_without_review = true\n conditions {}\n")).unwrap();
+    assert!(w.agent("sender").unwrap().permissions.outbox.conditions.is_some());
+    std::fs::write(dir.path().join("agents/sender.wcl"), bare).unwrap();
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &id), "draft");
+}
+
+#[test]
+fn round3_switch_off_then_bare_on_does_not_restore_legacy() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let bare = w.read_agent("sender").unwrap();
+    w.put_agent("sender", &bare.replace("send_without_review = true", "send_without_review = false"), |_| Vec::new()).unwrap();
+    w.put_agent("sender", &bare, |_| Vec::new()).unwrap();
+    let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &id), "draft");
+}
+
 fn user() -> Author {
     Author::Session("test".into())
 }
