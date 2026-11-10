@@ -601,6 +601,7 @@ fn apply_rechecks_current_field_permissions_and_does_not_trust_claimed_diff() {
 
 #[test]
 fn apply_rechecks_change_types_disabled_agents_and_author_fallback() {
+    for type_name in ["memo", "email"] {
     for restriction in [
         "permissions { change_types = [] }",
         "enabled = false",
@@ -609,7 +610,7 @@ fn apply_rechecks_change_types_disabled_agents_and_author_fallback() {
         let fake = FakeAnthropic::start();
         let api = Api::start(&fake);
         api.agent("reader", "label = \"Reader\"\n");
-        let (memo, version) = api.note("memo", "Original");
+        let (memo, version) = api.note(type_name, "Original");
         fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_edit", json!({ "id": memo, "base_version": version, "note": json!({ "fields": { "title": "Injected" } }).to_string() })));
         fake.push(AnthropicMessage::text("Done."));
         let events = api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
@@ -627,6 +628,30 @@ fn apply_rechecks_change_types_disabled_agents_and_author_fallback() {
             api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"],
             "Original"
         );
+    }
+    }
+}
+
+#[test]
+fn legacy_type_permissions_keep_definition_operations() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", "permissions { types = [\"memo\"] }");
+    for (tool, input, event) in [
+        ("propose_type_change", json!({ "name": "fresh", "wcl": LOG }), "type_proposal"),
+        ("propose_type_change", json!({ "name": "log", "wcl": LOG.replace("Log", "Changed") }), "type_proposal"),
+        ("propose_type_delete", json!({ "name": "log" }), "type_proposal"),
+        ("propose_taxonomy_change", json!({ "name": "unused", "wcl": "label = \"Unused\"\nterm \"One\"\n" }), "taxonomy_proposal"),
+        ("propose_taxonomy_delete", json!({ "name": "unused" }), "taxonomy_proposal"),
+    ] {
+        fake.clear_requests();
+        fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        let events = api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+        assert_eq!(tool_result(&fake, 1)["is_error"], false, "{tool}: {events:?}");
+        let proposal = events_named(&events, event)[0].clone();
+        let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+        assert!(response.status().is_success(), "{tool}: {}", response.text().unwrap());
     }
 }
 
