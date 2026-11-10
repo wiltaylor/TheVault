@@ -585,12 +585,25 @@ fn an_agent_cannot_broaden_send_conditions_or_apply_changes_without_review() {
     let limited = SENDER.replace("send_without_review = true", "send_without_review = true\n    conditions { recipients = [\"ann@example.com\"]\n email = true\n daily_cap = 2\n }");
     api.agent("sender", &limited);
     let helper = limited.replace("Sender", "Helper");
-    api.one(&fake, Some("sender"), "propose_agent_change", json!({"name": "helper", "wcl": helper}));
+    api.one(
+        &fake,
+        Some("sender"),
+        "propose_agent_change",
+        json!({"name": "helper", "wcl": helper}),
+    );
     assert_ne!(last_result(&fake, false)["applied"], true);
     assert!(!api.agent_exists("helper"));
-    api.one(&fake, Some("sender"), "propose_agent_change", json!({"name": "helper", "wcl": SENDER.replace("Sender", "Helper")}));
+    api.one(
+        &fake,
+        Some("sender"),
+        "propose_agent_change",
+        json!({"name": "helper", "wcl": SENDER.replace("Sender", "Helper")}),
+    );
     let result = last_result(&fake, true);
-    assert!(result["error"].as_str().unwrap().contains("conditions"), "{result}");
+    assert!(
+        result["error"].as_str().unwrap().contains("conditions"),
+        "{result}"
+    );
     assert!(!api.agent_exists("helper"));
 }
 

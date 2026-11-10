@@ -326,14 +326,26 @@ impl Default for OutboxConditions {
 impl Outbox {
     /// Whether another agent's send grant is no broader than this one.
     pub fn allows(&self, other: &Self) -> bool {
-        if !other.send_without_review { return true; }
-        if !self.send_without_review { return false; }
+        if !other.send_without_review {
+            return true;
+        }
+        if !self.send_without_review {
+            return false;
+        }
         let own = self.limits();
         let theirs = other.limits();
-        (!theirs.email || own.email) && (!theirs.sms || own.sms) && (!theirs.event || own.event)
+        (!theirs.email || own.email)
+            && (!theirs.sms || own.sms)
+            && (!theirs.event || own.event)
             && theirs.daily_cap <= own.daily_cap
             && theirs.cancel_delay_minutes >= own.cancel_delay_minutes
-            && (self.conditions.is_none() || (other.conditions.is_some() && theirs.recipients.iter().all(|r| own.recipients.iter().any(|a| a.trim().eq_ignore_ascii_case(r.trim())))))
+            && (self.conditions.is_none()
+                || (other.conditions.is_some()
+                    && theirs.recipients.iter().all(|r| {
+                        own.recipients
+                            .iter()
+                            .any(|a| a.trim().eq_ignore_ascii_case(r.trim()))
+                    })))
     }
 
     pub fn limits(&self) -> OutboxConditions {
