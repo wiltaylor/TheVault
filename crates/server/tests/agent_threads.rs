@@ -892,7 +892,6 @@ fn an_app_cannot_apply_admin_proposals_even_when_held_in_its_thread() {
     let res = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
     assert_eq!(res.status(), StatusCode::OK);
     assert!(type_file().contains("tab \"Details\""));
-
 }
 
 /// The text of every message `request` sent, in order, as `role: text`.

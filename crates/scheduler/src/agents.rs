@@ -971,7 +971,8 @@ impl Scheduler {
                 if let Err(e) = state.set_agent_run_thread(id, &thread) {
                     eprintln!("agent {:?}: recording the run's thread: {e}", agent.name);
                 }
-                let r = runner.run_turn(&agent, &thread, &job.prompt, job.scope, job.caller.as_ref());
+                let r =
+                    runner.run_turn(&agent, &thread, &job.prompt, job.scope, job.caller.as_ref());
                 (r.outcome, r.log, Some(thread))
             }
             Err(e) => (Err(e), Vec::new(), None),

@@ -418,12 +418,19 @@ pub async fn authenticate(
     }
     let path = req.uri().path();
     let metadata_only = *req.method() == Method::DELETE
-        || (*req.method() == Method::POST && (path.ends_with("/archive") || path.ends_with("/unarchive")));
-    if !matches!(*req.method(), Method::GET | Method::HEAD) && !metadata_only
-        && let Some(id) = path.strip_prefix("/api/notes/").and_then(|p| p.split('/').next())
+        || (*req.method() == Method::POST
+            && (path.ends_with("/archive") || path.ends_with("/unarchive")));
+    if !matches!(*req.method(), Method::GET | Method::HEAD)
+        && !metadata_only
+        && let Some(id) = path
+            .strip_prefix("/api/notes/")
+            .and_then(|p| p.split('/').next())
     {
         let id = id.to_owned();
-        let checked = blocking(sessions.writer.clone(), move |w| crate::notes::writable_note(w, &id)).await;
+        let checked = blocking(sessions.writer.clone(), move |w| {
+            crate::notes::writable_note(w, &id)
+        })
+        .await;
         if let Err(e) = checked {
             return e.into_response();
         }

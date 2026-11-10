@@ -344,7 +344,6 @@ fn grants_saved(w: &Writer, name: &str, agent: &Agent) -> bool {
             .is_some_and(|a| a.permissions.scripts.runs_saved())
 }
 
-
 /// Whether writing `agent` as agent `name` turns on sub agents, or names an agent to delegate to,
 /// that it does not have now (subagents U2).
 fn grants_subs(w: &Writer, name: &str, agent: &Agent) -> bool {
@@ -356,8 +355,6 @@ fn grants_subs(w: &Writer, name: &str, agent: &Agent) -> bool {
     let s = &agent.permissions.subagents;
     (s.allow && !now.allow) || s.agents.iter().any(|a| !now.allows_agent(a))
 }
-
-
 
 /// `propose_agent_delete`: check the agent exists, is not built in and is not the proposing
 /// agent `by`, without deleting it, and hand the delete to the user.

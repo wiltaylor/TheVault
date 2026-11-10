@@ -19,8 +19,11 @@ type Shared = State<Arc<Writer>>;
 /// Transcripts are server records, not user-editable notes.
 pub(crate) fn writable_type(type_name: &str) -> Result<(), ApiError> {
     if type_name == crate::agent_threads::THREAD_TYPE {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "server_owned",
-            "Agent threads can only be written through the agent runtime."));
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "server_owned",
+            "Agent threads can only be written through the agent runtime.",
+        ));
     }
     Ok(())
 }
@@ -31,7 +34,6 @@ pub(crate) fn writable_note(w: &Writer, id: &str) -> Result<(), ApiError> {
     }
     Ok(())
 }
-
 
 #[derive(Deserialize)]
 pub struct TypeQuery {
@@ -520,13 +522,19 @@ pub async fn restore_from_trash(
 ) -> Result<Response, ApiError> {
     let saved = blocking(w, move |w| {
         if !matches!(author, state::Author::Session(_))
-            && w.trash()?.iter().any(|n| n.id == id && n.type_name == crate::agent_threads::THREAD_TYPE)
+            && w.trash()?
+                .iter()
+                .any(|n| n.id == id && n.type_name == crate::agent_threads::THREAD_TYPE)
         {
-            return Err(ApiError::new(StatusCode::FORBIDDEN, "human_only",
-                "Only a signed-in session can restore agent threads."));
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "human_only",
+                "Only a signed-in session can restore agent threads.",
+            ));
         }
         w.restore_from_trash(&id, &author).map_err(ApiError::from)
-    }).await?;
+    })
+    .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 

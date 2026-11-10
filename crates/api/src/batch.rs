@@ -224,14 +224,17 @@ pub async fn run(
     let report = blocking(w, move |w| {
         for op in &ops {
             match op {
-                Op::Create { type_name, .. } | Op::Upsert { type_name, .. } =>
-                    crate::notes::writable_type(type_name)?,
-                Op::Update { id, .. } | Op::Delete { id, .. } =>
-                    crate::notes::writable_note(w, id)?,
+                Op::Create { type_name, .. } | Op::Upsert { type_name, .. } => {
+                    crate::notes::writable_type(type_name)?
+                }
+                Op::Update { id, .. } | Op::Delete { id, .. } => {
+                    crate::notes::writable_note(w, id)?
+                }
             }
         }
         w.batch(ops, dry_run, &author).map_err(ApiError::from)
-    }).await?;
+    })
+    .await?;
     Ok(report_response(&names, report))
 }
 

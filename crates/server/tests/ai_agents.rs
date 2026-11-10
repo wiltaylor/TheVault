@@ -568,23 +568,21 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
 
     // A write caller cannot inherit the Assistant's admin authority.
     for (name, scope) in [("phone", "write"), ("agent-chat", "admin")] {
-    let write = api.token_of(name, scope);
-    fake.push(AnthropicMessage::new().tool_use(
-        "toolu_d",
-        "propose_agent_delete",
-        json!({ "name": "helper" }),
-    ));
-    fake.push(AnthropicMessage::text("Proposed."));
-    let events = api.chat_as(&write, None);
-    let p = last(&events, "agent_proposal").clone();
-    assert!(find(&events, "applied").is_none(), "{events:?}");
-    assert!(api.agent_wcl("helper").is_some());
-    let (status, body) = api.apply_as(&write, &p);
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"], "needs_admin");
-
+        let write = api.token_of(name, scope);
+        fake.push(AnthropicMessage::new().tool_use(
+            "toolu_d",
+            "propose_agent_delete",
+            json!({ "name": "helper" }),
+        ));
+        fake.push(AnthropicMessage::text("Proposed."));
+        let events = api.chat_as(&write, None);
+        let p = last(&events, "agent_proposal").clone();
+        assert!(find(&events, "applied").is_none(), "{events:?}");
+        assert!(api.agent_wcl("helper").is_some());
+        let (status, body) = api.apply_as(&write, &p);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "needs_admin");
     }
-
 }
 
 #[test]

@@ -4725,7 +4725,8 @@ mod tests {
             super::change_scope(state::Scope::Read, &agent),
             state::Scope::Read
         );
-        let reader = Agent::parse("reader", "permissions {\n  tools = [\"search_notes\"]\n}\n").unwrap();
+        let reader =
+            Agent::parse("reader", "permissions {\n  tools = [\"search_notes\"]\n}\n").unwrap();
         assert_eq!(unattended_scope(&reader), Scope::Write);
         assert_eq!(change_scope(Scope::Admin, &reader), Scope::Write);
     }
