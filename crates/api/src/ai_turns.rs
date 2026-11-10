@@ -662,7 +662,7 @@ fn apply_as_agent(
                         .map(|n| n.type_name),
                 };
                 if let Some(t) = type_name
-                    && !limits.allows(&t)
+                    && !limits.allows_change(&t)
                 {
                     return Err(ApiError::new(
                         StatusCode::FORBIDDEN,

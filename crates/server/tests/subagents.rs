@@ -636,6 +636,39 @@ fn proposals_surface_in_the_parent_chat_and_changes_are_authored_by_the_sub_agen
 }
 
 #[test]
+fn delegated_apply_rechecks_the_current_parent_and_saved_ceiling() {
+    for named in [false, true] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        let thread = api.thread("lead");
+        let mut start = start("toolu_0", "Make a note");
+        if named {
+            start.2["agent"] = json!("writer");
+        }
+        start.2["permissions"] = json!({ "types": ["item"], "tools": null, "confirm": null, "web": null, "browser": null, "run_code": null });
+        fake.push(calls(&[start]));
+        fake.push(AnthropicMessage::new().tool_use("toolu_s", "propose_create", item("From sub")));
+        fake.push(AnthropicMessage::text("Proposed."));
+        fake.push(AnthropicMessage::text("Over to you."));
+        let events = api.chat("lead", Some(&thread), "Plan");
+        let proposal = find(&events, "proposal")
+            .expect("delegated proposal")
+            .clone();
+        assert_eq!(proposal["proposer_parent"], "lead");
+        assert_eq!(proposal["proposer_limits"]["types"], json!(["item"]));
+        api.agent(
+            "lead",
+            &LEAD.replace(
+                "permissions {",
+                "permissions {\n change_fields = { item: [\"done\"] }",
+            ),
+        );
+        let (status, result) = api.send("POST", "/api/ai/apply", Some(proposal));
+        assert_eq!(status, StatusCode::FORBIDDEN, "named={named}: {result}");
+    }
+}
+
+#[test]
 fn stopping_the_parent_stops_its_sub_agents_and_stopping_one_answers_the_parent() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

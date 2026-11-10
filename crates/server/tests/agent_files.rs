@@ -254,6 +254,8 @@ fn the_json_form_is_written_as_canonical_wcl_and_reads_back() {
     form["label"] = json!("Mail sorter");
     form["effort"] = json!("low");
     form["permissions"]["web"]["download"] = json!(false);
+    form["permissions"]["change_types"] = json!(["email"]);
+    form["permissions"]["change_fields"] = json!({ "email": ["processed"] });
     form["triggers"][0]["timezone"] = json!("Australia/Melbourne");
     let saved = expect(
         api.admin("PUT", "/api/agents/triage")
@@ -263,6 +265,11 @@ fn the_json_form_is_written_as_canonical_wcl_and_reads_back() {
         StatusCode::OK,
     );
     assert_eq!(saved["label"], "Mail sorter");
+    assert_eq!(saved["permissions"]["change_types"], json!(["email"]));
+    assert_eq!(
+        saved["permissions"]["change_fields"],
+        json!({ "email": ["processed"] })
+    );
     assert_eq!(saved["effort"], "low");
     assert_eq!(saved["permissions"]["web"]["download"], false);
     assert_eq!(saved["triggers"][0]["timezone"], "Australia/Melbourne");
