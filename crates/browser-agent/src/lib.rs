@@ -442,7 +442,8 @@ fn kill_profile_processes(path: &Path) -> ApiResult<()> {
                 // Numeric pid only. Permission errors leave deletion pending.
                 let pid = rustix::process::Pid::from_raw(pid).expect("positive process id");
                 if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::KILL)
-                    && e != rustix::io::Errno::SRCH {
+                    && e != rustix::io::Errno::SRCH
+                {
                     return Err(ApiError::new(
                         StatusCode::CONFLICT,
                         "could not stop this profile's processes",
