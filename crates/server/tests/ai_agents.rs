@@ -580,6 +580,24 @@ fn agent_proposal_apply_rechecks_change_permission_escalation() {
 }
 
 #[test]
+fn browser_secret_proposal_apply_rechecks_active_names() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    let response = api.client.put(api.server.url("/api/secrets/bank")).bearer_auth(api.token()).json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]})).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    api.put_agent("clerk", &CLERK.replace("tools = [", "browser = true\n browser_secrets = [\"bank\"]\n tools = ["));
+    let helper = HELPER.replace("tools = [", "browser = true\n browser_secrets = [\"bank\"]\n tools = [");
+    let events = api.one(&fake, Some("clerk"), "propose_agent_change", json!({"name":"helper", "wcl":helper}));
+    let proposal = last(&events, "agent_proposal").clone();
+    let response = api.client.delete(api.server.url("/api/secrets/bank")).bearer_auth(api.token()).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (status, result) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
+    assert!(api.agent_wcl("helper").is_none());
+}
+
+#[test]
 fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     let api = Api::start();
     let fake = FakeAnthropic::start();

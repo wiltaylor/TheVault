@@ -111,8 +111,12 @@ The list is empty by default. Only an owner session or ordinary admin user token
 can save it. Agent changes wait for Apply and cannot re-confirm deleted names.
 Names missing after deletion or rename remain listed as "missing - re-confirm".
 Recreating the same name does not reactivate an old grant. The owner must save
-the list again. Save and deletion times live in state.db, not in agent files.
-Files imported without an owner save are inactive until confirmed there too.
+the list again. Exactly the saved names and their confirmation times live in
+state.db, alongside deletion times, not in agent files. A file changed outside
+the app or by a proposal can only narrow that confirmed list. Deleting an agent
+revokes its confirmations, so recreating its name cannot inherit them.
+The sync feed hides Login names from non-managers, including paired devices,
+and marks those entries with `browser_secrets_hidden`.
 Ship updated desktop and Android apps before saving the new permission: old
 apps reject the unknown field, as they do `browser = true`.
 

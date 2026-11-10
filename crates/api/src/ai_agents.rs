@@ -304,6 +304,13 @@ fn escalation_error(name: &str, problems: &[String]) -> ToolOut {
     out
 }
 
+/// Recheck Login liveness at both proposal and Apply, not just the file's names.
+fn active_escalation(w: &Writer, by: &Agent, target: &Agent) -> Vec<String> {
+    let mut active = by.clone();
+    active.permissions.browser_secrets.retain(|name| w.state().browser_secret_active(&by.name, name).unwrap_or(false));
+    escalation(&active, target)
+}
+
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
@@ -336,7 +343,7 @@ pub(crate) fn propose_change(
                 "The agent was not proposed. Fix the issues and propose it again; get_agent answers the agent-file vocabulary.",
             )
         })?;
-    let problems = escalation(by, &agent);
+    let problems = active_escalation(w, by, &agent);
     if !problems.is_empty() {
         return Err(escalation_error(name, &problems));
     }
@@ -529,7 +536,7 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
     if let Some(by) = &by {
         let (_, agent) = w.check_agent(name, after, crate::agent_files::tool_check(w))?;
-        let problems = escalation(by, &agent);
+        let problems = active_escalation(w, by, &agent);
         if !problems.is_empty() {
             return Err(ApplyError::Refused(format!(
                 "it would give agent {name} more than {} has: {}",

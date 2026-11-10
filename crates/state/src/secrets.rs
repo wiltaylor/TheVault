@@ -257,15 +257,28 @@ impl State {
 
     /// Called only after an owner saves an agent through the admin definition route.
     /// The logical millisecond clock also orders events when wall time stands still or rolls back.
-    pub fn confirm_browser_secrets(&self, agent: &str) -> Result<()> {
-        self.conn().execute("INSERT INTO browser_secret_events(kind,name,time_ms) VALUES ('saved',?1,MAX(?2,COALESCE((SELECT MAX(time_ms)+1 FROM browser_secret_events),?2))) ON CONFLICT(kind,name) DO UPDATE SET time_ms=excluded.time_ms", params![agent, self.now()])?;
+    pub fn confirm_browser_secrets(&self, agent: &str, names: &[String]) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("INSERT INTO browser_secret_events(kind,name,time_ms) VALUES ('saved',?1,MAX(?2,COALESCE((SELECT MAX(time_ms)+1 FROM browser_secret_events),?2))) ON CONFLICT(kind,name) DO UPDATE SET time_ms=excluded.time_ms", params![agent, self.now()])?;
+        tx.execute("DELETE FROM browser_secret_grants WHERE agent=?1", [agent])?;
+        for name in names {
+            tx.execute("INSERT INTO browser_secret_grants(agent,name,time_ms) SELECT ?1,?2,time_ms FROM browser_secret_events WHERE kind='saved' AND name=?1", params![agent, name])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Revokes all confirmed names when an agent is deleted, including proposal Apply.
+    pub fn revoke_browser_secrets(&self, agent: &str) -> Result<()> {
+        self.conn().execute("DELETE FROM browser_secret_grants WHERE agent=?1", [agent])?;
         Ok(())
     }
 
     /// Liveness only, not an authorization check: callers must also check the agent's list.
     /// Missing save records fail closed, including files imported without owner confirmation.
     pub fn browser_secret_active(&self, agent: &str, name: &str) -> Result<bool> {
-        Ok(self.conn().query_row("SELECT EXISTS(SELECT 1 FROM login_secrets l JOIN browser_secret_events s ON s.kind='saved' AND s.name=?1 WHERE l.name=?2 AND s.time_ms > COALESCE((SELECT time_ms FROM browser_secret_events WHERE kind='deleted' AND name=?2),-1))", params![agent, name], |r| r.get(0))?)
+        Ok(self.conn().query_row("SELECT EXISTS(SELECT 1 FROM login_secrets l JOIN browser_secret_grants g ON g.agent=?1 AND g.name=l.name WHERE l.name=?2 AND g.time_ms > COALESCE((SELECT time_ms FROM browser_secret_events WHERE kind='deleted' AND name=?2),-1))", params![agent, name], |r| r.get(0))?)
     }
 
     /// Whether a key file was loaded, so secrets can be read and written.

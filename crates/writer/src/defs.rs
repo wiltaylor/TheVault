@@ -1086,6 +1086,7 @@ impl Writer {
                 "{label} is built in and cannot be deleted."
             )));
         }
+        self.state.revoke_browser_secrets(name)?;
         let generation = self.commit(vec![Change::delete(agent_path(name))])?;
         inner.index.advance(generation)?;
         self.state
