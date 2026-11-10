@@ -98,3 +98,22 @@ Then revoke the token as above, and remove the line you added to the agent's ins
 | `POST /api/agent-codes` `{ name, scope, server_url? }` | `admin` | Issues a code that works once for 10 minutes. Answers `{ code, expires, name, scope, server_url, command }`. `server_url` defaults to the address the request came in on. |
 | `POST /api/agent-codes/redeem` `{ code }` | None | Creates the `agent-<name>` token, replacing one of that name. Answers 201 `{ server_url, token, name, scope }`, or 410 for a wrong, used or expired code. |
 | `GET /agent/install.sh` | None | The install script, with the server's URL as the request reached it. Behind a proxy, the server reads `X-Forwarded-Host` and `X-Forwarded-Proto`. |
+# Login secret permissions
+
+On Permissions, Browser automation must be on before selecting Login secrets.
+The list is empty by default. Only an owner session or ordinary admin user token
+can save it. Agent changes wait for Apply and cannot re-confirm deleted names.
+Names missing after deletion or rename remain listed as "missing - re-confirm".
+Recreating the same name does not reactivate an old grant. The owner must save
+the list again. Save and deletion times live in state.db, not in agent files.
+Files imported without an owner save are inactive until confirmed there too.
+Ship updated desktop and Android apps before saving the new permission: old
+apps reject the unknown field, as they do `browser = true`.
+
+This permission does not implement password fill. Later fill must use the
+authenticated, decrypted Login origins through `state::canonical_origin`, never
+the clear metadata origins. A password must reach the page to work, so a misled
+agent with a shell in the box may reach it indirectly (assumed, not tested).
+Prompt injection can make an agent sign in and act. No origin restriction means
+a secret could be entered on a look-alike page.
+

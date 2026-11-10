@@ -491,7 +491,11 @@ function SubagentsSection(props: {
 }
 
 function PermissionsTab(p: AgentTabProps) {
+  const [loginSecrets] = createResource(() => api.secrets().then((all) => all.filter((s) => s.kind === "login")).catch(() => []));
   const perms = () => p.draft.permissions;
+  const selectedLogins = () => perms().browser_secrets ?? [];
+  const loginNames = () => [...new Set([...(loginSecrets() ?? []).map((s) => s.name), ...selectedLogins()])];
+  const toggleLogin = (name: string, checked: boolean) => setPerms({ browser_secrets: checked ? [...selectedLogins(), name] : selectedLogins().filter((n) => n !== name) });
   const setPerms = (patch: Partial<AgentForm["permissions"]>) =>
     p.setDraft((d) => ({ ...d, permissions: { ...d.permissions, ...patch } }));
   // Off is no scripts block at all, as the agent file holds a switch only when on.
@@ -694,11 +698,22 @@ function PermissionsTab(p: AgentTabProps) {
               type="checkbox"
               role="switch"
               checked={perms().browser ?? false}
-              onChange={(e) => setPerms({ browser: e.currentTarget.checked })}
+              onChange={(e) => setPerms({ browser: e.currentTarget.checked, ...(!e.currentTarget.checked ? { browser_secrets: [] } : {}) })}
             />{" "}
             Browser automation
           </label>
           <p class="muted">{BROWSER_NOTE}</p>
+          <fieldset disabled={!perms().browser}>
+            <legend>Login secrets</legend>
+            <p class="muted">None selected means no Login access. Deleted or renamed names need re-confirmation. Saving this list confirms the selected names again.</p>
+            <For each={loginNames()}>{(name) => {
+              const info = () => loginSecrets()?.find((s) => s.name === name);
+              return <label class="agent-check"><input type="checkbox" checked={selectedLogins().includes(name)} onChange={(e) => toggleLogin(name, e.currentTarget.checked)} />{name}{" "}
+                <Show when={info()} fallback={<span>missing - re-confirm</span>}>{(s) => <span>{s().username} — {s().origins?.length ? s().origins?.join(", ") : "Any site (warning)"}</span>}</Show>
+                <Show when={info() && p.agent.browser_secrets_inactive?.includes(name)}><span> missing - re-confirm</span></Show>
+              </label>;
+            }}</For>
+          </fieldset>
           <p class="muted">
             Whatever you are signed in to in the box's browser, this agent can reach. It needs the browser box (see
             Settings {">"} Integrations).

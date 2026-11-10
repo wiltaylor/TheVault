@@ -168,7 +168,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -687,7 +687,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=22 => {
+        0..=23 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -784,6 +784,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                 tx.execute_batch(agent_queue::SCHEMA)?;
                 agent_queue::seed_legacy(&tx)?;
             }
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS browser_secret_events (kind TEXT NOT NULL, name TEXT NOT NULL, time_ms INTEGER NOT NULL, PRIMARY KEY(kind,name));")?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

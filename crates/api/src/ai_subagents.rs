@@ -65,9 +65,10 @@ pub fn spec(agent: &Agent) -> ToolSpec {
                     "confirm": switch("confirm"),
                     "web": switch("web"),
                     "browser": { "type": ["boolean", "null"], "description": "false turns browser automation off; null keeps yours." },
+                    "browser_secrets": names("Only these of your Login secret names; null keeps yours."),
                     "run_code": { "type": ["boolean", "null"], "description": "false turns run_script off; null keeps yours." },
                 },
-                "required": ["tools", "types", "confirm", "web", "browser", "run_code"],
+                "required": ["tools", "types", "confirm", "web", "browser", "browser_secrets", "run_code"],
                 "additionalProperties": false,
             },
             "model": { "type": ["string", "null"], "description": "Another model of your AI account for the sub agent; null for yours." },
@@ -172,6 +173,14 @@ pub fn narrow(parent: &AgentPermissions, arg: &Value) -> (AgentPermissions, Vec<
         }
         _ => {}
     }
+    if let Some(names) = list(&arg["browser_secrets"]) {
+        p.browser_secrets = names.into_iter().filter(|n| {
+            let allowed = parent.browser_secrets.contains(n);
+            if !allowed { ignored.push("a Login secret you do not have".to_owned()); }
+            allowed
+        }).collect();
+    }
+    if !p.browser { p.browser_secrets.clear(); }
     match arg["run_code"].as_bool() {
         // Without its own code it may still run the saved scripts and tasks the parent may.
         Some(false) => {
@@ -242,6 +251,7 @@ pub fn intersect(own: &AgentPermissions, parent: &AgentPermissions) -> AgentPerm
         p.outbox.send_without_review = false;
     }
     p.browser = own.browser && parent.browser;
+    p.browser_secrets = own.browser_secrets.iter().filter(|n| p.browser && parent.browser_secrets.contains(n)).cloned().collect();
     p.scripts.run_code = own.scripts.run_code && parent.scripts.run_code;
     p.scripts.run_saved = own.scripts.runs_saved() && parent.scripts.runs_saved();
     p.subagents = schema::AgentSubagents::default();

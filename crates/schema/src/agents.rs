@@ -141,6 +141,8 @@ pub struct Permissions {
     /// tools, offered when the server has a browser box. Absent means `false`, and it is
     /// independent of `tools`: an absent tools list does not include the browser tools.
     pub browser: bool,
+    /// Login names available to browser automation. Empty denies all.
+    pub browser_secrets: Vec<String>,
     /// The skills the agent is offered (skills S6), by name; `None` is every valid skill.
     /// Written only when set: an app from before skills refuses a permission it does not know.
     pub skills: Option<Vec<String>>,
@@ -878,6 +880,9 @@ impl Agent {
             if p.browser {
                 field(&mut out, "  ", "browser", "true");
             }
+            if !p.browser_secrets.is_empty() {
+                field(&mut out, "  ", "browser_secrets", &list(&p.browser_secrets));
+            }
             if p.gmail_actions {
                 field(&mut out, "  ", "gmail_actions", "true");
             }
@@ -1151,7 +1156,7 @@ impl Reader<'_> {
     fn permissions(&mut self, d: &Doc) -> Permissions {
         self.known(
             d,
-            &["tools", "types", "change_types", "change_fields", "browser", "skills", "gmail_actions"],
+            &["tools", "types", "change_types", "change_fields", "browser", "browser_secrets", "skills", "gmail_actions"],
             "permissions.",
             "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... }, outbox { ... }, scripts { ... } or subagents { ... }",
         );
@@ -1174,6 +1179,10 @@ impl Reader<'_> {
             ),
             ..Permissions::default()
         };
+        p.browser_secrets = self.names(d, "browser_secrets", "permissions.browser_secrets", "secret").unwrap_or_default();
+        if !p.browser && !p.browser_secrets.is_empty() {
+            self.c.fail("permissions.browser_secrets", "requires Browser automation (browser = true)");
+        }
         if let Some(value) = d.field("change_fields") {
             match value {
                 Value::Record(entries) => {

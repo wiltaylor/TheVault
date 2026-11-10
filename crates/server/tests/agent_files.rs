@@ -152,6 +152,30 @@ fn the_vault_starts_with_the_assistant() {
 }
 
 #[test]
+fn browser_secret_grants_require_owner_and_reconfirmation_after_recreation() {
+    let api = Api::start();
+    let login = json!({"kind": "login", "username": "test", "password": "made-up-password", "origins": ["https://example.com"]});
+    expect(api.admin("PUT", "/api/secrets/bank").json(&login).send().unwrap(), StatusCode::OK);
+    let source = "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n";
+    expect(api.put_wcl("clerk", source, api.server.admin_token()), StatusCode::OK);
+    expect(api.admin("DELETE", "/api/secrets/bank").send().unwrap(), StatusCode::OK);
+    expect(api.admin("PUT", "/api/secrets/bank").json(&login).send().unwrap(), StatusCode::OK);
+    let read = || expect(api.admin("GET", "/api/agents/clerk").send().unwrap(), StatusCode::OK);
+    assert_eq!(read()["browser_secrets_inactive"], json!(["bank"]));
+    let device = pair_device(&api);
+    let external = expect(api.admin("POST", "/api/tokens").json(&json!({"name": "agent-test", "scope": "admin"})).send().unwrap(), StatusCode::CREATED)["secret"].as_str().unwrap().to_owned();
+    for token in [&device, &external] {
+        expect(api.put_wcl("clerk", source, token), StatusCode::FORBIDDEN);
+        assert_eq!(read()["browser_secrets_inactive"], json!(["bank"]));
+        let hidden = expect(api.req("GET", "/api/agents/clerk", token).send().unwrap(), StatusCode::OK);
+        assert_eq!(hidden["permissions"]["browser_secrets"], json!([]));
+        assert!(!hidden["wcl"].as_str().unwrap().contains("bank"));
+    }
+    expect(api.put_wcl("clerk", source, api.server.admin_token()), StatusCode::OK);
+    assert_eq!(read()["browser_secrets_inactive"], json!([]));
+}
+
+#[test]
 fn read_lists_and_reads_write_cannot_change_admin_writes() {
     let api = Api::start();
     let read = api.token("read");
