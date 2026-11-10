@@ -36,7 +36,18 @@ fn syntax(e: query::ParseError) -> String {
 fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<query::Page, String> {
     w.read_index(|index, schema| {
         let excluded = if agent_reading() {
-            Some(w.state().held_agent_note_ids().map_err(err)?)
+            let mut held = w.state().held_agent_note_ids().map_err(err)?;
+            if w.state().meta("agent_safety.activation_ms").map_err(err)?.is_some() {
+                // Missing cache rows must fail closed too, without reading note files
+                // or evaluating the caller's condition against unreviewed content.
+                let known = serde_json::to_string(&w.state().agent_safety_index_ids().map_err(err)?).map_err(err)?;
+                let mut stmt = index.connection().prepare("SELECT id FROM notes WHERE id NOT IN (SELECT value FROM json_each(?1))").map_err(err)?;
+                let rows = stmt.query_map([known], |r| r.get::<_, String>(0)).map_err(err)?;
+                for id in rows {
+                    held.insert(id.map_err(err)?);
+                }
+            }
+            Some(held)
         } else {
             None
         };

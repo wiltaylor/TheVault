@@ -100,6 +100,12 @@ impl State {
             .collect::<std::result::Result<_, _>>()?)
     }
 
+    pub fn agent_safety_index_ids(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT id FROM agent_safety_index")?;
+        Ok(stmt.query_map([], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// Cached content hashes, joined with server-owned decisions. No vault file reads.
     pub fn indexed_agent_safety(&self) -> Result<Vec<(String, String, Option<String>)>> {
         if self.meta("agent_safety.activation_ms")?.is_none() {

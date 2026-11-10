@@ -251,7 +251,7 @@ fn classify(
         }
         if config.name == "agent_safety"
             && !Doc::parse(&saved.wcl, "safety scope")
-                .is_ok_and(|doc| writer::agent_safety::incoming(&saved.type_name, &doc))
+                .is_ok_and(|doc| writer.incoming_agent_note(&saved.type_name, &doc))
         {
             continue;
         }

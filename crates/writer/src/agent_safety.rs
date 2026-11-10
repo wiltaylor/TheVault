@@ -33,11 +33,10 @@ pub fn incoming(kind: &str, doc: &Doc) -> bool {
         }),
         "message" => fields["direction"] != "out",
         "call" => fields["direction"] != "out",
-        // Calendar sync retains the organiser address on the series, but not my_response.
-        // Unknown ownership is conservative: only an exact own-calendar address exempts it.
+        // Without account state an organiser cannot establish ownership.
         "event" | "event_series" => {
             if fields["organiser"].as_str().is_some_and(|s| !s.is_empty()) {
-                fields["organiser"] != fields["calendar"]
+                true
             } else {
                 fields.get("google_ref").is_some_and(|v| !v.is_null())
             }
@@ -163,6 +162,17 @@ fn same_image_rendering(old: &serde_json::Value, next: &serde_json::Value) -> bo
 }
 
 impl Writer {
+    pub fn incoming_agent_note(&self, kind: &str, doc: &Doc) -> bool {
+        if matches!(kind, "event" | "event_series")
+            && let Some(organiser) = doc.field("organiser").and_then(schema::Value::as_str)
+            && !organiser.is_empty()
+            && let Ok(Some(account)) = self.state().get_secret(crate::google::ACCOUNT)
+            && organiser.eq_ignore_ascii_case(account.trim())
+        {
+            return false;
+        }
+        incoming(kind, doc)
+    }
     /// The only incremental note-index write boundary. Safety is refreshed before
     /// publishing notes, including imports which bypass normal write preparation.
     pub(crate) fn update_note_index(
@@ -182,6 +192,29 @@ impl Writer {
         inner.index.update(&inner.schema, updates)?;
         for update in updates {
             let (index::Update::Put { id, .. } | index::Update::Delete { id }) = update;
+            if matches!(update, index::Update::Delete { .. }) {
+                let parents = self.state().agent_safety_parents(id)?;
+                self.state().unbind_deleted_safety_member(id)?;
+                for parent in &parents {
+                    use rusqlite::OptionalExtension;
+                    let next: Option<String> = inner.index.connection().query_row(
+                        "SELECT n.id FROM field_values f JOIN notes n ON n.id=f.note WHERE f.str=?1 AND ((f.field='thread' AND n.type='email') OR (f.field='conversation' AND n.type='message')) ORDER BY n.created_at,n.id LIMIT 1",
+                        [parent], |r| r.get(0),
+                    ).optional()?;
+                    if let Some(next) = next {
+                        self.state().bind_agent_safety_member(parent, &next)?;
+                        self.refresh_safety_parents(&next)?;
+                    } else {
+                        self.state().set_meta(&format!("agent_safety.no_members.{parent}"), "1")?;
+                        if let Some(raw) = self.state().meta(&format!("agent_safety.note.{parent}"))?
+                            && let Ok(safety) = serde_json::from_str::<Safety>(&raw)
+                            && self.state().indexed_agent_safety_hash(parent)?.as_deref() == Some(&safety.fingerprint)
+                        {
+                            self.state().set_agent_safety_result(parent, &raw, safety.allowed())?;
+                        }
+                    }
+                }
+            }
             self.refresh_safety_parents(id)?;
         }
         Ok(())
@@ -251,7 +284,7 @@ impl Writer {
     }
     fn safety_member_cleared(&self, id: &str) -> Result<bool> {
         let Some(member) = self.state().meta(&format!("agent_safety.member.{id}"))? else {
-            return Ok(false);
+            return Ok(self.state().meta(&format!("agent_safety.no_members.{id}"))?.is_some());
         };
         Ok(self.state().indexed_agent_note_allowed(&member)?)
     }
@@ -435,7 +468,7 @@ impl Writer {
                     .is_none()
             {
                 let note = self.read(&id)?;
-                if incoming(&note.type_name, &note.doc) {
+                if self.incoming_agent_note(&note.type_name, &note.doc) {
                     let safety = Safety {
                         status: "held".into(),
                         reason: "predates_activation".into(),
@@ -477,7 +510,7 @@ impl Writer {
         }
         // Once gated, changing direction/type cannot turn the gate off.
         let stored = self.state().meta(&format!("agent_safety.note.{id}"))?;
-        if stored.is_none() && !incoming(kind, doc) {
+        if stored.is_none() && !self.incoming_agent_note(kind, doc) {
             return Ok(result("not_required", "outgoing_or_local"));
         }
         if self
@@ -552,7 +585,7 @@ impl Writer {
 
     /// Called under the existing commit lock by the after-write hook.
     pub fn register_agent_safety(&self, id: &str, kind: &str, doc: &Doc) -> Result<()> {
-        if incoming(kind, doc)
+        if self.incoming_agent_note(kind, doc)
             && self
                 .state()
                 .meta(&format!("agent_safety.note.{id}"))?
