@@ -40,6 +40,47 @@ fn privileged_script_sources_are_read_only_for_agents() {
     }
 }
 
+#[test]
+fn tool_source_waits_even_with_tools_confirmation_off() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.put_text("/api/agents/keeper", KEEPER);
+    let wcl = "description = \"Safe\"\nscript = \"safe\"\nfunction = \"run\"\n";
+    fake.push(AnthropicMessage::new().tool_use("source", "propose_tool_change",
+        json!({"name": "safe", "wcl": wcl, "script_source": "fn run(params: Value) -> string { \"safe\" }\n"})));
+    fake.push(AnthropicMessage::text("Waiting."));
+    api.call_note("keeper", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB");
+    api.advance("PT1S");
+    assert_eq!(api.threads("keeper")[0]["pending"], 1);
+    assert!(api.script("safe").is_none());
+}
+
+#[test]
+fn secret_and_host_runs_refuse_script_and_tool_sources_including_stale_apply() {
+    for grant in ["secrets = [\"api_key\"]", "allow_domains = [\"example.com\"]"] {
+        let fake = FakeAnthropic::start();
+        let api = Api::start(&fake);
+        api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
+        let wcl = "description = \"Echo\"\nscript = \"stamp\"\nfunction = \"call\"\n";
+        let changed = format!("{STAMP}\n// edit\n");
+        let mut pending = Vec::new();
+        for method in ["propose_script_change", "propose_tool_change"] {
+            let events = api.one(&fake, method, json!({"name": if method == "propose_script_change" {"stamp"} else {"echo"}, "source": changed, "wcl": wcl, "script_source": changed}));
+            let event = if method == "propose_script_change" {"script_proposal"} else {"tool_proposal"};
+            pending.push(find(&events, event).unwrap().clone());
+        }
+        api.put_text("/api/tasks/guarded", &format!("schedule = \"0 0 1 1 *\"\nscript = \"stamp\"\npaused = true\n{grant}\n"));
+        for p in pending {
+            assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
+        }
+        for method in ["propose_script_change", "propose_tool_change"] {
+            api.one(&fake, method, json!({"name": if method == "propose_script_change" {"stamp"} else {"echo"}, "source": changed, "wcl": wcl, "script_source": changed}));
+            assert!(last_result(&fake).0);
+        }
+        assert_eq!(api.script("stamp").as_deref(), Some(STAMP));
+    }
+}
+
 const PHONE_FILE: &str =
     "handler \"sms_received\" {\n script = \"phone_test\"\n function = \"run\"\n}\n";
 

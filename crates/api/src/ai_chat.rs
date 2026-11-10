@@ -1268,7 +1268,7 @@ impl Direct {
                     && p["grants_run_saved"] != true
                     && p["grants_subagents"] != true
             }
-            "tool_proposal" => self.tools,
+            "tool_proposal" => self.tools && !p["script_after"].is_string(),
             // The tools of [`ALWAYS_PROPOSE`]: always the user's Apply (TV-32 Q2 O1).
             "script_proposal" | "task_proposal" | "device_file_proposal" => false,
             "agent_memory_proposal" => self.memories,
@@ -4834,6 +4834,7 @@ mod tests {
         .unwrap();
         let direct = Direct::of(confirm_of(&all_off), Scope::Admin);
         assert!(direct.covers("tool_proposal", &json!({})));
+        assert!(!direct.covers("tool_proposal", &json!({ "script_after": "fn run() {}" })));
         assert!(!direct.covers("script_proposal", &json!({ "op": "change" })));
         assert!(!direct.covers("device_file_proposal", &json!({})));
         assert!(!direct.covers("script_proposal", &json!({ "op": "delete" })));

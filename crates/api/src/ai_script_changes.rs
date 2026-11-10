@@ -126,12 +126,23 @@ pub(crate) fn shared_paths_refused(
     script: &str,
     except_task: Option<&str>,
 ) -> Option<String> {
+    if writer::SHIPPED_FILES
+        .iter()
+        .any(|f| f.path == format!("scripts/{script}.ws"))
+    {
+        return Some(format!(
+            "an agent may not change script {script:?}: shipped scripts are read-only for agents. Tell the user the change to make in the editor"
+        ));
+    }
     let with_paths: Vec<String> = w
         .script_runs_as(script, None)
         .unwrap_or_default()
         .into_iter()
         .filter(|u| !(u.kind == "task" && Some(u.name.as_str()) == except_task))
-        .filter(|u| !u.read_paths.is_empty() || !u.write_paths.is_empty())
+        .filter(|u| {
+            !u.read_paths.is_empty() || !u.write_paths.is_empty()
+                || !u.secrets.is_empty() || !u.allow_domains.is_empty()
+        })
         .map(|u| {
             let mut paths = Vec::new();
             if !u.read_paths.is_empty() {
@@ -140,6 +151,12 @@ pub(crate) fn shared_paths_refused(
             if !u.write_paths.is_empty() {
                 paths.push(format!("writes {}", u.write_paths.join(", ")));
             }
+            if !u.secrets.is_empty() {
+                paths.push(format!("secrets {}", u.secrets.join(", ")));
+            }
+            if !u.allow_domains.is_empty() {
+                paths.push(format!("hosts {}", u.allow_domains.join(", ")));
+            }
             format!("{} {} ({})", u.kind, u.name, paths.join(", "))
         })
         .collect();
@@ -147,7 +164,7 @@ pub(crate) fn shared_paths_refused(
         return None;
     }
     Some(format!(
-        "an agent may not change script {script:?}: {} runs it with read_paths or write_paths, so the new code would reach those folders. Tell the user the change to make in the editor",
+        "an agent may not change script {script:?}: {} runs it with read_paths, write_paths, secrets or allow_domains, so the new code would inherit those grants. Tell the user the change to make in the editor",
         with_paths.join(", ")
     ))
 }
