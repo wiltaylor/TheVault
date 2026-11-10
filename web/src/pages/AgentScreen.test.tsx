@@ -830,13 +830,14 @@ describe("the Triggers tab", () => {
     const a = triage();
     a.triggers = [{ name: "opened", kind: "event", on: ["create"], type: ["email"], where: null, prompt: "File." }];
     agent.mockResolvedValue(a);
-    triggerBackfill.mockResolvedValueOnce({ count: 500, selected: 100, preview: "preview-1" })
+    triggerBackfill.mockResolvedValueOnce({ count: 500, selected: 100, preview: "preview-1", unmatched_legacy_runs: 3 })
       .mockResolvedValueOnce({ queued: 100 });
     await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));
     expect(t.queryByRole("button", { name: "Confirm backfill" })).toBeNull();
     fireEvent.click(t.getByRole("button", { name: "Count matching notes" }));
     await t.findByText(/500 matching notes have no trigger record/);
+    expect(t.getByText(/3 runs from before this version could not be matched to a note/)).toBeTruthy();
     expect(triggerBackfill).toHaveBeenCalledWith("inbox_triage", "opened", { limit: 100 });
     fireEvent.click(t.getByRole("button", { name: "Confirm backfill" }));
     await t.findByText("100 jobs queued.");
