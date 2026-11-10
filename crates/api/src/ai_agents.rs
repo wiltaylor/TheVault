@@ -92,12 +92,13 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let (agent, error) = match Agent::parse(name, &wcl) {
         Ok(mut a) => {
-            if name != by.name {
-                a.permissions.outbox.conditions = None;
+            let hidden = name != by.name && a.permissions.outbox.conditions.take().is_some();
+            if hidden {
                 wcl = a.to_wcl();
             }
             let mut v = crate::agent_files::agent_json(&a);
             v["account"] = json!(crate::ai_settings::agent_account_name(w, &a));
+            if hidden { v["permissions"]["outbox"]["conditions_hidden"] = json!(true); }
             (v, Value::Null)
         }
         Err(e) if name == by.name => (Value::Null, json!(e.to_string())),

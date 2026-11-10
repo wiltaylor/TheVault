@@ -626,7 +626,7 @@ function PermissionsTab(p: AgentTabProps) {
             <p class="agent-perm-note" role="note">
               {OUTBOX_WARNING}
             </p>
-            <Show when={!perms().outbox?.conditions}>
+            <Show when={!perms().outbox?.conditions && !perms().outbox?.conditions_hidden}>
               <p class="agent-perm-note">Legacy limits, set conditions: 20 items per UTC day, five minute cancellation delay.</p>
             </Show>
           </Show>

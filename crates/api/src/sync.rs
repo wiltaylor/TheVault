@@ -62,7 +62,7 @@ pub struct ChangesQuery {
 }
 
 /// One feed entry, with the content of its note or file as it is now.
-fn entry(w: &Writer, c: &Journaled) -> Result<Value, ApiError> {
+fn entry(w: &Writer, c: &Journaled, full_conditions: bool) -> Result<Value, ApiError> {
     let state = w.state();
     match &c.key {
         ChangeKey::Note(id) => {
@@ -106,11 +106,26 @@ fn entry(w: &Writer, c: &Journaled) -> Result<Value, ApiError> {
                 }
                 return Ok(out);
             }
-            let text = w.read_synced(path)?;
-            Ok(json!({
+            let mut text = w.read_synced(path)?;
+            let deleted = text.is_none();
+            let mut hidden = false;
+            if kind == "agent" && !full_conditions && let Some(source) = text.as_deref() {
+                match schema::Agent::parse(name, source) {
+                    Ok(mut agent) => {
+                        if agent.permissions.outbox.conditions.take().is_some() {
+                            hidden = true;
+                            text = Some(agent.to_wcl());
+                        }
+                    }
+                    Err(_) => { hidden = true; text = None; }
+                }
+            }
+            let mut out = json!({
                 "seq": c.seq, "at": c.at_ms, "kind": kind, "path": path, "name": name,
-                "deleted": text.is_none(), "text": text,
-            }))
+                "deleted": deleted, "text": text,
+            });
+            if hidden { out["conditions_hidden"] = json!(true); }
+            Ok(out)
         }
     }
 }
@@ -123,6 +138,8 @@ fn entry(w: &Writer, c: &Journaled) -> Result<Value, ApiError> {
 /// A skill file that is not UTF-8 carries `base64` instead of `text` (skills S1).
 pub async fn changes(
     State(w): Shared,
+    Caller(author): Caller,
+    Extension(GrantedScope(scope)): Extension<GrantedScope>,
     Query(q): Query<ChangesQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let since = q.since.unwrap_or(0);
@@ -137,11 +154,14 @@ pub async fn changes(
     }
     let limit = usize::try_from(limit).unwrap_or(1);
     let page = blocking(w, move |w| -> Result<_, ApiError> {
+        let full_conditions = matches!(author, Author::Session(_))
+            || (!crate::auth::is_agent_token(&author) && (scope.allows(Scope::Admin)
+                || match &author { Author::Token(name) => w.state().device_for_token(name)?.is_some(), _ => false }));
         let page = w.state().changes_since(since, limit)?;
         let entries = page
             .changes
             .iter()
-            .map(|c| entry(w, c))
+            .map(|c| entry(w, c, full_conditions))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(json!({
             "changes": entries,

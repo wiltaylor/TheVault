@@ -273,6 +273,7 @@ fn agent_response(
     agent: &Agent,
     wcl: String,
     account: Option<String>,
+    conditions_hidden: bool,
 ) -> Response {
     let mut out = agent_json(agent);
     out["account"] = json!(account);
@@ -283,6 +284,7 @@ fn agent_response(
         .map(crate::error::issue_json)
         .collect();
     out["warnings"] = json!(warnings);
+    if conditions_hidden { out["permissions"]["outbox"]["conditions_hidden"] = json!(true); }
     text_or_json(headers, wcl, out)
 }
 
@@ -296,7 +298,7 @@ pub async fn read(
 ) -> Result<Response, ApiError> {
     // A file that does not parse is a 400 `invalid` with its issues and its text, so the File
     // tab can show it to be fixed.
-    let (wcl, agent, account) = blocking(w, move |w| {
+    let (wcl, agent, account, hidden) = blocking(w, move |w| {
         let full = matches!(by, state::Author::Session(_))
             || (scope.allows(state::Scope::Admin) && !crate::auth::is_agent_token(&by));
         let mut wcl = w.read_agent(&name)?;
@@ -307,14 +309,15 @@ pub async fn read(
             }
             err
         })?;
-        if !full && agent.permissions.outbox.conditions.take().is_some() {
+        let hidden = !full && agent.permissions.outbox.conditions.take().is_some();
+        if hidden {
             wcl = agent.to_wcl();
         }
         let account = crate::ai_settings::agent_account_name(w, &agent);
-        Ok::<_, ApiError>((wcl, agent, account))
+        Ok::<_, ApiError>((wcl, agent, account, hidden))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl, account))
+    Ok(agent_response(&headers, &agent, wcl, account, hidden))
 }
 
 /// The JSON body of `PUT /api/agents/{name}`: `wcl`, or the form `GET` answers. `name`, `kind`,
@@ -382,6 +385,8 @@ struct OutboxForm {
     #[serde(default)]
     send_without_review: bool,
     conditions: Option<schema::OutboxConditions>,
+    #[serde(default, rename = "conditions_hidden")]
+    _conditions_hidden: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -573,7 +578,7 @@ pub async fn put(
         Ok::<_, ApiError>((wcl, agent, account))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl, account))
+    Ok(agent_response(&headers, &agent, wcl, account, false))
 }
 
 /// `DELETE /api/agents/{name}`.

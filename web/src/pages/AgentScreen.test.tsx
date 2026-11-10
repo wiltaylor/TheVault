@@ -635,6 +635,13 @@ describe("the Permissions tab", () => {
     expect(p.getByText(/Legacy limits, set conditions/)).toBeTruthy();
   });
 
+  it("does not show legacy limits when conditions are hidden", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, outbox: { send_without_review: true, conditions_hidden: true } } }));
+    await open();
+    const p = await tab("Permissions");
+    expect(p.queryByText(/Legacy limits, set conditions/)).toBeNull();
+  });
+
   it("saves explicit strict send conditions without losing them when toggled", async () => {
     await open();
     const p = await tab("Permissions");
