@@ -34,7 +34,10 @@ struct Address {
 }
 
 fn prune(failures: &mut VecDeque<Instant>, now: Instant) {
-    while failures.front().is_some_and(|t| now.duration_since(*t) >= WINDOW) {
+    while failures
+        .front()
+        .is_some_and(|t| now.duration_since(*t) >= WINDOW)
+    {
         failures.pop_front();
     }
 }
@@ -42,7 +45,10 @@ fn prune(failures: &mut VecDeque<Instant>, now: Instant) {
 impl Address {
     fn reset(&mut self) {
         let in_flight = self.in_flight;
-        *self = Self { in_flight, ..Self::default() };
+        *self = Self {
+            in_flight,
+            ..Self::default()
+        };
     }
 
     fn retry(&mut self, now: Instant, global_full: bool) -> Option<u64> {
@@ -82,12 +88,19 @@ struct Counters {
 
 impl Counters {
     fn bucket(&self, key: Key) -> Option<Bucket> {
-        self.pending.get(&key).or_else(|| self.addresses.get(&key)).cloned()
+        self.pending
+            .get(&key)
+            .or_else(|| self.addresses.get(&key))
+            .cloned()
     }
 
     fn precheck(&mut self, key: Key, now: Instant) -> Option<u64> {
         prune(&mut self.failures, now);
-        self.bucket(key).and_then(|b| b.lock().expect("attempt bucket").retry(now, self.failures.len() >= 50))
+        self.bucket(key).and_then(|b| {
+            b.lock()
+                .expect("attempt bucket")
+                .retry(now, self.failures.len() >= 50)
+        })
     }
 
     fn begin(&mut self, key: Key, now: Instant) -> Result<Bucket, u64> {
@@ -95,7 +108,9 @@ impl Counters {
             return Err(delay);
         }
         if !self.addresses.contains_key(&key)
-            && self.pruned.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1))
+            && self
+                .pruned
+                .is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1))
         {
             self.pruned = Some(now);
             self.addresses.retain(|_, b| {
@@ -138,10 +153,15 @@ impl Counters {
         if !self.addresses.contains_key(&key) {
             if self.addresses.len() >= MAX_ADDRESSES {
                 // Clean history first, then oldest failure. Never evict in-flight checks.
-                let oldest = self.addresses.iter().filter_map(|(k, b)| {
-                    let b = b.lock().expect("attempt bucket");
-                    (b.in_flight == 0).then_some((*k, b.last))
-                }).min_by_key(|(_, last)| *last).map(|(k, _)| k);
+                let oldest = self
+                    .addresses
+                    .iter()
+                    .filter_map(|(k, b)| {
+                        let b = b.lock().expect("attempt bucket");
+                        (b.in_flight == 0).then_some((*k, b.last))
+                    })
+                    .min_by_key(|(_, last)| *last)
+                    .map(|(k, _)| k);
                 if let Some(oldest) = oldest {
                     self.addresses.remove(&oldest);
                 }
@@ -153,11 +173,17 @@ impl Counters {
             // The current failure still contributes to the global limit and notification.
         }
         prune(&mut self.failures, now);
-        if self.failures.len() == 50 { self.failures.pop_front(); }
+        if self.failures.len() == 50 {
+            self.failures.pop_front();
+        }
         self.failures.push_back(now);
         let notify = self.failures.len() >= 5
-            && self.notified.is_none_or(|t| now.duration_since(t) >= NOTICE_COOLDOWN);
-        if notify { self.notified = Some(now); }
+            && self
+                .notified
+                .is_none_or(|t| now.duration_since(t) >= NOTICE_COOLDOWN);
+        if notify {
+            self.notified = Some(now);
+        }
         notify
     }
 }
@@ -185,18 +211,26 @@ pub(crate) struct Limits {
 impl Limits {
     pub(crate) fn from_env(writer: Arc<Writer>) -> Self {
         let value = std::env::var("VAULT_TRUSTED_PROXIES").unwrap_or_default();
-        Self { writer, counters: Mutex::default(), proxies: proxies(&value) }
+        Self {
+            writer,
+            counters: Mutex::default(),
+            proxies: proxies(&value),
+        }
     }
 }
 
 fn client_address(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> Key {
     let peer = peer.map(|ip| ip.to_canonical());
-    proxies.iter().find(|p| Some(p.address) == peer)
+    proxies
+        .iter()
+        .find(|p| Some(p.address) == peer)
         .and_then(|p| {
             // Reject duplicate headers rather than guessing which one a proxy wrote.
             let mut values = headers.get_all(p.header).iter();
             let value = values.next()?.to_str().ok()?;
-            if values.next().is_some() { return None; }
+            if values.next().is_some() {
+                return None;
+            }
             if p.header == "x-forwarded-for" {
                 value.rsplit(',').next()
             } else {
@@ -204,29 +238,46 @@ fn client_address(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> Key {
             }
         })
         .and_then(|v| v.trim().parse::<IpAddr>().ok())
-        .or(peer).map(key)
+        .or(peer)
+        .map(key)
 }
 
 fn proxies(value: &str) -> Vec<Proxy> {
-    value.split(',').filter(|s| !s.trim().is_empty()).map(|entry| {
-        let (kind, ip) = entry.trim().split_once('=')
-            .expect("VAULT_TRUSTED_PROXIES entries must be caddy=IP or cloudflare=IP");
-        let header = match kind {
-            "caddy" => "x-forwarded-for",
-            "cloudflare" => "cf-connecting-ip",
-            _ => panic!("unknown VAULT_TRUSTED_PROXIES proxy type"),
-        };
-        Proxy {
-            address: ip.parse::<IpAddr>().expect("VAULT_TRUSTED_PROXIES requires literal IP addresses").to_canonical(),
-            header,
-        }
-    }).collect()
+    value
+        .split(',')
+        .filter(|s| !s.trim().is_empty())
+        .map(|entry| {
+            let (kind, ip) = entry
+                .trim()
+                .split_once('=')
+                .expect("VAULT_TRUSTED_PROXIES entries must be caddy=IP or cloudflare=IP");
+            let header = match kind {
+                "caddy" => "x-forwarded-for",
+                "cloudflare" => "cf-connecting-ip",
+                _ => panic!("unknown VAULT_TRUSTED_PROXIES proxy type"),
+            };
+            Proxy {
+                address: ip
+                    .parse::<IpAddr>()
+                    .expect("VAULT_TRUSTED_PROXIES requires literal IP addresses")
+                    .to_canonical(),
+                header,
+            }
+        })
+        .collect()
 }
 
 fn limited(seconds: u64) -> Response {
-    let mut response = crate::ApiError::new(StatusCode::TOO_MANY_REQUESTS,
-        "attempt_limit", "Too many credential checks. Try again later.").into_response();
-    response.headers_mut().insert(RETRY_AFTER, seconds.to_string().parse().expect("integer header"));
+    let mut response = crate::ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "attempt_limit",
+        "Too many credential checks. Try again later.",
+    )
+    .into_response();
+    response.headers_mut().insert(
+        RETRY_AFTER,
+        seconds.to_string().parse().expect("integer header"),
+    );
     response
 }
 
@@ -240,7 +291,11 @@ struct Attempt {
 
 impl Attempt {
     fn finish(mut self, status: StatusCode) -> bool {
-        let notify = self.limits.counters.lock().expect("attempt counters")
+        let notify = self
+            .limits
+            .counters
+            .lock()
+            .expect("attempt counters")
             .record(self.key, &self.bucket, status, Instant::now());
         self.finished = true;
         notify
@@ -250,7 +305,11 @@ impl Attempt {
 impl Drop for Attempt {
     fn drop(&mut self) {
         if !self.finished {
-            self.limits.counters.lock().expect("attempt counters").release(self.key, &self.bucket);
+            self.limits
+                .counters
+                .lock()
+                .expect("attempt counters")
+                .release(self.key, &self.bucket);
         }
     }
 }
@@ -260,13 +319,25 @@ pub(crate) async fn check(
     request: Request,
     next: Next,
 ) -> Response {
-    if request.method() != Method::POST || !matches!(request.uri().path(),
-        "/api/login" | "/api/devices/pair" | "/api/agent-codes/redeem") {
+    if request.method() != Method::POST
+        || !matches!(
+            request.uri().path(),
+            "/api/login" | "/api/devices/pair" | "/api/agent-codes/redeem"
+        )
+    {
         return next.run(request).await;
     }
-    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
     let address = client_address(&limits.proxies, peer, request.headers());
-    if let Some(seconds) = limits.counters.lock().expect("attempt counters").precheck(address, Instant::now()) {
+    if let Some(seconds) = limits
+        .counters
+        .lock()
+        .expect("attempt counters")
+        .precheck(address, Instant::now())
+    {
         return limited(seconds);
     }
     // Bound uploads before reserving a credential check. A partial body cannot hold an
@@ -274,14 +345,38 @@ pub(crate) async fn check(
     let (parts, body) = request.into_parts();
     let body = match tokio::time::timeout(BODY_TIMEOUT, to_bytes(body, BODY_LIMIT)).await {
         Ok(Ok(bytes)) => bytes,
-        Ok(Err(_)) => return crate::ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "body_limit", "Credential request body is too large or invalid.").into_response(),
-        Err(_) => return crate::ApiError::new(StatusCode::REQUEST_TIMEOUT, "body_timeout", "Credential request body timed out.").into_response(),
+        Ok(Err(_)) => {
+            return crate::ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "body_limit",
+                "Credential request body is too large or invalid.",
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return crate::ApiError::new(
+                StatusCode::REQUEST_TIMEOUT,
+                "body_timeout",
+                "Credential request body timed out.",
+            )
+            .into_response();
+        }
     };
-    let bucket = match limits.counters.lock().expect("attempt counters").begin(address, Instant::now()) {
+    let bucket = match limits
+        .counters
+        .lock()
+        .expect("attempt counters")
+        .begin(address, Instant::now())
+    {
         Ok(bucket) => bucket,
         Err(seconds) => return limited(seconds),
     };
-    let attempt = Attempt { limits: limits.clone(), key: address, bucket, finished: false };
+    let attempt = Attempt {
+        limits: limits.clone(),
+        key: address,
+        bucket,
+        finished: false,
+    };
     let response = next.run(Request::from_parts(parts, Body::from(body))).await;
     if attempt.finish(response.status()) {
         let result = crate::blocking(limits.writer.clone(), |w| w.notify(&state::NewNotification {
@@ -289,7 +384,9 @@ pub(crate) async fn check(
             body: Some("Five or more password or pairing/code checks failed in one minute. Attempt limits are active.".into()),
             source: "server:auth".into(), note_id: None, url: None,
         })).await;
-        if result.is_err() { tracing::warn!("could not store authentication failure notification"); }
+        if result.is_err() {
+            tracing::warn!("could not store authentication failure notification");
+        }
     }
     response
 }
@@ -298,12 +395,18 @@ pub(crate) async fn check(
 mod tests {
     use super::*;
 
-    fn ip(s: &str) -> Key { Some(s.parse().unwrap()) }
+    fn ip(s: &str) -> Key {
+        Some(s.parse().unwrap())
+    }
 
     #[test]
     fn failure_window_expires() {
         let now = Instant::now();
-        let mut b = Address { failures: VecDeque::from([now; 5]), last: Some(now), ..Address::default() };
+        let mut b = Address {
+            failures: VecDeque::from([now; 5]),
+            last: Some(now),
+            ..Address::default()
+        };
         assert_eq!(b.retry(now + WINDOW, false), None);
     }
 
@@ -324,7 +427,10 @@ mod tests {
         }
         now += HISTORY;
         assert_eq!(b.retry(now, true), None);
-        for _ in 0..5 { b.last = Some(now); b.failures.push_back(now); }
+        for _ in 0..5 {
+            b.last = Some(now);
+            b.failures.push_back(now);
+        }
         assert_eq!(b.retry(now, false), Some(60));
     }
 
@@ -334,14 +440,23 @@ mod tests {
         let peer = ip("::ffff:127.0.0.1");
         let mut headers = HeaderMap::new();
         assert_eq!(client_address(&trusted, peer, &headers), ip("127.0.0.1"));
-        headers.insert("x-forwarded-for", "spoofed, ::ffff:192.0.2.1".parse().unwrap());
+        headers.insert(
+            "x-forwarded-for",
+            "spoofed, ::ffff:192.0.2.1".parse().unwrap(),
+        );
         assert_eq!(client_address(&trusted, peer, &headers), ip("192.0.2.1"));
         headers.append("x-forwarded-for", "192.0.2.2".parse().unwrap());
         assert_eq!(client_address(&trusted, peer, &headers), ip("127.0.0.1"));
         headers.clear();
         headers.insert("x-forwarded-for", "2001:db8:1:2::ab".parse().unwrap());
-        assert_eq!(client_address(&trusted, peer, &headers), ip("2001:db8:1:2::"));
-        assert_eq!(client_address(&trusted, ip("192.0.2.3"), &headers), ip("192.0.2.3"));
+        assert_eq!(
+            client_address(&trusted, peer, &headers),
+            ip("2001:db8:1:2::")
+        );
+        assert_eq!(
+            client_address(&trusted, ip("192.0.2.3"), &headers),
+            ip("192.0.2.3")
+        );
         let trusted = proxies("cloudflare=::ffff:127.0.0.1");
         headers.insert("cf-connecting-ip", "192.0.2.1, 192.0.2.2".parse().unwrap());
         assert_eq!(client_address(&trusted, peer, &headers), ip("127.0.0.1"));
@@ -356,7 +471,9 @@ mod tests {
         let checks: Vec<_> = (0..5).map(|_| c.begin(k, now).unwrap()).collect();
         assert!(matches!(c.begin(k, now), Err(1)));
         assert!(c.failures.is_empty());
-        for b in checks { c.record(k, &b, StatusCode::UNAUTHORIZED, now); }
+        for b in checks {
+            c.record(k, &b, StatusCode::UNAUTHORIZED, now);
+        }
         assert!(matches!(c.begin(k, now), Err(60)));
         let clean = ip("192.0.2.2");
         let b = c.begin(clean, now).unwrap();
@@ -368,12 +485,20 @@ mod tests {
     #[test]
     fn full_table_admits_clean_owner_and_evicts_only_after_failure() {
         let now = Instant::now();
-        let mut c = Counters { pruned: Some(now), ..Counters::default() };
+        let mut c = Counters {
+            pruned: Some(now),
+            ..Counters::default()
+        };
         for i in 0..MAX_ADDRESSES as u32 {
             let k = Some(IpAddr::V4((0x0a000000u32 + i).into()));
-            c.addresses.insert(k, Arc::new(Mutex::new(Address {
-                last: Some(now), failures: VecDeque::from([now]), ..Address::default()
-            })));
+            c.addresses.insert(
+                k,
+                Arc::new(Mutex::new(Address {
+                    last: Some(now),
+                    failures: VecDeque::from([now]),
+                    ..Address::default()
+                })),
+            );
         }
         let oldest = ip("10.0.0.0");
         c.addresses.get(&oldest).unwrap().lock().unwrap().last = Some(now - Duration::from_secs(1));

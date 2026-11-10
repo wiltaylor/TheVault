@@ -1,8 +1,12 @@
 //! Public credential checks must be bounded before expensive verification.
 use reqwest::blocking::Client;
 use serde_json::json;
+use std::{
+    io::{BufRead, BufReader, Write},
+    net::TcpStream,
+    time::Duration,
+};
 use testkit::TestServer;
-use std::{io::{BufRead, BufReader, Write}, net::TcpStream, time::Duration};
 
 #[test]
 fn login_attempts_are_limited() {
@@ -318,17 +322,28 @@ fn pairing_code_failures_are_also_limited() {
 
 #[test]
 fn ipv6_privacy_addresses_share_a_64_but_not_the_owners_prefix() {
-    let server = TestServer::start_with_env(|_| {}, &[("VAULT_TRUSTED_PROXIES", "cloudflare=127.0.0.1")]);
+    let server =
+        TestServer::start_with_env(|_| {}, &[("VAULT_TRUSTED_PROXIES", "cloudflare=127.0.0.1")]);
     let client = Client::new();
     for i in 1..=55 {
-        let response = client.post(server.url("/api/agent-codes/redeem"))
+        let response = client
+            .post(server.url("/api/agent-codes/redeem"))
             .header("CF-Connecting-IP", format!("2001:db8:1:2::{i:x}"))
-            .json(&json!({"code":"0000000000"})).send().unwrap();
+            .json(&json!({"code":"0000000000"}))
+            .send()
+            .unwrap();
         assert_eq!(response.status(), if i <= 5 { 410 } else { 429 });
     }
-    assert_eq!(client.post(server.url("/api/login"))
-        .header("CF-Connecting-IP", "2001:db8:1:3::1")
-        .json(&json!({"password":testkit::PASSWORD})).send().unwrap().status(), 200);
+    assert_eq!(
+        client
+            .post(server.url("/api/login"))
+            .header("CF-Connecting-IP", "2001:db8:1:3::1")
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap()
+            .status(),
+        200
+    );
 }
 
 #[test]
@@ -336,7 +351,8 @@ fn incomplete_body_neither_holds_the_shared_key_nor_waits_forever() {
     let server = TestServer::start();
     let url = reqwest::Url::parse(&server.url("/api/login")).unwrap();
     let mut slow = TcpStream::connect((url.host_str().unwrap(), url.port().unwrap())).unwrap();
-    slow.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+    slow.set_read_timeout(Some(Duration::from_secs(15)))
+        .unwrap();
     write!(slow, "POST /api/login HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n").unwrap();
     let mut reader = BufReader::new(slow.try_clone().unwrap());
     let mut line = String::new();
@@ -347,9 +363,19 @@ fn incomplete_body_neither_holds_the_shared_key_nor_waits_forever() {
     assert_eq!(line, "\r\n");
     slow.write_all(b"{").unwrap();
     // The slow request is now being read. Its address must not be reserved or locked.
-    let client = Client::builder().timeout(Duration::from_secs(3)).build().unwrap();
-    assert_eq!(client.post(server.url("/api/login"))
-        .json(&json!({"password":testkit::PASSWORD})).send().unwrap().status(), 200);
+    let client = Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap();
+    assert_eq!(
+        client
+            .post(server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap()
+            .status(),
+        200
+    );
     line.clear();
     reader.read_line(&mut line).unwrap();
     assert!(line.contains("408 Request Timeout"), "{line}");
@@ -361,19 +387,40 @@ fn concurrent_wrong_passwords_cannot_bypass_the_failure_budget() {
     let client = Client::new();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(12));
     let statuses = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..12).map(|_| {
-            let barrier = barrier.clone();
-            let url = server.url("/api/login");
-            let client = client.clone();
-            scope.spawn(move || {
-                barrier.wait();
-                client.post(url).json(&json!({"password":"wrong"})).send().unwrap().status()
+        let handles: Vec<_> = (0..12)
+            .map(|_| {
+                let barrier = barrier.clone();
+                let url = server.url("/api/login");
+                let client = client.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    client
+                        .post(url)
+                        .json(&json!({"password":"wrong"}))
+                        .send()
+                        .unwrap()
+                        .status()
+                })
             })
-        }).collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect::<Vec<_>>()
     });
-    assert!(statuses.iter().all(|s| s.as_u16() == 401 || s.as_u16() == 429));
+    assert!(
+        statuses
+            .iter()
+            .all(|s| s.as_u16() == 401 || s.as_u16() == 429)
+    );
     assert_eq!(statuses.iter().filter(|s| s.as_u16() == 401).count(), 5);
-    assert_eq!(client.post(server.url("/api/login"))
-        .json(&json!({"password":testkit::PASSWORD})).send().unwrap().status(), 429);
+    assert_eq!(
+        client
+            .post(server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap()
+            .status(),
+        429
+    );
 }
