@@ -309,8 +309,12 @@ macro_rules! held_rest_route {
             assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
             let token = api.external_agent_token();
             let path = $path.replace("{id}", id);
-            let response = api.client.get(api.server.url(&path))
-                .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap();
+            let response = api
+                .client
+                .get(api.server.url(&path))
+                .bearer_auth(token["secret"].as_str().unwrap())
+                .send()
+                .unwrap();
             assert_eq!(response.status(), 403, "{path}");
         }
     };
@@ -998,9 +1002,16 @@ impl Api {
             "/api/agent-codes",
             json!({"name":"cli", "scope":"write"}),
         );
-        let response: Value = self.client.post(self.server.url("/api/agent-codes/redeem"))
-            .json(&json!({"code":issued["code"]})).send().unwrap()
-            .error_for_status().unwrap().json().unwrap();
+        let response: Value = self
+            .client
+            .post(self.server.url("/api/agent-codes/redeem"))
+            .json(&json!({"code":issued["code"]}))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
         json!({"secret":response["token"]})
     }
 
