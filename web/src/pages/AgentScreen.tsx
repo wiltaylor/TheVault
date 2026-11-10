@@ -618,7 +618,7 @@ function PermissionsTab(p: AgentTabProps) {
               type="checkbox"
               role="switch"
               checked={perms().outbox?.send_without_review ?? false}
-              onChange={(e) => setPerms({ outbox: { ...perms().outbox, send_without_review: e.currentTarget.checked } })}
+              onChange={(e) => setPerms({ outbox: { ...perms().outbox, send_without_review: e.currentTarget.checked, conditions: perms().outbox?.conditions ?? { recipients: [], email: false, sms: false, event: false, daily_cap: 0, cancel_delay_minutes: 5 } } })}
             />{" "}
             Send from the Outbox without review
           </label>

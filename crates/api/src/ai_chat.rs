@@ -4107,7 +4107,7 @@ fn propose_or_read(
         "propose_taxonomy_change" => crate::ai_taxonomies::propose_change(w, &call.id, input),
         "propose_taxonomy_delete" => crate::ai_taxonomies::propose_delete(w, &call.id, input),
         "list_agents" => crate::ai_agents::list(w),
-        "get_agent" => crate::ai_agents::get(w, input),
+        "get_agent" => crate::ai_agents::get(w, agent, input),
         "propose_agent_change" => crate::ai_agents::propose_change(w, agent, &call.id, input),
         "propose_agent_delete" => crate::ai_agents::propose_delete(w, agent, &call.id, input),
         "list_skills" => crate::ai_skill_changes::list(w, agent),

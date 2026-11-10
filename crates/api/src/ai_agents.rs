@@ -85,18 +85,23 @@ pub(crate) fn list(w: &Writer) -> Result<ToolOut, ToolOut> {
 }
 
 /// `get_agent`: the file as stored, the agent parsed, and the agent-file vocabulary.
-pub(crate) fn get(w: &Writer, input: &Value) -> Result<ToolOut, ToolOut> {
+pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, ToolOut> {
     let name = str_arg(input, "name")?;
-    let wcl = w
+    let mut wcl = w
         .read_agent(name)
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let (agent, error) = match Agent::parse(name, &wcl) {
-        Ok(a) => {
+        Ok(mut a) => {
+            if name != by.name {
+                a.permissions.outbox.conditions = None;
+                wcl = a.to_wcl();
+            }
             let mut v = crate::agent_files::agent_json(&a);
             v["account"] = json!(crate::ai_settings::agent_account_name(w, &a));
             (v, Value::Null)
         }
-        Err(e) => (Value::Null, json!(e.to_string())),
+        Err(e) if name == by.name => (Value::Null, json!(e.to_string())),
+        Err(_) => return Err(ToolOut::error("the other agent's file is invalid")),
     };
     Ok(out(
         json!({
@@ -356,7 +361,8 @@ pub(crate) fn propose_change(
 
 /// Whether writing `agent` as agent `name` turns on `run_code`, which it does not have now.
 fn grants(w: &Writer, name: &str, agent: &Agent) -> bool {
-    agent.permissions.outbox.conditions
+    (agent.permissions.outbox.send_without_review && !agent_named(w, name).ok().flatten().is_some_and(|a| a.permissions.outbox.send_without_review))
+        || agent.permissions.outbox.conditions
         != agent_named(w, name)
             .ok()
             .flatten()

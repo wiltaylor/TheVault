@@ -621,7 +621,7 @@ describe("the Permissions tab", () => {
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
     fireEvent.click(p.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(putAgent).toHaveBeenCalled());
-    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true });
+    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true, conditions: { recipients: [], email: false, sms: false, event: false, daily_cap: 0, cancel_delay_minutes: 5 } });
   });
 
   it("shows the switch on for an agent that sends without review", async () => {

@@ -344,7 +344,7 @@ impl Outbox {
                     && theirs.recipients.iter().all(|r| {
                         own.recipients
                             .iter()
-                            .any(|a| a.trim().eq_ignore_ascii_case(r.trim()))
+                            .any(|a| send_recipient_key(a, false).zip(send_recipient_key(r, false)).is_some_and(|(a, r)| a == r) || send_recipient_key(a, true).zip(send_recipient_key(r, true)).is_some_and(|(a, r)| a == r))
                     })))
     }
 
@@ -357,6 +357,18 @@ impl Outbox {
             ..OutboxConditions::default()
         })
     }
+}
+
+/// Exact address/number keys shared by send admission and permission containment.
+pub fn send_recipient_key(value: &str, sms: bool) -> Option<String> {
+    let value = value.trim();
+    if !sms {
+        return (value.is_ascii() && value.contains('@')).then(|| value.to_ascii_lowercase());
+    }
+    let rest = value.strip_prefix('+')?;
+    if !rest.chars().all(|c| c.is_ascii_digit() || " -().".contains(c)) { return None; }
+    let digits: String = rest.chars().filter(char::is_ascii_digit).collect();
+    (digits.len() >= 8 && digits.len() <= 15 && !digits.starts_with('0')).then(|| format!("+{digits}"))
 }
 
 impl Outbox {

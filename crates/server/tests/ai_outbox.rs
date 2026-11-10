@@ -59,7 +59,10 @@ struct Api {
 
 impl Api {
     fn start(fake: &FakeAnthropic) -> Api {
-        let server = TestServer::start();
+        let server = TestServer::start_seeded(|root| {
+            std::fs::create_dir_all(root.join("agents")).unwrap();
+            std::fs::write(root.join("agents/sender.wcl"), SENDER).unwrap();
+        });
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -649,15 +652,15 @@ fn an_agent_cannot_give_another_the_bypass_it_lacks() {
     );
     assert!(!api.agent_exists("helper"));
 
-    // An agent that has the bypass may give it.
+    // Even a legacy agent cannot enable sending on a new helper without Apply.
     api.one(
         &fake,
         Some("sender"),
         "propose_agent_change",
         json!({ "name": "helper", "wcl": helper }),
     );
-    assert_eq!(last_result(&fake, false)["applied"], true);
-    assert!(api.agent_exists("helper"));
+    assert_ne!(last_result(&fake, false)["applied"], true);
+    assert!(!api.agent_exists("helper"));
 
     // Apply checks it again against the proposer.
     let forged = json!({

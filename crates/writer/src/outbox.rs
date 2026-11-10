@@ -128,24 +128,7 @@ fn strings(doc: &Doc, name: &str) -> Vec<String> {
 }
 
 fn recipient_key(value: &str, kind: &str) -> Option<String> {
-    let value = value.trim();
-    if kind != "sms" {
-        return value.contains('@').then(|| value.to_lowercase());
-    }
-    let value = value
-        .strip_prefix("00")
-        .map(|s| format!("+{s}"))
-        .unwrap_or_else(|| value.to_owned());
-    if !value.starts_with('+')
-        || !value
-            .chars()
-            .all(|c| c.is_ascii_digit() || "+ -().".contains(c))
-    {
-        return None;
-    }
-    let digits: String = value.chars().filter(char::is_ascii_digit).collect();
-    (digits.len() >= 8 && digits.len() <= 15 && !digits.starts_with('0'))
-        .then(|| format!("+{digits}"))
+    schema::send_recipient_key(value, kind == "sms")
 }
 
 impl ItemChange {
@@ -251,7 +234,7 @@ impl Writer {
         let mut recipients: Vec<_> = fields.iter().flat_map(|f| strings(doc, f)).collect();
         // Event updates may keep the original attendees. Those recipients are part of the grant.
         if kind == "event"
-            && let Some(event) = text(doc, "event").filter(|s| !s.is_empty())
+            && let Some(event) = text(doc, "event").filter(|s| !s.is_empty()).or_else(|| text(doc, "result").filter(|s| !s.is_empty()))
         {
             let existing = schema::is_ulid(event)
                 .then(|| std::fs::read_to_string(self.vault.root().join(note_path("event", event))))
@@ -259,6 +242,9 @@ impl Writer {
                 .and_then(|s| Input::Wcl(s).parse("event").ok());
             if let Some(note) = existing {
                 recipients.extend(strings(&note, "attendees_raw"));
+                if text(doc, "my_response").is_some_and(|s| !s.is_empty()) {
+                    recipients.extend(strings(&note, "organiser"));
+                }
             } else {
                 set(doc, "status", "draft");
                 return Ok(());
@@ -272,17 +258,23 @@ impl Writer {
                             && recipient_key(r, kind).is_some()
                     })
                 }));
-        if !enabled
-            || !allowed
-            || !self.state.reserve_outbox(
+        let invalid_phone = kind == "sms" && text(doc, "phone").and_then(|p| recipient_key(p, kind)).is_none();
+        let denied = if !enabled { Some("this kind is not enabled for this agent") }
+            else if !allowed || invalid_phone { Some("recipient not on this agent's list") }
+            else if !self.state.reserve_outbox(
                 name,
                 id,
                 self.now_ms(),
                 limits.daily_cap,
                 limits.cancel_delay_minutes * 60_000,
-            )?
-        {
+            )? { Some("over this agent's daily limit") } else { None };
+        if let Some(message) = denied {
+            if matches!(author, Author::Session(_) | Author::Token(_)) {
+                return Err(Error::Invalid(Invalid { file: note_path("outbox", id), issues: vec![Issue::new("status", message)] }));
+            }
             set(doc, "status", "draft");
+        } else if kind == "sms" && let Some(phone) = text(doc, "phone").and_then(|p| recipient_key(p, kind)) {
+            set(doc, "phone", &phone);
         }
         Ok(())
     }
@@ -545,6 +537,9 @@ impl Writer {
     /// removed is logged and left for the next sweep.
     pub fn sweep_outbox(&self, now_ms: i64) -> usize {
         use script_core::Vault as _;
+        if let Err(e) = self.state.prune_outbox_limits(now_ms) {
+            eprintln!("outbox: could not prune expired send limits: {e}");
+        }
         let rows = match self.query(
             &format!(
                 "from {} include archived where status == \"sending\"",
