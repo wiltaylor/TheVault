@@ -375,6 +375,27 @@ permissions {
 "#;
 
 #[test]
+fn read_access_does_not_authorize_changes() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", MEMOS_ONLY);
+    let (memo, version) = api.note("memo", "Private person");
+    let call = |tool: &str, input: Value| -> Value {
+        fake.clear_requests();
+        fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+        tool_result(&fake, 1)
+    };
+    assert_eq!(call("get_note", json!({ "id": memo }))["is_error"], false);
+    let changed = call("propose_edit", json!({
+        "id": memo, "base_version": version,
+        "note": json!({ "fields": { "title": "Injected" } }).to_string()
+    }));
+    assert_eq!(changed["is_error"], true, "read permission authorized a change: {changed}");
+}
+
+#[test]
 fn every_note_tool_keeps_to_the_agents_types_and_leaves_threads_out() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
