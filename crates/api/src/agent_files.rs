@@ -262,8 +262,15 @@ pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
             v
         })
         .collect();
-    let tools = blocking(w2, |w| Ok::<_, ApiError>(known_tools(w))).await?;
-    Ok(Json(json!({ "agents": agents, "tools": tools })))
+    let (tools, warnings) = blocking(w2, |w| {
+        let warnings: Vec<_> = w.reserved_agent_names()?.into_iter()
+            .map(|name| format!("Agent {name:?} uses a reserved name and may share Outbox ownership. Rename its agents/{name}.wcl file."))
+            .collect();
+        Ok::<_, ApiError>((known_tools(w), warnings))
+    }).await?;
+    Ok(Json(
+        json!({ "agents": agents, "tools": tools, "warnings": warnings }),
+    ))
 }
 
 /// The response to a read or a write: the agent with its WCL, the name of the account it

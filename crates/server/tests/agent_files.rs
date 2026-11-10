@@ -186,13 +186,14 @@ fn browser_secret_grants_require_owner_and_reconfirmation_after_recreation() {
     };
     assert_eq!(read()["browser_secrets_inactive"], json!(["bank"]));
     let device = pair_device(&api);
-    let external = expect(
-        api.admin("POST", "/api/tokens")
-            .json(&json!({"name": "agent-test", "scope": "admin"}))
+    let code = expect(
+        api.admin("POST", "/api/agent-codes")
+            .json(&json!({"name": "test", "scope": "write"}))
             .send()
             .unwrap(),
         StatusCode::CREATED,
-    )["secret"]
+    );
+    let external = expect(api.client.post(api.server.url("/api/agent-codes/redeem")).json(&json!({"code": code["code"]})).send().unwrap(), StatusCode::CREATED)["token"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -206,11 +207,10 @@ fn browser_secret_grants_require_owner_and_reconfirmation_after_recreation() {
         assert_eq!(hidden["permissions"]["browser_secrets"], json!([]));
         assert!(!hidden["wcl"].as_str().unwrap().contains("bank"));
     }
-    let listed = expect(
+    expect(
         api.req("GET", "/api/secrets", &external).send().unwrap(),
-        StatusCode::OK,
+        StatusCode::FORBIDDEN,
     );
-    assert!(!listed.to_string().contains("bank"));
     expect(
         api.put_wcl("clerk", source, api.server.admin_token()),
         StatusCode::OK,
@@ -575,16 +575,11 @@ fn an_admin_token_writes_agent_files() {
     assert!(api.server.vault_path().join("types/email.wcl").is_file());
 
     // An API token with `write` is not a device, whatever it is called.
-    let named = expect(
-        api.admin("POST", "/api/tokens")
-            .json(&json!({ "name": "device-fake", "scope": "write" }))
-            .send()
-            .unwrap(),
-        StatusCode::CREATED,
-    )["secret"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    // Existing user-kind tokens with this prefix still need a real device record.
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    let (_, named) = state
+        .create_token("device-fake", state::Scope::Write)
+        .unwrap();
     expect(
         api.put_wcl("clerk", "label = \"Mine\"\n", &named),
         StatusCode::FORBIDDEN,

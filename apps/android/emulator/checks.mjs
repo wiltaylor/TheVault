@@ -250,8 +250,20 @@ async function root() {
   for (let i = 0; i < 20 && !shellTry("id").includes("uid=0"); i++) execFileSync("sleep", ["0.5"]);
 }
 
-async function reboot() {
+async function reboot(forceRecovery = false) {
+  const owner = join(repo, process.env.THEVAULT_EMULATOR_LOGS ?? "target/android-emulator", "owner.json");
+  const record = existsSync(owner) ? JSON.parse(readFileSync(owner, "utf8")) : null;
+  const expected = {
+    serial: process.env.ANDROID_SERIAL,
+    avd: process.env.THEVAULT_AVD ?? "thevault-api35",
+    home: process.env.ANDROID_AVD_HOME ?? `${process.env.HOME}/.android/avd`,
+  };
+  if (forceRecovery && process.env.THEVAULT_FORCE_RECOVERY === "1") {
+    if (ownedEmulatorGone(record, expected)) throw new Error("Forced recovery requires our live emulator");
+    process.kill(record.pid, "SIGKILL");
+  } else {
   adb("reboot");
+  }
   await sleep(5_000);
   await recoverReboot({
     wait: async () => {
@@ -259,21 +271,27 @@ async function reboot() {
       await until("boot", () => shellTry("getprop sys.boot_completed").trim() === "1", { timeout: 300_000, every: 1_000 });
     },
     gone: () => {
-      const owner = join(repo, process.env.THEVAULT_EMULATOR_LOGS ?? "target/android-emulator", "owner.json");
-      const record = existsSync(owner) ? JSON.parse(readFileSync(owner, "utf8")) : null;
-      return ownedEmulatorGone(record, {
-        serial: process.env.ANDROID_SERIAL,
-        avd: process.env.THEVAULT_AVD ?? "thevault-api35",
-        home: process.env.ANDROID_AVD_HOME ?? `${process.env.HOME}/.android/avd`,
-      });
+      return ownedEmulatorGone(record, expected);
     },
     restart: async () => {
       // Preserve the crash log before boot.sh opens emulator.log for the new process.
       const dir = join(repo, process.env.THEVAULT_EMULATOR_LOGS ?? "target/android-emulator");
-      if (existsSync(join(dir, "emulator.log"))) copyFileSync(join(dir, "emulator.log"), join(logs, `emulator-before-recovery-${Date.now()}.log`));
+      const crash = existsSync(join(logs, "emulator-crash.log"))
+        ? `emulator-crash-${Date.now()}.log` : "emulator-crash.log";
+      if (existsSync(join(dir, "emulator.log"))) copyFileSync(join(dir, "emulator.log"), join(logs, crash));
       execFileSync("bash", [join(repo, "apps/android/emulator/boot.sh"), "-writable-system"], {
         cwd: repo, env: process.env, stdio: "inherit", timeout: 720_000,
       });
+    },
+    reconnect: async () => {
+      await pw?.device.close().catch(() => {});
+      pw = null;
+      // System-image setup also reboots, before our APK has been installed.
+      if (!shellTry(`pm path ${PKG}`).includes("package:")) return;
+      await root();
+      wakeAndUnlock();
+      openApp();
+      if (DEBUGGABLE) pw = await L.appPage(60_000);
     },
   });
   shellTry("input keyevent KEYCODE_WAKEUP");
@@ -1487,7 +1505,7 @@ async function main() {
       return { count: all.length, dupes: Object.entries(by).filter(([, c]) => c > 1) };
     };
     const before = await refs();
-    await reboot();
+    await reboot(true);
     await root();
     wakeAndUnlock();
     openApp();
@@ -1715,7 +1733,9 @@ function writeReport(completed) {
   ];
   for (const n of Object.keys(TITLES).map(Number).sort((a, b) => a - b)) {
     if (only && !only.has(n)) continue;
-    const r = results[n] ?? { status: "not run", note: "The run stopped before this check.", evidence: [] };
+    const r = results[n] ?? (n >= 53 && n <= 57
+      ? { status: "not implemented", note: "Not implemented.", evidence: [] }
+      : { status: "not run", note: "The run stopped before this check.", evidence: [] });
     const cell = (s) => String(s).replace(/\|/g, "\\|").replace(/\n/g, " ");
     lines.push(`| ${n} | ${cell(TITLES[n].doing.slice(0, 80))}${TITLES[n].doing.length > 80 ? "…" : ""} | ${labels[r.status] ?? r.status} | ${cell(r.note)} | ${r.evidence.map((e) => `\`${e}\``).join(", ")} |`);
   }

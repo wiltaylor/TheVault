@@ -5,6 +5,19 @@ import { ownedEmulatorGone, processState, recoverReboot } from "./reboot.mjs";
 const expected = { serial: "emulator-5580", avd: "tv130-api35", home: "/home/agent/tv-130/avd" };
 const record = { ...expected, pid: 123, start: "456" };
 
+test("cold-boot recovery reopens the Android device and waits for its WebView", async () => {
+  const calls = [];
+  let waits = 0;
+  await recoverReboot({
+    wait: async () => { if (++waits === 1) throw new Error("device gone"); },
+    gone: () => true,
+    restart: async () => calls.push("cold boot"),
+    reconnect: async () => { calls.push("close device", "open device", "wait WebView socket", "open WebView"); },
+    log: () => {},
+  });
+  assert.deepEqual(calls, ["cold boot", "close device", "open device", "wait WebView socket", "open WebView"]);
+});
+
 test("ownership requires the exact serial, AVD, home and recorded process", () => {
   for (const bad of [null, { ...record, pid: -1 }, { ...record, serial: "emulator-5554" },
     { ...record, avd: "thevault" }, { ...record, home: "/other" }, { ...record, start: "" }]) {

@@ -1,10 +1,12 @@
-import { Show, createSignal } from "solid-js";
+import { For, Show, createResource, createSignal } from "solid-js";
+import { api } from "../api";
 import { logOut } from "../session";
 import { About } from "./About";
 import { DEFAULT_TILES, isTileTemplate, setTileUrl, tileUrl, validTileUrl } from "../map/model";
 
 /** Settings kept in this browser. */
 export function Settings() {
+  const [agentList] = createResource(() => api.agents());
   const [tiles, setTiles] = createSignal(tileUrl() === DEFAULT_TILES ? "" : tileUrl());
   const [saved, setSaved] = createSignal(false);
   const invalid = () => tiles().trim() !== "" && !validTileUrl(tiles().trim());
@@ -20,6 +22,12 @@ export function Settings() {
     <section class="settings">
       <h1>General settings</h1>
       <About />
+      <Show when={agentList()?.warnings?.length}>
+        <section class="settings-form" aria-label="Agents">
+          <h2>Agents</h2>
+          <For each={agentList()?.warnings}>{(warning) => <p class="error" role="alert">{warning}</p>}</For>
+        </section>
+      </Show>
       <form class="settings-form" aria-label="Map tiles" onSubmit={save}>
         <h2>Map tiles</h2>
         <p class="muted">

@@ -74,6 +74,7 @@ mod planner;
 mod push;
 mod query;
 mod refs;
+mod review_probes;
 mod saved_scripts;
 mod scheduler;
 mod schema_changes;

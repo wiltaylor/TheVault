@@ -657,16 +657,11 @@ fn an_admin_token_writes_skills() {
     assert_eq!(refused["error"], "forbidden");
 
     // An API token with `write` is not a device, whatever it is called.
-    let named = expect(
-        api.admin("POST", "/api/tokens")
-            .json(&json!({ "name": "device-fake", "scope": "write" }))
-            .send()
-            .unwrap(),
-        StatusCode::CREATED,
-    )["secret"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    // Existing user-kind tokens with this prefix still need a real device record.
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    let (_, named) = state
+        .create_token("device-fake", state::Scope::Write)
+        .unwrap();
     for (method, path) in [
         ("PUT", "/api/skills/pdf"),
         ("PUT", "/api/skills/pdf/files/a.txt"),
