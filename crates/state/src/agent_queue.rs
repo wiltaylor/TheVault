@@ -398,8 +398,8 @@ mod tests {
     }
 
     #[test]
-    fn upgrades_from_19_and_20_preserve_existing_runs() {
-        for version in [19, 20] {
+    fn upgrades_from_19_20_and_22_preserve_existing_runs() {
+        for version in [19, 20, 22] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("state.db");
             let s = State::open(&path, None).unwrap();

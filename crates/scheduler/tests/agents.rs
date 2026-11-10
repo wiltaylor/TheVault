@@ -400,6 +400,9 @@ fn backfill_refuses_delete_only_and_queued_ops_are_rechecked() {
             .replace("[\"delete\"]", "[\"update\"]"),
     );
     r.scheduler.tick();
+    // The second job can first wait behind the first job's per-note claim. Once the
+    // capacity backoff elapses it must also recheck the now-removed operation.
+    r.advance(31);
     assert!(
         r.fake.turns().is_empty(),
         "removed create and delete ops must cancel"

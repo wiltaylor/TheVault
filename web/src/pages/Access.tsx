@@ -14,6 +14,10 @@ function SecretsPage() {
   const [secrets, { refetch }] = createResource(api.secrets);
   const [name, setName] = createSignal("");
   const [value, setValue] = createSignal("");
+  const [kind, setKind] = createSignal("string");
+  const [username, setUsername] = createSignal("");
+  const [seed, setSeed] = createSignal("");
+  const [origins, setOrigins] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [status, setStatus] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -30,9 +34,19 @@ function SecretsPage() {
     setBusy(true);
     try {
       const replaced = secrets()?.some((s) => s.name === n);
-      await api.putSecret(n, value());
+      if (kind() === "login") {
+        await api.putLoginSecret(n, {
+          username: username(), password: value(), totp_seed: seed() || undefined,
+          origins: origins().split("\n").map((s) => s.trim()).filter(Boolean),
+        });
+      } else {
+        await api.putSecret(n, value());
+      }
       setName("");
       setValue("");
+      setSeed("");
+      setUsername("");
+      setOrigins("");
       setStatus(replaced ? `Replaced the value of ${n}.` : `Stored ${n}.`);
       await refetch();
     } catch (e) {
@@ -65,6 +79,13 @@ function SecretsPage() {
       </p>
       <form class="admin-form" aria-label="Set a secret" onSubmit={save}>
         <div class="form-grid">
+          <label for="secret-kind">Kind</label>
+          <select id="secret-kind" value={kind()} onChange={(e) => {
+            setKind(e.currentTarget.value); setValue(""); setSeed("");
+          }}>
+            <option value="string">String</option>
+            <option value="login">Login</option>
+          </select>
           <label for="secret-name">Name</label>
           <input
             id="secret-name"
@@ -73,14 +94,27 @@ function SecretsPage() {
             autocomplete="off"
             onInput={(e) => setName(e.currentTarget.value)}
           />
-          <label for="secret-value">Value</label>
+          <Show when={kind() === "login"}>
+            <label for="secret-username">User name</label>
+            <input id="secret-username" autocomplete="off" value={username()} onInput={(e) => setUsername(e.currentTarget.value)} />
+          </Show>
+          <label for="secret-value">{kind() === "login" ? "Password" : "Value"}</label>
           <input
             id="secret-value"
             type="password"
             autocomplete="new-password"
             value={value()}
+            required={kind() === "login"}
             onInput={(e) => setValue(e.currentTarget.value)}
           />
+          <Show when={kind() === "login"}>
+            <label for="secret-seed">One-time-code seed (optional)</label>
+            <input id="secret-seed" type="password" autocomplete="new-password" value={seed()} onInput={(e) => setSeed(e.currentTarget.value)} />
+            <label for="secret-origins">Site origins (optional, one per line)</label>
+            <textarea id="secret-origins" value={origins()} placeholder="https://example.com" onInput={(e) => setOrigins(e.currentTarget.value)} />
+            <p class="muted">Replacing a Login, including its origins or seed, requires its password again. Leave the seed empty to remove it.</p>
+            <Show when={!origins().trim()}><p role="note">No origins means any site, including a look-alike page. Add origins to restrict where this Login may be entered.</p></Show>
+          </Show>
         </div>
         <button type="submit" class="primary" disabled={busy()}>
           Save secret
@@ -112,11 +146,18 @@ function SecretsPage() {
                     <tr data-secret={s.name}>
                       <td>
                         <code>{s.name}</code>
+                        <Show when={s.kind === "login"}>
+                          <span> Login: {s.username}</span>
+                          <span> {s.origins?.length ? s.origins.join(", ") : "Warning: any site (no origins)"}</span>
+                        </Show>
                       </td>
                       <td>{when(s.created)}</td>
                       <td>{when(s.updated)}</td>
                       <td class="actions">
-                        <button type="button" onClick={() => setName(s.name)}>
+                        <button type="button" onClick={() => {
+                          setName(s.name); setKind(s.kind ?? "string"); setValue(""); setSeed("");
+                          setUsername(s.username ?? ""); setOrigins((s.origins ?? []).join("\n"));
+                        }}>
                           Replace
                         </button>
                         <button type="button" class="danger" onClick={() => void remove(s.name)}>
