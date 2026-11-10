@@ -659,7 +659,9 @@ fn a_paired_device_writes_skills_and_nothing_more() {
     // An API token with `write` is not a device, whatever it is called.
     // Existing user-kind tokens with this prefix still need a real device record.
     let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
-    let (_, named) = state.create_token("device-fake", state::Scope::Write).unwrap();
+    let (_, named) = state
+        .create_token("device-fake", state::Scope::Write)
+        .unwrap();
     for (method, path) in [
         ("PUT", "/api/skills/pdf"),
         ("PUT", "/api/skills/pdf/files/a.txt"),
