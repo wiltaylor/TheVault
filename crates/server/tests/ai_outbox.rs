@@ -323,6 +323,8 @@ fn the_draft_tools_create_drafts_resolving_people() {
     // A new event, and a change to an existing one.
     let invite = json!({
         "event": "",
+        "event_action": "",
+        "my_response": "",
         "title": "Planning",
         "when": { "start": "2026-11-02T09:30:00+11:00", "end": "2026-11-02T10:00:00+11:00" },
         "location": "Room 1",
@@ -353,13 +355,30 @@ fn the_draft_tools_create_drafts_resolving_people() {
     change["when"] = json!({ "start": "", "end": "" });
     change["attendees"] = json!([]);
     change["description"] = json!("");
-    api.one(&fake, None, "draft_event", change);
+    api.one(&fake, None, "draft_event", change.clone());
     let r = last_result(&fake, false);
     let f = api.fields(r["id"].as_str().unwrap());
     assert_eq!(f["event"], standup.as_str());
     assert_eq!(f["title"], "Standup");
     assert_eq!(f["location"], "Room 1");
     assert!(f.get("when").is_none_or(Value::is_null), "{f}");
+
+    for action in [
+        json!({ "my_response": "accepted" }),
+        json!({ "event_action": "delete" }),
+    ] {
+        let mut request = change.clone();
+        for (key, value) in action.as_object().unwrap() {
+            request[key] = value.clone();
+        }
+        api.one(&fake, None, "draft_event", request);
+        let result = last_result(&fake, false);
+        let fields = api.fields(result["id"].as_str().unwrap());
+        assert_eq!(fields["status"], "draft");
+        for (key, value) in action.as_object().unwrap() {
+            assert_eq!(&fields[key], value);
+        }
+    }
 
     // Mistakes come back as errors and draft nothing.
     for (tool, input, says) in [
@@ -376,7 +395,7 @@ fn the_draft_tools_create_drafts_resolving_people() {
         ),
         (
             "draft_event",
-            json!({ "event": "", "title": "", "when": { "start": "", "end": "" }, "location": "", "attendees": [], "description": "", "calendar": "" }),
+            json!({ "event": "", "event_action": "", "my_response": "", "title": "", "when": { "start": "", "end": "" }, "location": "", "attendees": [], "description": "", "calendar": "" }),
             "title",
         ),
     ] {

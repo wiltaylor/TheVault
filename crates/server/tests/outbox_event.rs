@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use testkit::fake_google::{
     CalendarWrite, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN,
 };
-use testkit::{FakeGoogle, TestServer};
+use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, FakeGoogle, TestAccount, TestServer};
 
 fn expect(res: Response, status: u16) -> Value {
     let got = res.status().as_u16();
@@ -101,6 +101,43 @@ impl Api {
             201,
         );
         made["id"].as_str().unwrap().to_owned()
+    }
+
+    fn draft_event(&self, fake: &FakeAnthropic, event: &str, changes: Value) -> String {
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(fake).model("claude-opus-5"))
+            .secrets()
+        {
+            expect(
+                self.req("PUT", &format!("/api/secrets/{name}"))
+                    .json(&json!({ "value": value }))
+                    .send()
+                    .unwrap(),
+                200,
+            );
+        }
+        expect(self.req("PUT", "/api/agents/clerk").header("content-type", "text/plain").body("label = \"Clerk\"\npermissions {\n tools = [\"draft_event\"]\n confirm {\n notes = false\n }\n}\n").send().unwrap(), 200);
+        let mut input = json!({ "event": event, "event_action": "", "my_response": "", "title": "", "when": { "start": "", "end": "" }, "location": "", "attendees": [], "description": "", "calendar": "" });
+        for (key, value) in changes.as_object().unwrap() {
+            input[key] = value.clone();
+        }
+        fake.push(AnthropicMessage::new().tool_use("draft", "draft_event", input));
+        fake.push(AnthropicMessage::text("Drafted."));
+        let response = self.req("POST", "/api/ai/chat").json(&json!({ "agent": "clerk", "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Draft this action for review." }] }] })).send().unwrap();
+        assert_eq!(response.status(), 200);
+        let stream = response.text().unwrap();
+        let drafts = expect(
+            self.req("POST", "/api/query")
+                .json(&json!({ "query": "from outbox where status == \"draft\"" }))
+                .send()
+                .unwrap(),
+            200,
+        );
+        let rows = drafts["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{stream}\n{drafts}");
+        let id = rows[0]["id"].as_str().unwrap().to_owned();
+        assert_eq!(self.fields(&id)["drafted_by"], "clerk");
+        id
     }
 
     fn note(&self, id: &str) -> Value {
@@ -227,6 +264,359 @@ fn assert_no_send_updates(note: &Value) {
         note["note"]["fields"].get("send_updates").is_none(),
         "{note:#}"
     );
+}
+
+#[test]
+fn agent_cannot_bypass_event_outbox_with_send_updates() {
+    let root = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(root.path()).unwrap();
+    let state = state::State::open(
+        &vault.server_dir().join("state.db"),
+        Some(state::SecretKey::generate()),
+    )
+    .unwrap();
+    let writer = writer::Writer::open(vault, state).unwrap();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let result = writer.create(
+        "event",
+        &writer::Input::Json(json!({ "fields": {
+            "title": "Unreviewed invitation",
+            "when": { "start": "2026-04-03", "end": "2026-04-03" },
+            "attendees_raw": ["ann@example.com"],
+            "send_updates": "all"
+        }})),
+        &state::Author::Agent("careless".into()),
+    );
+    assert!(
+        matches!(result, Err(writer::Error::Rejected(ref message)) if message.contains("send_updates")),
+        "agent bypassed the event Outbox: {result:?}"
+    );
+}
+
+#[test]
+fn writer_enforces_calendar_author_and_outbox_boundary() {
+    let root = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(root.path()).unwrap();
+    let state = state::State::open(
+        &vault.server_dir().join("state.db"),
+        Some(state::SecretKey::generate()),
+    )
+    .unwrap();
+    let w = writer::Writer::open(vault, state).unwrap();
+    w.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    let user = state::Author::Session("owner".into());
+    let agent = state::Author::Agent("careless".into());
+    let sender = state::Author::Handler("outbox_send".into());
+    let body = json!({ "fields": {
+        "title": "Standup", "google_ref": "standup", "calendar": "primary",
+        "when": { "start": "2026-04-03", "end": "2026-04-03" },
+        "attendees_raw": ["ann@example.com"], "my_response": "needs_action"
+    }});
+    let made = w
+        .create("event", &writer::Input::Json(body.clone()), &user)
+        .unwrap();
+    for (field, value) in [
+        ("attendees_raw", json!(["bob@example.com"])),
+        ("attendees", json!([])),
+        ("my_response", json!("accepted")),
+        ("status", json!("cancelled")),
+        ("etag", json!("forged")),
+        ("google_ref", json!("another-event")),
+        ("send_updates", json!("all")),
+    ] {
+        let mut changed = body.clone();
+        changed["fields"][field] = value;
+        let result = w.update(
+            &made.id,
+            &writer::Input::Json(changed),
+            Some(&made.version),
+            &agent,
+        );
+        assert!(
+            matches!(result, Err(writer::Error::Rejected(_))),
+            "{field}: {result:?}"
+        );
+        assert_eq!(w.read(&made.id).unwrap().version, made.version);
+    }
+    assert!(matches!(
+        w.delete(&made.id, Some(&made.version), &agent),
+        Err(writer::Error::Rejected(_))
+    ));
+    let mut forged_snapshot = body.clone();
+    forged_snapshot["blocks"] = json!([{ "kind": "dict", "labels": ["snapshot"], "fields": { "my_response": "declined" } }]);
+    assert!(matches!(
+        w.update(
+            &made.id,
+            &writer::Input::Json(forged_snapshot),
+            Some(&made.version),
+            &agent
+        ),
+        Err(writer::Error::Rejected(_))
+    ));
+    for author in [
+        user.clone(),
+        state::Author::Token("api".into()),
+        state::Author::Task("outbox_send".into()),
+        state::Author::Handler("other".into()),
+    ] {
+        let mut changed = body.clone();
+        changed["fields"]["send_updates"] = json!("all");
+        assert!(
+            matches!(
+                w.update(
+                    &made.id,
+                    &writer::Input::Json(changed),
+                    Some(&made.version),
+                    &author
+                ),
+                Err(writer::Error::Rejected(_))
+            ),
+            "{author:?}"
+        );
+    }
+    let mut harmless = body.clone();
+    harmless["fields"]["location"] = json!("Room 2");
+    let edited = w
+        .update(
+            &made.id,
+            &writer::Input::Json(harmless),
+            Some(&made.version),
+            &agent,
+        )
+        .unwrap();
+    let mut approved = body;
+    approved["fields"]["send_updates"] = json!("all");
+    let approved = w
+        .update(
+            &made.id,
+            &writer::Input::Json(approved),
+            Some(&edited.version),
+            &sender,
+        )
+        .unwrap();
+    let mut agent_clear = writer::doc_to_json(&w.read(&made.id).unwrap().doc);
+    agent_clear["fields"]
+        .as_object_mut()
+        .unwrap()
+        .remove("send_updates");
+    assert!(matches!(
+        w.update(
+            &made.id,
+            &writer::Input::Json(agent_clear),
+            Some(&approved.version),
+            &agent
+        ),
+        Err(writer::Error::Rejected(_))
+    ));
+    // A pending approved send must not be reused by an agent's otherwise harmless edit.
+    let note = w.read(&made.id).unwrap();
+    let mut retry = writer::doc_to_json(&note.doc);
+    retry["fields"]["location"] = json!("Room 3");
+    assert!(matches!(
+        w.update(
+            &made.id,
+            &writer::Input::Json(retry),
+            Some(&approved.version),
+            &agent
+        ),
+        Err(writer::Error::Rejected(_))
+    ));
+    let mut cleared = writer::doc_to_json(&w.read(&made.id).unwrap().doc);
+    cleared["fields"]
+        .as_object_mut()
+        .unwrap()
+        .remove("send_updates");
+    w.update(
+        &made.id,
+        &writer::Input::Json(cleared),
+        Some(&approved.version),
+        &state::Author::Handler("google_event".into()),
+    )
+    .unwrap();
+    w.put_agent(
+        "careless",
+        "label = \"Careless\"\npermissions {\n confirm {\n notes = false\n }\n}\n",
+        |_| Vec::new(),
+    )
+    .unwrap();
+    for action in [
+        json!({ "my_response": "accepted" }),
+        json!({ "event_action": "delete" }),
+    ] {
+        let mut fields =
+            json!({ "title": "Review calendar action", "kind": "event", "event": made.id });
+        for (key, value) in action.as_object().unwrap() {
+            fields[key] = value.clone();
+        }
+        let draft = w
+            .create(
+                "outbox",
+                &writer::Input::Json(json!({ "fields": fields })),
+                &agent,
+            )
+            .unwrap();
+        let mut body = writer::doc_to_json(&w.read(&draft.id).unwrap().doc);
+        assert_eq!(body["fields"]["status"], "draft");
+        body["fields"]["status"] = json!("ready");
+        assert!(
+            w.update(
+                &draft.id,
+                &writer::Input::Json(body),
+                Some(&draft.version),
+                &agent
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn reviewed_event_rsvp_and_delete_reach_google_through_outbox() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    let mut event = standup();
+    event["attendees"] =
+        json!([{ "email": "me@example.com", "self": true, "responseStatus": "needsAction" }]);
+    event["organizer"] = json!({ "email": "ann@example.com" });
+    api.google.put_event("primary", event);
+    api.sync();
+    let events = api.events();
+    let id = events.keys().next().unwrap();
+    let rsvp = api.draft_event(&fake, id, json!({ "my_response": "accepted" }));
+    api.settle();
+    assert!(api.google.calendar_writes().is_empty());
+    api.edit(&rsvp, json!({ "status": "ready" }));
+    api.settle();
+    let sent = api.one_write_after(0);
+    assert_eq!(sent.method, "PATCH");
+    assert_eq!(sent.send_updates.as_deref(), Some("all"));
+    assert_eq!(sent.body["attendees"][0]["responseStatus"], "accepted");
+    assert!(api.gone(&rsvp));
+    let deletion = api.draft_event(&fake, id, json!({ "event_action": "delete" }));
+    api.settle();
+    assert!(api.google.requests().iter().all(|r| r.method != "DELETE"));
+    api.edit(&deletion, json!({ "status": "ready" }));
+    api.settle();
+    let deletes: Vec<_> = api
+        .google
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "DELETE")
+        .collect();
+    assert_eq!(deletes.len(), 1, "{deletes:?}");
+    assert_eq!(deletes[0].query("sendUpdates").as_deref(), Some("all"));
+    assert_eq!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
+    assert!(api.gone(&deletion));
+}
+
+#[test]
+fn local_delete_fails_pending_changes_but_finishes_delete_items() {
+    let api = Api::start();
+    let id = api.create("event", json!({ "fields": { "title": "Local idea" } }));
+    api.settle();
+    let pending = api.create("outbox", json!({ "fields": { "title": "Pending change", "kind": "event", "status": "sending", "event": id, "result": id } }));
+    api.settle();
+    let deletion = api.create(
+        "outbox",
+        invite(
+            json!({ "title": "Delete idea", "event": id, "event_action": "delete" }),
+            None,
+        ),
+    );
+    api.settle();
+    assert!(api.gone(&deletion));
+    let fields = api.fields(&pending);
+    assert_eq!(fields["status"], "failed", "{fields}");
+    assert!(fields["error"].as_str().unwrap().contains("deleted"));
+    assert!(fields.get("sent_at").is_none());
+    assert!(api.google.calendar_writes().is_empty());
+}
+
+#[test]
+fn agent_calendar_creates_local_deletes_and_series_expansion_are_checked() {
+    struct Clock;
+    impl state::Clock for Clock {
+        fn now_ms(&self) -> i64 {
+            1_772_409_600_000
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(root.path()).unwrap();
+    let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+    let w = writer::Writer::open(vault, state)
+        .unwrap()
+        .with_clock(std::sync::Arc::new(Clock));
+    w.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    let user = state::Author::Session("owner".into());
+    let agent = state::Author::Agent("careless".into());
+    let invitation =
+        json!({ "fields": { "title": "Unreviewed invite", "attendees_raw": ["ann@example.com"] } });
+    assert!(matches!(
+        w.create("event", &writer::Input::Json(invitation), &agent),
+        Err(writer::Error::Rejected(_))
+    ));
+    let local = w
+        .create(
+            "event",
+            &writer::Input::Json(json!({ "fields": { "title": "Local idea" } })),
+            &agent,
+        )
+        .unwrap();
+    w.delete(&local.id, Some(&local.version), &agent).unwrap();
+    let series_body = json!({ "fields": { "title": "Series", "rule": ["RRULE:FREQ=DAILY;COUNT=1"], "starts": { "start": "2026-03-02", "end": "2026-03-02" } } });
+    let mut google_series = series_body.clone();
+    google_series["fields"]["google_ref"] = json!("master");
+    google_series["fields"]["calendar"] = json!("primary");
+    let google = w
+        .create("event_series", &writer::Input::Json(google_series), &user)
+        .unwrap();
+    assert!(matches!(
+        w.delete(&google.id, Some(&google.version), &agent),
+        Err(writer::Error::Rejected(_))
+    ));
+
+    let series = w
+        .create("event_series", &writer::Input::Json(series_body), &user)
+        .unwrap();
+    let occurrence = w
+        .list(Some("event"))
+        .unwrap()
+        .into_iter()
+        .find(|s| {
+            writer::doc_to_json(&w.read(&s.id).unwrap().doc)["fields"]["series_ref"] == series.id
+        })
+        .expect("local series expanded");
+    let note = w.read(&occurrence.id).unwrap();
+    let mut body = writer::doc_to_json(&note.doc);
+    body["fields"]["google_ref"] = json!("linked-occurrence");
+    let linked = w
+        .update(
+            &occurrence.id,
+            &writer::Input::Json(body),
+            Some(&note.version),
+            &user,
+        )
+        .unwrap();
+    let note = w.read(&series.id).unwrap();
+    let mut body = writer::doc_to_json(&note.doc);
+    body["fields"]["rule"] = json!(["RDATE:20260303"]);
+    let result = w.update(
+        &series.id,
+        &writer::Input::Json(body),
+        Some(&note.version),
+        &agent,
+    );
+    assert!(
+        matches!(result, Err(writer::Error::Rejected(_))),
+        "{result:?}"
+    );
+    assert_eq!(w.read(&occurrence.id).unwrap().version, linked.version);
+    assert_eq!(w.read(&series.id).unwrap().version, note.version);
 }
 
 #[test]

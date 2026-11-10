@@ -1730,6 +1730,7 @@ impl Writer {
     /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
     /// and `updated` times and its archived state, and is put back in canonical order.
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+        self.check_calendar_write(change, author)?;
         let archived = change.doc.as_ref().is_some_and(note::is_archived);
         let stamps = change.doc.as_ref().map(|d| {
             (
@@ -1741,6 +1742,7 @@ impl Writer {
         });
         let original = change.doc.clone();
         self.hooks.before(change, author).map_err(Error::Rejected)?;
+        self.check_calendar_write(change, author)?;
         if change.doc == original {
             return Ok(());
         }
@@ -1757,6 +1759,69 @@ impl Writer {
             .type_def(&change.type_name)
             .ok_or_else(|| Error::UnknownType(change.type_name.clone()))?;
         change.doc = Some(note::arrange(ty, doc, &created, &updated));
+        Ok(())
+    }
+
+    /// Calendar notifications are an Outbox capability, not a hidden-field convention.
+    fn check_calendar_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
+        if change.type_name != "event" && change.type_name != "event_series" {
+            return Ok(());
+        }
+        let old = if change.event == Event::Create {
+            None
+        } else {
+            let (_, text) = self.existing(&change.id)?;
+            Some(Input::Wcl(text).parse(&note_path(&change.type_name, &change.id))?)
+        };
+        let next = change.doc.as_ref();
+        let field =
+            |doc: Option<&schema::Doc>, name: &str| doc.and_then(|d| d.field(name)).cloned();
+        let sender = matches!(author, Author::Handler(name) if name == "outbox_send");
+        if matches!(author, Author::Agent(_))
+            && field(next, "send_updates") != field(old.as_ref(), "send_updates")
+        {
+            return Err(Error::Rejected("agents may not change send_updates".into()));
+        }
+        if !sender
+            && field(next, "send_updates").is_some()
+            && (field(next, "send_updates") != field(old.as_ref(), "send_updates")
+                || matches!(author, Author::Agent(_)))
+        {
+            return Err(Error::Rejected(
+                "only handler outbox_send may set send_updates".into(),
+            ));
+        }
+        if matches!(author, Author::Agent(_)) {
+            let google = [old.as_ref(), next].into_iter().flatten().any(|doc| {
+                doc.field("google_ref")
+                    .and_then(schema::Value::as_str)
+                    .is_some_and(|v| !v.is_empty())
+            });
+            let sensitive = next.is_some()
+                && [
+                    "attendees",
+                    "attendees_raw",
+                    "my_response",
+                    "status",
+                    "etag",
+                    "google_ref",
+                ]
+                .into_iter()
+                .any(|name| field(next, name) != field(old.as_ref(), name));
+            let snapshots = |doc: Option<&schema::Doc>| {
+                doc.into_iter()
+                    .flat_map(|d| d.blocks.iter())
+                    .filter(|b| b.kind == "dict" && b.label() == Some("snapshot"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            let forged_snapshot = next.is_some() && snapshots(next) != snapshots(old.as_ref());
+            if sensitive || forged_snapshot || (google && change.event == Event::Delete) {
+                return Err(Error::Rejected(
+                    "agent calendar attendees, RSVP, cancellation and Google deletes require an Outbox item of kind event".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
