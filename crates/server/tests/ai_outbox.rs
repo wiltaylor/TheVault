@@ -502,8 +502,13 @@ fn the_draft_tools_need_write_and_follow_the_tools_list() {
     api.agent("reader", READER);
 
     let read = api.token_of("viewer", "read");
-    let response = api.client.post(api.server.url("/api/ai/chat"))
-        .bearer_auth(&read).json(&json!({})).send().unwrap();
+    let response = api
+        .client
+        .post(api.server.url("/api/ai/chat"))
+        .bearer_auth(&read)
+        .json(&json!({}))
+        .send()
+        .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let outbox = api.send("POST", "/api/query", json!({ "query": "from outbox" }));

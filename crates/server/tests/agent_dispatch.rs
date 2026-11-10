@@ -67,6 +67,41 @@ permissions {
 
 const CALL: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 
+#[test]
+fn a_write_dispatch_cannot_make_admin_changes_even_with_confirmation_off() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "keeper",
+        "label = \"Keeper\"\npermissions {\n  confirm {\n    types = false\n  }\n}\n",
+    );
+    let note = api.note("memo", "Roof", &["Gutters."]);
+    let writer = api.token_of("dispatcher", "write");
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_type",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
+    ));
+    fake.push(AnthropicMessage::text("Proposed."));
+    let (status, body) = api.dispatch_as(
+        &writer,
+        "keeper",
+        json!({ "notes": [note], "request": "Change the tab." }),
+    );
+    assert_eq!(status, 202, "{body}");
+    let thread = body["thread"]["id"].as_str().unwrap();
+    let run = api.wait_run(thread);
+    assert_eq!(run["detail"]["outcome"], "succeeded", "{run}");
+    let stored = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert!(stored["proposals"].as_array().unwrap().iter().any(|p| {
+        p["event"] == "type_proposal" && p["status"] == "pending"
+    }));
+    assert!(api.get("/api/types/memo")["wcl"]
+        .as_str()
+        .unwrap()
+        .contains("tab \"Main\""));
+}
+
 struct Api {
     server: TestServer,
     client: Client,

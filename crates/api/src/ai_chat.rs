@@ -269,7 +269,10 @@ pub(crate) async fn run_unattended(
     let started = start_with(
         w,
         author,
-        change_scope(caller_scope.unwrap_or_else(|| unattended_scope(agent)), agent),
+        change_scope(
+            caller_scope.unwrap_or_else(|| unattended_scope(agent)),
+            agent,
+        ),
         body,
         never,
         Some((report.clone(), retry)),

@@ -101,7 +101,13 @@ pub trait AgentRunner: Send + Sync {
     ) -> Result<String, String>;
 
     /// Run one turn of `agent` on thread `thread` whose user message is `prompt`.
-    fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str, scope: Option<state::Scope>) -> TurnReport;
+    fn run_turn(
+        &self,
+        agent: &Agent,
+        thread: &str,
+        prompt: &str,
+        scope: Option<state::Scope>,
+    ) -> TurnReport;
 }
 
 /// One run to start: an agent's trigger, the first message and the thread's title.

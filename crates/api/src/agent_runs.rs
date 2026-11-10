@@ -92,7 +92,13 @@ impl scheduler::AgentRunner for TriggerRunner {
             })
     }
 
-    fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str, scope: Option<state::Scope>) -> scheduler::TurnReport {
+    fn run_turn(
+        &self,
+        agent: &Agent,
+        thread: &str,
+        prompt: &str,
+        scope: Option<state::Scope>,
+    ) -> scheduler::TurnReport {
         let w = self.writer.clone();
         // Open clients show the thread running while the run goes (agents G17).
         crate::ai_turns::publish(&w, &agent.name, thread, None, true);

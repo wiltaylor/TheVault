@@ -519,10 +519,13 @@ fn an_agent_applies_its_own_confirm_switches_within_the_callers_scope() {
 
     // Read credentials cannot start a turn, even when the agent permits edits.
     let reader = api.token_of("reader", "read");
-    let response = api.request_as(&reader, "POST", "/api/ai/chat",
-        Some(json!({ "agent": "scribe", "messages": [] })));
+    let response = api.request_as(
+        &reader,
+        "POST",
+        "/api/ai/chat",
+        Some(json!({ "agent": "scribe", "messages": [] })),
+    );
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
 }
 
 #[test]

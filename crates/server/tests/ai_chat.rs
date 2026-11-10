@@ -1905,8 +1905,12 @@ fn a_write_callers_direct_changes_cannot_exceed_write_scope() {
     api.anthropic(&fake);
     api.confirm(serde_json::from_str(ALL_OFF).unwrap());
     let writer = api.token_of("writer", "write");
-    let events = api.propose_as(&writer, &fake, "propose_type_change",
-        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }));
+    let events = api.propose_as(
+        &writer,
+        &fake,
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
+    );
     assert!(shape(&events).contains(&"type_proposal"), "{events:?}");
     assert!(!shape(&events).contains(&"applied"), "{events:?}");
     assert!(api.type_wcl("memo").unwrap().contains("tab \"Main\""));

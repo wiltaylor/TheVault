@@ -355,8 +355,13 @@ fn notify_user_refuses_bad_calls_and_sends_nothing() {
 
     // A caller that may only read cannot notify.
     let viewer = api.token_of("viewer", "read");
-    let response = api.client.post(api.server.url("/api/ai/chat"))
-        .bearer_auth(&viewer).json(&json!({})).send().unwrap();
+    let response = api
+        .client
+        .post(api.server.url("/api/ai/chat"))
+        .bearer_auth(&viewer)
+        .json(&json!({}))
+        .send()
+        .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     // An agent whose tools list leaves it out is not offered it, and a call is not run.

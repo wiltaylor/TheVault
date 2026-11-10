@@ -568,6 +568,4 @@ fn with_taxonomy_confirmation_off_an_admin_change_applies_at_once_and_a_writer_s
         "{events:?}"
     );
     assert_eq!(api.taxonomy_wcl("size"), None);
-
-
 }
