@@ -40,6 +40,13 @@ fn body(res: Response) -> (u16, Value) {
 }
 
 fn install(server: &TestServer, admin: &Client, name: &str, scope: &str) -> Client {
+    if scope == "admin" {
+        // Legacy codes could grant admin. The new API refuses them.
+        let state = state::State::open(&server.vault_path().join(".vault/state.db"), None).unwrap();
+        let code = state.create_agent_code(name, state::Scope::Admin, 60_000).unwrap();
+        let (_, secret) = state.redeem_agent_code(&code.code).unwrap().unwrap();
+        return client(&secret);
+    }
     let (s, issued) = body(
         admin
             .post(server.url("/api/agent-codes"))
@@ -238,7 +245,7 @@ fn p5_agent_named_user_cannot_edit_users_draft() {
 
 /// P6: an ordinary token the user names `agent-ops` keeps the user's rights.
 #[test]
-fn p6_user_token_named_agent_prefix_is_unchanged() {
+fn p6_user_token_reserved_prefix_is_refused() {
     let server = TestServer::start();
     let admin = client(server.admin_token());
     let (s, made) = body(
@@ -248,6 +255,9 @@ fn p6_user_token_named_agent_prefix_is_unchanged() {
             .send()
             .unwrap(),
     );
+    assert_eq!(s, 400);
+    let _ = made;
+    let (s, made) = body(admin.post(server.url("/api/tokens")).json(&json!({ "name": "ordinary", "scope": "write" })).send().unwrap());
     assert_eq!(s, 201);
     let ops = client(made["secret"].as_str().unwrap());
     let (s, item) = create_ready(&server, &ops);

@@ -626,6 +626,11 @@ pub async fn apply(
     } else {
         "proposal"
     };
+    if crate::auth::is_agent_token(&author)
+            && ["agent", "proposer"].iter().any(|key| change[*key].as_str().is_some_and(|s| !s.is_empty()))
+        {
+            change = waiting_in_thread(&a.writer, event, &change).ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, "forbidden", "agent tokens may not impersonate proposing agents"))?;
+        }
     if !scope.allows(Scope::Admin) {
         let message = match event {
             "type_proposal" => Some(NEEDS_ADMIN_MESSAGE),

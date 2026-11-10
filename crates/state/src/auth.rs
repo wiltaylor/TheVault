@@ -69,6 +69,7 @@ impl FromStr for Scope {
 /// A token as stored, without its secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenInfo {
+    pub kind: String,
     pub name: String,
     pub scope: Scope,
     pub created_ms: i64,
@@ -87,6 +88,7 @@ fn token_hash(secret: &str) -> Vec<u8> {
 fn token_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(TokenInfo, String)> {
     Ok((
         TokenInfo {
+            kind: row.get(4)?,
             name: row.get(0)?,
             scope: Scope::Read,
             created_ms: row.get(2)?,
@@ -113,17 +115,22 @@ impl State {
     /// Creates a token and returns it with its secret. The secret is shown once; only its
     /// hash is stored.
     pub fn create_token(&self, name: &str, scope: Scope) -> Result<(TokenInfo, String)> {
+        self.create_token_kind(name, scope, "user")
+    }
+
+    pub(crate) fn create_token_kind(&self, name: &str, scope: Scope, kind: &str) -> Result<(TokenInfo, String)> {
         let secret = new_secret();
         let created_ms = self.now();
         let inserted = self.conn().execute(
-            "INSERT INTO tokens (name, scope, secret_hash, created_ms) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO tokens (name, scope, secret_hash, created_ms, kind) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (name) DO NOTHING",
-            params![name, scope.as_str(), token_hash(&secret), created_ms],
+            params![name, scope.as_str(), token_hash(&secret), created_ms, kind],
         )?;
         if inserted == 0 {
             return Err(Error::TokenExists(name.to_owned()));
         }
         let info = TokenInfo {
+            kind: kind.to_owned(),
             name: name.to_owned(),
             scope,
             created_ms,
@@ -139,7 +146,7 @@ impl State {
         let row = conn
             .query_row(
                 "UPDATE tokens SET last_used_ms = ?1 WHERE secret_hash = ?2
-                 RETURNING name, scope, created_ms, last_used_ms",
+                 RETURNING name, scope, created_ms, last_used_ms, kind",
                 params![now, token_hash(secret)],
                 token_row,
             )
@@ -157,7 +164,7 @@ impl State {
     pub fn list_tokens(&self) -> Result<Vec<TokenInfo>> {
         let conn = self.conn();
         let mut stmt =
-            conn.prepare("SELECT name, scope, created_ms, last_used_ms FROM tokens ORDER BY name")?;
+            conn.prepare("SELECT name, scope, created_ms, last_used_ms, kind FROM tokens ORDER BY name")?;
         let rows = stmt.query_map([], token_row)?;
         rows.map(|r| finish_token(r?)).collect()
     }
@@ -222,11 +229,12 @@ impl State {
         let secret = new_secret();
         tx.execute("DELETE FROM tokens WHERE name = ?1", [&name])?;
         tx.execute(
-            "INSERT INTO tokens (name, scope, secret_hash, created_ms) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO tokens (name, scope, secret_hash, created_ms, kind) VALUES (?1, ?2, ?3, ?4, 'agent')",
             params![name, scope.as_str(), token_hash(&secret), now],
         )?;
         tx.commit()?;
         let info = TokenInfo {
+            kind: "agent".to_owned(),
             name,
             scope,
             created_ms: now,

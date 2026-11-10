@@ -27,6 +27,8 @@ fn token_json(t: &TokenInfo) -> Value {
 /// Token names appear in history as authors, so keep them short and plain.
 fn check_name(name: &str) -> Result<(), ApiError> {
     let ok = !name.is_empty()
+        && !name.starts_with("agent-")
+        && !name.starts_with("device-")
         && name.len() <= 64
         && name
             .chars()

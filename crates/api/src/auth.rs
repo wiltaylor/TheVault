@@ -113,6 +113,11 @@ const ADMIN_PATHS: [&str; 4] = [
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller(pub Author);
 
+/// Agent-kind credentials become Agent authors at authentication, never by token name.
+pub fn is_agent_token(author: &Author) -> bool {
+    matches!(author, Author::Agent(_))
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
     type Rejection = ApiError;
 
@@ -400,7 +405,7 @@ async fn identify(sessions: &Arc<Sessions>, headers: &HeaderMap) -> Result<Grant
         .await?
         .ok_or_else(unauthorized)?;
         return Ok(Granted {
-            author: Author::Token(token.name),
+            author: if token.kind == "agent" { Author::Agent(token.name) } else { Author::Token(token.name) },
             scope: token.scope,
             renewed: None,
         });
@@ -439,6 +444,12 @@ pub async fn authenticate(
         Ok(g) => g,
         Err(e) => return e.into_response(),
     };
+    if is_agent_token(&granted.author)
+        && ((req.method() == Method::POST && matches!(req.uri().path(), "/api/tokens" | "/api/devices/pair-codes" | "/api/agent-codes"))
+            || is_agent_file_write(req.method(), req.uri().path()))
+    {
+        return ApiError::new(StatusCode::FORBIDDEN, "forbidden", "agent tokens may not grant credentials or change agent definitions").into_response();
+    }
     if is_human_only(req.method(), req.uri().path())
         && !matches!(granted.author, Author::Session(_))
     {

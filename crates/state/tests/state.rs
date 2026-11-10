@@ -12,6 +12,31 @@ const NOTE_A: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
 const NOTE_B: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
+#[test]
+fn token_kinds_migrate_from_19_and_20_without_losing_credentials() {
+    for version in [19, 20] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state.db");
+        let state = State::open(&path, None).unwrap();
+        let credentials: Vec<_> = ["agent-old", "device-old", "plain"].into_iter()
+            .map(|name| state.create_token(name, Scope::Admin).unwrap().1).collect();
+        drop(state);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("ALTER TABLE tokens DROP COLUMN kind;").unwrap();
+        conn.pragma_update(None, "user_version", version).unwrap();
+        drop(conn);
+        let state = State::open(&path, None).unwrap();
+        for (secret, kind) in credentials.iter().zip(["agent", "device", "user"]) {
+            let token = state.authenticate_token(secret).unwrap().unwrap();
+            assert_eq!(token.kind, kind);
+            assert_eq!(token.scope, Scope::Admin);
+        }
+        drop(state);
+        let state = State::open(&path, None).unwrap();
+        assert_eq!(state.list_tokens().unwrap().len(), 3);
+    }
+}
+
 struct TestClock(AtomicI64);
 
 impl TestClock {
@@ -1168,7 +1193,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 20);
+    assert_eq!(version, 21);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.

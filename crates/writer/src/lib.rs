@@ -946,6 +946,9 @@ impl Writer {
             .find(|t| t.note_id == id)
             .ok_or_else(|| Error::NotInTrash(id.to_owned()))?;
         let doc = Input::Wcl(entry.content.clone()).parse(&note_path(&entry.note_type, id))?;
+        if entry.note_type == "outbox" {
+            self.check_outbox_owner(&doc, author)?;
+        }
         let created = created_of(&doc);
         // A note archived when it was deleted comes back archived.
         let archived = note::is_archived(&doc);
@@ -1801,6 +1804,11 @@ impl Writer {
     /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
     /// and `updated` times and its archived state, and is put back in canonical order.
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+        if change.type_name == "outbox" && change.event == Event::Delete {
+            let (_, old) = self.existing(&change.id)?;
+            let doc = Input::Wcl(old).parse(&note_path("outbox", &change.id))?;
+            self.check_outbox_owner(&doc, author)?;
+        }
         self.check_calendar_write(change, author)?;
         let archived = change.doc.as_ref().is_some_and(note::is_archived);
         let stamps = change.doc.as_ref().map(|d| {
@@ -1833,13 +1841,18 @@ impl Writer {
         Ok(())
     }
 
+    fn check_outbox_owner(&self, doc: &schema::Doc, author: &Author) -> Result<()> {
+        if let Author::Agent(name) | Author::AgentMail(name) = author {
+            let text = |field| doc.field(field).and_then(schema::Value::as_str);
+            if text("status") != Some("draft") || text("drafted_by") != Some(name.as_str()) {
+                return Err(Error::BadRequest("agents may delete or restore only their own Outbox drafts".into()));
+            }
+        }
+        Ok(())
+    }
+
     /// Calendar notifications are an Outbox capability, not a hidden-field convention.
     fn check_calendar_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
-        if let Author::Token(name) = author
-            && let Some(name) = name.strip_prefix("agent-")
-        {
-            return self.check_calendar_write(change, &Author::Agent(name.to_owned()));
-        }
         if change.type_name != "event" && change.type_name != "event_series" {
             return Ok(());
         }

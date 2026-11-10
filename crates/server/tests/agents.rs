@@ -96,7 +96,7 @@ fn agent_code_token_drafts_but_cannot_approve_or_forge_results() {
         "note": { "fields": { "title": "Draft", "kind": "email", "to": ["ann@example.com"], "subject": "Review" }}
     })), 201);
     assert_eq!(made["note"]["fields"]["status"], "draft");
-    assert_eq!(made["note"]["fields"]["drafted_by"], "cli");
+    assert_eq!(made["note"]["fields"]["drafted_by"], "agent-cli");
     for (field, value) in [
         ("status", json!("ready")),
         ("drafted_by", json!("user")),
@@ -304,7 +304,7 @@ fn a_code_redeems_once_for_a_token_of_its_scope_and_reuse_is_gone() {
     let full = expect(
         redeem(
             &server,
-            issue(&server, &admin, "boss", "admin")["code"]
+            issue(&server, &admin, "boss", "write")["code"]
                 .as_str()
                 .unwrap(),
         ),
@@ -312,7 +312,7 @@ fn a_code_redeems_once_for_a_token_of_its_scope_and_reuse_is_gone() {
     );
     send(
         client(full["token"].as_str().unwrap()).get(server.url("/api/tokens")),
-        200,
+        403,
     );
 
     // The tokens are listed with the others and revoke like them.

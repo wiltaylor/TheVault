@@ -79,6 +79,9 @@ fn is_template(item: &Item, name: &str) -> bool {
 }
 
 fn check_name(what: &str, name: &str) -> Result<()> {
+    if what == "agent" && (name == "user" || name.starts_with("agent-") || name.starts_with("device-")) {
+        return Err(Error::BadRequest("reserved agent name".into()));
+    }
     if schema::is_name(name) {
         Ok(())
     } else {
