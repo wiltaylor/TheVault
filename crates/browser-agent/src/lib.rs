@@ -380,6 +380,7 @@ async fn delete_profile(
             ));
         }
     }
+    kill_profile_processes(&path)?;
     let _guard = state.profiles.lock().unwrap_or_else(|e| e.into_inner());
     if root.exists() {
         safe_dir(&root)?;
@@ -402,6 +403,45 @@ async fn delete_profile(
         .unwrap_or_else(|e| e.into_inner())
         .remove(id);
     Ok(Json(json!({"ok": true})))
+}
+
+/// A successful shell can leave detached children behind. Close those too before
+/// acknowledging deletion, otherwise they can recreate the retired directory.
+fn kill_profile_processes(path: &Path) -> ApiResult<()> {
+    let home = path.join("home");
+    let expected = format!("HOME={}", home.display());
+    for _ in 0..100 {
+        let mut found = false;
+        for entry in std::fs::read_dir("/proc")
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .flatten()
+        {
+            let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else {
+                continue;
+            };
+            if pid <= 1 || pid as u32 == std::process::id() {
+                continue;
+            }
+            let owns_home = std::fs::read(entry.path().join("environ"))
+                .is_ok_and(|env| env.split(|b| *b == 0).any(|v| v == expected.as_bytes()));
+            let owns_cwd = std::fs::read_link(entry.path().join("cwd"))
+                .is_ok_and(|cwd| cwd.starts_with(path));
+            if owns_home || owns_cwd {
+                found = true;
+                // Numeric pid only. Permission errors leave deletion pending.
+                if unsafe { libc::kill(pid, libc::SIGKILL) } != 0
+                    && io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+                {
+                    return Err(ApiError::new(StatusCode::CONFLICT, "could not stop this profile's processes"));
+                }
+            }
+        }
+        if !found {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Err(ApiError::new(StatusCode::CONFLICT, "profile processes have not stopped; cleanup will retry"))
 }
 
 fn authorize(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {

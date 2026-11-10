@@ -649,7 +649,7 @@ pub async fn apply(
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
     .map(Json);
     if event == "agent_proposal" {
-        crate::ai_browser::cleanup_retired(&a.writer).await;
+        crate::ai_browser::cleanup_retired(a.writer.clone());
     }
     result
 }

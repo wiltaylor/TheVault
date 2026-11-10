@@ -10,6 +10,21 @@ use tempfile::TempDir;
 
 const TOKEN: &str = "test-token-0123456789abcdef";
 
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_profile_stops_detached_children_and_prevents_regrowth() {
+    let b = Agent::start().await;
+    let result = b.run("setsid sh -c 'while :; do mkdir -p \"$HOME/regrow\"; sleep 0.05; done' </dev/null >/dev/null 2>&1 & printf '%s' $!").await;
+    let pid: i32 = result["stdout"].as_str().unwrap().trim().parse().unwrap();
+    let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+    // Always stop our test child even if the assertion fails on an old service.
+    let alive = std::fs::read_link(format!("/proc/{pid}/cwd")).is_ok();
+    unsafe { libc::kill(pid, libc::SIGKILL); }
+    assert_eq!(response.status(), 200);
+    assert!(!alive, "detached child survived DELETE");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!b.home.path().join("profiles/test").exists());
+}
+
 fn identity(r: reqwest::RequestBuilder, id: &str) -> reqwest::RequestBuilder {
     r.bearer_auth(TOKEN).header("x-vault-agent", id).header(
         "x-vault-agent-signature",

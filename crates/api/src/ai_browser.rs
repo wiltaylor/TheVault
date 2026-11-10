@@ -132,19 +132,18 @@ impl BrowserBox {
         self
     }
 
-    pub async fn remove_profile(&self) -> Result<(), String> {
-        self.check_protocol().await?;
-        let url = self.url("/profile", &[])?;
+    async fn remove_profile(&self) -> Result<(), (bool, String)> {
+        let url = self.url("/profile", &[]).map_err(|e| (false, e))?;
         let response = self
             .auth(http().delete(url))
             .timeout(Duration::from_secs(40))
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| (true, e.to_string()))?;
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(box_error(response).await)
+            Err((false, box_error(response).await))
         }
     }
 
@@ -185,30 +184,49 @@ impl Drop for TemporaryProfile {
         if let Err(e) = w.retire_browser_profile(&id) {
             eprintln!("temporary browser profile retirement failed: {e}");
         }
-        tokio::spawn(async move {
-            match b.remove_profile().await {
-                Ok(()) => {
-                    let _ = w.browser_profile_removed(&id);
-                }
-                Err(e) => eprintln!("temporary browser profile cleanup failed: {e}"),
-            }
-        });
+        cleanup_retired(w);
     }
 }
 
-pub async fn cleanup_retired(w: &Writer) {
+pub fn cleanup_retired(w: Arc<Writer>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
     let Some(b) = BrowserBox::from_env() else {
         return;
     };
-    let ids = w.retired_browser_profiles().unwrap_or_default();
-    for id in ids {
-        match b.clone().with_profile(id.clone()).remove_profile().await {
-            Ok(()) => {
-                let _ = w.browser_profile_removed(&id);
-            }
-            Err(e) => eprintln!("retired browser profile cleanup failed: {e}"),
+    if RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return;
+    }
+    struct Flight;
+    impl Drop for Flight {
+        fn drop(&mut self) {
+            RUNNING.store(false, Ordering::Release);
         }
     }
+    tokio::spawn(async move {
+        let _flight = Flight;
+        let mut delay = Duration::from_secs(30);
+        loop {
+            let ids = w.retired_browser_profiles().unwrap_or_default();
+            let Some(first) = ids.first() else { break };
+            // One protocol check per sweep, not per identity. An offline box
+            // must never delay a turn or startup, or create concurrent retries.
+            if b.clone().with_profile(first.clone()).check_protocol().await.is_ok() {
+                for id in ids {
+                    match b.clone().with_profile(id.clone()).remove_profile().await {
+                        Ok(()) => { let _ = w.browser_profile_removed(&id); }
+                        Err((unreachable, e)) => {
+                            eprintln!("retired browser profile cleanup failed: {e}");
+                            if unreachable { break; }
+                        }
+                    }
+                }
+            }
+            if w.retired_browser_profiles().unwrap_or_default().is_empty() { break; }
+            tokio::time::sleep(delay).await;
+            delay = (delay * 2).min(Duration::from_secs(900));
+        }
+    });
 }
 
 /// The client the tools share: no overall timeout, each request sets its own.

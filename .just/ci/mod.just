@@ -83,6 +83,9 @@ emulator-harness-test: emulator-harness-deps (require-tool "node")
 # Test the release train's scripts: the version calculation, the Android versionCode, how dpkg, rpm and pacman sort the package versions, the image tags and stamping (docs/releasing.md)
 [group('ci')]
 release-test: (require-tool "git") (require-tool "jq") (require-tool "dpkg") (require-tool "rpm") (require-tool "vercmp")
+	cargo build -p browser-agent
+	mkdir -p .evidence/tmp
+	TMPDIR="{{justfile_directory()}}/.evidence/tmp" node --test docker/test-browser-protocol.test.mjs
 	scripts/release/test.sh
 	node --test scripts/release/gradle-wrapper.test.mjs
 	node --test scripts/release/cache.test.mjs

@@ -536,9 +536,9 @@ pub fn routes() -> Vec<(Method, &'static str)> {
 }
 
 /// Home-server startup: recover identities left pending by a crash, then retry box cleanup.
-pub async fn recover_browser_profiles(writer: &Writer) -> Result<(), writer::Error> {
+pub fn recover_browser_profiles(writer: Arc<Writer>) -> Result<(), writer::Error> {
     writer.recover_temporary_browser_profiles()?;
-    ai_browser::cleanup_retired(writer).await;
+    ai_browser::cleanup_retired(writer);
     Ok(())
 }
 
