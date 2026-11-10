@@ -149,7 +149,8 @@ fn main() -> anyhow::Result<()> {
         },
     ));
     let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
-    runtime.block_on(api::recover_browser_profiles(&writer))
+    runtime
+        .block_on(api::recover_browser_profiles(&writer))
         .context("recovering temporary browser profiles")?;
     // In the runtime, so agent trigger runs use it (agents G12).
     let app = {

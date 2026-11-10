@@ -10,7 +10,7 @@ import { createServer } from "node:net";
 import { once } from "node:events";
 import { randomBytes } from "node:crypto";
 
-test("image gate HTTP checks use signed, separate and resettable profiles", { timeout: 30000 }, async () => {
+test("image gate HTTP checks use signed, separate and resettable profiles", { timeout: 30000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "vault-browser-protocol-"));
   const home = join(root, "home");
   const work = join(root, "work");
@@ -45,6 +45,7 @@ test("image gate HTTP checks use signed, separate and resettable profiles", { ti
     assert.match(stdout, /a second profile cannot read the screenshot/);
     assert.match(stdout, /a retired profile is refused/);
     assert.match(stdout, /container.*NOT run/);
+    t.diagnostic(stdout);
   } finally {
     child.kill("SIGTERM");
     await stopped;

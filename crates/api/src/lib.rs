@@ -535,15 +535,16 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         .collect()
 }
 
-/// Builds the router for every `/api` route. `test_clock` is the clock `scheduler` reads when the
-/// server runs with `--test-clock`; it adds `/api/test/clock`, which [`routes`] does not list (S7).
-/// `clients` is the folder of app builds `/api/clients` hands out, or `None` for none.
+/// Home-server startup: recover identities left pending by a crash, then retry box cleanup.
 pub async fn recover_browser_profiles(writer: &Writer) -> Result<(), writer::Error> {
     writer.recover_temporary_browser_profiles()?;
     ai_browser::cleanup_retired(writer).await;
     Ok(())
 }
 
+/// Builds the router for every `/api` route. `test_clock` is the clock `scheduler` reads when the
+/// server runs with `--test-clock`; it adds `/api/test/clock`, which [`routes`] does not list (S7).
+/// `clients` is the folder of app builds `/api/clients` hands out, or `None` for none.
 pub fn router(
     writer: Arc<Writer>,
     scheduler: Arc<Scheduler>,
