@@ -556,6 +556,7 @@ impl Writer {
         if !index.is_current(&vault)? {
             recover(&vault, &state)?;
             index.rebuild(&vault)?;
+            state.set_meta("agent_safety.index_ready", "0")?;
         }
         feed::reconcile(&vault, &state)?;
         let schema = Schema::load(&vault)?;

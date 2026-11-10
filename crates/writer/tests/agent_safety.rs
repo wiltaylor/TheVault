@@ -271,6 +271,9 @@ fn review_index_excludes_many_held_notes_without_reading_their_files() {
         .unwrap();
     }
     assert_eq!(w.state().held_agent_note_ids().unwrap().len(), 64);
+    // Startup and the user's inventory must also use the persisted safety index.
+    w.activate_agent_safety().unwrap();
+    assert_eq!(w.held_agent_notes(Some("email"), None, None, None).unwrap().len(), 64);
     let _acting = writer::acting_as(&Author::Agent("test".into()));
     let rows = w.query_page("from email select title", 100, None).unwrap();
     assert_eq!(rows["total"], 1);

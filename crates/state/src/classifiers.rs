@@ -100,6 +100,16 @@ impl State {
             .collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Cached content hashes, joined with server-owned decisions. No vault file reads.
+    pub fn indexed_agent_safety(&self) -> Result<Vec<(String, String, Option<String>)>> {
+        if self.meta("agent_safety.activation_ms")?.is_none() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT i.id,i.fingerprint,m.value FROM agent_safety_index i LEFT JOIN meta m ON m.key='agent_safety.note.' || i.id")?;
+        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub fn queue_classifications(&self, payloads: &[String]) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;

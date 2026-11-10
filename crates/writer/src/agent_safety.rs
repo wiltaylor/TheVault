@@ -164,10 +164,18 @@ impl Writer {
         };
         let since = since.map(parse).transpose()?;
         let until = until.map(parse).transpose()?;
+        let held = self.state().held_agent_note_ids()?;
+        let cached = self.state().indexed_agent_safety()?;
+        let notes = self.read_index(|index, _| {
+            let mut stmt = index.connection().prepare("SELECT id,type,created FROM notes WHERE (?1 IS NULL OR type=?1)")?;
+            stmt.query_map([kind], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))))?
+                .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()
+        }).map_err(index::Error::from)?;
         let mut out = Vec::new();
-        for note in self.list_with(kind, Archived::Include)? {
-            let date = note
-                .created
+        for (id, hash, stored) in cached {
+            if !held.contains(&id) { continue; }
+            let Some((type_name, created)) = notes.get(&id) else { continue; };
+            let date = created
                 .as_deref()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
             if since.is_some_and(|s| date.is_none_or(|d| d < s))
@@ -175,15 +183,32 @@ impl Writer {
             {
                 continue;
             }
-            let safety = self.agent_safety(&note.id)?;
+            let mut safety = stored.and_then(|v| serde_json::from_str::<Safety>(&v).ok()).unwrap_or(Safety {
+                status: "held".into(), reason: "unclassified".into(), fingerprint: hash.clone(),
+            });
+            if safety.fingerprint != hash {
+                safety = Safety { status: "held".into(), reason: "content_changed".into(), fingerprint: hash };
+            }
             if !safety.allowed() && reason.is_none_or(|r| r == safety.reason) {
-                out.push(serde_json::json!({"id":note.id,"type":note.type_name,"created":note.created,"agent_safety":safety}));
+                out.push(serde_json::json!({"id":id,"type":type_name,"created":created,"agent_safety":safety}));
             }
         }
         Ok(out)
     }
 
     pub fn activate_agent_safety(&self) -> Result<()> {
+        if self.state().meta("agent_safety.index_ready")?.as_deref() == Some("1") {
+            for (id, _, stored) in self.state().indexed_agent_safety()? {
+                if let Some(mut safety) = stored.and_then(|v| serde_json::from_str::<Safety>(&v).ok())
+                    && safety.status == "pending" && !self.state().classification_queued(&id)?
+                {
+                    safety.status = "held".into();
+                    safety.reason = "unclassified".into();
+                    self.state().set_agent_safety_result(&id, &serde_json::to_string(&safety).expect("safety"), false)?;
+                }
+            }
+            return Ok(());
+        }
         let existing = self
             .list_with(None, Archived::Include)?
             .into_iter()
@@ -229,6 +254,7 @@ impl Writer {
             }
             self.refresh_agent_safety_index(&id, &note.type_name, &note.doc)?;
         }
+        self.state().set_meta("agent_safety.index_ready", "1")?;
         Ok(())
     }
 
