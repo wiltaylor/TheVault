@@ -349,6 +349,9 @@ impl AgentPlan {
     /// (agents G16). A trigger with no `type` is not called from an `agent_thread` or
     /// `agent_memory` note.
     fn callees(&self, type_name: &str) -> Vec<(Agent, Trigger)> {
+        if schema::AGENT_CALL_EXCLUDED_TYPES.contains(&type_name) {
+            return Vec::new();
+        }
         self.agents
             .values()
             .filter_map(|a| {
@@ -559,7 +562,7 @@ impl Scheduler {
                 Event::Delete => "delete",
             };
             // A saved note is read for calls committed in it (agents G19).
-            if s.event != Event::Delete && matches!(author, Author::Session(_)) {
+            if s.event != Event::Delete {
                 plan.agents
                     .mentions
                     .insert(s.id.clone(), s.type_name.clone());
@@ -700,18 +703,11 @@ impl Scheduler {
         let Ok(note) = self.writer.read(id) else {
             return Vec::new();
         };
-        // Imported content remains untrusted even when saved through the editor.
-        if matches!(
-            note.type_name.as_str(),
-            "email" | "message" | "call" | "conversation" | "event" | "email_thread"
-        ) {
-            return Vec::new();
-        }
         // Recheck the last persisted writer, not just the queued notification.
         let Ok(Some(version)) = self.writer.state().version(id, &note.version) else {
             return Vec::new();
         };
-        if !matches!(version.author, Author::Session(_)) {
+        if matches!(version.author, Author::Agent(_)) {
             return Vec::new();
         }
         let found = mentions::calls(&note.doc);
@@ -746,6 +742,10 @@ impl Scheduler {
                     }
                 }
             };
+            if !state.consume_agent_call(&call.call, id, &call.agent).unwrap_or(false) {
+                record(None);
+                continue;
+            }
             let Some((agent, trigger)) = callees.iter().find(|(a, _)| a.name == call.agent) else {
                 eprintln!(
                     "call {} in note {id}: agent {:?} may not be called from a {} note, or is disabled or missing",

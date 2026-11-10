@@ -19,6 +19,23 @@ pub struct AgentCall {
 }
 
 impl State {
+    /// Issue a short-lived capability, independent of answered calls.
+    pub fn issue_agent_call(&self, call: &str, note: &str, agent: &str, principal: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO agent_call_ids (call,note,agent,principal,expires_ms) VALUES (?1,?2,?3,?4,?5)",
+            params![call, note, agent, principal, self.now() + 86_400_000],
+        )?;
+        Ok(())
+    }
+
+    /// Atomically consume an unused capability bound to this note and agent.
+    pub fn consume_agent_call(&self, call: &str, note: &str, agent: &str) -> Result<bool> {
+        Ok(self.conn().execute(
+            "UPDATE agent_call_ids SET used=1 WHERE call=?1 AND note=?2 AND agent=?3 AND used=0 AND expires_ms>?4",
+            params![call, note, agent, self.now()],
+        )? == 1)
+    }
+
     /// Records call `call` of `agent` from note `note`, answered by `thread`. Answers false, and
     /// changes nothing, when the call is recorded already.
     pub fn record_agent_call(
@@ -69,6 +86,18 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issued_calls_are_bound_and_single_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        s.issue_agent_call("CALL", "NOTE", "clerk", "session:owner").unwrap();
+        assert!(!s.consume_agent_call("CALL", "OTHER", "clerk").unwrap());
+        assert!(!s.consume_agent_call("CALL", "NOTE", "owl").unwrap());
+        assert!(s.consume_agent_call("CALL", "NOTE", "clerk").unwrap());
+        assert!(!s.consume_agent_call("CALL", "NOTE", "clerk").unwrap());
+        assert!(!s.consume_agent_call("FORGED", "NOTE", "clerk").unwrap());
+    }
 
     #[test]
     fn a_call_is_recorded_once() {

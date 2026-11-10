@@ -89,6 +89,7 @@ async function ask(call: string) {
     if (!(err instanceof ApiError && err.status === 404)) console.warn(`call ${call}:`, err);
     // Not seen yet: the note's save may still be on its way.
     if (Date.now() - e.since < CALL_POLL_FOR_MS) e.timer = setTimeout(() => void ask(call), CALL_POLL_MS);
+    else e.set({ state: "unanswered", thread: null, running: false });
   } finally {
     e.busy = false;
   }

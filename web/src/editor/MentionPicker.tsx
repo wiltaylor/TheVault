@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { agentCallHref, newUlid } from "../agentCalls";
+import { agentCallHref } from "../agentCalls";
+import { api } from "../api";
 import { AGENT_ICON, agentLabel, agents, callableAgents } from "../agents";
 import type { AgentSummary, Row, TypeDef } from "../api";
 import { TypeIcon } from "../components/Icon";
@@ -65,6 +66,7 @@ export function MentionPicker(props: SolidNodeViewProps) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let seq = 0;
   let done = false;
+  let issuing = false;
 
   onMount(() => queueMicrotask(() => input.focus()));
   onCleanup(() => clearTimeout(timer));
@@ -145,14 +147,25 @@ export function MentionPicker(props: SolidNodeViewProps) {
    * Remove the picker and put the caret where it stood, after what replaced it: a mention, a
    * placeholder link, or for an abandoned `@` picker the text typed.
    */
-  function finish(
+  async function finish(
     content?:
       | { note: { id: string; title: string } }
       | { placeholder: { type: string; title: string } }
       | { call: { agent: AgentSummary; request: string } }
       | { nothing: true },
   ) {
-    if (done) return;
+    if (done || issuing) return;
+    let callId: string | undefined;
+    if (content && "call" in content) {
+      if (!host) { setError("Save the note before calling an agent."); return; }
+      issuing = true;
+      try {
+        callId = (await api.issueAgentCall(host, content.call.agent.name)).call;
+      } catch {
+        setError("Calling an agent needs a connection to your server.");
+        return;
+      } finally { issuing = false; }
+    }
     done = true;
     const pos = props.getPos();
     const { editor } = props;
@@ -169,7 +182,7 @@ export function MentionPicker(props: SolidNodeViewProps) {
     } else if (content && "call" in content && editor.schema.marks.link) {
       // One link, the call, then a space outside it (agents G19).
       const { agent, request } = content.call;
-      const link = editor.schema.marks.link.create({ href: agentCallHref(agent.name, newUlid()) });
+      const link = editor.schema.marks.link.create({ href: agentCallHref(agent.name, callId!) });
       const lines = `@${agentLabel(agent)} ${request}`.split("\n");
       const nodes: PMNode[] = [];
       lines.forEach((line, i) => {

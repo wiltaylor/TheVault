@@ -1974,6 +1974,7 @@ export const api = {
    * call the server did not run, and whether the thread runs. 404 while the server has not seen it.
    */
   agentCall: (call: string) => request<AgentCallInfo>("GET", `/api/agents/calls/${enc(call)}`),
+  issueAgentCall: (note: string, agent: string) => request<{ call: string }>("POST", "/api/agents/calls", { note, agent }),
   /** The agent's threads, newest activity first (agents G7); archived ones only with `archived` (agents G15). */
   agentThreads: (name: string, archived = false) =>
     request<{ threads: AgentThreadSummary[] }>("GET", `/api/agents/${enc(name)}/threads${archived ? "?archived=true" : ""}`),

@@ -1306,3 +1306,8 @@ impl Reader<'_> {
         })
     }
 }
+/// Imported content can never commit an agent call, even after an editor save.
+pub const AGENT_CALL_EXCLUDED_TYPES: &[&str] = &[
+    "email", "message", "call", "conversation", "event", "email_thread",
+];
+

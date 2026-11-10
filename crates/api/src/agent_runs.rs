@@ -34,6 +34,46 @@ use writer::Writer;
 
 use crate::{ApiError, agent_threads, ai_chat, ai_retry, blocking};
 
+/// Reserve a call for an authenticated editor, including a paired app editor.
+pub async fn issue_call(
+    State(w): State<Arc<Writer>>,
+    crate::auth::Caller(author): crate::auth::Caller,
+    axum::Extension(crate::auth::GrantedScope(scope)): axum::Extension<crate::auth::GrantedScope>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    blocking(w, move |w| {
+        let permitted = match &author {
+            state::Author::Session(_) => true,
+            state::Author::Token(name) => scope == state::Scope::Write
+                && !name.starts_with("agent-")
+                && w.state().device_for_token(name)?.is_some(),
+            _ => false,
+        };
+        if !permitted {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden", "calls require an editor session or a paired device write token"));
+        }
+        let note = body["note"].as_str().unwrap_or("");
+        let agent = body["agent"].as_str().unwrap_or("");
+        if note.parse::<ulid::Ulid>().is_err() {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", "a note id is required"));
+        }
+        let agents = w.agents()?;
+        let valid = agents.iter().any(|(name, a)| name == agent && a.as_ref().is_ok_and(|a| {
+            a.enabled && w.read(note).map_or(true, |n| {
+                !schema::AGENT_CALL_EXCLUDED_TYPES.contains(&n.type_name.as_str())
+                    && a.mention_trigger(&n.type_name).is_some()
+            })
+        }));
+        if !valid {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid", "this agent cannot be called from this note"));
+        }
+        let call = ulid::Ulid::new().to_string();
+        let (kind, name) = author.parts();
+        w.state().issue_agent_call(&call, note, agent, &format!("{kind}:{name}"))?;
+        Ok(Json(json!({ "call": call })))
+    }).await
+}
+
 /// How many runs of each trigger the route answers.
 pub const RUNS_SHOWN: u32 = 20;
 

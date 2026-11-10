@@ -294,6 +294,9 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
     }
     // Agent triggers run only on the home server (agents G10), so their runs are read there, and
     // so are the calls of agents it answered (agents G19).
+    if path == "/api/agents/calls" && method == Method::POST {
+        return Route::Forward;
+    }
     if get
         && path
             .strip_prefix("/api/agents/calls/")

@@ -197,6 +197,7 @@ fn mention_json(a: &Agent) -> Value {
     if types.is_empty() {
         return json!({ "types": null });
     }
+    types.retain(|t| !schema::AGENT_CALL_EXCLUDED_TYPES.contains(t));
     types.sort_unstable();
     types.dedup();
     json!({ "types": types })

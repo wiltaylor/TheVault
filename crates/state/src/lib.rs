@@ -166,7 +166,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 19;
+const SCHEMA_VERSION: i64 = 20;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -672,6 +672,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 18 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS classifier_pending (id INTEGER PRIMARY KEY, payload TEXT NOT NULL);")?;
+            }
+            if version <= 19 {
+                tx.execute_batch("CREATE TABLE agent_call_ids (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, principal TEXT NOT NULL, expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0);")?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
