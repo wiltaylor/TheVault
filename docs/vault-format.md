@@ -2929,9 +2929,11 @@ No valid definition or a lost dispatch leaves the note held. The decision is ser
 and bound to a fingerprint of the content. Editable classification fields cannot clear it.
 Content changes invalidate clearance with reason `content_changed`, without automatic
 reclassification. Routine labels/processed writes preserve clearance. A pending provider
-result also survives same-message image completion/reconversion by the trusted `google_gmail`
-task. The Gmail id must be unchanged, as must all projected content except body, HTML asset
-identity and attachments. Gmail message ids identify immutable original messages. Only that
+result also survives same-message image completion by the trusted `google_gmail`
+task. The Gmail id must be unchanged. Body blocks are compared after reducing pending-image
+placeholders and rendered images, retaining all paragraph text, image alt text and captions.
+HTML asset identity and attachments may change. Reconversion introducing different text is
+held as `content_changed`, and never inherits a user release. Only that
 server task can carry the verdict to the new rendering fingerprint, including a pending
 verdict. Ordinary session, agent and other-task content edits still invalidate it. User release
 always requires the current fingerprint, never a conversion alias. The task's code is trusted
@@ -3050,7 +3052,7 @@ A `trigger` block is labelled with its name and holds a `prompt`, the first user
 | `type` | type name, or list of type names | every type | With `on` or `mention`. The note types the trigger fires for, or whose notes may call the agent. Each must exist when the file is saved |
 | `where` | string | every note | With `on` only. A condition in the query language, such as `processed != true`, checked against the note after the change, or before it for a delete |
 
-A call is a link in a note's inline markup whose URL is `agent:<name>?call=<id>`: `<name>` is the agent's name and `<id>` a ULID the client makes when it commits the call, as in `[@Clerk list what to buy](agent:clerk?call=01JB8Z4K2MQ7V3X9T5R6W8Y2ZB)`. The link text is `@<label>` followed by the request. A call stands in the inline markup of a content block (a paragraph, heading, list item, quote, toggle or admonition title, at any depth); one inside inline code or escaped is text, and plain text such as `@clerk` is not a call. The server answers each call id once, records it in `state.db`, and never rewrites the note for it.
+A call is a link in a note's inline markup whose URL is `agent:<name>?call=<id>`: `<name>` is the agent's name and `<id>` a ULID the home server issues to the editor, bound to the note, agent and issuing principal, with a 24-hour expiry for unused ids, as in `[@Clerk list what to buy](agent:clerk?call=01JB8Z4K2MQ7V3X9T5R6W8Y2ZB)`. The link text is `@<label>` followed by the request. A call stands in the inline markup of a content block (a paragraph, heading, list item, quote, toggle or admonition title, at any depth); one inside inline code or escaped is text, and plain text such as `@clerk` is not a call. The server answers each call id once, records it in `state.db`, and never rewrites the note for it.
 
 ```wcl
 label         = "Inbox triage"

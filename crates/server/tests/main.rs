@@ -34,6 +34,7 @@ mod archive;
 mod asset_memory;
 mod asset_usage;
 mod auth;
+mod auth_limits;
 mod background_turns;
 mod brave;
 mod browser_desktop;

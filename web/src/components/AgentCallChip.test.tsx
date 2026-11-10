@@ -9,6 +9,7 @@ import { refreshAgents } from "../agents";
 import { bumpTurns } from "../ai/running";
 import { type AgentSummary, ApiError, api } from "../api";
 import { Inline } from "./Inline";
+import { ThisNote } from "../views/thisNote";
 
 const CALL = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 const AGENTS: AgentSummary[] = [{ name: "clerk", label: "Clerk", icon: "pen", built_in: false, enabled: true, mention: { types: null } }];
@@ -35,6 +36,24 @@ describe("agent call links", () => {
 
 describe("the chip", () => {
   const text = `Roof: [@Clerk tidy this](agent:clerk?call=${CALL}) today`;
+
+  it("keeps a copy's refusal separate from the original note's pending status", async () => {
+    const call = vi.spyOn(api, "agentCall").mockImplementation(async (_, note) => {
+      if (note === "copy") return { agent: "clerk", note, thread: null, running: false };
+      throw new ApiError(404, { error: "not_found", message: "pending" });
+    });
+    const r = render(() => <>
+      <div data-testid="original"><ThisNote.Provider value="original"><Inline text={text} /></ThisNote.Provider></div>
+      <div data-testid="copy"><ThisNote.Provider value="copy"><Inline text={text} /></ThisNote.Provider></div>
+    </>);
+    await waitFor(() => expect(r.getByTestId("copy")).toHaveTextContent("Not answered"));
+    expect(r.getByTestId("original")).toHaveTextContent("Sending…");
+    call.mockImplementation(async (_, note) => ({ agent: "clerk", note: note!, thread: note === "original" ? "answer" : null, running: false }));
+    bumpTurns();
+    await waitFor(() => expect(r.getByTestId("original").querySelector("a")).toHaveAttribute("href", "/agents/clerk?thread=answer"));
+    expect(r.getByTestId("copy").querySelector("a")).toHaveAttribute("href", "/agents/clerk");
+    r.unmount();
+  });
 
   it("shows the call running and opens its thread", async () => {
     const call = vi.spyOn(api, "agentCall").mockResolvedValue({ agent: "clerk", note: "01N", thread: "01THREAD", running: true });

@@ -653,7 +653,7 @@ export interface AgentSummary {
    * What a note may call the agent by (agents G16): `null` when it is disabled or has no mention
    * trigger, else the types whose notes may call it, `types: null` for every type.
    */
-  mention?: { types: string[] | null } | null;
+  mention?: { types: string[] | null; excluded_types?: string[] } | null;
   built_in: boolean;
   error?: string;
   /** How many turns run on the agent's threads now (agents G17). */
@@ -1984,7 +1984,8 @@ export const api = {
    * What became of a call of an agent committed in a note (agents G19): its thread, null for a
    * call the server did not run, and whether the thread runs. 404 while the server has not seen it.
    */
-  agentCall: (call: string) => request<AgentCallInfo>("GET", `/api/agents/calls/${enc(call)}`),
+  agentCall: (call: string, note?: string) => request<AgentCallInfo>("GET", `/api/agents/calls/${enc(call)}${note ? `?note=${enc(note)}` : ""}`),
+  issueAgentCall: (note: string, agent: string) => request<{ call: string }>("POST", "/api/agents/calls", { note, agent }),
   /** The agent's threads, newest activity first (agents G7); archived ones only with `archived` (agents G15). */
   agentThreads: (name: string, archived = false) =>
     request<{ threads: AgentThreadSummary[] }>("GET", `/api/agents/${enc(name)}/threads${archived ? "?archived=true" : ""}`),

@@ -352,6 +352,9 @@ impl AgentPlan {
     /// (agents G16). A trigger with no `type` is not called from an `agent_thread` or
     /// `agent_memory` note.
     fn callees(&self, type_name: &str) -> Vec<(Agent, Trigger)> {
+        if schema::AGENT_CALL_EXCLUDED_TYPES.contains(&type_name) {
+            return Vec::new();
+        }
         self.agents
             .values()
             .filter_map(|a| {
@@ -550,6 +553,11 @@ impl Scheduler {
         let mut plan = self.plan();
         for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
             let deleting = plan.agents.deleting.remove(&s.id);
+            // Scan latest mentions, including refusal receipts for agent-written calls.
+            plan.agents.mentions.remove(&s.id);
+            if s.event != Event::Delete {
+                plan.agents.mentions.insert(s.id.clone(), s.type_name.clone());
+            }
             let Ok(doc) = Doc::parse(&s.wcl, "agent event") else {
                 continue;
             };
@@ -571,14 +579,6 @@ impl Scheduler {
                 Event::Update => "update",
                 Event::Delete => "delete",
             };
-            // A saved note is read for calls committed in it (agents G19).
-            if s.event == Event::Delete {
-                plan.agents.mentions.remove(&s.id);
-            } else {
-                plan.agents
-                    .mentions
-                    .insert(s.id.clone(), s.type_name.clone());
-            }
             plan.agents.heard.push(Heard {
                 op,
                 id: s.id.clone(),
@@ -752,6 +752,10 @@ impl Scheduler {
         let Ok(note) = self.writer.read(id) else {
             return Vec::new();
         };
+        // Recheck the last persisted writer, not just the queued notification.
+        let Ok(Some(version)) = self.writer.state().version(id, &note.version) else {
+            return Vec::new();
+        };
         let found = mentions::calls(&note.doc);
         if found.is_empty() {
             return Vec::new();
@@ -784,6 +788,22 @@ impl Scheduler {
                     }
                 }
             };
+            if state
+                .agent_call_bound_elsewhere(&call.call, id, &call.agent)
+                .unwrap_or(true)
+            {
+                let _ = state.refuse_agent_call_copy(&call.call, id, &call.agent);
+                continue;
+            }
+            if matches!(version.author, Author::Agent(_))
+                || !self.call_versions_trusted(id, &call.call, &call.agent)
+                || !state
+                    .consume_agent_call(&call.call, id, &call.agent, &version.author)
+                    .unwrap_or(false)
+            {
+                record(None);
+                continue;
+            }
             let Some((agent, trigger)) = callees.iter().find(|(a, _)| a.name == call.agent) else {
                 eprintln!(
                     "call {} in note {id}: agent {:?} may not be called from a {} note, or is disabled or missing",
@@ -831,6 +851,7 @@ impl Scheduler {
             }
             // Full queue: no thread is opened, and the call is not recorded (TV-86 F2).
             if self.plan().agents.room(&agent.name, now).is_err() {
+                let _ = state.release_agent_call(&call.call);
                 eprintln!(
                     "agent {:?}: call {} in note {id} is not run: its queue is full; the next save of the note asks again",
                     agent.name, call.call
@@ -846,6 +867,7 @@ impl Scheduler {
                 Ok(t) => t,
                 Err(e) => {
                     // Not recorded: the next save tries again.
+                    let _ = state.release_agent_call(&call.call);
                     eprintln!(
                         "agent {:?}: the thread for call {} in note {id} could not be opened: {e}",
                         agent.name, call.call
@@ -887,6 +909,34 @@ impl Scheduler {
             }
         }
         admits
+    }
+
+    /// A later issuer save cannot launder an earlier foreign write. Use persisted
+    /// history rather than pending scans, which are coalesced and lost on restart.
+    fn call_versions_trusted(&self, note: &str, call: &str, agent: &str) -> bool {
+        let state = self.writer.state();
+        let Ok(Some((issued_ms, principal))) = state.agent_call_issuance(call, note, agent) else {
+            return false;
+        };
+        let Ok(versions) = state.history(note) else {
+            return false;
+        };
+        for version in versions.into_iter().filter(|v| v.at_ms >= issued_ms) {
+            let (kind, name) = version.author.parts();
+            if format!("{kind}:{name}") == principal {
+                continue;
+            }
+            let Ok(doc) = schema::Doc::parse(&version.content, note) else {
+                return false;
+            };
+            if mentions::calls(&doc)
+                .iter()
+                .any(|found| found.call.call == call)
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// Run notes sent to `agent` (TV-77 D1): open a thread of origin [`DISPATCH_ORIGIN`] about

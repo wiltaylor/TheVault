@@ -97,6 +97,7 @@ mod ai_turns;
 mod ai_web;
 mod apps;
 mod assets;
+mod attempt_limits;
 mod auth;
 mod batch;
 mod brave;
@@ -342,6 +343,7 @@ fn build() -> Built {
         )
         .delete("/api/skills/{name}/files/{*path}", skills::delete_file)
         .get("/api/agents/calls/{call}", agent_runs::call)
+        .post("/api/agents/calls", agent_runs::issue_call)
         .get("/api/agents/{name}/runs", agent_runs::list)
         .post("/api/agents/{name}/dispatch", ai_dispatch::dispatch)
         .get("/api/dispatched", ai_dispatch::list)
@@ -555,6 +557,7 @@ pub fn router(
     // Only the server runs agents' scripts (script-tools T1), on the host the tasks run on.
     script_tools::register(&writer, &scheduler);
     let browser = browser::Config::from_env();
+    let limits = Arc::new(attempt_limits::Limits::from_env(writer.clone()));
     let mut app = assemble(
         writer,
         scheduler,
@@ -569,6 +572,10 @@ pub fn router(
         app = app.merge(desktop);
     }
     app.layer(middleware::from_fn_with_state(sessions, auth::authenticate))
+        .layer(middleware::from_fn_with_state(
+            limits,
+            attempt_limits::check,
+        ))
 }
 
 /// Builds the router for every `/api` route with no credentials checked: every request acts as

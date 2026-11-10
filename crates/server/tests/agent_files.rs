@@ -115,7 +115,7 @@ fn the_vault_starts_with_the_assistant() {
             "model": null,
             "enabled": true,
             "triggers": 0,
-            "mention": { "types": null },
+            "mention": { "types": null, "excluded_types": ["email", "message", "call", "conversation", "event", "email_thread"] },
             "running": 0,
             "built_in": true,
         }])
