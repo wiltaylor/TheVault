@@ -1612,7 +1612,7 @@ async function main() {
 
   // 49: the app updates itself from the server (D27), twice: the first update over the APK
   // installed by hand may ask the user once, which the run taps through; the second, with the app
-  // its own installer of record, must need no tap at all.
+  // its own installer of record and outside Android's silent-update throttle, must need no tap.
   await check(49, async () => {
     const pkg = () => shell(`dumpsys package ${PKG}`);
     const versionCode = () => Number(/versionCode=(\d+)/.exec(pkg())?.[1] ?? 0);
@@ -1625,6 +1625,11 @@ async function main() {
     await pushReady();
     const runs = [];
     for (const [version, newer] of updates) {
+      // Android's SilentUpdatePolicy throttles USER_ACTION_NOT_REQUIRED updates from the
+      // same installer/package within 30 seconds. Start the second publish at least 35 s
+      // after observing the first install (so also after its commit), not at the server's
+      // next 30-second poll boundary. Do not bypass the policy or accept a second tap.
+      if (runs.length) await sleep(35_000);
       const before = versionCode();
       closeApp();
       execFileSync(join(repo, "target/debug/vault"), ["clients", "publish", "--vault", srv.vault, "--build", "debug", "--version", version, "--arch", "x86_64", newer], { env: srv.env, stdio: ["ignore", "ignore", "inherit"] });
