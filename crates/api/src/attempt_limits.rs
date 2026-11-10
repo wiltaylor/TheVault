@@ -98,7 +98,10 @@ struct Counters {
 
 impl Counters {
     fn bucket(&self, key: Key) -> Option<Bucket> {
-        self.pending.get(&key).or_else(|| self.addresses.get(&key)).cloned()
+        self.pending
+            .get(&key)
+            .or_else(|| self.addresses.get(&key))
+            .cloned()
     }
 
     fn unindex(&mut self, key: Key) {
@@ -122,31 +125,49 @@ impl Counters {
 
     fn precheck(&mut self, key: Key, now: Instant) -> Option<u64> {
         prune(&mut self.failures, now);
-        while self.provisional.first().is_some_and(|(at, _)| now.duration_since(*at) >= WINDOW) {
+        while self
+            .provisional
+            .first()
+            .is_some_and(|(at, _)| now.duration_since(*at) >= WINDOW)
+        {
             self.provisional.pop_first();
         }
         // retry may expire history, so keep its eviction entry consistent.
         self.unindex(key);
         let global_full = self.failures.len() + self.provisional.len() >= 50;
-        let retry = self.bucket(key).and_then(|b| b.lock().expect("attempt bucket").retry(now, global_full));
+        let retry = self
+            .bucket(key)
+            .and_then(|b| b.lock().expect("attempt bucket").retry(now, global_full));
         let expired = self.addresses.get(&key).is_some_and(|b| {
             let b = b.lock().expect("attempt bucket");
             b.last.is_none() && b.in_flight == 0
         });
-        if expired { self.addresses.remove(&key); }
+        if expired {
+            self.addresses.remove(&key);
+        }
         self.index(key);
         retry
     }
 
     fn begin(&mut self, key: Key, now: Instant) -> Result<Started, u64> {
-        if let Some(delay) = self.precheck(key, now) { return Err(delay); }
+        if let Some(delay) = self.precheck(key, now) {
+            return Err(delay);
+        }
         if !self.addresses.contains_key(&key)
-            && self.pruned.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1))
+            && self
+                .pruned
+                .is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1))
         {
             self.pruned = Some(now);
             // Bounded work, not a full-table scan, even after every bucket has expired.
             for _ in 0..64 {
-                if !self.eviction.first().is_some_and(|(at, _)| now.duration_since(*at) >= HISTORY) { break; }
+                if !self
+                    .eviction
+                    .first()
+                    .is_some_and(|(at, _)| now.duration_since(*at) >= HISTORY)
+                {
+                    break;
+                }
                 let (_, old) = self.eviction.pop_first().expect("oldest history");
                 self.addresses.remove(&old);
             }
@@ -159,9 +180,16 @@ impl Counters {
         }
         self.pending.insert(key, bucket.clone());
         let id = self.next_id;
-        self.next_id = self.next_id.checked_add(1).expect("attempt sequence exhausted");
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("attempt sequence exhausted");
         self.provisional.insert((now, id));
-        Ok(Started { bucket, at: now, id })
+        Ok(Started {
+            bucket,
+            at: now,
+            id,
+        })
     }
 
     fn record(&mut self, key: Key, started: &Started, status: StatusCode, now: Instant) -> bool {
@@ -172,7 +200,9 @@ impl Counters {
         {
             let mut b = started.bucket.lock().expect("attempt bucket");
             b.in_flight -= 1;
-            if b.in_flight == 0 { self.pending.remove(&key); }
+            if b.in_flight == 0 {
+                self.pending.remove(&key);
+            }
             if !failed {
                 // Other in-flight charges survive this successful check.
                 b.reset();
@@ -183,7 +213,9 @@ impl Counters {
                 b.failures.push_back(now);
             }
         }
-        if !failed { return false; }
+        if !failed {
+            return false;
+        }
         if !self.addresses.contains_key(&key) {
             if self.addresses.len() >= MAX_ADDRESSES
                 && let Some((_, oldest)) = self.eviction.pop_first()
@@ -197,11 +229,17 @@ impl Counters {
         }
         self.index(key);
         prune(&mut self.failures, now);
-        if self.failures.len() == 50 { self.failures.pop_front(); }
+        if self.failures.len() == 50 {
+            self.failures.pop_front();
+        }
         self.failures.push_back(now);
         let notify = self.failures.len() >= 5
-            && self.notified.is_none_or(|t| now.duration_since(t) >= NOTICE_COOLDOWN);
-        if notify { self.notified = Some(now); }
+            && self
+                .notified
+                .is_none_or(|t| now.duration_since(t) >= NOTICE_COOLDOWN);
+        if notify {
+            self.notified = Some(now);
+        }
         notify
     }
 }
@@ -323,12 +361,20 @@ impl Attempt {
 impl Drop for Attempt {
     fn drop(&mut self) {
         if !self.finished {
-            let notify = self.limits
+            let notify = self
+                .limits
                 .counters
                 .lock()
                 .expect("attempt counters")
-                .record(self.key, &self.started, StatusCode::REQUEST_TIMEOUT, Instant::now());
-            if notify { drop(notify_owner(self.limits.clone())); }
+                .record(
+                    self.key,
+                    &self.started,
+                    StatusCode::REQUEST_TIMEOUT,
+                    Instant::now(),
+                );
+            if notify {
+                drop(notify_owner(self.limits.clone()));
+            }
         }
     }
 }
@@ -341,7 +387,9 @@ fn notify_owner(limits: Arc<Limits>) -> tokio::task::JoinHandle<()> {
             body: Some("Five or more password or pairing/code checks failed in one minute. Attempt limits are active.".into()),
             source: "server:auth".into(), note_id: None, url: None,
         })).await;
-        if result.is_err() { tracing::warn!("could not store authentication failure notification"); }
+        if result.is_err() {
+            tracing::warn!("could not store authentication failure notification");
+        }
     })
 }
 
@@ -447,7 +495,10 @@ mod tests {
                 b.failures.push_back(now);
             }
             assert_eq!(b.retry(now, false), Some(delay));
-            assert_eq!(b.retry(now + Duration::from_secs(1), false), Some(delay - 1));
+            assert_eq!(
+                b.retry(now + Duration::from_secs(1), false),
+                Some(delay - 1)
+            );
             now += Duration::from_secs(delay);
         }
         now += HISTORY;
@@ -557,26 +608,41 @@ mod tests {
     #[test]
     fn capacity_eviction_uses_the_index_without_scanning_buckets() {
         let now = Instant::now();
-        let mut c = Counters { pruned: Some(now), ..Counters::default() };
+        let mut c = Counters {
+            pruned: Some(now),
+            ..Counters::default()
+        };
         for i in 0..MAX_ADDRESSES as u32 {
             let k = Some(IpAddr::V4((0x0a000000u32 + i).into()));
-            c.addresses.insert(k, Arc::new(Mutex::new(Address { last: Some(now), ..Address::default() })));
+            c.addresses.insert(
+                k,
+                Arc::new(Mutex::new(Address {
+                    last: Some(now),
+                    ..Address::default()
+                })),
+            );
             c.index(k);
         }
         // An unrelated poisoned bucket makes a regression to locking every bucket fail
         // deterministically, rather than relying only on a wall-clock speed assertion.
         let unrelated = c.addresses.get(&ip("10.0.255.255")).unwrap().clone();
-        assert!(std::panic::catch_unwind(|| {
-            let _held = unrelated.lock().unwrap();
-            panic!("unrelated eviction sentinel");
-        }).is_err());
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _held = unrelated.lock().unwrap();
+                panic!("unrelated eviction sentinel");
+            })
+            .is_err()
+        );
         let start = Instant::now();
         for i in 0..2000u32 {
             let k = Some(IpAddr::V4((0xc0000200u32 + i).into()));
             let check = c.begin(k, now).unwrap();
             c.record(k, &check, StatusCode::UNAUTHORIZED, now);
         }
-        assert!(start.elapsed() < Duration::from_secs(5), "2000 indexed replacements must stay cheap");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "2000 indexed replacements must stay cheap"
+        );
         assert_eq!(c.addresses.len(), MAX_ADDRESSES);
         assert_eq!(c.eviction.len(), MAX_ADDRESSES);
         assert!(c.pending.is_empty());
@@ -597,7 +663,9 @@ mod tests {
         let clean = ip("203.0.113.1");
         let owner = c.begin(clean, now).unwrap();
         c.record(clean, &owner, StatusCode::OK, now);
-        for (k, check) in checks { c.record(k, &check, StatusCode::OK, now); }
+        for (k, check) in checks {
+            c.record(k, &check, StatusCode::OK, now);
+        }
         assert!(c.provisional.is_empty());
         assert!(c.failures.is_empty());
         assert!(c.addresses.is_empty());

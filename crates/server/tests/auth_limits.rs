@@ -431,40 +431,84 @@ fn disconnected_password_checks_still_consume_the_budget_and_notify() {
     let url = reqwest::Url::parse(&server.url("/api/login")).unwrap();
     let body = r#"{"password":"wrong"}"#;
     for _ in 0..30 {
-        let mut socket = TcpStream::connect((url.host_str().unwrap(), url.port().unwrap())).unwrap();
+        let mut socket =
+            TcpStream::connect((url.host_str().unwrap(), url.port().unwrap())).unwrap();
         write!(socket, "POST /api/login HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
         std::thread::sleep(Duration::from_millis(5));
         // The body is complete, but abandon the result while the blocking hash may still run.
         let _ = socket.shutdown(std::net::Shutdown::Both);
     }
     let client = Client::new();
-    assert_eq!(client.post(server.url("/api/login"))
-        .json(&json!({"password":testkit::PASSWORD})).send().unwrap().status(), 429);
+    assert_eq!(
+        client
+            .post(server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap()
+            .status(),
+        429
+    );
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let notifications: serde_json::Value = client.get(server.url("/api/notifications"))
-            .bearer_auth(server.admin_token()).send().unwrap().json().unwrap();
-        if notifications["items"].as_array().unwrap().iter().any(|n| n["source"] == "server:auth") { break; }
-        assert!(std::time::Instant::now() < deadline, "cancelled failures must notify the owner");
+        let notifications: serde_json::Value = client
+            .get(server.url("/api/notifications"))
+            .bearer_auth(server.admin_token())
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        if notifications["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["source"] == "server:auth")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "cancelled failures must notify the owner"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let activity: serde_json::Value = client.get(server.url("/api/activity?kind=auth.login_failed&limit=200"))
-        .bearer_auth(server.admin_token()).send().unwrap().json().unwrap();
-    assert!(activity["items"].as_array().unwrap().len() <= 5, "cancelled requests must not run more than five hashes: {activity}");
+    let activity: serde_json::Value = client
+        .get(server.url("/api/activity?kind=auth.login_failed&limit=200"))
+        .bearer_auth(server.admin_token())
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert!(
+        activity["items"].as_array().unwrap().len() <= 5,
+        "cancelled requests must not run more than five hashes: {activity}"
+    );
 }
 
 #[test]
 fn global_ipv6_flood_limits_a_failed_prefix_but_admits_a_clean_owner() {
-    let server = TestServer::start_with_env(|_| {}, &[("VAULT_TRUSTED_PROXIES", "cloudflare=127.0.0.1")]);
+    let server =
+        TestServer::start_with_env(|_| {}, &[("VAULT_TRUSTED_PROXIES", "cloudflare=127.0.0.1")]);
     let client = Client::new();
     for i in 1..=50 {
-        assert_eq!(client.post(server.url("/api/agent-codes/redeem"))
-            .header("CF-Connecting-IP", format!("2001:db8:{i:x}:1::1"))
-            .json(&json!({"code":"0000000000"})).send().unwrap().status(), 410);
+        assert_eq!(
+            client
+                .post(server.url("/api/agent-codes/redeem"))
+                .header("CF-Connecting-IP", format!("2001:db8:{i:x}:1::1"))
+                .json(&json!({"code":"0000000000"}))
+                .send()
+                .unwrap()
+                .status(),
+            410
+        );
     }
-    let login = |ip| client.post(server.url("/api/login"))
-        .header("CF-Connecting-IP", ip)
-        .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+    let login = |ip| {
+        client
+            .post(server.url("/api/login"))
+            .header("CF-Connecting-IP", ip)
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap()
+    };
     assert_eq!(login("2001:db8:1:1::abcd").status(), 429);
     assert_eq!(login("2001:db8:ffff:1::1").status(), 200);
 }
