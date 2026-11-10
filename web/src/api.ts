@@ -662,6 +662,8 @@ export interface AgentSummary {
 
 export interface AgentList {
   agents: AgentSummary[];
+  /** Existing agent files whose reserved names may collide with Outbox ownership. */
+  warnings?: string[];
   /** Every tool `permissions.tools` may name. */
   tools: string[];
 }

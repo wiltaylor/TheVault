@@ -22,7 +22,7 @@ export function ownedEmulatorGone(record, expected, state = processState) {
 }
 
 /** A failed adb wait cannot distinguish a dead emulator from a disconnected transport. */
-export async function recoverReboot({ wait, gone, restart, log = console.log }) {
+export async function recoverReboot({ wait, gone, restart, reconnect = async () => {}, log = console.log }) {
   try {
     await wait();
     return;
@@ -32,4 +32,5 @@ export async function recoverReboot({ wait, gone, restart, log = console.log }) 
   }
   await restart();
   await wait(); // One recovery only. A second failure must remain visible.
+  await reconnect();
 }
