@@ -407,3 +407,34 @@ docker compose down -v
 ```
 
 `down -v` cannot be undone. Remove the folder with `compose.yaml` afterwards, and the images with `docker image rm ghcr.io/wiltaylor/thevault:latest ghcr.io/wiltaylor/thevault-browser:latest`.
+
+## Credential attempt limits and reverse proxies
+
+Login, device pairing (password or code), and agent-code redemption share failure
+counters. Five failures from one client in 60 seconds cause a 60-second backoff.
+Repeated exhausted windows double this delay, up to 15 minutes. Success resets
+that client's count. After 15 minutes without a failed check its backoff resets.
+HTTP 429 includes `Retry-After` in seconds. Fifty failures globally in 60 seconds
+also trigger backoff for clients with recent failures, but not for a clean client.
+Concurrent checks from the same client return 429 rather than starting more hashes.
+After five failures in a minute the owner gets a notification through the normal
+notification feed and device push, at most once per 15 minutes. Counters are in
+memory and reset on restart. At 65,536 tracked addresses, new clients get 503 until
+space expires. Missing peer metadata shares one bucket.
+
+The server trusts no forwarded addresses by default. `VAULT_TRUSTED_PROXIES`
+sets comma-separated literal peer IPs with a proxy type, for example
+`caddy=172.30.141.2,cloudflare=172.30.141.3`. Caddy peers use the last address in
+`X-Forwarded-For`. Cloudflared peers use `CF-Connecting-IP`. Headers from other
+peers are ignored. Invalid configuration stops startup. Do not trust arbitrary
+clients or expose a trusted proxy's network address to untrusted containers.
+
+The shipped Compose file configures those two fixed proxy container addresses on
+the dedicated `172.30.141.0/24` proxy network for its `https` and `cloudflare`
+profiles. No proxy container is present in the LAN-only profile. The server
+and proxy containers must be recreated after updating the Compose configuration.
+If that subnet conflicts with an existing network, change the proxy network's
+subnet, both fixed container addresses, and `VAULT_TRUSTED_PROXIES` together.
+For a custom deployment, set this variable to the actual immediate proxy peer,
+not its public client or the whole Docker network. An empty value trusts none.
+

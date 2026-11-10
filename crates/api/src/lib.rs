@@ -67,6 +67,7 @@
 //! [`web::serve`] serves the built web client outside `/api` (D18).
 
 mod activity;
+mod attempt_limits;
 mod agent_files;
 mod agent_memory;
 mod agent_runs;
@@ -550,6 +551,7 @@ pub fn router(
     // Only the server runs agents' scripts (script-tools T1), on the host the tasks run on.
     script_tools::register(&writer, &scheduler);
     let browser = browser::Config::from_env();
+    let limits = Arc::new(attempt_limits::Limits::from_env(writer.clone()));
     let mut app = assemble(
         writer,
         scheduler,
@@ -564,6 +566,7 @@ pub fn router(
         app = app.merge(desktop);
     }
     app.layer(middleware::from_fn_with_state(sessions, auth::authenticate))
+        .layer(middleware::from_fn_with_state(limits, attempt_limits::check))
 }
 
 /// Builds the router for every `/api` route with no credentials checked: every request acts as

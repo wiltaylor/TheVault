@@ -25,7 +25,8 @@ services:
       # The browser box's exec service, set only when .env has BROWSER_TOKEN (browser profile).
       VAULT_BROWSER_URL: ${BROWSER_TOKEN:+http://browser:7700}
       VAULT_BROWSER_TOKEN: ${BROWSER_TOKEN:-}
-    networks: [default, browser]
+      VAULT_TRUSTED_PROXIES: ${VAULT_TRUSTED_PROXIES-caddy=172.30.141.2,cloudflare=172.30.141.3}
+    networks: [default, browser, proxy]
     volumes:
       # Named volumes unless .env names host folders.
       - ${THEVAULT_DATA:-data}:/data
@@ -48,6 +49,9 @@ services:
   caddy:
     image: caddy:2
     profiles: [https]
+    networks:
+      proxy:
+        ipv4_address: 172.30.141.2
     restart: unless-stopped
     depends_on:
       thevault:
@@ -66,6 +70,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.1}
     profiles: [cloudflare]
+    networks:
+      proxy:
+        ipv4_address: 172.30.141.3
     restart: unless-stopped
     depends_on:
       thevault:
@@ -96,6 +103,11 @@ services:
 
 networks:
   default:
+  # Only the two forwarding proxies have trusted, fixed addresses on this network.
+  proxy:
+    ipam:
+      config:
+        - subnet: 172.30.141.0/24
   # thevault and the browser box only. Not internal: the box needs the internet.
   browser:
 
