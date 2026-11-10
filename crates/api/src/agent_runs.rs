@@ -279,7 +279,9 @@ pub async fn call(
 ) -> Result<Json<Value>, ApiError> {
     let found = blocking(w, move |w| {
         Ok::<_, ApiError>(match w.state().agent_call(&call)? {
-            Some(answered) if query.get("note").is_none_or(|note| *note == answered.note) => Some(answered),
+            Some(answered) if query.get("note").is_none_or(|note| *note == answered.note) => {
+                Some(answered)
+            }
             _ => match query.get("note") {
                 Some(note) => w.state().refused_agent_call(&call, note)?,
                 None => None,

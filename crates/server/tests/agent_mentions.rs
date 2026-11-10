@@ -470,7 +470,10 @@ fn issued_calls_are_note_and_agent_bound_and_expire() {
     let asked = call("@Helper request", "helper", &issued);
     let copy = api.note("memo", "Copy", &[&asked]);
     api.advance("PT1S");
-    assert_eq!(api.status(&format!("/api/agents/calls/{issued}?note={id}")), 404);
+    assert_eq!(
+        api.status(&format!("/api/agents/calls/{issued}?note={id}")),
+        404
+    );
     assert_eq!(api.status(&format!("/api/agents/calls/{issued}")), 404);
     assert!(api.get(&format!("/api/agents/calls/{issued}?note={copy}"))["thread"].is_null());
     api.save(
@@ -503,7 +506,11 @@ fn a_write_token_cannot_deliver_a_session_issued_call() {
     api.agent("helper", "label = \"Helper\"\n");
     let id = api.note("memo", "Editor", &[]);
     let issued = api.issue(&id, "helper");
-    let token = api.send("POST", "/api/tokens", json!({ "name": "external-writer", "scope": "write" }));
+    let token = api.send(
+        "POST",
+        "/api/tokens",
+        json!({ "name": "external-writer", "scope": "write" }),
+    );
     let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
     api.client.put(api.server.url(&format!("/api/notes/{id}")))
         .bearer_auth(token["secret"].as_str().unwrap())
@@ -511,7 +518,10 @@ fn a_write_token_cannot_deliver_a_session_issued_call() {
         .send().unwrap().error_for_status().unwrap();
     fake.push(AnthropicMessage::text("Must not run."));
     api.advance("PT1S");
-    assert!(fake.message_requests().is_empty(), "an API token cannot deliver an owner's reserved call");
+    assert!(
+        fake.message_requests().is_empty(),
+        "an API token cannot deliver an owner's reserved call"
+    );
     assert!(api.threads("helper").is_empty());
 }
 
@@ -523,12 +533,27 @@ fn issuance_refuses_disabled_uncallable_agents_and_imported_types() {
     api.agent("clerk", CLERK);
     let log = api.note("log", "Not callable", &[]);
     for agent in ["sleepy", "clerk"] {
-        let res = api.request("POST", "/api/agents/calls", Some(json!({ "note": log, "agent": agent })));
+        let res = api.request(
+            "POST",
+            "/api/agents/calls",
+            Some(json!({ "note": log, "agent": agent })),
+        );
         assert_eq!(res.status().as_u16(), 400, "{agent}");
     }
-    for type_name in ["email", "message", "call", "conversation", "event", "email_thread"] {
+    for type_name in [
+        "email",
+        "message",
+        "call",
+        "conversation",
+        "event",
+        "email_thread",
+    ] {
         let id = api.note(type_name, "Imported", &[]);
-        let res = api.request("POST", "/api/agents/calls", Some(json!({ "note": id, "agent": "assistant" })));
+        let res = api.request(
+            "POST",
+            "/api/agents/calls",
+            Some(json!({ "note": id, "agent": "assistant" })),
+        );
         assert_eq!(res.status().as_u16(), 400, "{type_name}");
     }
 }

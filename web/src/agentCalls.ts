@@ -83,7 +83,7 @@ async function ask(call: string) {
   clearTimeout(e.timer);
   e.timer = undefined;
   try {
-    const got = await api.agentCall(e.call, e.note);
+    const got = e.note ? await api.agentCall(e.call, e.note) : await api.agentCall(e.call);
     e.set({ state: got.thread ? "answered" : "unanswered", thread: got.thread, running: got.running });
     // The apps may not have the live stream: while the thread runs, ask again now and then.
     if (got.running) e.timer = setTimeout(() => void ask(call), RUNNING_POLL_MS);

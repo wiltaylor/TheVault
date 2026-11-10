@@ -41,21 +41,39 @@ fn activity_upkeep_prunes_call_reservations_and_copy_refusals() {
     let dir = tempfile::tempdir().unwrap();
     let clock = TestClock::new(1_000);
     let s = open(&dir, clock.clone());
-    s.issue_agent_call("UNUSED", "NOTE", "clerk", "session:owner").unwrap();
-    s.issue_agent_call("USED", "NOTE", "clerk", "session:owner").unwrap();
-    assert!(s.consume_agent_call("USED", "NOTE", "clerk", &owner()).unwrap());
-    s.record_agent_call("USED", "clerk", "NOTE", Some("THREAD")).unwrap();
+    s.issue_agent_call("UNUSED", "NOTE", "clerk", "session:owner")
+        .unwrap();
+    s.issue_agent_call("USED", "NOTE", "clerk", "session:owner")
+        .unwrap();
+    assert!(
+        s.consume_agent_call("USED", "NOTE", "clerk", &owner())
+            .unwrap()
+    );
+    s.record_agent_call("USED", "clerk", "NOTE", Some("THREAD"))
+        .unwrap();
     s.refuse_agent_call_copy("USED", "COPY", "clerk").unwrap();
     clock.advance(DAY_MS);
     s.prune_activity().unwrap();
-    assert!(!s.agent_call_bound_elsewhere("UNUSED", "COPY", "clerk").unwrap());
-    assert!(s.agent_call_bound_elsewhere("USED", "COPY", "clerk").unwrap());
+    assert!(
+        !s.agent_call_bound_elsewhere("UNUSED", "COPY", "clerk")
+            .unwrap()
+    );
+    assert!(
+        s.agent_call_bound_elsewhere("USED", "COPY", "clerk")
+            .unwrap()
+    );
     assert!(s.refused_agent_call("USED", "COPY").unwrap().is_some());
     clock.advance(31 * DAY_MS);
     s.prune_activity().unwrap();
-    assert!(!s.agent_call_bound_elsewhere("USED", "COPY", "clerk").unwrap());
+    assert!(
+        !s.agent_call_bound_elsewhere("USED", "COPY", "clerk")
+            .unwrap()
+    );
     assert!(s.refused_agent_call("USED", "COPY").unwrap().is_none());
-    assert!(s.agent_call("USED").unwrap().is_some(), "answered replay tombstones remain");
+    assert!(
+        s.agent_call("USED").unwrap().is_some(),
+        "answered replay tombstones remain"
+    );
 }
 
 fn page(state: &State, f: ActivityFilter) -> Vec<String> {

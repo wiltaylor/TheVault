@@ -35,7 +35,13 @@ impl State {
     }
 
     /// Atomically consume an unused capability bound to this note and agent.
-    pub fn consume_agent_call(&self, call: &str, note: &str, agent: &str, author: &crate::Author) -> Result<bool> {
+    pub fn consume_agent_call(
+        &self,
+        call: &str,
+        note: &str,
+        agent: &str,
+        author: &crate::Author,
+    ) -> Result<bool> {
         if !matches!(author, crate::Author::Session(_) | crate::Author::Token(_)) {
             return Ok(false);
         }
@@ -99,7 +105,10 @@ impl State {
         let now = self.now();
         let old = now - 30 * 86_400_000;
         let ids = conn.execute("DELETE FROM agent_call_ids WHERE (used=0 AND expires_ms<=?1) OR (used=1 AND expires_ms<=?2)", params![now, old])?;
-        let refusals = conn.execute("DELETE FROM agent_call_refusals WHERE created_ms<=?1", [old])?;
+        let refusals = conn.execute(
+            "DELETE FROM agent_call_refusals WHERE created_ms<=?1",
+            [old],
+        )?;
         Ok(ids + refusals)
     }
 
@@ -173,24 +182,83 @@ mod tests {
             crate::Author::Task("stamp".into()),
             crate::Author::Agent("clerk".into()),
         ] {
-            assert!(!s.consume_agent_call("CALL", "NOTE", "clerk", &author).unwrap(), "{author:?}");
+            assert!(
+                !s.consume_agent_call("CALL", "NOTE", "clerk", &author)
+                    .unwrap(),
+                "{author:?}"
+            );
         }
-        assert!(!s.consume_agent_call("CALL", "OTHER", "clerk", &crate::Author::Session("owner".into())).unwrap());
-        assert!(!s.consume_agent_call("CALL", "NOTE", "owl", &crate::Author::Session("owner".into())).unwrap());
-        assert!(s.consume_agent_call("CALL", "NOTE", "clerk", &crate::Author::Session("owner".into())).unwrap());
-        assert!(!s.consume_agent_call("CALL", "NOTE", "clerk", &crate::Author::Session("owner".into())).unwrap());
-        assert!(!s.consume_agent_call("FORGED", "NOTE", "clerk", &crate::Author::Session("owner".into())).unwrap());
+        assert!(
+            !s.consume_agent_call(
+                "CALL",
+                "OTHER",
+                "clerk",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+        assert!(
+            !s.consume_agent_call(
+                "CALL",
+                "NOTE",
+                "owl",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+        assert!(
+            s.consume_agent_call(
+                "CALL",
+                "NOTE",
+                "clerk",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+        assert!(
+            !s.consume_agent_call(
+                "CALL",
+                "NOTE",
+                "clerk",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
+        assert!(
+            !s.consume_agent_call(
+                "FORGED",
+                "NOTE",
+                "clerk",
+                &crate::Author::Session("owner".into())
+            )
+            .unwrap()
+        );
     }
 
     #[test]
     fn a_device_issued_call_requires_that_same_device() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
-        s.issue_agent_call("CALL", "NOTE", "clerk", "token:device-one").unwrap();
-        for author in [crate::Author::Session("owner".into()), crate::Author::Token("device-two".into())] {
-            assert!(!s.consume_agent_call("CALL", "NOTE", "clerk", &author).unwrap());
+        s.issue_agent_call("CALL", "NOTE", "clerk", "token:device-one")
+            .unwrap();
+        for author in [
+            crate::Author::Session("owner".into()),
+            crate::Author::Token("device-two".into()),
+        ] {
+            assert!(
+                !s.consume_agent_call("CALL", "NOTE", "clerk", &author)
+                    .unwrap()
+            );
         }
-        assert!(s.consume_agent_call("CALL", "NOTE", "clerk", &crate::Author::Token("device-one".into())).unwrap());
+        assert!(
+            s.consume_agent_call(
+                "CALL",
+                "NOTE",
+                "clerk",
+                &crate::Author::Token("device-one".into())
+            )
+            .unwrap()
+        );
     }
 
     #[test]
