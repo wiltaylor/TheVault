@@ -1272,9 +1272,15 @@ impl Direct {
             // The tools of [`ALWAYS_PROPOSE`]: always the user's Apply (TV-32 Q2 O1).
             "script_proposal" | "task_proposal" | "device_file_proposal" => false,
             "agent_memory_proposal" => self.memories,
-            "skill_proposal" => self.skills && !p["path"].as_str().is_some_and(|s| {
-                s == "tools" || s.starts_with("tools/") || s == "scripts" || s.starts_with("scripts/")
-            }),
+            "skill_proposal" => {
+                self.skills
+                    && !p["path"].as_str().is_some_and(|s| {
+                        s == "tools"
+                            || s.starts_with("tools/")
+                            || s == "scripts"
+                            || s.starts_with("scripts/")
+                    })
+            }
             "proposal" => match p["op"].as_str().unwrap_or("update") {
                 "update" | "create" => self.notes,
                 "archive" | "unarchive" => self.archive,

@@ -56,7 +56,10 @@ const DIFF_LIMIT: u64 = 256 * 1024;
 
 /// Skill tools never receive script secrets, including user-uploaded and binary files.
 pub(crate) fn check_tool_secrets(path: &str, bytes: &[u8]) -> Result<(), String> {
-    let Some(name) = path.strip_prefix("tools/").and_then(|s| s.strip_suffix(".wcl")) else {
+    let Some(name) = path
+        .strip_prefix("tools/")
+        .and_then(|s| s.strip_suffix(".wcl"))
+    else {
         return Ok(());
     };
     let source = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;

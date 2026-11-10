@@ -25,12 +25,22 @@ const MODEL: &str = "claude-opus-5";
 fn every_privileged_default_run_is_guarded_through_every_agent_route() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": all_off()}),
+    );
     // A user-owned copy bound by a shipped handler must be guarded by grants, not its name.
     let mail = api.script("google_mail").unwrap();
     api.ok("PUT", "/api/scripts/mail_copy", json!({"source": mail}));
-    api.put_text("/api/types/email", &writer::DEFAULT_EMAIL_TYPE.replace("google_mail", "mail_copy"));
-    api.put_text("/api/skills/probe", "---\nname: probe\ndescription: Test\n---\n");
+    api.put_text(
+        "/api/types/email",
+        &writer::DEFAULT_EMAIL_TYPE.replace("google_mail", "mail_copy"),
+    );
+    api.put_text(
+        "/api/skills/probe",
+        "---\nname: probe\ndescription: Test\n---\n",
+    );
     let mut guarded = Vec::new();
     // Read the actual installed runs, not SHIPPED_FILES: a new handler/task can name a script
     // absent from that list. Runs include every type handler, task and device binding.
@@ -40,7 +50,8 @@ fn every_privileged_default_run_is_guarded_through_every_agent_route() {
         let (_, got) = last_result(&fake);
         if got["runs_as"].as_array().unwrap().iter().any(|r| {
             ["handler", "task", "device"].contains(&r["kind"].as_str().unwrap())
-                && (!r["secrets"].as_array().unwrap().is_empty() || !r["allow_domains"].as_array().unwrap().is_empty())
+                && (!r["secrets"].as_array().unwrap().is_empty()
+                    || !r["allow_domains"].as_array().unwrap().is_empty())
         }) {
             guarded.push(name.to_owned());
         }
@@ -53,16 +64,46 @@ fn every_privileged_default_run_is_guarded_through_every_agent_route() {
         let task = format!("schedule = \"0 0 1 1 *\"\nscript = \"{name}\"\n");
         let device = PHONE_FILE.replace("phone_test", &name);
         for (method, event, input) in [
-            ("propose_script_change", "script_proposal", json!({"name": name, "source": source})),
-            ("propose_tool_change", "tool_proposal", json!({"name": "attempt", "wcl": tool, "script_source": source})),
-            ("propose_task_change", "task_proposal", json!({"name": "attempt", "wcl": task, "script_source": source})),
-            ("propose_device_file_change", "device_file_proposal", json!({"platform": "android", "wcl": device, "scripts": [{"name": name, "source": source}]})),
-            ("propose_skill_file_change", "skill_proposal", json!({"name": "probe", "path": format!("scripts/{name}.ws"), "text": source, "base64": null})),
-            ("propose_type_change", "type_proposal", json!({"name": "attempt", "wcl": ITEM.replace("stamp", &name)})),
+            (
+                "propose_script_change",
+                "script_proposal",
+                json!({"name": name, "source": source}),
+            ),
+            (
+                "propose_tool_change",
+                "tool_proposal",
+                json!({"name": "attempt", "wcl": tool, "script_source": source}),
+            ),
+            (
+                "propose_task_change",
+                "task_proposal",
+                json!({"name": "attempt", "wcl": task, "script_source": source}),
+            ),
+            (
+                "propose_device_file_change",
+                "device_file_proposal",
+                json!({"platform": "android", "wcl": device, "scripts": [{"name": name, "source": source}]}),
+            ),
+            (
+                "propose_skill_file_change",
+                "skill_proposal",
+                json!({"name": "probe", "path": format!("scripts/{name}.ws"), "text": source, "base64": null}),
+            ),
+            (
+                "propose_type_change",
+                "type_proposal",
+                json!({"name": "attempt", "wcl": ITEM.replace("stamp", &name)}),
+            ),
         ] {
             let events = api.one(&fake, method, input);
-            assert!(find(&events, "applied").is_none(), "{name} {method}: {events:?}");
-            assert!(find(&events, event).is_some() || last_result(&fake).0, "{name} {method}: {events:?}");
+            assert!(
+                find(&events, "applied").is_none(),
+                "{name} {method}: {events:?}"
+            );
+            assert!(
+                find(&events, event).is_some() || last_result(&fake).0,
+                "{name} {method}: {events:?}"
+            );
         }
     }
 }
@@ -71,13 +112,25 @@ fn every_privileged_default_run_is_guarded_through_every_agent_route() {
 fn handler_binding_cannot_grant_google_secrets_or_bypass_apply() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": {"types": false}}));
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": {"types": false}}),
+    );
     api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
     let with_secret = ITEM.replace("  function      = \"after_update\"", "  function = \"after_update\"\n  secrets = [\"google_refresh_token\"]\n  allow_domains = [\"*\"]");
-    let events = api.one(&fake, "propose_type_change", json!({"name": "item", "wcl": with_secret}));
+    let events = api.one(
+        &fake,
+        "propose_type_change",
+        json!({"name": "item", "wcl": with_secret}),
+    );
     assert!(find(&events, "applied").is_none(), "{events:?}");
     assert!(find(&events, "type_proposal").is_none(), "{events:?}");
-    let events = api.one(&fake, "propose_type_change", json!({"name": "item", "wcl": ITEM}));
+    let events = api.one(
+        &fake,
+        "propose_type_change",
+        json!({"name": "item", "wcl": ITEM}),
+    );
     assert!(find(&events, "type_proposal").is_some(), "{events:?}");
     assert!(find(&events, "applied").is_none(), "{events:?}");
     let mut p = find(&events, "type_proposal").unwrap().clone();
@@ -85,7 +138,11 @@ fn handler_binding_cannot_grant_google_secrets_or_bypass_apply() {
     assert_eq!(api.apply_as(&api.token(), &p).0, StatusCode::FORBIDDEN);
     // An existing shipped binding cannot be switched to agent code with Google grants.
     let rebound = writer::DEFAULT_EMAIL_TYPE.replace("google_mail", "stamp");
-    let events = api.one(&fake, "propose_type_change", json!({"name": "email", "wcl": rebound}));
+    let events = api.one(
+        &fake,
+        "propose_type_change",
+        json!({"name": "email", "wcl": rebound}),
+    );
     assert!(find(&events, "type_proposal").is_none(), "{events:?}");
     assert!(find(&events, "applied").is_none(), "{events:?}");
     assert!(last_result(&fake).0);
@@ -97,9 +154,17 @@ fn a_tools_own_hosts_allow_held_source_edits_but_not_forged_script_names() {
     let api = Api::start(&fake);
     api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
     api.ok("PUT", "/api/tools/echo", json!({"wcl": ECHO}));
-    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": all_off()}),
+    );
     let changed = format!("{STAMP}\n// edit\n");
-    let events = api.one(&fake, "propose_tool_change", json!({"name": "echo", "wcl": ECHO, "script_source": changed}));
+    let events = api.one(
+        &fake,
+        "propose_tool_change",
+        json!({"name": "echo", "wcl": ECHO, "script_source": changed}),
+    );
     assert!(find(&events, "applied").is_none());
     let p = find(&events, "tool_proposal").unwrap().clone();
     for script in [Value::Null, json!("google_mail")] {
@@ -822,8 +887,7 @@ fn device_commands_are_refused_for_script_task_and_tool_proposals_and_apply() {
     }
 }
 
-const ECHO: &str =
-    "description = \"Echo the parameters.\"\nscript = \"stamp\"\nfunction = \"call\"\nallow_domains = [\"echo.example.com\"]\n";
+const ECHO: &str = "description = \"Echo the parameters.\"\nscript = \"stamp\"\nfunction = \"call\"\nallow_domains = [\"echo.example.com\"]\n";
 
 /// Every confirmation switch off.
 fn all_off() -> Value {
@@ -968,7 +1032,11 @@ impl Api {
         self.ok("PUT", "/api/scripts/stamp", json!({ "source": STAMP }));
         self.put_text("/api/types/item", ITEM);
         self.put_text("/api/tasks/nightly", NIGHTLY);
-        self.ok("PUT", "/api/tools/echo", json!({ "wcl": ECHO.replace("allow_domains = [\"echo.example.com\"]\n", "") }));
+        self.ok(
+            "PUT",
+            "/api/tools/echo",
+            json!({ "wcl": ECHO.replace("allow_domains = [\"echo.example.com\"]\n", "") }),
+        );
     }
 
     /// One tool call by the Assistant as the admin, then an answer: the turn's events.

@@ -469,7 +469,11 @@ pub(crate) fn run_skill_tool(
         Err(e) => return Ran::refused("invalid", e, base),
     };
     if c.tool.as_ref().is_some_and(|t| !t.secrets.is_empty()) {
-        return Ran::refused("not_allowed", "skill tools may not receive secrets".into(), base);
+        return Ran::refused(
+            "not_allowed",
+            "skill tools may not receive secrets".into(),
+            base,
+        );
     }
     let mut script = base;
     if let Some(t) = &c.tool {
