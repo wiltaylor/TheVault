@@ -12,6 +12,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 chrono-tz = "0.10"
 store.workspace = true
 schema.workspace = true
+html-blocks.workspace = true
 index.workspace = true
 query.workspace = true
 script-core.workspace = true

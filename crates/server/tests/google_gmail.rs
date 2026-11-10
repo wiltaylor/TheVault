@@ -1350,7 +1350,7 @@ fn older_bodies_are_reconverted_unless_the_user_edited_them() {
     let note = gmail.note(&kept);
     assert_eq!(
         note["agent_safety"]["status"], "released",
-        "reconversion must preserve release: {note}"
+        "unchanged reconversion must preserve release: {note}"
     );
     assert_eq!(gmail.note(&gone)["agent_safety"]["status"], "released");
     assert_eq!(note["note"]["fields"]["converter"], 2);

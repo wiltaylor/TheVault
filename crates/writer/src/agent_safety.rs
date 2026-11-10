@@ -121,6 +121,26 @@ pub fn fingerprint(kind: &str, doc: &Doc) -> String {
     )
 }
 
+// Only image rendering is reduced. Paragraph text, image alt text and captions
+// remain evidence, so replacing a plain-text import with different HTML is held.
+fn reduce_image_rendering(value: &mut serde_json::Value) {
+    let alt = if value["kind"] == "image" {
+        Some(value["fields"]["alt"].as_str().unwrap_or("").to_owned())
+    } else if value["kind"] == "paragraph" {
+        value["fields"]["text"].as_str().and_then(html_blocks::pending_image).map(|(alt, _)| alt)
+    } else {
+        None
+    };
+    if let Some(alt) = alt {
+        let caption = value["fields"]["caption"].as_str().unwrap_or("").to_owned();
+        *value = serde_json::json!({"image_text":alt,"caption":caption});
+    } else if let Some(blocks) = value["blocks"].as_array_mut() {
+        for block in blocks {
+            reduce_image_rendering(block);
+        }
+    }
+}
+
 impl Writer {
     /// Gmail messages are immutable by Gmail id. Only the trusted sync task may carry a
     /// decision across a local rendering change of that same message. This is not an
@@ -154,9 +174,7 @@ impl Writer {
                 fields.remove("html");
                 fields.remove("attachments");
             }
-            if let Some(blocks) = value["blocks"].as_array_mut() {
-                blocks.retain(|b| b["labels"][0] != "body");
-            }
+            reduce_image_rendering(&mut value);
             value
         };
         if without_rendering(&old) != without_rendering(next) {

@@ -541,8 +541,15 @@ fn round3_conversion_preserves_pending_and_cleared_same_message_only() {
         let w = open(dir.path());
         w.activate_agent_safety().unwrap();
         let body = |text: &str| {
+            let block = if text == "Completed image rendering" {
+                serde_json::json!({"kind":"image","fields":{"asset":"image-id","alt":"Logo"}})
+            } else if text == "Image placeholder" {
+                serde_json::json!({"kind":"paragraph","fields":{"text":"[Image: Logo](https://example.test/logo.png) (not downloaded yet)"}})
+            } else {
+                serde_json::json!({"kind":"paragraph","fields":{"text":text}})
+            };
             Input::Json(
-                serde_json::json!({"fields":{"title":"Same message", "gmail_ref":"immutable-id"},"blocks":[{"kind":"content","labels":["body"],"blocks":[{"kind":"paragraph","fields":{"text":text}}]}]}),
+                serde_json::json!({"fields":{"title":"Same message", "gmail_ref":"immutable-id"},"blocks":[{"kind":"content","labels":["body"],"blocks":[block]}]}),
             )
         };
         let note = w
