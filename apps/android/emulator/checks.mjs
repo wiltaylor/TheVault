@@ -276,7 +276,9 @@ async function reboot(forceRecovery = false) {
     restart: async () => {
       // Preserve the crash log before boot.sh opens emulator.log for the new process.
       const dir = join(repo, process.env.THEVAULT_EMULATOR_LOGS ?? "target/android-emulator");
-      if (existsSync(join(dir, "emulator.log"))) copyFileSync(join(dir, "emulator.log"), join(logs, "emulator-crash.log"));
+      const crash = existsSync(join(logs, "emulator-crash.log"))
+        ? `emulator-crash-${Date.now()}.log` : "emulator-crash.log";
+      if (existsSync(join(dir, "emulator.log"))) copyFileSync(join(dir, "emulator.log"), join(logs, crash));
       execFileSync("bash", [join(repo, "apps/android/emulator/boot.sh"), "-writable-system"], {
         cwd: repo, env: process.env, stdio: "inherit", timeout: 720_000,
       });
@@ -284,6 +286,8 @@ async function reboot(forceRecovery = false) {
     reconnect: async () => {
       await pw?.device.close().catch(() => {});
       pw = null;
+      // System-image setup also reboots, before our APK has been installed.
+      if (!shellTry(`pm path ${PKG}`).includes("package:")) return;
       await root();
       wakeAndUnlock();
       openApp();
