@@ -185,6 +185,11 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
         }
     }
     // The Outbox bypass (outbox X11): only an agent that sends without review may give it.
+    if !bp.outbox.allows(&tp.outbox) {
+        problems.push(
+            "it would broaden send_without_review conditions beyond this agent's grant".to_owned(),
+        );
+    }
     for ((name, on), (_, mine)) in tp.outbox.switches().into_iter().zip(bp.outbox.switches()) {
         if on && !mine {
             problems.push(format!(
