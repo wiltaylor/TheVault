@@ -526,7 +526,7 @@ fn fs_paths_are_refused_and_any_host_or_a_missing_secret_warns() {
     // script is refused, naming the task and its folders; the same task without a source is not.
     let said = api.refused(&fake, "other", NIGHTLY, Some(&changed));
     let why = said["error"].as_str().unwrap();
-    assert!(why.contains("task mover (reads /srv/in)"), "{said}");
+    assert!(why.contains("task mover (reads /srv/in,"), "{said}");
     assert!(why.contains("may not change script \"stamp\""), "{said}");
     api.propose(&fake, "other", NIGHTLY, None);
     // The proposal made before the paths were given is refused at Apply.
@@ -655,20 +655,24 @@ fn a_task_with_its_script_is_written_in_one_apply_and_changes_and_deletes_are_ch
     );
     assert_eq!(api.task("digest").unwrap()["schedule"], "0 9 * * 1-5");
     let changed = format!("{digest}\nfn extra() -> int {{\n    1\n}}\n");
-    let p = api.propose(
+    let refused = api.refused(
         &fake,
         "digest",
         "schedule = \"0 9 * * 1-5\"\nscript = \"digest\"\n",
         Some(&changed),
     );
+    assert!(refused.to_string().contains("task other (hosts *)"));
+    // File-only changes still show shared roles, without a source-change warning.
+    let p = api.propose(
+        &fake,
+        "digest",
+        "schedule = \"0 10 * * 1-5\"\nscript = \"digest\"\n",
+        None,
+    );
     assert_eq!(p["runs_as"].as_array().unwrap().len(), 1, "{p}");
     assert_eq!(p["runs_as"][0]["name"], "other");
     let w = warnings(&p);
-    assert!(
-        w.iter()
-            .any(|w| w.starts_with("Task other may reach any host")),
-        "{w:?}"
-    );
+    assert!(w.is_empty(), "{w:?}");
 
     // A delete keeps the script and the run history.
     let ran = api.ok("POST", "/api/tasks/digest/run?wait=true", json!({}));

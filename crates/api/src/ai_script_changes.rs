@@ -11,8 +11,9 @@
 //!   `Direct::covers` never covers a `script_proposal` (TV-32 Q2 O1). `POST /api/ai/apply` applies
 //!   it through [`apply_script`], with `admin` or as the copy that waits in the thread.
 //! - A change is refused, at the proposal and again at Apply, while any run of the script has
-//!   `read_paths` or `write_paths`: the agent's code would reach those folders (TV-32 Q3, TV-87).
-//!   [`shared_paths_refused`] names each such run. A delete is not affected.
+//!   `read_paths`, `write_paths`, `secrets` or `allow_domains`: the agent's code would inherit
+//!   those grants (TV-135). [`shared_paths_refused`] names each such run. Shipped scripts are
+//!   read-only for agents, including deletion, even when the user edited or unbound them.
 //! - A change that adds a call to `device::sms_send` is refused, at the proposal and again at Apply
 //!   ([`sms_send_refused`], TV-98, TV-72 policy P-a), whatever runs the script.
 //! - A change to a script that a device file runs carries `device` ([`on_phone`], TV-98, TV-72
@@ -117,21 +118,42 @@ pub(crate) fn described(uses: &[ScriptUse]) -> (Value, Vec<String>) {
     (uses.iter().map(use_json).collect(), warnings)
 }
 
-/// The refusal of a new source for script `script` when a run of it has `fs` paths (TV-71 review
-/// F1, TV-87, TV-32 Q3): the agent's code would run with those folders. Task `except_task` is left
-/// out: a task's proposed file has no paths, and its current one is not what runs. Only tasks have
-/// `fs` paths; the refusal names each run with its folders.
+/// Shipped script names stay read-only even if the user edited or unbound them.
+pub(crate) fn shipped_script_refused(script: &str) -> Option<String> {
+    if writer::SHIPPED_FILES
+        .iter()
+        .any(|f| f.path == format!("scripts/{script}.ws"))
+    {
+        return Some(format!(
+            "an agent may not change script {script:?}: shipped scripts are read-only for agents. Tell the user the change to make in the editor"
+        ));
+    }
+    None
+}
+
+/// Refuse agent source edits that inherit folders, secrets or host grants from any run.
+/// The task or tool being replaced is excluded because its proposed grants are checked
+/// separately and a source change always waits for Apply.
 pub(crate) fn shared_paths_refused(
     w: &Writer,
     script: &str,
     except_task: Option<&str>,
+    except_tool: Option<&str>,
 ) -> Option<String> {
+    if let Some(why) = shipped_script_refused(script) {
+        return Some(why);
+    }
     let with_paths: Vec<String> = w
-        .script_runs_as(script, None)
+        .script_runs_as(script, except_tool)
         .unwrap_or_default()
         .into_iter()
         .filter(|u| !(u.kind == "task" && Some(u.name.as_str()) == except_task))
-        .filter(|u| !u.read_paths.is_empty() || !u.write_paths.is_empty())
+        .filter(|u| {
+            !u.read_paths.is_empty()
+                || !u.write_paths.is_empty()
+                || !u.secrets.is_empty()
+                || !u.allow_domains.is_empty()
+        })
         .map(|u| {
             let mut paths = Vec::new();
             if !u.read_paths.is_empty() {
@@ -140,6 +162,12 @@ pub(crate) fn shared_paths_refused(
             if !u.write_paths.is_empty() {
                 paths.push(format!("writes {}", u.write_paths.join(", ")));
             }
+            if !u.secrets.is_empty() {
+                paths.push(format!("secrets {}", u.secrets.join(", ")));
+            }
+            if !u.allow_domains.is_empty() {
+                paths.push(format!("hosts {}", u.allow_domains.join(", ")));
+            }
             format!("{} {} ({})", u.kind, u.name, paths.join(", "))
         })
         .collect();
@@ -147,7 +175,7 @@ pub(crate) fn shared_paths_refused(
         return None;
     }
     Some(format!(
-        "an agent may not change script {script:?}: {} runs it with read_paths or write_paths, so the new code would reach those folders. Tell the user the change to make in the editor",
+        "an agent may not change script {script:?}: {} runs it with read_paths, write_paths, secrets or allow_domains, so the new code would inherit those grants. Tell the user the change to make in the editor",
         with_paths.join(", ")
     ))
 }
@@ -553,7 +581,7 @@ pub(crate) fn propose_change(
             None,
         ));
     }
-    if let Some(why) = shared_paths_refused(w, name, None) {
+    if let Some(why) = shared_paths_refused(w, name, None, None) {
         return Err(refused(why));
     }
     if let Some(why) = sms_send_refused(name, before.as_deref(), after) {
@@ -617,6 +645,9 @@ pub(crate) fn propose_delete(
     input: &Value,
 ) -> Result<ToolOut, ToolOut> {
     let name = name_arg(input)?;
+    if let Some(why) = shipped_script_refused(name) {
+        return Err(refused(why));
+    }
     let before = w.read_script(name).map_err(|_| missing(w, name))?;
     let uses = w
         .script_runs_as(name, None)
@@ -682,6 +713,9 @@ pub(crate) fn apply_script(w: &Writer, p: &Value, admin: bool) -> Result<Value, 
     };
     let shown = &p["runs_as"];
     w.commit_checked(|w| -> Result<Vec<store::Change>, ApplyError> {
+        if let Some(why) = shipped_script_refused(name) {
+            return Err(ApplyError::Refused(why));
+        }
         require_phone_script_admin(w, name, after, admin)?;
         if w.read_script(name).ok().as_deref() != before {
             return Err(ApplyError::Stale(format!(
@@ -690,7 +724,7 @@ pub(crate) fn apply_script(w: &Writer, p: &Value, admin: bool) -> Result<Value, 
         }
         // A change is refused while a run of the script has folders (TV-87). A delete is not.
         if after.is_some()
-            && let Some(why) = shared_paths_refused(w, name, None)
+            && let Some(why) = shared_paths_refused(w, name, None, None)
         {
             return Err(ApplyError::Refused(why));
         }
