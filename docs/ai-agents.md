@@ -28,6 +28,24 @@ The Assistant (`agents/assistant.wcl`) is shipped with every vault. It cannot be
 
 ## Permissions
 
+`types` is the read ceiling. Optional `change_types` limits changes to a subset of it.
+Optional `change_fields` restricts edits of a type to named fields and forbids create,
+archive and delete for that type. Absent settings preserve existing behavior.
+For example, a triage agent can read people but only update an email's processed flag
+and write triage records with:
+
+```wcl
+permissions {
+  types = ["person", "email", "triage_record"]
+  change_types = ["email", "triage_record"]
+  change_fields = { email = ["processed"] }
+}
+```
+
+The server checks proposals and rechecks current permissions and note content when
+Apply commits. Confirmation switches never widen these permissions. The File tab
+edits these restrictions, and saving other settings preserves them.
+
 An agent's permissions are its own: nothing is inherited from Settings > AI.
 
 - **Tools**: the chat tools the agent is offered. A tool the server cannot offer, such as `web_search` without a Brave Search key, is still left out.

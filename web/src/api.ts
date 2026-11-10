@@ -663,6 +663,8 @@ export interface AgentList {
 export interface AgentPermissions {
   tools: string[] | null;
   types: string[] | null;
+  change_types?: string[] | null;
+  change_fields?: Record<string, string[]>;
   confirm: AiConfirm;
   web: AiWeb;
   /** The Outbox switches (outbox X2, X9); absent from a server before the Outbox. */

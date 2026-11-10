@@ -1145,6 +1145,8 @@ struct Setup {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Limits {
     types: Option<Vec<String>>,
+    change_types: Option<Vec<String>>,
+    change_fields: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Limits {
@@ -1155,6 +1157,8 @@ impl Limits {
     pub(crate) fn of_permissions(p: &schema::AgentPermissions) -> Limits {
         Limits {
             types: p.types.clone(),
+            change_types: p.change_types.clone(),
+            change_fields: p.change_fields.clone(),
         }
     }
 
@@ -1164,6 +1168,39 @@ impl Limits {
             None => name != agent_threads::THREAD_TYPE && name != agent_memory::MEMORY_TYPE,
             Some(t) => t.iter().any(|n| n == name),
         }
+    }
+
+    pub(crate) fn allows_change(&self, name: &str) -> bool {
+        self.allows(name) && self.change_types.as_ref().is_none_or(|types| types.iter().any(|t| t == name))
+    }
+
+    /// Check the actual current note and replacement, never the proposal's claimed diff.
+    fn check_change(&self, w: &Writer, p: &Value) -> Result<(), ApplyError> {
+        let op = p["op"].as_str().unwrap_or("update");
+        if op == "download" { return Ok(()); }
+        let current = if op == "create" { None } else {
+            Some(w.read(p["note_id"].as_str().unwrap_or_default())?)
+        };
+        let t = current.as_ref().map(|n| n.type_name.as_str()).unwrap_or_else(|| p["type"].as_str().unwrap_or_default());
+        if !self.allows_change(t) {
+            return Err(ApplyError::Refused(format!("This agent may not change {t} notes.")));
+        }
+        if let Some(fields) = self.change_fields.get(t) {
+            if op != "update" {
+                return Err(ApplyError::Refused(format!("This agent may only edit allowed fields of {t} notes.")));
+            }
+            let before = doc_to_json(&current.as_ref().expect("update has current note").doc);
+            let after = &p["after"];
+            let empty = serde_json::Map::new();
+            let bf = before["fields"].as_object().unwrap_or(&empty);
+            let af = after["fields"].as_object().unwrap_or(&empty);
+            if before["blocks"] != after["blocks"] || bf.keys().chain(af.keys()).any(|k| {
+                !SERVER_FIELDS.contains(&k.as_str()) && !fields.contains(k) && bf.get(k) != af.get(k)
+            }) {
+                return Err(ApplyError::Refused(format!("This agent may only change allowed fields of {t} notes.")));
+            }
+        }
+        Ok(())
     }
 
     /// `rows` without the notes of types the agent may not read, and how many went.
@@ -1191,7 +1228,7 @@ impl Limits {
             }
             _ => return None,
         };
-        (!self.allows(&type_name))
+        (!(if verb == "read" { self.allows(&type_name) } else { self.allows_change(&type_name) }))
             .then(|| ToolOut::error(format!("This agent may not {verb} {type_name} notes.")))
     }
 }
@@ -3418,7 +3455,13 @@ fn run_tool(
     if call.error.is_none() && crate::ai_outbox::is_draft_tool(&call.name) {
         return crate::ai_outbox::draft(w, scope, agent, limits, &call.name, &call.input);
     }
-    let out = propose_or_read(w, author, limits, agent, call);
+    let mut out = propose_or_read(w, author, limits, agent, call);
+    if let Some(("proposal", p)) = &mut out.proposal {
+        p["proposer"] = json!(agent.name);
+        if let Err(e) = limits.check_change(w, p) {
+            return ToolOut::error(e.to_string());
+        }
+    }
     match &out.proposal {
         Some((event, p)) if direct.covers(event, p) => {
             let (event, p) = (*event, p.clone());
@@ -3730,27 +3773,32 @@ pub(crate) fn apply_change_with_admin(
         v @ Value::Object(_) => Ok(Input::Json(v.clone())),
         _ => Err(ApplyError::Invalid("the change has no after".into())),
     };
-    let saved = match op {
-        "update" => w.update(
-            member("note_id")?,
-            &doc()?,
-            Some(member("base_version")?),
-            author,
-        )?,
-        "create" => w.create(member("type")?, &doc()?, author)?,
-        "archive" | "unarchive" => w.set_archived(
-            member("note_id")?,
-            op == "archive",
-            Some(member("base_version")?),
-            author,
-        )?,
-        "delete" => w.delete(member("note_id")?, Some(member("base_version")?), author)?,
+    let input = if matches!(op, "update" | "create") { Some(doc()?) } else { None };
+    let write = match op {
+        "update" => writer::CheckedNoteWrite::Update(member("note_id")?, input.as_ref().expect("update input"), Some(member("base_version")?)),
+        "create" => writer::CheckedNoteWrite::Create(member("type")?, input.as_ref().expect("create input")),
+        "archive" | "unarchive" => writer::CheckedNoteWrite::Archive(member("note_id")?, op == "archive", Some(member("base_version")?)),
+        "delete" => writer::CheckedNoteWrite::Delete(member("note_id")?, Some(member("base_version")?)),
         other => {
             return Err(ApplyError::Invalid(format!(
                 "{other:?} is not a note change"
             )));
         }
     };
+    let saved = w.commit_checked_note(write, author, |w| -> Result<(), ApplyError> {
+        let proposer = p["proposer"].as_str().or(match author {
+            Author::Agent(name) => Some(name.split("/sub:").next().unwrap_or(name)),
+            _ => None,
+        });
+        if let Some(name) = proposer {
+            let agent = w.agent(name)?;
+            if !agent.enabled {
+                return Err(ApplyError::Refused("The proposing agent is disabled.".into()));
+            }
+            Limits::of(&agent).check_change(w, p)?;
+        }
+        Ok(())
+    })?;
     Ok(json!({ "op": op, "note_id": saved.id, "version": saved.version }))
 }
 

@@ -197,6 +197,14 @@ pub fn intersect(own: &AgentPermissions, parent: &AgentPermissions) -> AgentPerm
         (Some(x), Some(y)) => Some(x.iter().filter(|t| y.contains(t)).cloned().collect()),
     };
     let mut p = own.clone();
+    p.change_types = match (&own.change_types, &parent.change_types) {
+        (Some(a), Some(b)) => Some(a.iter().filter(|t| b.contains(t)).cloned().collect()),
+        (Some(a), None) | (None, Some(a)) => Some(a.clone()),
+        (None, None) => None,
+    };
+    for (t, fields) in &parent.change_fields {
+        p.change_fields.entry(t.clone()).and_modify(|own| own.retain(|f| fields.contains(f))).or_insert_with(|| fields.clone());
+    }
     p.tools = lists(&own.tools, &parent.tools);
     p.skills = lists(&own.skills, &parent.skills);
     // An absent types list is every type but threads and memories, so a list meets the other
