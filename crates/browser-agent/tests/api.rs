@@ -10,6 +10,27 @@ use tempfile::TempDir;
 
 const TOKEN: &str = "test-token-0123456789abcdef";
 
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_b_cannot_read_agent_a_browser_storage() {
+    let b = Agent::start().await;
+    // A storage-state export contains the same credentials as a live profile.
+    // The identity header is supplied by the server, never by the model.
+    let a = b.http.post(b.url("/run"))
+        .bearer_auth(TOKEN)
+        .header("x-vault-agent", "agent-a")
+        .json(&json!({"command": "printf '%s' '{\"cookies\":[{\"name\":\"session\",\"value\":\"fixture-only\"}]}' > storage-state.json"}))
+        .send().await.unwrap();
+    assert_eq!(a.status(), 200);
+    let a: Value = a.json().await.unwrap();
+    assert_eq!(a["exit"], 0);
+    let other = b.http.get(b.url("/file"))
+        .bearer_auth(TOKEN)
+        .header("x-vault-agent", "agent-b")
+        .query(&[("path", "storage-state.json")])
+        .send().await.unwrap();
+    assert_eq!(other.status(), 404, "agent B can read agent A's exported cookies");
+}
+
 struct Agent {
     base: String,
     work: TempDir,
