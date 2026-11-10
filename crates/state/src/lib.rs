@@ -63,7 +63,7 @@ pub use notifications::{
 };
 pub use pins::{PinEntry, PinKind, PinNode};
 pub use runs::{RunId, RunOutcome, TaskRun};
-pub use secrets::{SecretInfo, SecretKey, key_file_path};
+pub use secrets::{LoginInfo, LoginSecret, SecretInfo, SecretKey, canonical_origin, key_file_path};
 pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck};
 pub use shipped::ShippedRecord;
 
@@ -166,7 +166,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 22;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -604,7 +604,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=19 => {
+        0..=21 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -675,6 +675,27 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 19 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_call_ids (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, principal TEXT NOT NULL, expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS agent_call_refusals (call TEXT NOT NULL, note TEXT NOT NULL, agent TEXT NOT NULL, created_ms INTEGER NOT NULL, PRIMARY KEY(call,note));")?;
+            }
+            if version <= 21 {
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
+                    CREATE TRIGGER IF NOT EXISTS login_namespace BEFORE INSERT ON login_secrets WHEN EXISTS(SELECT 1 FROM secrets WHERE name=NEW.name) BEGIN SELECT RAISE(ABORT, 'secret kind conflict'); END;
+                    CREATE TRIGGER IF NOT EXISTS string_namespace BEFORE INSERT ON secrets WHEN EXISTS(SELECT 1 FROM login_secrets WHERE name=NEW.name) BEGIN SELECT RAISE(ABORT, 'secret kind conflict'); END;")?;
+            }
+            for (column, definition) in [
+                ("username", "TEXT NOT NULL DEFAULT ''"),
+                ("origins", "TEXT NOT NULL DEFAULT '[]'"),
+                ("has_totp", "INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('login_secrets') WHERE name=?1)",
+                    [column],
+                    |r| r.get(0),
+                )?;
+                if !exists {
+                    tx.execute_batch(&format!(
+                        "ALTER TABLE login_secrets ADD COLUMN {column} {definition}"
+                    ))?;
+                }
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
