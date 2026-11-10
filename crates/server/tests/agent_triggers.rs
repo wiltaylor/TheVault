@@ -472,7 +472,7 @@ fn safety_delete_of_held_note_does_not_enqueue_its_content() {
     api.advance("PT31S");
     assert!(chat.message_requests().is_empty());
     assert!(
-        api.get("/api/agents/reader/runs")["runs"]
+        api.get("/api/agents/reader/runs")["triggers"][0]["runs"]
             .as_array()
             .unwrap()
             .is_empty()
