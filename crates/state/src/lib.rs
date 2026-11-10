@@ -681,9 +681,21 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                     CREATE TRIGGER IF NOT EXISTS login_namespace BEFORE INSERT ON login_secrets WHEN EXISTS(SELECT 1 FROM secrets WHERE name=NEW.name) BEGIN SELECT RAISE(ABORT, 'secret kind conflict'); END;
                     CREATE TRIGGER IF NOT EXISTS string_namespace BEFORE INSERT ON secrets WHEN EXISTS(SELECT 1 FROM login_secrets WHERE name=NEW.name) BEGIN SELECT RAISE(ABORT, 'secret kind conflict'); END;")?;
             }
-            for (column, definition) in [("username", "TEXT NOT NULL DEFAULT ''"), ("origins", "TEXT NOT NULL DEFAULT '[]'"), ("has_totp", "INTEGER NOT NULL DEFAULT 0")] {
-                let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('login_secrets') WHERE name=?1)", [column], |r| r.get(0))?;
-                if !exists { tx.execute_batch(&format!("ALTER TABLE login_secrets ADD COLUMN {column} {definition}"))?; }
+            for (column, definition) in [
+                ("username", "TEXT NOT NULL DEFAULT ''"),
+                ("origins", "TEXT NOT NULL DEFAULT '[]'"),
+                ("has_totp", "INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('login_secrets') WHERE name=?1)",
+                    [column],
+                    |r| r.get(0),
+                )?;
+                if !exists {
+                    tx.execute_batch(&format!(
+                        "ALTER TABLE login_secrets ADD COLUMN {column} {definition}"
+                    ))?;
+                }
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

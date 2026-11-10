@@ -17,14 +17,29 @@ const NONCE_LEN: usize = 24;
 pub fn canonical_origin(origin: &str) -> Option<String> {
     let rest = origin.split_once("://")?.1;
     let authority = rest.strip_suffix('/').unwrap_or(rest);
-    if origin.trim() != origin || authority.contains(['/', '\\', '@', '?', '#']) { return None; }
+    if origin.trim() != origin || authority.contains(['/', '\\', '@', '?', '#']) {
+        return None;
+    }
     let mut url = url::Url::parse(origin).ok()?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
-        || !url.username().is_empty() || url.password().is_some() || url.path() != "/"
-        || url.query().is_some() || url.fragment().is_some() { return None; }
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
     if let Some(url::Host::Domain(domain)) = url.host() {
         let domain = domain.strip_suffix('.').unwrap_or(domain);
-        if domain.split('.').any(str::is_empty) || !domain.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'.')) { return None; }
+        if domain.split('.').any(str::is_empty)
+            || !domain
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'.'))
+        {
+            return None;
+        }
         let domain = domain.to_owned();
         url.set_host(Some(&domain)).ok()?;
     }
@@ -162,7 +177,8 @@ impl State {
                 },
             )
             .map_err(|_| Error::Corrupt("login encryption failed".into()))?;
-        let origins = serde_json::to_string(&login.origins).map_err(|_| Error::Corrupt("login origins encoding failed".into()))?;
+        let origins = serde_json::to_string(&login.origins)
+            .map_err(|_| Error::Corrupt("login origins encoding failed".into()))?;
         self.conn().execute("INSERT INTO login_secrets (name,nonce,ciphertext,created_ms,updated_ms,username,origins,has_totp) VALUES (?1,?2,?3,?4,?4,?5,?6,?7) ON CONFLICT(name) DO UPDATE SET nonce=excluded.nonce,ciphertext=excluded.ciphertext,updated_ms=excluded.updated_ms,username=excluded.username,origins=excluded.origins,has_totp=excluded.has_totp",
             params![name, nonce.as_slice(), ciphertext, self.now(), login.username, origins, login.totp_seed.is_some()])?;
         Ok(())
@@ -195,7 +211,9 @@ impl State {
                     aad: aad.as_bytes(),
                 },
             )
-            .map_err(|_| Error::WrongKey { detail: format!("login {name:?} could not be decrypted with the loaded key file") })?;
+            .map_err(|_| Error::WrongKey {
+                detail: format!("login {name:?} could not be decrypted with the loaded key file"),
+            })?;
         serde_json::from_slice(&plaintext)
             .map(Some)
             .map_err(|_| Error::Corrupt("invalid login payload".into()))
@@ -206,8 +224,14 @@ impl State {
         let mut stmt = conn.prepare("SELECT name,created_ms,updated_ms,username,origins,has_totp FROM login_secrets ORDER BY name")?;
         let rows = stmt.query_map([], |r| {
             let origins: String = r.get(4)?;
-            Ok(LoginInfo { name: r.get(0)?, created_ms: r.get(1)?, updated_ms: r.get(2)?, username: r.get(3)?,
-                origins: serde_json::from_str(&origins).unwrap_or_default(), has_totp: r.get(5)? })
+            Ok(LoginInfo {
+                name: r.get(0)?,
+                created_ms: r.get(1)?,
+                updated_ms: r.get(2)?,
+                username: r.get(3)?,
+                origins: serde_json::from_str(&origins).unwrap_or_default(),
+                has_totp: r.get(5)?,
+            })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
