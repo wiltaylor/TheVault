@@ -388,7 +388,7 @@ impl AgentPlan {
         while lane.started.front().is_some_and(|t| *t <= now - HOUR_MS) {
             lane.started.pop_front();
         }
-        lane.started.len() >= MAX_PER_HOUR
+        lane.started.len() + lane.queue.len() >= MAX_PER_HOUR
     }
 
     /// Start `job` now, queue it behind its agent's running runs, or skip it over the hourly
@@ -399,7 +399,7 @@ impl AgentPlan {
         while lane.started.front().is_some_and(|t| *t <= now - HOUR_MS) {
             lane.started.pop_front();
         }
-        if lane.started.len() >= MAX_PER_HOUR {
+        if lane.started.len() + lane.queue.len() >= MAX_PER_HOUR {
             eprintln!(
                 "agent {:?}: trigger {:?} skipped: {MAX_PER_HOUR} runs started in the last hour",
                 job.agent, job.trigger
@@ -434,16 +434,21 @@ impl AgentPlan {
                 );
             }
         }
-        lane.started.push_back(now);
         lane.queue.push_back(job);
         Admitted::Queued
     }
 
     /// The next waiting run of `agent`, or `None`, freeing its slot, when none waits.
-    fn next_queued(&mut self, agent: &str) -> Option<AgentJob> {
+    fn next_queued(&mut self, agent: &str, now: i64) -> Option<AgentJob> {
         let lane = self.lanes.get_mut(agent)?;
         match lane.queue.pop_front() {
-            Some(j) => Some(j),
+            Some(j) => {
+                while lane.started.front().is_some_and(|t| *t <= now - HOUR_MS) {
+                    lane.started.pop_front();
+                }
+                lane.started.push_back(now);
+                Some(j)
+            },
             None => {
                 lane.running = lane.running.saturating_sub(1);
                 None
@@ -496,6 +501,12 @@ impl Scheduler {
                 eprintln!("agent runs left running: {e}");
             }
             self.reload_agents();
+            if let Ok(starts) = self.writer.state().recent_agent_starts(self.clock.now_ms() - HOUR_MS) {
+                let mut plan = self.plan();
+                for (agent, at) in starts {
+                    plan.agents.lanes.entry(agent).or_default().started.push_back(at);
+                }
+            }
             self.wake.notify_all();
         }
     }
@@ -701,6 +712,7 @@ impl Scheduler {
         for note in processed {
             let _ = self.writer.state().acknowledge_trigger_event(&note, now - DEBOUNCE_MS);
         }
+        let _ = self.writer.state().prune_trigger_events(now - DEBOUNCE_MS);
         let state = self.writer.state();
         match state.due_trigger_jobs(now) {
             Ok(queued) => for row in queued {
@@ -1084,7 +1096,7 @@ impl Scheduler {
     pub(crate) fn agent_work(&self, mut job: AgentJob) {
         loop {
             self.run_agent_job(&job);
-            let next = self.plan().agents.next_queued(&job.agent);
+            let next = self.plan().agents.next_queued(&job.agent, self.clock.now_ms());
             match next {
                 Some(j) => job = j,
                 None => break,

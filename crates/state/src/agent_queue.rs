@@ -127,6 +127,17 @@ impl State {
         self.conn().execute("DELETE FROM trigger_events WHERE note=?1 AND at_ms<=?2", params![note,before])?;
         Ok(())
     }
+
+    pub fn prune_trigger_events(&self, before: i64) -> Result<()> {
+        self.conn().execute("DELETE FROM trigger_events WHERE at_ms<=?1", [before])?;
+        Ok(())
+    }
+
+    pub fn recent_agent_starts(&self, since: i64) -> Result<Vec<(String,i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT agent,started_ms FROM agent_runs WHERE started_ms>?1 ORDER BY started_ms")?;
+        Ok(stmt.query_map([since], |r| Ok((r.get(0)?,r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+    }
     pub fn preview_trigger_backfill(&self, principal: &str, agent: &str, trigger: &str, payload: &str) -> Result<String> {
         let id = self.new_ulid().to_string();
         self.conn().execute("INSERT INTO trigger_backfill_previews VALUES (?1,?2,?3,?4,?5,?6)", params![id,principal,agent,trigger,payload,self.now()+600_000])?;
@@ -147,7 +158,7 @@ impl State {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         if let Some(note) = note {
-            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND status IN ('waiting','running'))", params![agent, trigger, note], |r| r.get(0))?;
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND status IN ('waiting','admitted','running'))", params![agent, trigger, note], |r| r.get(0))?;
             if exists { return Ok(None); }
         }
         let count: i64 = tx.query_row("SELECT count(*) FROM trigger_jobs WHERE agent=?1 AND status IN ('waiting','admitted')", [agent], |r| r.get(0))?;
