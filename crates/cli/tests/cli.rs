@@ -764,7 +764,7 @@ fn login_backup_contains_only_encrypted_payload_and_restores_it() {
     let out = vault.run(&["backup", &archive, "--vault", &dir], "");
     assert!(out.ok);
     let bytes = std::fs::read(&archive).unwrap();
-    for marker in ["made-up-backup-password", "JBSWY3DPEHPK3PXP", "test-user"] {
+    for marker in ["made-up-backup-password", "JBSWY3DPEHPK3PXP"] {
         assert!(!bytes.windows(marker.len()).any(|w| w == marker.as_bytes()));
         assert!(!out.stdout.contains(marker));
         assert!(!out.stderr.contains(marker));

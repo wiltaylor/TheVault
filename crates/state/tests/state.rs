@@ -491,11 +491,7 @@ fn login_credentials_are_separate_encrypted_and_name_bound() {
     assert!(!debug.contains(login.totp_seed.as_ref().unwrap()));
     drop(state);
     let bytes = read_db_bytes(&dir);
-    for marker in [
-        &login.username,
-        &login.password,
-        login.totp_seed.as_ref().unwrap(),
-    ] {
+    for marker in [&login.password, login.totp_seed.as_ref().unwrap()] {
         assert!(!contains(&bytes, marker.as_bytes()));
     }
     let reopened = open_with_key(&dir, key);
@@ -1239,7 +1235,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 21);
+    assert_eq!(version, 22);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.

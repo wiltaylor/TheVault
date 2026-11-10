@@ -13,6 +13,24 @@ use crate::{Error, Result, State, random_bytes};
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 24;
 
+/// Canonical HTTP(S) origin, shared by stored grants and browser page matching.
+pub fn canonical_origin(origin: &str) -> Option<String> {
+    let rest = origin.split_once("://")?.1;
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    if origin.trim() != origin || authority.contains(['/', '\\', '@', '?', '#']) { return None; }
+    let mut url = url::Url::parse(origin).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
+        || !url.username().is_empty() || url.password().is_some() || url.path() != "/"
+        || url.query().is_some() || url.fragment().is_some() { return None; }
+    if let Some(url::Host::Domain(domain)) = url.host() {
+        let domain = domain.strip_suffix('.').unwrap_or(domain);
+        if domain.split('.').any(str::is_empty) || !domain.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'.')) { return None; }
+        let domain = domain.to_owned();
+        url.set_host(Some(&domain)).ok()?;
+    }
+    Some(url.origin().ascii_serialization())
+}
+
 /// A Login payload. Never format or serialize it into a response, log or script binding.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,6 +144,8 @@ pub struct SecretInfo {
 impl State {
     /// Stores a Login in a separate, encrypted namespace, never readable by `get_secret`.
     pub fn set_login_secret(&self, name: &str, login: &LoginSecret) -> Result<()> {
+        // Replacing must not silently overwrite a credential under the wrong key.
+        self.get_login_secret(name)?;
         let payload = serde_json::to_vec(login)
             .map_err(|_| Error::Corrupt("login encoding failed".into()))?;
         let mut nonce = [0u8; NONCE_LEN];
@@ -142,8 +162,9 @@ impl State {
                 },
             )
             .map_err(|_| Error::Corrupt("login encryption failed".into()))?;
-        self.conn().execute("INSERT INTO login_secrets (name,nonce,ciphertext,created_ms,updated_ms) VALUES (?1,?2,?3,?4,?4) ON CONFLICT(name) DO UPDATE SET nonce=excluded.nonce,ciphertext=excluded.ciphertext,updated_ms=excluded.updated_ms",
-            params![name, nonce.as_slice(), ciphertext, self.now()])?;
+        let origins = serde_json::to_string(&login.origins).map_err(|_| Error::Corrupt("login origins encoding failed".into()))?;
+        self.conn().execute("INSERT INTO login_secrets (name,nonce,ciphertext,created_ms,updated_ms,username,origins,has_totp) VALUES (?1,?2,?3,?4,?4,?5,?6,?7) ON CONFLICT(name) DO UPDATE SET nonce=excluded.nonce,ciphertext=excluded.ciphertext,updated_ms=excluded.updated_ms,username=excluded.username,origins=excluded.origins,has_totp=excluded.has_totp",
+            params![name, nonce.as_slice(), ciphertext, self.now(), login.username, origins, login.totp_seed.is_some()])?;
         Ok(())
     }
 
@@ -174,41 +195,21 @@ impl State {
                     aad: aad.as_bytes(),
                 },
             )
-            .map_err(|_| Error::Corrupt("login decryption failed".into()))?;
+            .map_err(|_| Error::WrongKey { detail: format!("login {name:?} could not be decrypted with the loaded key file") })?;
         serde_json::from_slice(&plaintext)
             .map(Some)
             .map_err(|_| Error::Corrupt("invalid login payload".into()))
     }
 
     pub fn list_login_secrets(&self) -> Result<Vec<LoginInfo>> {
-        let rows = {
-            let conn = self.conn();
-            let mut stmt =
-                conn.prepare("SELECT name,created_ms,updated_ms FROM login_secrets ORDER BY name")?;
-            stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        rows.into_iter()
-            .map(|(name, created_ms, updated_ms)| {
-                let login = self
-                    .get_login_secret(&name)?
-                    .ok_or_else(|| Error::UnknownSecret(name.clone()))?;
-                Ok(LoginInfo {
-                    name,
-                    username: login.username,
-                    origins: login.origins,
-                    has_totp: login.totp_seed.is_some(),
-                    created_ms,
-                    updated_ms,
-                })
-            })
-            .collect()
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT name,created_ms,updated_ms,username,origins,has_totp FROM login_secrets ORDER BY name")?;
+        let rows = stmt.query_map([], |r| {
+            let origins: String = r.get(4)?;
+            Ok(LoginInfo { name: r.get(0)?, created_ms: r.get(1)?, updated_ms: r.get(2)?, username: r.get(3)?,
+                origins: serde_json::from_str(&origins).unwrap_or_default(), has_totp: r.get(5)? })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn is_login_secret(&self, name: &str) -> Result<bool> {

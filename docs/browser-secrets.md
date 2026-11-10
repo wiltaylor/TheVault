@@ -3,7 +3,10 @@
 Settings > Secrets supports String secrets and Login secrets. Existing String
 secrets still work as before. A Login stores a user name, password, optional
 base32 one-time-code seed and optional HTTP(S) site origins. Login credentials
-are encrypted in state.db with the existing key outside the vault. They never
+are encrypted in state.db with the existing key outside the vault. User name,
+origins and has_totp are clear metadata, so listing never decrypts credentials.
+A missing or wrong key prevents credential reads and replacement, not metadata
+reads or deletion. Login secrets never
 enter vault git sync. Backups carry the encrypted row, not decrypted credentials.
 Keep the key separately unless you deliberately include it in a backup.
 
@@ -13,7 +16,8 @@ origins or the seed. The API returns metadata, never the password or seed.
 Login values cannot be read by ordinary script-secret bindings or agent tools.
 
 Origins use exact scheme, host and effective port matching, not subdomains or
-suffixes. Hosts are lowercased and IDNA encoded, and default ports are removed.
+suffixes. Hosts are lowercased and IDNA encoded, and default ports and one
+trailing dot are removed. Wildcards and empty domain labels are refused.
 IP literals are allowed. Paths, credentials, queries and fragments are refused.
 No origins means any site, with a warning. Browser filling, agent grants and
 confirmation cards are separate work, not enabled by this storage feature.

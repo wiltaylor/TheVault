@@ -353,7 +353,7 @@ fn validate_login(b: SecretBody) -> Result<state::LoginSecret, ApiError> {
     let seed = b
         .totp_seed
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_ascii_uppercase());
+        .map(|s| s.replace(' ', "").to_ascii_uppercase());
     if let Some(seed) = &seed {
         let unpadded = seed.trim_end_matches('=');
         let remainder = unpadded.len() % 8;
@@ -385,25 +385,7 @@ fn validate_login(b: SecretBody) -> Result<state::LoginSecret, ApiError> {
     }
     let mut origins = Vec::new();
     for origin in b.origins.unwrap_or_default() {
-        let authority = origin
-            .split_once("://")
-            .map(|(_, rest)| rest.strip_suffix('/').unwrap_or(rest))
-            .ok_or_else(invalid)?;
-        if origin.trim() != origin || authority.contains(['/', '\\', '@', '?', '#']) {
-            return Err(invalid());
-        }
-        let url = reqwest::Url::parse(&origin).map_err(|_| invalid())?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.path() != "/"
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(invalid());
-        }
-        let canonical = url.origin().ascii_serialization();
+        let canonical = state::canonical_origin(&origin).ok_or_else(invalid)?;
         if !origins.contains(&canonical) {
             origins.push(canonical);
         }
