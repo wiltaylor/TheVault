@@ -378,7 +378,13 @@ permissions {
 fn read_access_does_not_authorize_changes() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    api.agent("reader", &MEMOS_ONLY.replace("types = [\"memo\"]", "types = [\"memo\"]\n  change_types = []"));
+    api.agent(
+        "reader",
+        &MEMOS_ONLY.replace(
+            "types = [\"memo\"]",
+            "types = [\"memo\"]\n  change_types = []",
+        ),
+    );
     let (memo, version) = api.note("memo", "Private person");
     let call = |tool: &str, input: Value| -> Value {
         fake.clear_requests();
@@ -388,11 +394,17 @@ fn read_access_does_not_authorize_changes() {
         tool_result(&fake, 1)
     };
     assert_eq!(call("get_note", json!({ "id": memo }))["is_error"], false);
-    let changed = call("propose_edit", json!({
-        "id": memo, "base_version": version,
-        "note": json!({ "fields": { "title": "Injected" } }).to_string()
-    }));
-    assert_eq!(changed["is_error"], true, "read permission authorized a change: {changed}");
+    let changed = call(
+        "propose_edit",
+        json!({
+            "id": memo, "base_version": version,
+            "note": json!({ "fields": { "title": "Injected" } }).to_string()
+        }),
+    );
+    assert_eq!(
+        changed["is_error"], true,
+        "read permission authorized a change: {changed}"
+    );
 }
 
 #[test]
@@ -403,14 +415,17 @@ fn field_permissions_allow_processed_but_not_subject_body_create_archive_or_dele
 permissions {
   types = ["person", "email", "memo"]
   change_types = ["email", "memo"]
-  change_fields = { email = ["processed"] }
+  change_fields = { email: ["processed"] }
   confirm { notes = false }
 }
 "#;
     api.agent("triage", restricted);
     let (email, version) = api.note("email", "Mail");
     let (person, _) = api.note("person", "Private person");
-    let call = |tool: &str, input: Value| -> Value {
+    let call = |tool: &str, mut input: Value| -> Value {
+        for key in ["fields", "note"] {
+            if input[key].is_object() { input[key] = json!(input[key].to_string()); }
+        }
         fake.clear_requests();
         fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
         fake.push(AnthropicMessage::text("Done."));
@@ -419,21 +434,54 @@ permissions {
     };
     assert_eq!(call("get_note", json!({ "id": person }))["is_error"], false);
     for (tool, input) in [
-        ("propose_fields", json!({ "id": person, "base_version": version, "fields": { "title": "Injected" } })),
-        ("propose_fields", json!({ "id": email, "base_version": version, "fields": { "subject": "Injected" } })),
-        ("propose_edit", json!({ "id": email, "base_version": version, "note": { "fields": { "title": "Mail" }, "blocks": [{ "kind": "content", "labels": ["body"], "blocks": [{ "kind": "paragraph", "fields": { "text": "Injected" } }] }] } })),
-        ("propose_create", json!({ "type": "email", "note": { "fields": { "title": "New email" } } })),
-        ("propose_archive", json!({ "id": email, "base_version": version, "archived": true })),
-        ("propose_delete", json!({ "id": email, "base_version": version })),
+        (
+            "propose_fields",
+            json!({ "id": person, "base_version": version, "fields": { "title": "Injected" } }),
+        ),
+        (
+            "propose_fields",
+            json!({ "id": email, "base_version": version, "fields": { "subject": "Injected" } }),
+        ),
+        (
+            "propose_edit",
+            json!({ "id": email, "base_version": version, "note": { "fields": { "title": "Mail" }, "blocks": [{ "kind": "content", "labels": ["body"], "blocks": [{ "kind": "paragraph", "fields": { "text": "Injected" } }] }] } }),
+        ),
+        (
+            "propose_create",
+            json!({ "type": "email", "note": { "fields": { "title": "New email" } } }),
+        ),
+        (
+            "propose_archive",
+            json!({ "id": email, "archived": true }),
+        ),
+        (
+            "propose_delete",
+            json!({ "id": email }),
+        ),
     ] {
         let result = call(tool, input);
         assert_eq!(result["is_error"], true, "{tool}: {result}");
-        assert!(result["content"].as_str().unwrap().contains("may"), "{result}");
+        assert!(
+            result["content"].as_str().unwrap().contains("may"),
+            "{result}"
+        );
     }
-    let result = call("propose_fields", json!({ "id": email, "base_version": version, "fields": { "processed": true } }));
+    let result = call(
+        "propose_fields",
+        json!({ "id": email, "base_version": version, "fields": { "processed": true } }),
+    );
     assert_eq!(result["is_error"], false, "{result}");
-    assert_eq!(api.get(&format!("/api/notes/{email}"))["note"]["fields"]["processed"], true);
-    assert_eq!(call("propose_create", json!({ "type": "memo", "note": { "fields": { "title": "Triage record" } } }))["is_error"], false);
+    assert_eq!(
+        api.get(&format!("/api/notes/{email}"))["note"]["fields"]["processed"],
+        true
+    );
+    assert_eq!(
+        call(
+            "propose_create",
+            json!({ "type": "memo", "note": { "fields": { "title": "Triage record" } } })
+        )["is_error"],
+        false
+    );
 }
 
 #[test]
@@ -444,14 +492,29 @@ fn apply_rechecks_current_field_permissions_and_does_not_trust_claimed_diff() {
     api.agent("reader", broad);
     let (memo, version) = api.note("memo", "Original");
     let thread = api.thread("reader");
-    fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_fields", json!({ "id": memo, "base_version": version, "fields": { "title": "Injected" } })));
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_t",
+        "propose_fields",
+        json!({ "id": memo, "base_version": version, "fields": json!({ "title": "Injected" }).to_string() }),
+    ));
     fake.push(AnthropicMessage::text("Done."));
-    let events = api.chat(json!({ "agent": "reader", "thread": thread, "messages": [user("Go.")] }));
+    let events =
+        api.chat(json!({ "agent": "reader", "thread": thread, "messages": [user("Go.")] }));
+    assert_eq!(events_named(&events, "proposal").len(), 1, "{events:?}");
     let proposal = events_named(&events, "proposal")[0].clone();
-    api.agent("reader", &broad.replace("types = [\"memo\"]", "types = [\"memo\"]\nchange_fields = { memo = [] }"));
+    api.agent(
+        "reader",
+        &broad.replace(
+            "types = [\"memo\"]",
+            "types = [\"memo\"]\nchange_fields = { memo: [] }",
+        ),
+    );
     let res = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
     assert!(!res.status().is_success(), "{}", res.text().unwrap());
-    assert_eq!(api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"], "Original");
+    assert_eq!(
+        api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"],
+        "Original"
+    );
 }
 
 #[test]

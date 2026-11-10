@@ -38,7 +38,7 @@ and write triage records with:
 permissions {
   types = ["person", "email", "triage_record"]
   change_types = ["email", "triage_record"]
-  change_fields = { email = ["processed"] }
+  change_fields = { email: ["processed"] }
 }
 ```
 

@@ -820,7 +820,13 @@ impl Writer {
         self.update_unlocked(id, input, base, author)
     }
 
-    fn update_unlocked(&self, id: &str, input: &Input, base: Option<&str>, author: &Author) -> Result<Saved> {
+    fn update_unlocked(
+        &self,
+        id: &str,
+        input: &Input,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         let doc = input.parse(&note_path(&type_name, id))?;
@@ -967,7 +973,13 @@ impl Writer {
         self.archive_unlocked(id, archived, base, author)
     }
 
-    fn archive_unlocked(&self, id: &str, archived: bool, base: Option<&str>, author: &Author) -> Result<Saved> {
+    fn archive_unlocked(
+        &self,
+        id: &str,
+        archived: bool,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         self.check_base(id, &type_name, &old, base)?;
@@ -1279,8 +1291,12 @@ impl Writer {
         check(self)?;
         Ok(match op {
             CheckedNoteWrite::Create(t, input) => self.create_unlocked(t, input, author),
-            CheckedNoteWrite::Update(id, input, base) => self.update_unlocked(id, input, base, author),
-            CheckedNoteWrite::Archive(id, archived, base) => self.archive_unlocked(id, archived, base, author),
+            CheckedNoteWrite::Update(id, input, base) => {
+                self.update_unlocked(id, input, base, author)
+            }
+            CheckedNoteWrite::Archive(id, archived, base) => {
+                self.archive_unlocked(id, archived, base, author)
+            }
             CheckedNoteWrite::Delete(id, base) => self.delete_unlocked(id, base, author),
         }?)
     }

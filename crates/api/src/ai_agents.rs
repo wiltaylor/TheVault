@@ -148,16 +148,26 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
     }
     let target_limits = Limits::of(target);
     match tp.change_types.as_ref().or(tp.types.as_ref()) {
-        None if bp.change_types.is_some() || bp.types.is_some() => problems.push("it would allow changes to every note type".into()),
+        None if bp.change_types.is_some() || bp.types.is_some() => {
+            problems.push("it would allow changes to every note type".into())
+        }
         Some(types) => {
-            for t in types.iter().filter(|t| target_limits.allows_change(t) && !limits.allows_change(t)) {
+            for t in types
+                .iter()
+                .filter(|t| target_limits.allows_change(t) && !limits.allows_change(t))
+            {
                 problems.push(format!("it would allow changes to {t} notes"));
             }
         }
         _ => {}
     }
     for (t, fields) in &bp.change_fields {
-        if target_limits.allows_change(t) && tp.change_fields.get(t).is_none_or(|other| other.iter().any(|f| !fields.contains(f))) {
+        if target_limits.allows_change(t)
+            && tp
+                .change_fields
+                .get(t)
+                .is_none_or(|other| other.iter().any(|f| !fields.contains(f)))
+        {
             problems.push(format!("it would allow unrestricted fields of {t} notes"));
         }
     }
@@ -545,6 +555,14 @@ mod tests {
         let t = agent_format_text();
         assert!(t.starts_with("## Agent files"), "{}", &t[..40]);
         assert!(!t.contains("## Device files"));
+    }
+
+    #[test]
+    fn agent_grants_cannot_widen_change_types_or_fields() {
+        let parent = agent("permissions {\n types = [\"email\", \"person\"]\n change_types = [\"email\"]\n change_fields = { email: [\"processed\"] }\n}\n");
+        let broad = agent("permissions { types = [\"email\", \"person\"] }\n");
+        assert!(!escalation(&parent, &broad).is_empty());
+        assert!(escalation(&parent, &parent).is_empty());
     }
 
     #[test]

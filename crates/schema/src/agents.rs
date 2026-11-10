@@ -678,9 +678,18 @@ impl Agent {
                 ));
             }
         }
-        for t in self.permissions.change_types.iter().flatten().chain(self.permissions.change_fields.keys()) {
+        for t in self
+            .permissions
+            .change_types
+            .iter()
+            .flatten()
+            .chain(self.permissions.change_fields.keys())
+        {
             if schema.type_def(t).is_none() {
-                issues.push(Issue::new("permissions.change_types", format!("there is no type {t:?}")));
+                issues.push(Issue::new(
+                    "permissions.change_types",
+                    format!("there is no type {t:?}"),
+                ));
             }
         }
         for trigger in &self.triggers {
@@ -745,7 +754,12 @@ impl Agent {
                 field(&mut out, "  ", "change_types", &list(types));
             }
             if !p.change_fields.is_empty() {
-                let entries = p.change_fields.iter().map(|(t, f)| format!("{t} = {}", list(f))).collect::<Vec<_>>().join(", ");
+                let entries = p
+                    .change_fields
+                    .iter()
+                    .map(|(t, f)| format!("{t}: {}", list(f)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 field(&mut out, "  ", "change_fields", &format!("{{ {entries} }}"));
             }
             // Written only when on, so a file without it still reads in an app from before it.
@@ -1031,13 +1045,19 @@ impl Reader<'_> {
                             self.c.fail(&at, "must be a unique type name");
                             continue;
                         }
-                        let fields = Doc { fields: vec![("fields".into(), value.clone())], blocks: Vec::new() };
+                        let fields = Doc {
+                            fields: vec![("fields".into(), value.clone())],
+                            blocks: Vec::new(),
+                        };
                         if let Some(fields) = self.names(&fields, "fields", &at, "field") {
                             p.change_fields.insert(name.clone(), fields);
                         }
                     }
                 }
-                _ => self.c.fail("permissions.change_fields", "must be a record of type names and field lists"),
+                _ => self.c.fail(
+                    "permissions.change_fields",
+                    "must be a record of type names and field lists",
+                ),
             }
         }
         let mut seen = HashSet::new();

@@ -203,7 +203,10 @@ pub fn intersect(own: &AgentPermissions, parent: &AgentPermissions) -> AgentPerm
         (None, None) => None,
     };
     for (t, fields) in &parent.change_fields {
-        p.change_fields.entry(t.clone()).and_modify(|own| own.retain(|f| fields.contains(f))).or_insert_with(|| fields.clone());
+        p.change_fields
+            .entry(t.clone())
+            .and_modify(|own| own.retain(|f| fields.contains(f)))
+            .or_insert_with(|| fields.clone());
     }
     p.tools = lists(&own.tools, &parent.tools);
     p.skills = lists(&own.skills, &parent.skills);
