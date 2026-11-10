@@ -331,6 +331,11 @@ impl Writer {
     /// Fill in what an item's author leaves out, before the type's defaults: `drafted_by` for the
     /// user's and an agent's new items, and `status = draft` for an agent's.
     pub(crate) fn fill_outbox(&self, doc: &mut Doc, is_new: bool, author: &Author) {
+        if let Author::Token(name) = author
+            && let Some(name) = name.strip_prefix("agent-")
+        {
+            return self.fill_outbox(doc, is_new, &Author::Agent(name.to_owned()));
+        }
         if !is_new {
             return;
         }
@@ -487,6 +492,12 @@ fn outbox_rule(
     author: &Author,
     bypass: &dyn Fn(&str) -> bool,
 ) -> std::result::Result<(), String> {
+    // Install-code tokens draft only, regardless of the in-app agent's send permission.
+    if let Author::Token(name) = author
+        && let Some(name) = name.strip_prefix("agent-")
+    {
+        return outbox_rule(doc, old, &Author::Agent(name.to_owned()), &|_| false);
+    }
     let status = text(doc, "status").unwrap_or("");
     let was = old.map(|o| text(o, "status").unwrap_or("")).unwrap_or("");
     match author {

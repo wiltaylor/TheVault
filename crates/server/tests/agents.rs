@@ -83,6 +83,55 @@ fn agent_code_token_cannot_create_ready_outbox_item() {
 }
 
 #[test]
+fn agent_code_token_drafts_but_cannot_approve_or_forge_results() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let issued = issue(&server, &admin, "cli", "write");
+    let token = expect(redeem(&server, issued["code"].as_str().unwrap()), 201);
+    let agent = client(token["token"].as_str().unwrap());
+    let made = send(agent.post(server.url("/api/notes?type=outbox")).json(&json!({
+        "note": { "fields": { "title": "Draft", "kind": "email", "to": ["ann@example.com"], "subject": "Review" }}
+    })), 201);
+    assert_eq!(made["note"]["fields"]["status"], "draft");
+    assert_eq!(made["note"]["fields"]["drafted_by"], "cli");
+    for (field, value) in [("status", json!("ready")), ("drafted_by", json!("user")), ("sent_ref", json!("forged"))] {
+        let mut note = made["note"].clone();
+        note["fields"][field] = value;
+        let res = agent.put(server.url(&format!("/api/notes/{}", made["id"].as_str().unwrap())))
+            .json(&json!({ "note": note, "base": made["version"] })).send().unwrap();
+        let status = res.status();
+        let body = res.text().unwrap();
+        assert!(status.is_client_error() && body.contains("agent"), "{field}: {status}: {body}");
+    }
+}
+
+#[test]
+fn agent_code_token_calendar_changes_require_outbox() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let issued = issue(&server, &admin, "cli", "write");
+    let token = expect(redeem(&server, issued["code"].as_str().unwrap()), 201);
+    let agent = client(token["token"].as_str().unwrap());
+    let made = send(admin.post(server.url("/api/notes?type=event")).json(&json!({ "note": { "fields": {
+        "title": "Meeting", "google_ref": "meeting", "calendar": "primary",
+        "when": { "start": "2026-04-03", "end": "2026-04-03" }, "my_response": "needs_action"
+    }}})), 201);
+    let url = server.url(&format!("/api/notes/{}", made["id"].as_str().unwrap()));
+    for (field, value) in [("my_response", json!("accepted")), ("attendees_raw", json!(["ann@example.com"])), ("status", json!("cancelled")), ("send_updates", json!("all"))] {
+        let mut note = made["note"].clone();
+        note["fields"][field] = value;
+        let res = agent.put(&url).json(&json!({ "note": note, "base": made["version"] })).send().unwrap();
+        let status = res.status();
+        let body = res.text().unwrap();
+        assert!(status.is_client_error() && body.contains("agent"), "{field}: {status}: {body}");
+    }
+    let res = agent.delete(&url).send().unwrap();
+    let status = res.status();
+    let body = res.text().unwrap();
+    assert!(status.is_client_error() && body.contains("agent"), "delete: {status}: {body}");
+}
+
+#[test]
 fn only_an_admin_issues_an_install_code_and_it_carries_the_one_line_command() {
     let server = TestServer::start_seeded(seed);
     let admin = client(server.admin_token());
