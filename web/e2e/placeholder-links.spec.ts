@@ -265,9 +265,8 @@ test("a placeholder in a version shown from history only shows", async ({ page, 
 });
 
 test("Ask <Label> commits a call in one go, shown as a chip that opens the agent", async ({ page, admin }) => {
-  // The agent is disabled once it is picked, so the server records the call without a run, and
-  // no run of it fails in this shared vault. Disabled before, it would not be offered: the page
-  // follows agent changes as they happen.
+  // Disable only after issuance, before saving the call into the note. The server refuses to
+  // issue calls for disabled agents, but records this issued call without running the agent.
   const tok = token();
   const name = `caller_${tok}`;
   const label = `Caller${tok}`;
@@ -280,11 +279,11 @@ test("Ask <Label> commits a call in one go, shown as a chip that opens the agent
   await page.getByTestId("mention-agent").filter({ hasText: `Ask ${label}` }).click();
   const box = page.getByRole("textbox", { name: `Ask ${label}…` });
   await expect(box).toBeFocused();
-  expect((await put(`label = "${label}"\nenabled = false\n`)).ok()).toBe(true);
   await expect(box).toHaveAttribute("placeholder", `What should ${label} do?`);
   await box.fill("tidy this");
   await box.press("Enter");
   await expect(page.getByTestId("mention-picker")).toHaveCount(0);
+  expect((await put(`label = "${label}"\nenabled = false\n`)).ok()).toBe(true);
   await saveAndWait(page);
   const text = await bodyText(admin, note.id);
   expect(text).toMatch(new RegExp(`^\\[@${label} tidy this\\]\\(agent:${name}\\?call=(${ULID})\\)\\s*$`));

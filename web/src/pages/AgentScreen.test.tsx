@@ -24,6 +24,7 @@ const appInfo = vi.fn();
 const agentThreads = vi.fn();
 const aiAccounts = vi.fn();
 const agentRuns = vi.fn();
+const triggerBackfill = vi.fn();
 const agentThread = vi.fn();
 const cron = vi.fn();
 const agentMemories = vi.fn();
@@ -47,6 +48,7 @@ vi.mock("../api", async (orig) => {
       agentThreads,
       aiAccounts,
       agentRuns,
+      triggerBackfill,
       agentThread,
       cron,
       agentMemories,
@@ -838,6 +840,24 @@ describe("the Permissions tab", () => {
 });
 
 describe("the Triggers tab", () => {
+  it("previews a backfill count before confirming the selected newest notes", async () => {
+    const a = triage();
+    a.triggers = [{ name: "opened", kind: "event", on: ["create"], type: ["email"], where: null, prompt: "File." }];
+    agent.mockResolvedValue(a);
+    triggerBackfill.mockResolvedValueOnce({ count: 500, selected: 100, preview: "preview-1", unmatched_legacy_runs: 3 })
+      .mockResolvedValueOnce({ queued: 100 });
+    await open("/agents/inbox_triage/settings/triggers");
+    const t = within(await screen.findByRole("region", { name: "Triggers" }));
+    expect(t.queryByRole("button", { name: "Confirm backfill" })).toBeNull();
+    fireEvent.click(t.getByRole("button", { name: "Count matching notes" }));
+    await t.findByText(/500 matching notes have no trigger record/);
+    expect(t.getByText(/3 runs from before this version could not be matched to a note/)).toBeTruthy();
+    expect(triggerBackfill).toHaveBeenCalledWith("inbox_triage", "opened", { limit: 100 });
+    fireEvent.click(t.getByRole("button", { name: "Confirm backfill" }));
+    await t.findByText("100 jobs queued.");
+    expect(triggerBackfill).toHaveBeenLastCalledWith("inbox_triage", "opened", { preview: "preview-1" });
+  });
+
   it("shows a schedule with its next runs and its last runs, each linking to its thread", async () => {
     await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));

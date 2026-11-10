@@ -8,6 +8,7 @@
 
 mod activity;
 mod agent_calls;
+mod agent_queue;
 mod agent_runs;
 mod auth;
 mod changes;
@@ -42,6 +43,7 @@ pub use activity::{
     one_line,
 };
 pub use agent_calls::AgentCall;
+pub use agent_queue::{TRIGGER_QUEUE_CAP, TriggerJob, TriggerQueueStats};
 pub use agent_runs::{AgentRun, AgentRunId, AgentRunOutcome};
 pub use auth::{AgentCode, Scope, TokenInfo};
 pub use changes::{ChangeKey, ChangePage, Journaled};
@@ -166,7 +168,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 22;
+const SCHEMA_VERSION: i64 = 23;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -685,7 +687,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=21 => {
+        0..=22 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -777,6 +779,10 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                         "ALTER TABLE login_secrets ADD COLUMN {column} {definition}"
                     ))?;
                 }
+            }
+            if version <= 22 {
+                tx.execute_batch(agent_queue::SCHEMA)?;
+                agent_queue::seed_legacy(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
