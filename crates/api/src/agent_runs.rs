@@ -281,7 +281,8 @@ pub async fn call(
             Some(answered) => Some(answered),
             None => w.state().refused_agent_call(&call)?,
         })
-    }).await?;
+    })
+    .await?;
     let Some(c) = found else {
         return Err(ApiError::new(
             StatusCode::NOT_FOUND,

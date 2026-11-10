@@ -70,10 +70,22 @@ impl State {
     }
 
     pub fn refused_agent_call(&self, call: &str) -> Result<Option<AgentCall>> {
-        Ok(self.conn().query_row(
-            "SELECT call,agent,note,created_ms FROM agent_call_refusals WHERE call=?1",
-            [call], |r| Ok(AgentCall { call: r.get(0)?, agent: r.get(1)?, note: r.get(2)?, thread: None, created_ms: r.get(3)? }),
-        ).optional()?)
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT call,agent,note,created_ms FROM agent_call_refusals WHERE call=?1",
+                [call],
+                |r| {
+                    Ok(AgentCall {
+                        call: r.get(0)?,
+                        agent: r.get(1)?,
+                        note: r.get(2)?,
+                        thread: None,
+                        created_ms: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
     }
 
     /// Records call `call` of `agent` from note `note`, answered by `thread`. Answers false, and
