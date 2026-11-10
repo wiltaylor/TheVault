@@ -931,6 +931,9 @@ impl Writer {
                 previous_limits.conditions = Some(schema::OutboxConditions::default());
             }
             let mut proposed_limits = agent.permissions.outbox.clone();
+            if proposed_limits.conditions.is_none() && !proposed_limits.send_without_review {
+                proposed_limits.conditions = Some(schema::OutboxConditions::default());
+            }
             proposed_limits.send_without_review = true;
             if !previous.allows(&agent.permissions.outbox)
                 || !previous_limits.allows(&proposed_limits)
