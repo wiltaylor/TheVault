@@ -24,8 +24,8 @@
 //! check a change and hand it to the user (ai D14, D18, D20, D31, agents
 //! G20; an agent change is also checked against the turn's agent, `crate::ai_agents`). When
 //! the agent's permissions turn a kind's confirmation off and the turn's scope allows the write
-//! (`write` for notes, `admin` for types, taxonomies, agents and skills; [`change_scope`]
-//! caps direct changes at both the caller's and agent's scopes), the tool makes
+//! (`write` for notes, `admin` for types, taxonomies, agents and skills; a `write` caller's turn
+//! has the agent's own scope, [`change_scope`]), the tool makes
 //! the change itself with [`apply_change`], as the caller, through the writer calls the panel's
 //! Apply reaches, and sends `applied` in place of the proposal (ai D22). Nothing here ever purges
 //! the trash (ai D21). With a Brave Search key stored, `web_search` searches the web
@@ -319,11 +319,7 @@ pub(crate) fn unattended_scope(agent: &Agent) -> Scope {
 /// Direct changes cannot exceed either the caller's or the agent's authority.
 fn change_scope(caller: Scope, agent: &Agent) -> Scope {
     let agent = unattended_scope(agent);
-    if agent.allows(caller) {
-        caller
-    } else {
-        agent
-    }
+    if agent.allows(caller) { caller } else { agent }
 }
 
 /// The confirmation switch that governs change tool `name`, or `None` for a tool that changes
@@ -4665,8 +4661,14 @@ mod tests {
             assert!(scope.allows(direct));
             assert!(super::unattended_scope(&agent).allows(direct));
         }
-        assert_eq!(super::change_scope(state::Scope::Write, &agent), state::Scope::Write);
-        assert_eq!(super::change_scope(state::Scope::Read, &agent), state::Scope::Read);
+        assert_eq!(
+            super::change_scope(state::Scope::Write, &agent),
+            state::Scope::Write
+        );
+        assert_eq!(
+            super::change_scope(state::Scope::Read, &agent),
+            state::Scope::Read
+        );
     }
     use super::*;
 
