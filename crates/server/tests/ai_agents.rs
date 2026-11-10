@@ -546,6 +546,31 @@ fn an_agent_cannot_give_another_agent_more_than_it_has_or_change_itself() {
 }
 
 #[test]
+fn agent_proposal_apply_rechecks_change_permission_escalation() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    api.put_agent("clerk", CLERK);
+    let events = api.one(
+        &fake,
+        Some("clerk"),
+        "propose_agent_change",
+        json!({ "name": "helper", "wcl": HELPER }),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    api.put_agent(
+        "clerk",
+        &CLERK.replace(
+            "types = [\"memo\"]",
+            "types = [\"memo\"]\nchange_types = []",
+        ),
+    );
+    let (status, result) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
+    assert!(api.agent_wcl("helper").is_none());
+}
+
+#[test]
 fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     let api = Api::start();
     let fake = FakeAnthropic::start();

@@ -909,7 +909,7 @@ pub fn apply_save(w: &Writer, author: &Author, p: &Value) -> Result<Value, Apply
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let agent = match author {
-        Author::Agent(name) => w.agent(name)?,
+        Author::Agent(name) | Author::AgentMail(name) => w.agent(name)?,
         _ => crate::ai_settings::assistant(w)
             .map_err(|e| ApplyError::Invalid(e.body["message"].to_string()))?,
     };

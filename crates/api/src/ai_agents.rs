@@ -146,6 +146,30 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
         }
         (None, None) => {}
     }
+    let target_limits = Limits::of(target);
+    match tp.change_types.as_ref().or(tp.types.as_ref()) {
+        None if bp.change_types.is_some() => {
+            problems.push("it would allow changes to every note type".into())
+        }
+        Some(types) => {
+            for t in types.iter().filter(|t| {
+                target_limits.allows_change(t) && limits.allows(t) && !limits.allows_change(t)
+            }) {
+                problems.push(format!("it would allow changes to {t} notes"));
+            }
+        }
+        _ => {}
+    }
+    for (t, fields) in &bp.change_fields {
+        if target_limits.allows_change(t)
+            && tp
+                .change_fields
+                .get(t)
+                .is_none_or(|other| other.iter().any(|f| !fields.contains(f)))
+        {
+            problems.push(format!("it would allow unrestricted fields of {t} notes"));
+        }
+    }
     for ((name, on), (_, mine)) in tp.confirm.switches().into_iter().zip(bp.confirm.switches()) {
         if !on && mine {
             problems.push(format!(
@@ -211,6 +235,9 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
             "it would turn on Browser automation (permissions.browser), which is off for this agent"
                 .to_owned(),
         );
+    }
+    if tp.gmail_actions && !bp.gmail_actions {
+        problems.push("it would turn on Gmail actions, which are off for this agent".to_owned());
     }
     // Skills (skills S6): only those this agent is offered itself; an absent list is every skill.
     match (&bp.skills, &tp.skills) {
@@ -533,6 +560,31 @@ mod tests {
     }
 
     #[test]
+    fn agent_grants_cannot_widen_change_types_or_fields() {
+        let parent = agent(
+            "permissions {\n types = [\"email\", \"person\"]\n change_types = [\"email\"]\n change_fields = { email: [\"processed\"] }\n}\n",
+        );
+        let broad = agent("permissions { types = [\"email\", \"person\"] }\n");
+        assert!(!escalation(&parent, &broad).is_empty());
+        assert!(escalation(&parent, &parent).is_empty());
+        let wider_fields = agent(
+            "permissions {\n types = [\"email\"]\n change_fields = { email: [\"processed\", \"subject\"] }\n}\n",
+        );
+        assert!(!escalation(&parent, &wider_fields).is_empty());
+        let narrower =
+            agent("permissions {\n types = [\"email\"]\n change_fields = { email: [] }\n}\n");
+        assert!(escalation(&parent, &narrower).is_empty());
+        let type_parent = agent(
+            "permissions {\n types = [\"email\", \"person\"]\n change_types = [\"email\"]\n}\n",
+        );
+        assert!(
+            escalation(&type_parent, &broad)
+                .iter()
+                .any(|m| m.contains("person"))
+        );
+    }
+
+    #[test]
     fn escalation_compares_tools_types_and_switches() {
         let all = agent("");
         let some = agent(
@@ -594,6 +646,18 @@ mod tests {
         assert!(p[0].contains("Browser automation"), "{p:?}");
         assert!(escalation(&driver, &driver).is_empty());
         assert!(escalation(&driver, &all).is_empty());
+    }
+
+    #[test]
+    fn escalation_refuses_gmail_actions_the_proposer_lacks() {
+        let mail = agent("permissions { gmail_actions = true\n}\n");
+        let off = agent("");
+        assert!(
+            escalation(&off, &mail)
+                .iter()
+                .any(|p| p.contains("Gmail actions"))
+        );
+        assert!(escalation(&mail, &off).is_empty());
     }
 
     #[test]

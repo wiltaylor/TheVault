@@ -77,6 +77,14 @@ pub use activity::{Acting, acting_as};
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
+
+/// A single note write whose authorization must be checked under the write lock.
+pub enum CheckedNoteWrite<'a> {
+    Create(&'a str, &'a Input),
+    Update(&'a str, &'a Input, Option<&'a str>),
+    Archive(&'a str, bool, Option<&'a str>),
+    Delete(&'a str, Option<&'a str>),
+}
 pub use builtin::{
     AGENT_MEMORY_TYPE, AGENT_THREAD_TYPE, BUILT_IN_KEYS, BUILT_IN_TAXONOMIES, BUILT_IN_TYPES,
     CALL_TYPE, CONVERSATION_TYPE, DEFAULT_AGENT_MEMORY_TYPE, DEFAULT_AGENT_THREAD_TYPE,
@@ -649,6 +657,19 @@ impl Writer {
         Ok(texts.remove(0))
     }
 
+    /// Create an empty type with authorization checked under the write lock.
+    pub fn put_type_checked<E: From<Error>>(
+        &self,
+        name: &str,
+        source: &str,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<String, E> {
+        let _w = self.write_lock();
+        check(self)?;
+        let mut texts = self.put_types_locked(self.lock(), &[(name, source)])?;
+        Ok(texts.remove(0))
+    }
+
     /// Write several type files in one commit, checked as one schema, so types that name each
     /// other can arrive together. Returns each canonical text, in order.
     pub(crate) fn put_types(&self, sources: &[(&str, &str)]) -> Result<Vec<String>> {
@@ -788,6 +809,10 @@ impl Writer {
     /// Create a note of `type_name` with a new id.
     pub fn create(&self, type_name: &str, input: &Input, author: &Author) -> Result<Saved> {
         let _w = self.write_lock();
+        self.create_unlocked(type_name, input, author)
+    }
+
+    fn create_unlocked(&self, type_name: &str, input: &Input, author: &Author) -> Result<Saved> {
         let inner = self.lock();
         let id = ulid::Ulid::new().to_string();
         let doc = input.parse(&note_path(type_name, &id))?;
@@ -805,6 +830,16 @@ impl Writer {
         author: &Author,
     ) -> Result<Saved> {
         let _w = self.write_lock();
+        self.update_unlocked(id, input, base, author)
+    }
+
+    fn update_unlocked(
+        &self,
+        id: &str,
+        input: &Input,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         let doc = input.parse(&note_path(&type_name, id))?;
@@ -857,6 +892,10 @@ impl Writer {
     /// Delete note `id`, which must be at version `base`, moving it to the trash.
     pub fn delete(&self, id: &str, base: Option<&str>, author: &Author) -> Result<Saved> {
         let _w = self.write_lock();
+        self.delete_unlocked(id, base, author)
+    }
+
+    fn delete_unlocked(&self, id: &str, base: Option<&str>, author: &Author) -> Result<Saved> {
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         self.check_base(id, &type_name, &old, base)?;
@@ -944,6 +983,16 @@ impl Writer {
         author: &Author,
     ) -> Result<Saved> {
         let _w = self.write_lock();
+        self.archive_unlocked(id, archived, base, author)
+    }
+
+    fn archive_unlocked(
+        &self,
+        id: &str,
+        archived: bool,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
         self.check_base(id, &type_name, &old, base)?;
@@ -1241,6 +1290,28 @@ impl Writer {
         let generation = self.commit(changes)?;
         inner.index.advance(generation).map_err(Error::from)?;
         Ok(())
+    }
+
+    /// Like `commit_checked`, but retains the full note pipeline, including handlers,
+    /// validation, events and base-version checks. The callback may read, not write.
+    pub fn commit_checked_note<E: From<Error>>(
+        &self,
+        op: CheckedNoteWrite<'_>,
+        author: &Author,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<Saved, E> {
+        let _w = self.write_lock();
+        check(self)?;
+        Ok(match op {
+            CheckedNoteWrite::Create(t, input) => self.create_unlocked(t, input, author),
+            CheckedNoteWrite::Update(id, input, base) => {
+                self.update_unlocked(id, input, base, author)
+            }
+            CheckedNoteWrite::Archive(id, archived, base) => {
+                self.archive_unlocked(id, archived, base, author)
+            }
+            CheckedNoteWrite::Delete(id, base) => self.delete_unlocked(id, base, author),
+        }?)
     }
 
     /// The type folder holding note `id`, from the files on disk.
@@ -1730,6 +1801,7 @@ impl Writer {
     /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
     /// and `updated` times and its archived state, and is put back in canonical order.
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+        self.check_calendar_write(change, author)?;
         let archived = change.doc.as_ref().is_some_and(note::is_archived);
         let stamps = change.doc.as_ref().map(|d| {
             (
@@ -1741,6 +1813,7 @@ impl Writer {
         });
         let original = change.doc.clone();
         self.hooks.before(change, author).map_err(Error::Rejected)?;
+        self.check_calendar_write(change, author)?;
         if change.doc == original {
             return Ok(());
         }
@@ -1757,6 +1830,69 @@ impl Writer {
             .type_def(&change.type_name)
             .ok_or_else(|| Error::UnknownType(change.type_name.clone()))?;
         change.doc = Some(note::arrange(ty, doc, &created, &updated));
+        Ok(())
+    }
+
+    /// Calendar notifications are an Outbox capability, not a hidden-field convention.
+    fn check_calendar_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
+        if change.type_name != "event" && change.type_name != "event_series" {
+            return Ok(());
+        }
+        let old = if change.event == Event::Create {
+            None
+        } else {
+            let (_, text) = self.existing(&change.id)?;
+            Some(Input::Wcl(text).parse(&note_path(&change.type_name, &change.id))?)
+        };
+        let next = change.doc.as_ref();
+        let field =
+            |doc: Option<&schema::Doc>, name: &str| doc.and_then(|d| d.field(name)).cloned();
+        let sender = matches!(author, Author::Handler(name) if name == "outbox_send");
+        if matches!(author, Author::Agent(_) | Author::AgentMail(_))
+            && field(next, "send_updates") != field(old.as_ref(), "send_updates")
+        {
+            return Err(Error::Rejected("agents may not change send_updates".into()));
+        }
+        if !sender
+            && field(next, "send_updates").is_some()
+            && (field(next, "send_updates") != field(old.as_ref(), "send_updates")
+                || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
+        {
+            return Err(Error::Rejected(
+                "only handler outbox_send may set send_updates".into(),
+            ));
+        }
+        if matches!(author, Author::Agent(_) | Author::AgentMail(_)) {
+            let google = [old.as_ref(), next].into_iter().flatten().any(|doc| {
+                doc.field("google_ref")
+                    .and_then(schema::Value::as_str)
+                    .is_some_and(|v| !v.is_empty())
+            });
+            let sensitive = next.is_some()
+                && [
+                    "attendees",
+                    "attendees_raw",
+                    "my_response",
+                    "status",
+                    "etag",
+                    "google_ref",
+                ]
+                .into_iter()
+                .any(|name| field(next, name) != field(old.as_ref(), name));
+            let snapshots = |doc: Option<&schema::Doc>| {
+                doc.into_iter()
+                    .flat_map(|d| d.blocks.iter())
+                    .filter(|b| b.kind == "dict" && b.label() == Some("snapshot"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            let forged_snapshot = next.is_some() && snapshots(next) != snapshots(old.as_ref());
+            if sensitive || forged_snapshot || (google && change.event == Event::Delete) {
+                return Err(Error::Rejected(
+                    "agent calendar attendees, RSVP, cancellation and Google deletes require an Outbox item of kind event".into(),
+                ));
+            }
+        }
         Ok(())
     }
 

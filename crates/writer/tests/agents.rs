@@ -46,6 +46,69 @@ fn none(_: &Agent) -> Vec<Issue> {
     Vec::new()
 }
 
+#[test]
+fn agent_edits_and_deletes_wait_for_checked_note_commits() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    for delete in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let w = with_email(dir.path());
+        w.put_agent("reader", "", none).unwrap();
+        let original = w.read_agent("reader").unwrap();
+        let input = writer::Input::Json(serde_json::json!({ "fields": { "title": "Checked" } }));
+        let author = state::Author::Agent("reader".into());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let note_w = &w;
+            let note = scope.spawn(move || {
+                note_w.commit_checked_note(
+                    writer::CheckedNoteWrite::Create("email", &input),
+                    &author,
+                    |w| {
+                        assert!(w.agent("reader").unwrap().enabled);
+                        entered_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                        assert!(
+                            w.agent("reader")
+                                .unwrap()
+                                .permissions
+                                .change_types
+                                .is_none()
+                        );
+                        assert_eq!(w.read_agent("reader").unwrap(), original);
+                        Ok::<(), Error>(())
+                    },
+                )
+            });
+            entered_rx.recv().unwrap();
+            let edit_w = &w;
+            let edit = scope.spawn(move || {
+                attempt_tx.send(()).unwrap();
+                if delete {
+                    edit_w.delete_agent("reader").unwrap();
+                } else {
+                    edit_w
+                        .put_agent("reader", "permissions { change_types = [] }", none)
+                        .unwrap();
+                }
+                done_tx.send(()).unwrap();
+            });
+            attempt_rx.recv().unwrap();
+            let blocked = done_rx.recv_timeout(Duration::from_millis(50)).is_err();
+            release_tx.send(()).unwrap();
+            note.join().unwrap().unwrap();
+            edit.join().unwrap();
+            assert!(
+                blocked,
+                "agent mutation overtook the authorized note commit"
+            );
+        });
+    }
+}
+
 fn issues_of(e: Error) -> Vec<String> {
     match e {
         Error::Invalid(inv) => inv.issues.iter().map(|i| i.to_string()).collect(),

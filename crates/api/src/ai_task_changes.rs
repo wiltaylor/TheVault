@@ -357,7 +357,7 @@ pub(crate) fn propose_change(
         ));
     }
     if script_after.is_some()
-        && let Some(why) = shared_paths_refused(w, &def.script, Some(name))
+        && let Some(why) = shared_paths_refused(w, &def.script, Some(name), None)
     {
         return Err(refused(
             why,
@@ -559,7 +559,7 @@ pub(crate) fn apply_task(w: &Writer, p: &Value, admin: bool) -> Result<Value, Ap
             return Err(stale(&format!("the script {} changed", def.script)));
         }
         if script_after.is_some()
-            && let Some(why) = shared_paths_refused(w, &def.script, Some(name))
+            && let Some(why) = shared_paths_refused(w, &def.script, Some(name), None)
         {
             return Err(ApplyError::Refused(why));
         }

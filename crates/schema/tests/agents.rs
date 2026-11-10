@@ -5,6 +5,19 @@ use schema::{
     TriggerWhen,
 };
 
+#[test]
+fn gmail_actions_are_opt_in_and_round_trip() {
+    let off = Agent::parse("clerk", "label = \"Clerk\"\n").unwrap();
+    assert!(!off.permissions.gmail_actions);
+    let on = Agent::parse(
+        "clerk",
+        "label = \"Clerk\"\npermissions { gmail_actions = true\n}\n",
+    )
+    .unwrap();
+    assert!(on.permissions.gmail_actions);
+    assert!(on.to_wcl().contains("gmail_actions"));
+}
+
 const FULL: &str = r#"label         = "Inbox triage"
 description   = "Files new email."
 icon          = "bot"
@@ -41,6 +54,59 @@ trigger new_email {
   prompt = "File this email."
 }
 "#;
+
+#[test]
+fn separate_change_permissions_round_trip_and_default_to_legacy() {
+    let default = Agent::parse("reader", "").unwrap();
+    assert_eq!(default.permissions.change_types, None);
+    assert!(default.permissions.change_fields.is_empty());
+    let source = "permissions {\n types = [\"email\", \"person\"]\n change_types = [\"email\"]\n change_fields = { email: [\"processed\"] }\n}\n";
+    let agent = Agent::parse("reader", source).unwrap();
+    assert_eq!(agent.permissions.change_types, Some(vec!["email".into()]));
+    assert_eq!(agent.permissions.change_fields["email"], ["processed"]);
+    assert_eq!(Agent::parse("reader", &agent.to_wcl()).unwrap(), agent);
+    for value in [
+        "true",
+        "{ email: true }",
+        "{ email: [\"bad name\"] }",
+        "{ email: [\"processed\", \"processed\"] }",
+    ] {
+        assert!(
+            Agent::parse(
+                "reader",
+                &format!("permissions {{\n change_fields = {value}\n}}\n")
+            )
+            .is_err(),
+            "{value}"
+        );
+    }
+    assert!(
+        Agent::parse("reader", "permissions { change_types = [] }")
+            .unwrap()
+            .permissions
+            .change_types
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn change_fields_diagnostics_name_the_type_and_warn_on_unknown_fields() {
+    let unknown =
+        Agent::parse("reader", "permissions { change_fields = { invoice: [] } }").unwrap();
+    let issues = unknown.check(&schema());
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].at, "permissions.change_fields.invoice");
+    let typo = Agent::parse(
+        "reader",
+        "permissions { change_fields = { email: [\"misspelt\"] } }",
+    )
+    .unwrap();
+    let issues = typo.check(&schema());
+    assert_eq!(issues.len(), 1);
+    assert!(issues[0].is_warning());
+    assert_eq!(issues[0].at, "permissions.change_fields.email");
+}
 
 const EMAIL: &str = r#"label = "Email"
 

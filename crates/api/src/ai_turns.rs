@@ -692,7 +692,9 @@ fn apply_as_agent(
 ) -> Result<Value, ApiError> {
     let author = match change["agent"].as_str().filter(|n| !n.is_empty()) {
         Some(name) => {
-            let agent = w.agent(name)?;
+            let agent = crate::ai_agents::agent_named(w, name)?.ok_or_else(|| {
+                ai_chat::ApplyError::Refused("The proposing agent no longer exists.".into())
+            })?;
             if event == "proposal" {
                 let limits = ai_chat::Limits::of(&agent);
                 let type_name = match change["op"].as_str().unwrap_or("update") {
@@ -704,7 +706,7 @@ fn apply_as_agent(
                         .map(|n| n.type_name),
                 };
                 if let Some(t) = type_name
-                    && !limits.allows(&t)
+                    && !limits.allows_change(&t)
                 {
                     return Err(ApiError::new(
                         StatusCode::FORBIDDEN,
@@ -715,8 +717,18 @@ fn apply_as_agent(
             }
             // A throwaway sub agent's proposal is applied as it, `<agent>/sub:<n>` (subagents
             // U4).
+            let email = event == "proposal"
+                && (change["type"] == "email"
+                    || change["note_id"]
+                        .as_str()
+                        .and_then(|id| w.read(id).ok())
+                        .is_some_and(|n| n.type_name == "email"));
             match change["sub"].as_u64() {
+                Some(n) if email => Author::AgentMail(format!("{}/sub:{n}", agent.name)),
                 Some(n) => Author::Agent(format!("{}/sub:{n}", agent.name)),
+                // This is the authenticated caller's explicit Apply, not an unattended
+                // tool write. Human approval may reach Gmail even with autonomous mail off.
+                None if email => Author::AgentMail(agent.name),
                 None => Author::Agent(agent.name),
             }
         }

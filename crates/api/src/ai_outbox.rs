@@ -51,6 +51,8 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
             "Draft a calendar invite into the Outbox: a new Google Calendar event, or a change to an existing event note, which emails its attendees once sent. It is not sent: it waits in the Outbox's Draft tab until the user marks it Ready, unless this agent may send without review. For a change, an empty field leaves that part of the event as it is. Answers the Outbox item's id and status.",
             json!({
                 "event": { "type": "string", "description": "The id of the event note to change; empty for a new event." },
+                "event_action": { "type": "string", "description": "Empty or update changes the event. Delete removes the existing event from Google after review.", "enum": ["", "update", "delete"] },
+                "my_response": { "type": "string", "description": "An RSVP on an existing invitation, sent after review.", "enum": ["", "accepted", "tentative", "declined"] },
                 "title": { "type": "string", "description": "The event's title; empty to keep a changed event's title." },
                 "when": {
                     "type": "object",
@@ -329,6 +331,18 @@ fn sms(w: &Writer, limits: &Limits, input: &Value) -> Result<Drafted, ToolOut> {
 fn event(w: &Writer, limits: &Limits, input: &Value) -> Result<Drafted, ToolOut> {
     let event_id = text(input, "event");
     let current = note_of(w, event_id, "event", "event")?;
+    let action = text(input, "event_action");
+    let response = text(input, "my_response");
+    if !["", "update", "delete"].contains(&action)
+        || !["", "accepted", "tentative", "declined"].contains(&response)
+    {
+        return Err(ToolOut::error("invalid event action or RSVP"));
+    }
+    if current.is_none() && (action == "delete" || !response.is_empty()) {
+        return Err(ToolOut::error(
+            "an RSVP or deletion needs an existing event",
+        ));
+    }
     let mut title = text(input, "title").to_owned();
     let start = input["when"]["start"].as_str().map_or("", str::trim);
     let end = input["when"]["end"].as_str().map_or("", str::trim);
@@ -349,6 +363,12 @@ fn event(w: &Writer, limits: &Limits, input: &Value) -> Result<Drafted, ToolOut>
     let mut fields = json!({ "title": title, "kind": "event" });
     if current.is_some() {
         fields["event"] = json!(event_id);
+    }
+    if !action.is_empty() {
+        fields["event_action"] = json!(action);
+    }
+    if !response.is_empty() {
+        fields["my_response"] = json!(response);
     }
     if !start.is_empty() || !end.is_empty() {
         let start = if start.is_empty() { end } else { start };

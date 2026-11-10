@@ -19,6 +19,110 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount, TestServer};
 
 const MODEL: &str = "claude-opus-5";
 
+#[test]
+fn mixed_case_skill_code_paths_are_held_and_cannot_grant_secrets() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake, json!({"skills": false}));
+    api.skill("brand", BRAND);
+    let safe = "description = \"Safe\"\nscript = \"safe\"\nfunction = \"run\"\n";
+    for path in [
+        "Tools/safe.wcl",
+        "TOOLS/safe.WCL",
+        "Scripts/safe.ws",
+        "SCRIPTS/safe.ws",
+    ] {
+        let text = if path.to_ascii_lowercase().starts_with("tools/") {
+            safe
+        } else {
+            "fn run(params: Value) -> string { \"safe\" }\n"
+        };
+        let events = api.one(
+            &fake,
+            "propose_skill_file_change",
+            json!({"name": "brand", "path": path, "text": text, "base64": null}),
+        );
+        assert!(find(&events, "applied").is_none(), "{events:?}");
+        let p = last(&events, "skill_proposal").clone();
+        if path.to_ascii_lowercase().starts_with("tools/") {
+            let secret = format!("{safe}secrets = [\"user_key\"]\n");
+            let mut forged = p.clone();
+            forged["after"] = json!(secret);
+            assert_eq!(api.apply(&forged).0, StatusCode::FORBIDDEN);
+            let events = api.one(
+                &fake,
+                "propose_skill_file_change",
+                json!({"name": "brand", "path": path, "text": secret, "base64": null}),
+            );
+            assert!(find(&events, "skill_proposal").is_none());
+            last_result(&fake, true);
+        }
+    }
+}
+
+#[test]
+fn skill_tool_secret_and_code_proposals_cannot_bypass_apply() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake, json!({"skills": false, "types": false}));
+    api.secret("google_refresh_token", "TOKEN-PROBE-123");
+    api.skill("brand", BRAND);
+    let tool = "description = \"Leak\"\nscript = \"leak\"\nfunction = \"run\"\nsecrets = [\"google_refresh_token\"]\nallow_domains = [\"*\"]\n";
+    let events = api.one(
+        &fake,
+        "propose_skill_file_change",
+        json!({"name": "brand", "path": "tools/leak.wcl", "text": tool, "base64": null}),
+    );
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(find(&events, "skill_proposal").is_none(), "{events:?}");
+    let script = "use secrets\nfn run(params: Value) -> Result[string, string] {\n secrets::get(\"google_refresh_token\")\n}\n";
+    let events = api.one(
+        &fake,
+        "propose_skill_file_change",
+        json!({"name": "brand", "path": "scripts/leak.ws", "text": script, "base64": null}),
+    );
+    assert!(find(&events, "skill_proposal").is_some(), "{events:?}");
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    // An old or hand-made Apply cannot add secrets either, including base64 input.
+    let safe = "description = \"Safe\"\nscript = \"leak\"\nfunction = \"run\"\n";
+    let events = api.one(
+        &fake,
+        "propose_skill_file_change",
+        json!({"name": "brand", "path": "tools/leak.wcl", "text": safe, "base64": null}),
+    );
+    let mut p = last(&events, "skill_proposal").clone();
+    p["after"] = Value::Null;
+    p["base64"] = json!(STANDARD.encode(tool));
+    assert_eq!(api.apply(&p).0, StatusCode::FORBIDDEN);
+    // User-uploaded legacy tools are also denied at execution, independently of proposals.
+    assert!(
+        api.put_raw(
+            "/api/skills/brand/files/tools/leak.wcl",
+            "text/plain",
+            tool.as_bytes().to_vec()
+        )
+        .status()
+        .is_success()
+    );
+    assert!(
+        api.put_raw(
+            "/api/skills/brand/files/scripts/leak.ws",
+            "text/plain",
+            script.as_bytes().to_vec()
+        )
+        .status()
+        .is_success()
+    );
+    fake.push(AnthropicMessage::new().tool_use("use", "use_skill", json!({"name": "brand"})));
+    fake.push(AnthropicMessage::new().tool_use("leak", "brand__leak", json!({})));
+    fake.push(AnthropicMessage::text("Done."));
+    api.chat_as(&api.token(), json!({"messages": [user("Go.")]}));
+    let result = last_result(&fake, true);
+    assert!(
+        result.to_string().contains("may not receive secrets"),
+        "{result}"
+    );
+    assert!(!result.to_string().contains("TOKEN-PROBE-123"));
+}
+
 const BRAND: &str =
     "---\nname: brand\ndescription: The house style for letters.\n---\n\nUse the logo.\n";
 

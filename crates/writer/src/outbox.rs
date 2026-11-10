@@ -183,7 +183,9 @@ impl Writer {
         }
         for item in items {
             match &item.author {
-                Author::Agent(name) if item.entered("draft") => self.count_draft(name),
+                Author::Agent(name) | Author::AgentMail(name) if item.entered("draft") => {
+                    self.count_draft(name)
+                }
                 // A send handler, a sync task, or a device reporting its command's result.
                 Author::Handler(_) | Author::Task(_) | Author::Token(_)
                     if item.entered("failed") =>
@@ -333,14 +335,16 @@ impl Writer {
             return;
         }
         let drafted_by = match author {
-            Author::Agent(name) => name.as_str(),
+            Author::Agent(name) | Author::AgentMail(name) => name.as_str(),
             Author::Session(_) | Author::Token(_) => DRAFTED_BY_USER,
             Author::Handler(_) | Author::Task(_) => return,
         };
         if text(doc, "drafted_by").is_none_or(str::is_empty) {
             set(doc, "drafted_by", drafted_by);
         }
-        if matches!(author, Author::Agent(_)) && doc.field("status").is_none() {
+        if matches!(author, Author::Agent(_) | Author::AgentMail(_))
+            && doc.field("status").is_none()
+        {
             set(doc, "status", "draft");
         }
     }
@@ -487,7 +491,7 @@ fn outbox_rule(
     let was = old.map(|o| text(o, "status").unwrap_or("")).unwrap_or("");
     match author {
         Author::Session(_) | Author::Token(_) => Ok(()),
-        Author::Agent(name) => {
+        Author::Agent(name) | Author::AgentMail(name) => {
             let label = format!("agent {name}");
             match old {
                 None => {
