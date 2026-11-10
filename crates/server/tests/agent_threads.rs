@@ -740,8 +740,15 @@ fn assistant_proposals_apply_without_an_agent_file() {
     let proposal = events_named(&events, "proposal")[0].clone();
     std::fs::remove_file(api.server.vault_path().join("agents/assistant.wcl")).unwrap();
     let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
-    assert!(response.status().is_success(), "{}", response.text().unwrap());
-    assert_eq!(api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"], "Changed");
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().unwrap()
+    );
+    assert_eq!(
+        api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"],
+        "Changed"
+    );
 }
 
 #[test]
