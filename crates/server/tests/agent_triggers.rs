@@ -468,7 +468,11 @@ fn safety_delete_of_held_note_does_not_enqueue_its_content() {
     let version = current["version"].as_str().unwrap();
     let path = format!("/api/notes/{id}?base_version={version}");
     let response = api.request("DELETE", &path, None);
-    assert!(response.status().is_success(), "{}", response.text().unwrap());
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().unwrap()
+    );
     api.advance("PT31S");
     assert!(chat.message_requests().is_empty());
     assert!(
