@@ -112,6 +112,7 @@ networks:
     ipam:
       config:
         - subnet: 172.30.141.0/24
+          ip_range: 172.30.141.128/25
   # thevault and the browser box only. Not internal: the box needs the internet.
   browser:
 
