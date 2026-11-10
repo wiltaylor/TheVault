@@ -203,10 +203,7 @@ pub(crate) struct Runner<'a> {
 pub fn run(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
     let types = check(q, ctx)?;
     let r = Runner::new(ctx)?;
-    if ctx.excluded_notes.is_some() {
-        return r.scan(&archive_rule(q), &types, page);
-    }
-    if let Some(text) = plain_search(q) {
+    if let Some(text) = plain_search(q).filter(|_| ctx.excluded_notes.is_none()) {
         let only = matches!(q.from, From::Types(_)).then_some(types.as_slice());
         let archived = if q.include_archived {
             index::Archived::Include

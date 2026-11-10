@@ -356,6 +356,28 @@ fn round3_unknown_google_series_organiser_is_incoming() {
 }
 
 #[test]
+fn round3_agent_query_keeps_sql_plan_on_large_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let held = create(&w, "Hidden");
+    let visible = create(&w, "Visible");
+    let hash = w.agent_safety(&visible.id).unwrap().fingerprint;
+    w.finish_agent_safety(&visible.id, &hash, "allowed", "allow").unwrap();
+    w.read_index(|index, _| {
+        // Nonmatching rows have deliberately invalid bodies. A Rust scan decodes them
+        // and fails, whereas the SQL planner reads only the selected page's bodies.
+        index.connection().execute_batch("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<3000)
+            INSERT INTO notes(id,type,title,data) SELECT 'probe-' || x,'email','Other','invalid-json' FROM n").unwrap();
+        index.connection().execute("UPDATE notes SET data='invalid-json' WHERE id=?1", [&held.id]).unwrap();
+    });
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    let page = w.query_page("from email where title == \"Visible\" select title", 10, None).unwrap();
+    assert_eq!(page["total"], 1);
+    assert!(page.to_string().contains("Visible"));
+}
+
+#[test]
 fn round3_derived_email_thread_title_is_held_with_first_message() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();

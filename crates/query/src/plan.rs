@@ -662,10 +662,16 @@ fn source(
         driver: driver.map(|e| e as *const Expr),
         driven: None,
     };
-    let filter = match &q.filter {
+    let mut filter = match &q.filter {
         Some(e) => p.pred(e, false)?,
         None => "1".to_owned(),
     };
+    if let Some(excluded) = r.ctx.excluded_notes {
+        // A bound JSON set is materialized once by SQLite, without decoding note bodies.
+        // Keep the ordinary field driver, sorting, count and pagination plans intact.
+        let ids = p.bind(Sql::Text(serde_json::to_string(excluded).ok()?));
+        filter = format!("({filter}) AND {} NOT IN (SELECT value FROM json_each({ids}))", p.id);
+    }
     let mut order = Vec::new();
     if let Some(g) = &q.group_by {
         order.push(Order {
