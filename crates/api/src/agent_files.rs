@@ -284,7 +284,9 @@ fn agent_response(
         .map(crate::error::issue_json)
         .collect();
     out["warnings"] = json!(warnings);
-    if conditions_hidden { out["permissions"]["outbox"]["conditions_hidden"] = json!(true); }
+    if conditions_hidden {
+        out["permissions"]["outbox"]["conditions_hidden"] = json!(true);
+    }
     text_or_json(headers, wcl, out)
 }
 

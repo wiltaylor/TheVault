@@ -109,7 +109,10 @@ fn entry(w: &Writer, c: &Journaled, full_conditions: bool) -> Result<Value, ApiE
             let mut text = w.read_synced(path)?;
             let deleted = text.is_none();
             let mut hidden = false;
-            if kind == "agent" && !full_conditions && let Some(source) = text.as_deref() {
+            if kind == "agent"
+                && !full_conditions
+                && let Some(source) = text.as_deref()
+            {
                 match schema::Agent::parse(name, source) {
                     Ok(mut agent) => {
                         if agent.permissions.outbox.conditions.take().is_some() {
@@ -117,14 +120,19 @@ fn entry(w: &Writer, c: &Journaled, full_conditions: bool) -> Result<Value, ApiE
                             text = Some(agent.to_wcl());
                         }
                     }
-                    Err(_) => { hidden = true; text = None; }
+                    Err(_) => {
+                        hidden = true;
+                        text = None;
+                    }
                 }
             }
             let mut out = json!({
                 "seq": c.seq, "at": c.at_ms, "kind": kind, "path": path, "name": name,
                 "deleted": deleted, "text": text,
             });
-            if hidden { out["conditions_hidden"] = json!(true); }
+            if hidden {
+                out["conditions_hidden"] = json!(true);
+            }
             Ok(out)
         }
     }
@@ -155,8 +163,12 @@ pub async fn changes(
     let limit = usize::try_from(limit).unwrap_or(1);
     let page = blocking(w, move |w| -> Result<_, ApiError> {
         let full_conditions = matches!(author, Author::Session(_))
-            || (!crate::auth::is_agent_token(&author) && (scope.allows(Scope::Admin)
-                || match &author { Author::Token(name) => w.state().device_for_token(name)?.is_some(), _ => false }));
+            || (!crate::auth::is_agent_token(&author)
+                && (scope.allows(Scope::Admin)
+                    || match &author {
+                        Author::Token(name) => w.state().device_for_token(name)?.is_some(),
+                        _ => false,
+                    }));
         let page = w.state().changes_since(since, limit)?;
         let entries = page
             .changes

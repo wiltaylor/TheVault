@@ -98,7 +98,9 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
             }
             let mut v = crate::agent_files::agent_json(&a);
             v["account"] = json!(crate::ai_settings::agent_account_name(w, &a));
-            if hidden { v["permissions"]["outbox"]["conditions_hidden"] = json!(true); }
+            if hidden {
+                v["permissions"]["outbox"]["conditions_hidden"] = json!(true);
+            }
             (v, Value::Null)
         }
         Err(e) if name == by.name => (Value::Null, json!(e.to_string())),

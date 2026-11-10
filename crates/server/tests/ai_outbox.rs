@@ -548,29 +548,90 @@ fn round4_sync_feed_redacts_conditions_for_agent_and_plain_tokens() {
     let api = Api::start(&fake);
     let source = SENDER.replace("send_without_review = true", "send_without_review = true\n conditions { recipients = [\"private@example.com\"]\n email = true\n daily_cap = 2\n }");
     api.agent("sender", &source);
-    let mut tokens = vec![api.token_of("plain_reader", "read"), api.token_of("plain_writer", "write")];
+    let mut tokens = vec![
+        api.token_of("plain_reader", "read"),
+        api.token_of("plain_writer", "write"),
+    ];
     for scope in ["read", "write"] {
-        let issued = api.send("POST", "/api/agent-codes", json!({"name": format!("sync_{scope}"), "scope": scope}));
-        let response: Value = api.client.post(api.server.url("/api/agent-codes/redeem")).json(&json!({"code": issued["code"]})).send().unwrap().json().unwrap();
+        let issued = api.send(
+            "POST",
+            "/api/agent-codes",
+            json!({"name": format!("sync_{scope}"), "scope": scope}),
+        );
+        let response: Value = api
+            .client
+            .post(api.server.url("/api/agent-codes/redeem"))
+            .json(&json!({"code": issued["code"]}))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
         tokens.push(response["token"].as_str().unwrap().to_owned());
     }
     for token in tokens {
-        let response = api.client.get(api.server.url("/api/sync/changes?since=0&limit=1000")).bearer_auth(token).send().unwrap();
+        let response = api
+            .client
+            .get(api.server.url("/api/sync/changes?since=0&limit=1000"))
+            .bearer_auth(token)
+            .send()
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let feed: Value = response.json().unwrap();
-        let entry = feed["changes"].as_array().unwrap().iter().find(|e| e["path"] == "agents/sender.wcl").unwrap();
-        assert!(!entry.to_string().contains("private@example.com"), "{entry}");
+        let entry = feed["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["path"] == "agents/sender.wcl")
+            .unwrap();
+        assert!(
+            !entry.to_string().contains("private@example.com"),
+            "{entry}"
+        );
         assert_eq!(entry["conditions_hidden"], true, "{entry}");
     }
-    assert!(api.get("/api/sync/changes?since=0&limit=1000").to_string().contains("private@example.com"));
-    let pair: Value = api.client.post(api.server.url("/api/devices/pair")).json(&json!({"password": testkit::PASSWORD, "name": "Phone", "platform": "android"})).send().unwrap().json().unwrap();
+    assert!(
+        api.get("/api/sync/changes?since=0&limit=1000")
+            .to_string()
+            .contains("private@example.com")
+    );
+    let pair: Value = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
+        .json(&json!({"password": testkit::PASSWORD, "name": "Phone", "platform": "android"}))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
     let device = pair["token"].as_str().unwrap();
-    let feed: Value = api.client.get(api.server.url("/api/sync/changes?since=0&limit=1000")).bearer_auth(device).send().unwrap().json().unwrap();
+    let feed: Value = api
+        .client
+        .get(api.server.url("/api/sync/changes?since=0&limit=1000"))
+        .bearer_auth(device)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
     assert!(feed.to_string().contains("private@example.com"));
-    std::fs::write(api.server.vault_path().join("agents/sender.wcl"), "invalid private@example.com").unwrap();
+    std::fs::write(
+        api.server.vault_path().join("agents/sender.wcl"),
+        "invalid private@example.com",
+    )
+    .unwrap();
     let token = api.token_of("invalid_reader", "read");
-    let feed: Value = api.client.get(api.server.url("/api/sync/changes?since=0&limit=1000")).bearer_auth(token).send().unwrap().json().unwrap();
-    let entry = feed["changes"].as_array().unwrap().iter().find(|e| e["path"] == "agents/sender.wcl").unwrap();
+    let feed: Value = api
+        .client
+        .get(api.server.url("/api/sync/changes?since=0&limit=1000"))
+        .bearer_auth(token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let entry = feed["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "agents/sender.wcl")
+        .unwrap();
     assert!(entry["text"].is_null(), "{entry}");
     assert_eq!(entry["deleted"], false);
     assert_eq!(entry["conditions_hidden"], true);
