@@ -250,7 +250,90 @@ fn agent_cannot_bypass_event_outbox_with_send_updates() {
         }})),
         &state::Author::Agent("careless".into()),
     );
-    assert!(result.is_err(), "agent bypassed the event Outbox");
+    assert!(
+        matches!(result, Err(writer::Error::Rejected(ref message)) if message.contains("send_updates")),
+        "agent bypassed the event Outbox: {result:?}"
+    );
+}
+
+#[test]
+fn writer_enforces_calendar_author_and_outbox_boundary() {
+    let root = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(root.path()).unwrap();
+    let state = state::State::open(
+        &vault.server_dir().join("state.db"),
+        Some(state::SecretKey::generate()),
+    )
+    .unwrap();
+    let w = writer::Writer::open(vault, state).unwrap();
+    w.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    let user = state::Author::Session("owner".into());
+    let agent = state::Author::Agent("careless".into());
+    let sender = state::Author::Handler("outbox_send".into());
+    let body = json!({ "fields": {
+        "title": "Standup", "google_ref": "standup", "calendar": "primary",
+        "when": { "start": "2026-04-03", "end": "2026-04-03" },
+        "attendees_raw": ["ann@example.com"], "my_response": "needs_action"
+    }});
+    let made = w.create("event", &writer::Input::Json(body.clone()), &user).unwrap();
+    for (field, value) in [
+        ("attendees_raw", json!(["bob@example.com"])),
+        ("attendees", json!([])),
+        ("my_response", json!("accepted")),
+        ("status", json!("cancelled")),
+        ("send_updates", json!("all")),
+    ] {
+        let mut changed = body.clone();
+        changed["fields"][field] = value;
+        let result = w.update(&made.id, &writer::Input::Json(changed), Some(&made.version), &agent);
+        assert!(matches!(result, Err(writer::Error::Rejected(_))), "{field}: {result:?}");
+        assert_eq!(w.read(&made.id).unwrap().version, made.version);
+    }
+    assert!(matches!(w.delete(&made.id, Some(&made.version), &agent), Err(writer::Error::Rejected(_))));
+    for author in [user.clone(), state::Author::Token("api".into()), state::Author::Task("outbox_send".into()), state::Author::Handler("other".into())] {
+        let mut changed = body.clone();
+        changed["fields"]["send_updates"] = json!("all");
+        assert!(matches!(w.update(&made.id, &writer::Input::Json(changed), Some(&made.version), &author), Err(writer::Error::Rejected(_))), "{author:?}");
+    }
+    let mut harmless = body.clone();
+    harmless["fields"]["location"] = json!("Room 2");
+    let edited = w.update(&made.id, &writer::Input::Json(harmless), Some(&made.version), &agent).unwrap();
+    let mut approved = body;
+    approved["fields"]["send_updates"] = json!("all");
+    let approved = w.update(&made.id, &writer::Input::Json(approved), Some(&edited.version), &sender).unwrap();
+    // A pending approved send must not be reused by an agent's otherwise harmless edit.
+    let note = w.read(&made.id).unwrap();
+    let mut retry = writer::doc_to_json(&note.doc);
+    retry["fields"]["location"] = json!("Room 3");
+    assert!(matches!(w.update(&made.id, &writer::Input::Json(retry), Some(&approved.version), &agent), Err(writer::Error::Rejected(_))));
+    let mut cleared = writer::doc_to_json(&w.read(&made.id).unwrap().doc);
+    cleared["fields"].as_object_mut().unwrap().remove("send_updates");
+    w.update(&made.id, &writer::Input::Json(cleared), Some(&approved.version), &state::Author::Handler("google_event".into())).unwrap();
+}
+
+#[test]
+fn reviewed_event_rsvp_and_delete_reach_google_through_outbox() {
+    let api = Api::start();
+    let mut event = standup();
+    event["attendees"] = json!([{ "email": "me@example.com", "self": true, "responseStatus": "needsAction" }]);
+    event["organizer"] = json!({ "email": "ann@example.com" });
+    api.google.put_event("primary", event);
+    api.sync();
+    let events = api.events();
+    let id = events.keys().next().unwrap();
+    let rsvp = api.create("outbox", invite(json!({ "title": "Accept Standup", "event": id, "my_response": "accepted" }), None));
+    api.settle();
+    let sent = api.one_write_after(0);
+    assert_eq!(sent.method, "PATCH");
+    assert_eq!(sent.send_updates.as_deref(), Some("all"));
+    assert_eq!(sent.body["attendees"][0]["responseStatus"], "accepted");
+    assert!(api.gone(&rsvp));
+    let deletion = api.create("outbox", invite(json!({ "title": "Delete Standup", "event": id, "event_action": "delete" }), None));
+    api.settle();
+    let sent = api.one_write_after(1);
+    assert_eq!(sent.method, "DELETE");
+    assert_eq!(sent.id, "standup");
+    assert!(api.gone(&deletion));
 }
 
 #[test]

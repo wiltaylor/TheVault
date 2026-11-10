@@ -274,6 +274,9 @@ fn send_event(item: Value) -> Result[Sent, string] {
     let description = content_of(item, "description")
     let attendees = strings_of(fields, "attendees_raw")
     if target == "" {
+        if text_of(fields, "event_action") == "delete" || text_of(fields, "my_response") != "" {
+            return Err("An RSVP or deletion needs an existing event.")
+        }
         let title = text_of(fields, "title").trim()
         if title == "" {
             return Err("The new event has no title.")
@@ -312,6 +315,10 @@ fn send_event(item: Value) -> Result[Sent, string] {
     if text_of(event, "type") != "event" {
         return Err("The note to change is not an event.")
     }
+    if text_of(fields, "event_action") == "delete" {
+        vault::delete(target, text_of(event, "version"))?
+        return Ok(Sent { done: false, sent_ref: "", result: target })
+    }
     let body = event.get("note").unwrap_or(Value::Null)
     let f: Map[string, Value] = match body.get("fields") {
         Some(Value::Map(m)) => m,
@@ -328,6 +335,10 @@ fn send_event(item: Value) -> Result[Sent, string] {
     let title = text_of(fields, "title").trim()
     if title != "" {
         f["title"] = Value::String(title)
+    }
+    let response = text_of(fields, "my_response")
+    if response != "" {
+        f["my_response"] = Value::String(response)
     }
     if start != "" || end != "" {
         let from = if start == "" { end } else { start }

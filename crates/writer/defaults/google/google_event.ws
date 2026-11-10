@@ -1017,6 +1017,7 @@ fn after_delete(event: Value) -> Result[(), string] {
     let fields = event.get("note").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
     let google_ref = text_of(fields, "google_ref")
     if google_ref == "" {
+        sent_items(text_of(event, "id"), "local")
         return Ok(())
     }
     let series_ref = text_of(fields, "series_ref")
@@ -1031,12 +1032,15 @@ fn after_delete(event: Value) -> Result[(), string] {
     }
     let ctx = connect()?
     if !ctx.ok {
+        failed_items(text_of(event, "id"), "Google Calendar is not connected.")
         return Ok(())
     }
     let reply = call(ctx, "DELETE", event_url(ctx, calendar_of(ctx, fields), google_ref), "", Value::Null)?
     let status = status_of(reply)
     if status == 200 || status == 204 || status == 404 || status == 410 {
+        sent_items(text_of(event, "id"), google_ref)
         return Ok(())
     }
+    failed_items(text_of(event, "id"), failure("events.delete of " + google_ref, reply))
     Err(failure("events.delete of " + google_ref, reply))
 }
