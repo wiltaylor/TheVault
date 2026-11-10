@@ -615,7 +615,7 @@ fn safety_review_server_holds_preexisting_notes_by_default() {
     let server = TestServer::start_with_args(
         |vault| {
             std::fs::create_dir_all(vault.join("types")).unwrap();
-            std::fs::write(vault.join("types/email.wcl"), "label = \"Email\"\n").unwrap();
+            std::fs::write(vault.join("types/email.wcl"), "label = \"Email\"\ntemplate default { tab Main { slot title } }\n").unwrap();
             std::fs::create_dir_all(vault.join("notes/email")).unwrap();
             std::fs::write(
                 vault.join(format!("notes/email/{ID}.wcl")),
