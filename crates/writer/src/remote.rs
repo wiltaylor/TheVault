@@ -201,8 +201,8 @@ impl Writer {
         let report = report(&inner.schema, self, type_name, &doc);
         let generation = self.commit(files)?;
         let version = self.state.record_version(id, type_name, author, wcl)?;
-        inner.index.update(
-            &inner.schema,
+        self.update_note_index(
+            inner,
             &[index::Update::Put {
                 id: id.to_owned(),
                 type_name: type_name.to_owned(),
@@ -251,9 +251,7 @@ impl Writer {
                 let generation = self.commit(vec![Change::delete(path)])?;
                 let entry = self.state.trash_note(id, &author)?;
                 let inner = &mut *inner;
-                inner
-                    .index
-                    .update(&inner.schema, &[index::Update::Delete { id: id.clone() }])?;
+                self.update_note_index(inner, &[index::Update::Delete { id: id.clone() }])?;
                 inner.index.advance(generation)?;
                 self.announce(
                     &[Saved {

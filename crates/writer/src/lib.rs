@@ -1739,17 +1739,6 @@ impl Writer {
             inner.index.set_schema(&schema)?;
             inner.schema = schema;
         }
-        for update in &updates {
-            if let Update::Put {
-                id, type_name, doc, ..
-            } = update
-            {
-                self.refresh_agent_safety_index(id, type_name, doc)?;
-            }
-            if let Update::Delete { id } = update {
-                self.state.forget_agent_safety_index(id)?;
-            }
-        }
         for s in &saved {
             if s.event == Event::Create
                 && !s.restored
@@ -1781,10 +1770,7 @@ impl Writer {
                     .set_meta(&format!("agent_safety.delivered.{}", s.id), "1")?;
             }
         }
-        inner.index.update(&inner.schema, &updates)?;
-        for s in &saved {
-            self.refresh_safety_parents(&s.id)?;
-        }
+        self.update_note_index(inner, &updates)?;
         inner.index.advance(generation)?;
         for ((by, act, id), s) in acts.iter().zip(&saved) {
             let title = match gone_titles.remove(id) {

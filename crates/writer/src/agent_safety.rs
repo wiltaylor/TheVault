@@ -123,28 +123,70 @@ pub fn fingerprint(kind: &str, doc: &Doc) -> String {
 
 // Only image rendering is reduced. Paragraph text, image alt text and captions
 // remain evidence, so replacing a plain-text import with different HTML is held.
-fn reduce_image_rendering(value: &mut serde_json::Value) {
-    let alt = if value["kind"] == "image" {
-        Some(value["fields"]["alt"].as_str().unwrap_or("").to_owned())
-    } else if value["kind"] == "paragraph" {
-        value["fields"]["text"]
-            .as_str()
-            .and_then(html_blocks::pending_image)
-            .map(|(alt, _)| alt)
-    } else {
-        None
-    };
-    if let Some(alt) = alt {
-        let caption = value["fields"]["caption"].as_str().unwrap_or("").to_owned();
-        *value = serde_json::json!({"image_text":alt,"caption":caption});
-    } else if let Some(blocks) = value["blocks"].as_array_mut() {
-        for block in blocks {
-            reduce_image_rendering(block);
+fn same_image_rendering(old: &serde_json::Value, next: &serde_json::Value) -> bool {
+    let mut old = old.clone();
+    let mut next = next.clone();
+    if old["kind"] == "paragraph" && next["kind"] == "image" {
+        let Some((alt, _)) = old["fields"]["text"].as_str().and_then(html_blocks::pending_image) else {
+            return false;
+        };
+        // Only the exact placeholder produced by the converter may become an image.
+        if old["fields"].as_object().is_none_or(|fields| fields.len() != 1) {
+            return false;
+        }
+        old["kind"] = serde_json::json!("image");
+        old["fields"] = serde_json::json!({});
+        if !alt.is_empty() {
+            old["fields"]["alt"] = serde_json::json!(alt);
         }
     }
+    if old["kind"] == "image" && next["kind"] == "image" {
+        for value in [&mut old, &mut next] {
+            if let Some(fields) = value["fields"].as_object_mut() {
+                fields.remove("asset");
+            }
+        }
+    }
+    match (old.get("blocks"), next.get("blocks")) {
+        (Some(a), Some(b)) => {
+            let (Some(a), Some(b)) = (a.as_array(), b.as_array()) else { return false; };
+            if a.len() != b.len() || !a.iter().zip(b).all(|(a, b)| same_image_rendering(a, b)) {
+                return false;
+            }
+            old.as_object_mut().unwrap().remove("blocks");
+            next.as_object_mut().unwrap().remove("blocks");
+        }
+        (None, None) => {}
+        _ => return false,
+    }
+    old == next
 }
 
 impl Writer {
+    /// The only incremental note-index write boundary. Safety is refreshed before
+    /// publishing notes, including imports which bypass normal write preparation.
+    pub(crate) fn update_note_index(
+        &self,
+        inner: &mut crate::Inner,
+        updates: &[index::Update],
+    ) -> Result<()> {
+        for update in updates {
+            match update {
+                index::Update::Put { id, type_name, doc, .. } => {
+                    self.bind_safety_member(id, type_name, doc)?;
+                    self.refresh_agent_safety_index(id, type_name, doc)?;
+                }
+                index::Update::Delete { id } => self.state().forget_agent_safety_index(id)?,
+            }
+        }
+        inner.index.update(&inner.schema, updates)?;
+        for update in updates {
+            let (index::Update::Put { id, .. } | index::Update::Delete { id }) = update;
+            self.refresh_safety_parents(id)?;
+        }
+        Ok(())
+    }
+
     /// Gmail messages are immutable by Gmail id. Only the trusted sync task may carry a
     /// decision across a local rendering change of that same message. This is not an
     /// editable note flag and is never available to an agent/session write.
@@ -177,10 +219,9 @@ impl Writer {
                 fields.remove("html");
                 fields.remove("attachments");
             }
-            reduce_image_rendering(&mut value);
             value
         };
-        if without_rendering(&old) != without_rendering(next) {
+        if !same_image_rendering(&without_rendering(&old), &without_rendering(next)) {
             return Ok(());
         }
         let before = fingerprint(kind, &old);
