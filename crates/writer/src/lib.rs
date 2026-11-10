@@ -1691,7 +1691,7 @@ impl Writer {
                 }
             }
             if s.event == Event::Create
-                && matches!(s.author.as_ref().unwrap_or(author), Author::Agent(_))
+                && matches!(s.author.as_ref().unwrap_or(author), Author::Agent(_) | Author::AgentMail(_))
             {
                 self.state
                     .set_meta(&format!("agent_safety.delivered.{}", s.id), "1")?;
@@ -1813,7 +1813,7 @@ impl Writer {
         let field =
             |doc: Option<&schema::Doc>, name: &str| doc.and_then(|d| d.field(name)).cloned();
         let sender = matches!(author, Author::Handler(name) if name == "outbox_send");
-        if matches!(author, Author::Agent(_))
+        if matches!(author, Author::Agent(_) | Author::AgentMail(_))
             && field(next, "send_updates") != field(old.as_ref(), "send_updates")
         {
             return Err(Error::Rejected("agents may not change send_updates".into()));
@@ -1821,13 +1821,13 @@ impl Writer {
         if !sender
             && field(next, "send_updates").is_some()
             && (field(next, "send_updates") != field(old.as_ref(), "send_updates")
-                || matches!(author, Author::Agent(_)))
+                || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
         {
             return Err(Error::Rejected(
                 "only handler outbox_send may set send_updates".into(),
             ));
         }
-        if matches!(author, Author::Agent(_)) {
+        if matches!(author, Author::Agent(_) | Author::AgentMail(_)) {
             let google = [old.as_ref(), next].into_iter().flatten().any(|doc| {
                 doc.field("google_ref")
                     .and_then(schema::Value::as_str)

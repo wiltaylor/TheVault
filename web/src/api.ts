@@ -679,6 +679,7 @@ export interface AgentPermissions {
    * absent from a server before the browser box.
    */
   browser?: boolean;
+  gmail_actions?: boolean;
   /**
    * The skills the agent is offered, by name (skills S6); null or absent is every valid skill.
    * Absent from a server before skills, and sent only when set, as the agent file holds it only

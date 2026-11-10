@@ -158,7 +158,8 @@ fn granted(name: &str) -> Result<Result<(), String>, HostError> {
         }
         // An agent's own code (run_script, or run_saved_script) names no secret: the refusal
         // says which route reads one (TV-99 D1).
-        let agent = matches!(r.job.author, Some(Author::Agent(_))) && r.job.secrets.is_empty();
+        let agent = matches!(r.job.author, Some(Author::Agent(_) | Author::AgentMail(_)))
+            && r.job.secrets.is_empty();
         Ok(Err(if agent {
             format!(
                 "secret {name:?} is not granted to this script: an agent's own code reads no secrets. Put the call in a script tool that names the secret (propose_tool_change), or run a task that names it (run_task)"

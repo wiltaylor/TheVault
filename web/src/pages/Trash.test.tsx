@@ -39,6 +39,12 @@ afterEach(() => {
 });
 
 describe("Trash", () => {
+  it("warns when Google can permanently remove a trashed email", async () => {
+    trash.mockResolvedValue([{ ...entry("01JC", "Mail", 1_700_000_000_000), type: "email" }]);
+    render(() => <Trash />);
+    expect(await screen.findByText(/Google permanently removes it after 30 days/)).toBeTruthy();
+    expect(screen.getByText(/Check notifications for failures/)).toBeTruthy();
+  });
   it("empties the trash after a confirm naming the count", async () => {
     render(() => <Trash />);
     fireEvent.click(await screen.findByRole("button", { name: "Empty trash" }));
