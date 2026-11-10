@@ -230,6 +230,30 @@ fn assert_no_send_updates(note: &Value) {
 }
 
 #[test]
+fn agent_cannot_bypass_event_outbox_with_send_updates() {
+    let root = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(root.path()).unwrap();
+    let state = state::State::open(
+        &vault.server_dir().join("state.db"),
+        Some(state::SecretKey::generate()),
+    )
+    .unwrap();
+    let writer = writer::Writer::open(vault, state).unwrap();
+    writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    let result = writer.create(
+        "event",
+        &writer::Input::Json(json!({ "fields": {
+            "title": "Unreviewed invitation",
+            "when": { "start": "2026-04-03", "end": "2026-04-03" },
+            "attendees_raw": ["ann@example.com"],
+            "send_updates": "all"
+        }})),
+        &state::Author::Agent("careless".into()),
+    );
+    assert!(result.is_err(), "agent bypassed the event Outbox");
+}
+
+#[test]
 fn a_ready_new_event_is_inserted_with_send_updates_and_the_item_leaves_the_outbox() {
     let api = Api::start();
     let item = api.create(
