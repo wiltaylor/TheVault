@@ -137,7 +137,8 @@ impl Writer {
                 matches!(act, NoteAct::Create | NoteAct::Update | NoteAct::Delete)
             }
             crate::AGENT_THREAD_TYPE => {
-                matches!(by, Author::Agent(_) | Author::AgentMail(_)) && matches!(act, NoteAct::Create | NoteAct::Update)
+                matches!(by, Author::Agent(_) | Author::AgentMail(_))
+                    && matches!(act, NoteAct::Create | NoteAct::Update)
             }
             _ => false,
         }

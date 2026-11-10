@@ -1707,19 +1707,38 @@ const EMAIL_HANDLER_SCRIPT: &str = "google_mail";
 /// replacing user edits to its other handlers.
 fn email_gmail_restore(w: &Writer) -> Result<()> {
     let schema = w.schema();
-    let Some(ty) = schema.type_def(EMAIL_TYPE) else { return Ok(()); };
-    if !w.is_built_in_def(ty) || ty.handlers.iter().any(|h| h.script == EMAIL_HANDLER_SCRIPT && h.event == "after_create") {
+    let Some(ty) = schema.type_def(EMAIL_TYPE) else {
+        return Ok(());
+    };
+    if !w.is_built_in_def(ty)
+        || ty
+            .handlers
+            .iter()
+            .any(|h| h.script == EMAIL_HANDLER_SCRIPT && h.event == "after_create")
+    {
         return Ok(());
     }
     let path = type_path(EMAIL_TYPE);
     let shipped = store::parse_data_only(DEFAULT_EMAIL_TYPE, &path)?;
     let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
-    let handler = shipped.items.into_iter().find(|i| block(i, "handler").is_some_and(|b| label(b) == Some("after_create"))).expect("shipped email restore handler");
+    let handler = shipped
+        .items
+        .into_iter()
+        .find(|i| block(i, "handler").is_some_and(|b| label(b) == Some("after_create")))
+        .expect("shipped email restore handler");
     ast.items.push(handler);
-    let change = TypeChange { wcl: store::to_canonical(&ast), ..TypeChange::default() };
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
     let plan = w.plan_type_change(EMAIL_TYPE, &change)?;
     if plan.changes.is_empty() {
-        w.apply_type_change(EMAIL_TYPE, &change, &plan.token, &Author::Task(SERVER_AUTHOR.to_owned()))?;
+        w.apply_type_change(
+            EMAIL_TYPE,
+            &change,
+            &plan.token,
+            &Author::Task(SERVER_AUTHOR.to_owned()),
+        )?;
     }
     Ok(())
 }

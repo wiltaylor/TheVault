@@ -7,7 +7,9 @@ use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use testkit::fake_google::{DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN};
-use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, FakeGoogle, MailAction, TestAccount, TestServer};
+use testkit::{
+    AiSeed, AnthropicMessage, FakeAnthropic, FakeGoogle, MailAction, TestAccount, TestServer,
+};
 
 const MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
 const READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
@@ -71,7 +73,13 @@ impl Api {
         for id in messages {
             google.add_message(mail(id));
         }
-        let server = TestServer::start_with_args(|_| {}, &[std::ffi::OsStr::new("--test-clock"), std::ffi::OsStr::new("2026-11-10T12:00:00Z")]);
+        let server = TestServer::start_with_args(
+            |_| {},
+            &[
+                std::ffi::OsStr::new("--test-clock"),
+                std::ffi::OsStr::new("2026-11-10T12:00:00Z"),
+            ],
+        );
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -625,15 +633,28 @@ fn interactive_agents_need_the_gmail_switch_for_archive_and_trash() {
     for allowed in [false, true] {
         let api = Api::start(&["one", "two"], &[MODIFY_SCOPE]);
         let fake = FakeAnthropic::start();
-        for (name, value) in AiSeed::new().account(TestAccount::anthropic(&fake).model("claude-opus-5")).secrets() {
-            expect(api.req("PUT", &format!("/api/secrets/{name}")).json(&json!({"value": value})).send().unwrap(), 200);
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
+            .secrets()
+        {
+            expect(
+                api.req("PUT", &format!("/api/secrets/{name}"))
+                    .json(&json!({"value": value}))
+                    .send()
+                    .unwrap(),
+                200,
+            );
         }
         expect(api.req("PUT", "/api/agents/clerk").body(format!("label = \"Clerk\"\npermissions {{\n gmail_actions = {allowed}\n confirm {{ notes = false\n delete = false\n }}\n}}\n")).send().unwrap(), 200);
         let one = api.email("one");
         let two = api.email("two");
         let mut note = api.note(&one);
         note["note"]["fields"]["processed"] = json!(true);
-        fake.push(AnthropicMessage::new().tool_use("edit", "propose_edit", json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()})));
+        fake.push(AnthropicMessage::new().tool_use(
+            "edit",
+            "propose_edit",
+            json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()}),
+        ));
         fake.push(AnthropicMessage::new().tool_use("delete", "propose_delete", json!({"id": two})));
         fake.push(AnthropicMessage::text("Done."));
         let response = api.req("POST", "/api/ai/chat").json(&json!({"agent": "clerk", "messages": [{"role": "user", "content": [{"type": "text", "text": "Process one and delete two."}]}]})).send().unwrap();
@@ -643,7 +664,14 @@ fn interactive_agents_need_the_gmail_switch_for_archive_and_trash() {
         api.settle();
         assert_eq!(api.note(&one)["note"]["fields"]["processed"], true);
         assert_eq!(api.emails().len(), 1);
-        assert_eq!(api.google.mail_actions(), if allowed { vec![modify("one"), trash("two")] } else { vec![] });
+        assert_eq!(
+            api.google.mail_actions(),
+            if allowed {
+                vec![modify("one"), trash("two")]
+            } else {
+                vec![]
+            }
+        );
     }
 }
 
@@ -653,13 +681,25 @@ fn failed_restore_keeps_the_vault_copy_and_reports_google_failure() {
     let one = api.email("one");
     api.delete(&one);
     api.google.set_action_error(Some((403, "Restore refused")));
-    expect(api.req("POST", &format!("/api/trash/{one}/restore")).send().unwrap(), 200);
+    expect(
+        api.req("POST", &format!("/api/trash/{one}/restore"))
+            .send()
+            .unwrap(),
+        200,
+    );
     let failed = api.server.settle_handlers();
     assert_eq!(failed.len(), 1, "{failed:?}");
     assert!(failed[0].contains("untrash"), "{failed:?}");
-    assert_eq!(api.server.secret_json("google_gmail_trashed"), json!(["one"]));
+    assert_eq!(
+        api.server.secret_json("google_gmail_trashed"),
+        json!(["one"])
+    );
     assert_eq!(api.note(&one)["note"]["fields"]["gmail_ref"], "one");
-    assert!(api.notifications().iter().any(|n| n["title"] == "Gmail did not untrash an email"));
+    assert!(
+        api.notifications()
+            .iter()
+            .any(|n| n["title"] == "Gmail did not untrash an email")
+    );
 }
 
 #[test]
@@ -667,10 +707,23 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
     for mention in [false, true] {
         let api = Api::start(&["one", "two"], &[MODIFY_SCOPE]);
         let fake = FakeAnthropic::start();
-        for (name, value) in AiSeed::new().account(TestAccount::anthropic(&fake).model("claude-opus-5")).secrets() {
-            expect(api.req("PUT", &format!("/api/secrets/{name}")).json(&json!({"value": value})).send().unwrap(), 200);
+        for (name, value) in AiSeed::new()
+            .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
+            .secrets()
+        {
+            expect(
+                api.req("PUT", &format!("/api/secrets/{name}"))
+                    .json(&json!({"value": value}))
+                    .send()
+                    .unwrap(),
+                200,
+            );
         }
-        let trigger = if mention { "trigger asked { mention = true\n}" } else { "trigger changed { on = [\"update\"]\n type = \"email\"\n prompt = \"Process mail.\"\n}" };
+        let trigger = if mention {
+            "trigger asked { mention = true\n}"
+        } else {
+            "trigger changed { on = [\"update\"]\n type = \"email\"\n prompt = \"Process mail.\"\n}"
+        };
         expect(api.req("PUT", "/api/agents/clerk").body(format!("label = \"Clerk\"\npermissions {{ gmail_actions = true\n confirm {{ notes = false\n delete = false\n }}\n}}\n{trigger}\n")).send().unwrap(), 200);
         let one = api.email("one");
         let two = api.email("two");
@@ -681,10 +734,20 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         }
         let mut note = api.note(&one);
         note["note"]["fields"]["processed"] = json!(true);
-        fake.push(AnthropicMessage::new().tool_use("edit", "propose_edit", json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()})));
+        fake.push(AnthropicMessage::new().tool_use(
+            "edit",
+            "propose_edit",
+            json!({"id": one, "base_version": note["version"], "note": note["note"].to_string()}),
+        ));
         fake.push(AnthropicMessage::new().tool_use("delete", "propose_delete", json!({"id": two})));
         fake.push(AnthropicMessage::text("Done."));
-        expect(api.req("POST", "/api/test/clock").json(&json!({"advance": "PT40S"})).send().unwrap(), 200);
+        expect(
+            api.req("POST", "/api/test/clock")
+                .json(&json!({"advance": "PT40S"}))
+                .send()
+                .unwrap(),
+            200,
+        );
         api.settle();
         assert_eq!(fake.message_requests().len(), 3, "mention={mention}");
         assert_eq!(api.note(&one)["note"]["fields"]["processed"], true);

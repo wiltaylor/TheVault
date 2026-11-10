@@ -996,7 +996,9 @@ impl Reader<'_> {
             "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... }, outbox { ... }, scripts { ... } or subagents { ... }",
         );
         let mut p = Permissions {
-            gmail_actions: self.bool(d, "gmail_actions", "permissions.gmail_actions").unwrap_or(false),
+            gmail_actions: self
+                .bool(d, "gmail_actions", "permissions.gmail_actions")
+                .unwrap_or(false),
             tools: self.names_by(d, "tools", "permissions.tools", "tool", is_tool_name),
             types: self.names(d, "types", "permissions.types", "type"),
             browser: self
