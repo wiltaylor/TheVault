@@ -56,7 +56,7 @@ fn existing_tool_rebindings_wait_for_apply() {
 fn unchanged_google_handlers_allow_description_edits() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    let edited = writer::DEFAULT_EMAIL_TYPE.replace("label = \"Email\"", "label = \"Mail\"");
+    let edited = writer::DEFAULT_EMAIL_TYPE.replace("One email message, pulled from Gmail.", "Email description edited by the agent.");
     assert_ne!(edited, writer::DEFAULT_EMAIL_TYPE);
     let events = api.one(&fake, "propose_type_change", json!({"name": "email", "wcl": edited}));
     let p = find(&events, "type_proposal").unwrap_or_else(|| panic!("{events:?}"));
@@ -142,11 +142,18 @@ fn every_privileged_default_run_is_guarded_through_every_agent_route() {
                 find(&events, "applied").is_none(),
                 "{name} {method}: {events:?}"
             );
-            assert!(
-                find(&events, event).is_some() || last_result(&fake).0,
-                "{name} {method}: {events:?}"
-            );
+            if matches!(method, "propose_skill_file_change" | "propose_type_change") {
+                assert!(find(&events, event).is_some() || last_result(&fake).0, "{name} {method}: {events:?}");
+            } else {
+                assert!(find(&events, event).is_none() && last_result(&fake).0, "{name} {method}: {events:?}");
+            }
         }
+        // File-only tool binding has no source edit to trigger shared_paths_refused.
+        // It must still be held because it adds grants to previously approved code.
+        let binding = format!("{tool}secrets = [\"user_key\"]\nallow_domains = [\"*\"]\n");
+        let events = api.one(&fake, "propose_tool_change", json!({"name": "binding", "wcl": binding, "script_source": null}));
+        assert!(find(&events, "applied").is_none(), "{name}: {events:?}");
+        assert!(find(&events, "tool_proposal").is_some(), "{name}: {events:?}");
     }
 }
 
