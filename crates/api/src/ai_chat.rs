@@ -1192,6 +1192,13 @@ impl Limits {
     }
 
     fn check_event(&self, w: &Writer, event: &str, p: &Value) -> Result<(), ApplyError> {
+        // Legacy read ceilings did not restrict definition operations.
+        if matches!(event, "type_proposal" | "taxonomy_proposal")
+            && self.change_types.is_none()
+            && self.change_fields.is_empty()
+        {
+            return Ok(());
+        }
         match event {
             "proposal" => self.check_change(w, p),
             "type_proposal" => self.check_whole_type(p["name"].as_str().unwrap_or_default()),
@@ -3839,11 +3846,14 @@ pub(crate) fn authorize_proposal(
     p: &Value,
 ) -> Result<(), ApplyError> {
     let proposer = p["proposer"].as_str().or(match author {
-        Author::Agent(name) => Some(name.split("/sub:").next().unwrap_or(name)),
+        Author::Agent(name) | Author::AgentMail(name) => {
+            Some(name.split("/sub:").next().unwrap_or(name))
+        }
         _ => None,
-    });
+    }).or_else(|| p["agent"].as_str());
     if let Some(name) = proposer {
-        let agent = w.agent(name)?;
+        let agent = crate::ai_agents::agent_named(w, name)?
+            .ok_or_else(|| ApplyError::Refused(format!("The proposing agent {name} no longer exists.")))?;
         if !agent.enabled {
             return Err(ApplyError::Refused(
                 "The proposing agent is disabled.".into(),
@@ -3851,7 +3861,8 @@ pub(crate) fn authorize_proposal(
         }
         Limits::of(&agent).check_event(w, event, p)?;
         if let Some(parent) = p["proposer_parent"].as_str() {
-            let parent = w.agent(parent)?;
+            let parent = crate::ai_agents::agent_named(w, parent)?
+                .ok_or_else(|| ApplyError::Refused("The parent agent no longer exists.".into()))?;
             if !parent.enabled {
                 return Err(ApplyError::Refused("The parent agent is disabled.".into()));
             }

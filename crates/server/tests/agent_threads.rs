@@ -465,7 +465,7 @@ fn change_permissions_cover_type_and_taxonomy_rewrites() {
         let result = tool_result(&fake, 1);
         assert_eq!(result["is_error"], true, "{tool}: {result}");
     }
-    for (tool, input) in changes {
+    for (tool, input) in changes.clone() {
         // A valid proposal cannot outlive a later field restriction on its affected type.
         api.agent("reader", "label = \"Reader\"\n");
         fake.clear_requests();
@@ -491,6 +491,29 @@ fn change_permissions_cover_type_and_taxonomy_rewrites() {
             response.text().unwrap()
         );
     }
+    api.agent("reader", "permissions { change_types = [\"memo\"] }");
+    for (tool, input) in changes.clone() {
+        fake.clear_requests();
+        fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        let events = api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+        let event = if tool == "propose_type_change" { "type_proposal" } else { "taxonomy_proposal" };
+        let proposal = events_named(&events, event)[0].clone();
+        let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+        assert!(response.status().is_success(), "{}", response.text().unwrap());
+    }
+    let response = api.client.put(api.server.url("/api/types/log"))
+        .bearer_auth(api.token()).header("content-type", "text/plain")
+        .body(format!("{LOG}\nfield stage {{ kind = \"taxonomy\"\n taxonomy = \"stage\" }}\n"))
+        .send().unwrap();
+    assert!(response.status().is_success(), "{}", response.text().unwrap());
+    api.send("POST", "/api/notes?type=log", json!({ "note": { "fields": { "title": "Other", "stage": "Open" } } }));
+    fake.clear_requests();
+    fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_taxonomy_change",
+        json!({ "name": "stage", "wcl": taxonomy.replace("Todo", "Next"), "renames": [{ "from": "Open", "to": "Next" }] })));
+    fake.push(AnthropicMessage::text("Done."));
+    api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+    assert_eq!(tool_result(&fake, 1)["is_error"], true);
 }
 
 #[test]
