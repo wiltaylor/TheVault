@@ -42,7 +42,11 @@ fn round5_own_google_event_is_exempt_independent_of_calendar() {
 fn round5_note_index_write_path_inventory() {
     // Ordinary writes (including handlers, restores and batch), type migration,
     // create_remote/replace_remote/apply_remote must share one safety boundary.
-    for source in [include_str!("../src/lib.rs"), include_str!("../src/types.rs"), include_str!("../src/remote.rs")] {
+    for source in [
+        include_str!("../src/lib.rs"),
+        include_str!("../src/types.rs"),
+        include_str!("../src/remote.rs"),
+    ] {
         let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(!compact.contains(".index.update("));
         assert!(compact.contains("self.update_note_index("));
