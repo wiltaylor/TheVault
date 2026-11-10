@@ -715,7 +715,12 @@ fn apply_as_agent(
             }
             // A throwaway sub agent's proposal is applied as it, `<agent>/sub:<n>` (subagents
             // U4).
-            let email = event == "proposal" && (change["type"] == "email" || change["note_id"].as_str().and_then(|id| w.read(id).ok()).is_some_and(|n| n.type_name == "email"));
+            let email = event == "proposal"
+                && (change["type"] == "email"
+                    || change["note_id"]
+                        .as_str()
+                        .and_then(|id| w.read(id).ok())
+                        .is_some_and(|n| n.type_name == "email"));
             match change["sub"].as_u64() {
                 Some(n) => Author::Agent(format!("{}/sub:{n}", agent.name)),
                 // This is the authenticated caller's explicit Apply, not an unattended
