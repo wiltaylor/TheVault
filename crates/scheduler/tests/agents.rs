@@ -443,7 +443,7 @@ fn an_agent_runs_at_most_two_at_once_and_queues_the_rest() {
 }
 
 #[test]
-fn an_agent_starts_at_most_sixty_runs_an_hour_and_says_so_once() {
+fn an_agent_starts_at_most_sixty_runs_an_hour_and_retries_the_overflow() {
     let r = Rig::new();
     r.agent("any", ANY);
     // A few at a time, so none is dropped from the queue.
@@ -452,19 +452,14 @@ fn an_agent_starts_at_most_sixty_runs_an_hour_and_says_so_once() {
         r.advance(31);
     }
     assert_eq!(r.fake.turns().len(), 60);
-    let notes = r.writer.state().notifications(false, 50, None).unwrap();
-    let limits: Vec<_> = notes
-        .items
-        .iter()
-        .filter(|n| n.title.contains("60 trigger runs in an hour"))
-        .collect();
-    assert_eq!(limits.len(), 1, "{:?}", notes.items);
-    assert_eq!(limits[0].url.as_deref(), Some("/agents/any/triggers"));
+    let queue = r.writer.state().trigger_queue_stats("any").unwrap();
+    assert_eq!(queue.waiting, 2);
+    assert_eq!(queue.dropped, 0);
     // An hour on, runs start again.
     r.clock.advance(Duration::from_secs(3600));
     r.create("log", "Later", "", &user());
     r.advance(31);
-    assert_eq!(r.fake.turns().len(), 61);
+    assert_eq!(r.fake.turns().len(), 63);
 }
 
 #[test]
@@ -945,7 +940,7 @@ fn a_full_queue_keeps_its_dispatch_runs_when_a_trigger_run_comes() {
                 .unwrap(),
         );
     }
-    // A trigger run finds the queue full of runs with threads: it is dropped, and no thread opens.
+    // A trigger run finds the queue full of runs with threads: it stays on disk.
     r.create("memo", "Roof", "open", &user());
     r.advance(31);
     assert_eq!(r.fake.threads.lock().unwrap().len(), room);
@@ -955,10 +950,12 @@ fn a_full_queue_keeps_its_dispatch_runs_when_a_trigger_run_comes() {
     ran.sort();
     sent.sort();
     assert_eq!(ran, sent, "every dispatch run ran");
+    r.advance(31);
+    assert_eq!(r.fake.turns().len(), room + 1);
 }
 
 #[test]
-fn a_dispatch_takes_the_place_of_a_trigger_run_waiting_in_a_full_queue() {
+fn a_dispatch_defers_a_durable_trigger_run_waiting_in_a_full_queue() {
     let r = Rig::new();
     r.agent("any", ANY);
     r.fake.hold.store(true, Ordering::SeqCst);
@@ -984,9 +981,11 @@ fn a_dispatch_takes_the_place_of_a_trigger_run_waiting_in_a_full_queue() {
         sent
     });
     r.fake.wait_turns(room);
-    // One trigger run was dropped, so the turns are the room's count, the dispatch among them.
+    // One trigger run was deferred, so the turns are the room's count, the dispatch among them.
     assert_eq!(r.fake.turns().len(), room);
     assert!(r.fake.turns().iter().any(|t| t.1 == sent), "{sent} ran");
+    r.advance(31);
+    assert_eq!(r.fake.turns().len(), room + 1, "the displaced trigger is retried");
 }
 
 #[test]

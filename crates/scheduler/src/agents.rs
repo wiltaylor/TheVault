@@ -15,11 +15,12 @@
 //!
 //! A run asks the [`AgentRunner`] for a new thread (`origin = "trigger:<name>"`) and runs one turn
 //! on it whose first user message is the trigger's prompt, with an `Event:` line for a note event.
-//! Each agent runs at most [`MAX_RUNNING`] runs at once; the rest queue. Past [`MAX_QUEUED`] the
-//! newest queued trigger run, one with no thread, is dropped. A run with a thread (a call from a
-//! note, or notes sent to the agent) is never dropped from the queue: a new one that finds no room
-//! is refused, and a new trigger run is dropped instead. At most [`MAX_PER_HOUR`] runs start per
-//! agent per hour; further ones are skipped, with one notification an hour. Every run is recorded
+//! Each agent runs at most [`MAX_RUNNING`] runs at once. Up to [`MAX_QUEUED`] wait in memory.
+//! Trigger overflow waits in state.db with capacity backoff, including across restarts.
+//! A person-requested run can displace a trigger back to disk, never discard it.
+//! At most [`MAX_PER_HOUR`] runs start per agent per hour. The durable queue caps waiting jobs
+//! at 10,000 per agent with visible drops and at most one owner notification an hour.
+//! Jobs expire after seven days. Run failures get three retries. Every run is recorded
 //! in `agent_runs` with its trail lines, and a failed run leaves one notification linking to its
 //! thread (agents G12).
 //!
@@ -198,6 +199,8 @@ pub(crate) struct AgentPlan {
     /// The notes to read for calls of agents, each with its type.
     mentions: BTreeMap<String, String>,
     lanes: BTreeMap<String, Lane>,
+    /// Durable work displaced by a person-requested run, returned to disk after unlocking.
+    displaced: Vec<AgentJob>,
 }
 
 /// What became of a run asked for.
@@ -376,7 +379,7 @@ impl AgentPlan {
         }
         let lane = self.lanes.entry(agent.to_owned()).or_default();
         let full = lane.running >= MAX_RUNNING && lane.queue.len() >= MAX_QUEUED;
-        if full && lane.queue.iter().all(|j| j.thread.is_some() || j.durable.is_some()) {
+        if full && lane.queue.iter().all(|j| j.thread.is_some()) {
             return Err(DispatchRefused::QueueFull);
         }
         Ok(())
@@ -424,14 +427,18 @@ impl AgentPlan {
                 );
                 return Admitted::Dropped;
             }
-            let Some(i) = lane.queue.iter().rposition(|j| j.thread.is_none() && j.durable.is_none()) else {
+            let Some(i) = lane.queue.iter().rposition(|j| j.thread.is_none()) else {
                 return Admitted::Refused;
             };
             if let Some(dropped) = lane.queue.remove(i) {
+                if dropped.durable.is_some() {
+                    self.displaced.push(dropped);
+                } else {
                 eprintln!(
                     "agent {:?}: {MAX_QUEUED} runs are waiting, so the newest run with no thread, of trigger {:?}, was dropped",
                     dropped.agent, dropped.trigger
                 );
+                }
             }
         }
         lane.queue.push_back(job);
@@ -749,7 +756,17 @@ impl Scheduler {
         for job in tell {
             self.notify_limit(&job);
         }
+        self.return_displaced_triggers();
         starts
+    }
+
+    fn return_displaced_triggers(&self) {
+        let jobs = std::mem::take(&mut self.plan().agents.displaced);
+        for job in jobs {
+            if let Some(id) = job.durable {
+                let _ = self.writer.state().retry_trigger_job(id, self.clock.now_ms(), None);
+            }
+        }
     }
 
     fn persist_trigger(&self, job: &AgentJob, due: i64) -> bool {
@@ -774,6 +791,14 @@ impl Scheduler {
         inserted
     }
 
+    /// Shared selection/execution guard. TV-137 adds writer.agent_may_read here when
+    /// integrating its Jev gate, so a queued note is checked again just before it runs.
+    fn trigger_note_allowed(&self, id: &str, ty: &str, event: &schema::NoteEvent) -> bool {
+        (event.types.is_empty() || event.types.iter().any(|t| t == ty))
+            && (!is_agent_type(ty) || !event.types.is_empty())
+            && self.note_matches(id, ty, event.condition_expr().as_ref()).is_some()
+    }
+
     /// Newest matching notes without any trigger record. Also used when confirming the
     /// preview, so edits, deletions, new records and safety decisions take effect.
     pub fn trigger_backfill_candidates(&self, name: &str, trigger: &str) -> Result<Vec<(String, String)>, String> {
@@ -785,10 +810,8 @@ impl Scheduler {
         notes.reverse();
         let mut found = Vec::new();
         for note in notes {
-            if (!e.types.is_empty() && !e.types.contains(&note.type_name))
-                || (is_agent_type(&note.type_name) && e.types.is_empty())
-                || self.writer.state().trigger_record_exists(name, trigger, &note.id).map_err(|e| e.to_string())?
-                || self.note_matches(&note.id, &note.type_name, e.condition_expr().as_ref()).is_none() { continue; }
+            if !self.trigger_note_allowed(&note.id, &note.type_name, e)
+                || self.writer.state().trigger_record_exists(name, trigger, &note.id).map_err(|e| e.to_string())? { continue; }
             found.push((note.id, note.type_name));
         }
         Ok(found)
@@ -1081,6 +1104,7 @@ impl Scheduler {
             self.drop_thread(&a.name, &thread);
             return Err(e);
         }
+        self.return_displaced_triggers();
         Ok(thread)
     }
 
@@ -1122,10 +1146,14 @@ impl Scheduler {
         };
         let state = self.writer.state();
         if let Some(id) = job.durable {
-            let _ = state.finish_trigger_job(id, "running", None);
+            match state.begin_trigger_job(id, self.clock.now_ms()) {
+                Ok(true) => {},
+                Ok(false) => return,
+                Err(e) => { eprintln!("starting durable trigger: {e}"); return; }
+            }
             let matches = agent.trigger(&job.trigger).is_some_and(|t| {
                 match (&job.note, &t.when) {
-                    (Some((note, ty)), TriggerWhen::NoteEvent(e)) => self.note_matches(note, ty, e.condition_expr().as_ref()).is_some(),
+                    (Some((note, ty)), TriggerWhen::NoteEvent(e)) => self.trigger_note_allowed(note, ty, e),
                     (None, _) => true,
                     _ => false,
                 }
@@ -1139,6 +1167,9 @@ impl Scheduler {
             Ok(id) => id,
             Err(e) => {
                 eprintln!("agent {:?}: recording the run failed: {e}", agent.name);
+                if let Some(queued) = job.durable {
+                    let _ = state.retry_trigger_job(queued, self.clock.now_ms(), Some(&e.to_string()));
+                }
                 return;
             }
         };

@@ -281,8 +281,11 @@ pub async fn backfill(
     Path((name, trigger)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let state::Author::Session(principal) = author else {
+    if !backfill_allowed(&author) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "session_required", "backfill requires a signed-in owner session"));
+    }
+    let state::Author::Session(principal) = author else {
+        unreachable!();
     };
     blocking(w, move |w| {
         let bad = |message: String| ApiError::new(StatusCode::BAD_REQUEST, "invalid_backfill", message);
@@ -302,6 +305,10 @@ pub async fn backfill(
             Ok(Json(json!({ "count": count, "selected": notes.len(), "preview": preview })))
         }
     }).await
+}
+
+fn backfill_allowed(author: &state::Author) -> bool {
+    matches!(author, state::Author::Session(_))
 }
 
 /// `GET /api/agents/calls/{call}`.
@@ -345,6 +352,16 @@ pub async fn call(
 mod call_issuer_tests {
     use super::call_issuer_allowed;
     use state::{Author, Scope};
+
+    #[test]
+    fn backfill_refuses_every_token_kind_and_agent_run() {
+        assert!(super::backfill_allowed(&Author::Session("owner".into())));
+        for author in [Author::Token("admin".into()), Author::Token("device-phone".into()),
+            Author::Token("agent-clerk".into()), Author::Agent("clerk".into()),
+            Author::AgentMail("clerk".into()), Author::Handler("import".into()), Author::Task("import".into())] {
+            assert!(!super::backfill_allowed(&author), "{author:?}");
+        }
+    }
 
     #[test]
     fn only_editor_principals_issue_call_ids() {

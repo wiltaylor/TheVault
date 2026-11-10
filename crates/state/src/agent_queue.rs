@@ -200,6 +200,12 @@ impl State {
         Ok(self.conn().execute("UPDATE trigger_jobs SET status='admitted' WHERE id=?1 AND status='waiting'", [id])? == 1)
     }
 
+    pub fn begin_trigger_job(&self, id: i64, now: i64) -> Result<bool> {
+        let conn = self.conn();
+        conn.execute("UPDATE trigger_jobs SET status='expired',message='wait exceeded seven days' WHERE id=?1 AND status='admitted' AND queued_ms<=?2", params![id,now-WEEK])?;
+        Ok(conn.execute("UPDATE trigger_jobs SET status='running' WHERE id=?1 AND status='admitted'", [id])? == 1)
+    }
+
     pub fn finish_trigger_job(&self, id: i64, status: &str, message: Option<&str>) -> Result<()> {
         self.conn().execute("UPDATE trigger_jobs SET status=?2, message=?3 WHERE id=?1", params![id,status,message])?;
         Ok(())
@@ -221,7 +227,7 @@ impl State {
     pub fn trigger_queue_stats(&self, agent: &str) -> Result<TriggerQueueStats> {
         let conn = self.conn();
         let count = |status| conn.query_row("SELECT count(*) FROM trigger_jobs WHERE agent=?1 AND status=?2", params![agent,status], |r| r.get(0));
-        Ok(TriggerQueueStats { waiting:count("waiting")?, failed:count("failed")?, expired:count("expired")?, dropped:conn.query_row("SELECT count FROM trigger_queue_drops WHERE agent=?1", [agent], |r| r.get(0)).optional()?.unwrap_or(0) })
+        Ok(TriggerQueueStats { waiting:count("waiting")? + count("admitted")?, failed:count("failed")?, expired:count("expired")?, dropped:conn.query_row("SELECT count FROM trigger_queue_drops WHERE agent=?1", [agent], |r| r.get(0)).optional()?.unwrap_or(0) })
     }
 
     pub fn trigger_drop_notice(&self, agent: &str, now: i64) -> Result<bool> {
