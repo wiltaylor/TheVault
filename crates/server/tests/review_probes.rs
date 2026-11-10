@@ -43,7 +43,9 @@ fn install(server: &TestServer, admin: &Client, name: &str, scope: &str) -> Clie
     if scope == "admin" {
         // Legacy codes could grant admin. The new API refuses them.
         let state = state::State::open(&server.vault_path().join(".vault/state.db"), None).unwrap();
-        let code = state.create_agent_code(name, state::Scope::Admin, 60_000).unwrap();
+        let code = state
+            .create_agent_code(name, state::Scope::Admin, 60_000)
+            .unwrap();
         let (_, secret) = state.redeem_agent_code(&code.code).unwrap().unwrap();
         return client(&secret);
     }
@@ -156,14 +158,21 @@ fn p3_agent_token_cannot_apply_as_sending_agent() {
     let (s, done) = body(
         agent
             .post(server.url("/api/ai/apply"))
-            .json(&json!({ "op": "create", "type": "outbox", "agent": "sender",
-                           "after": { "fields": ready_fields() } }))
+            .json(
+                &json!({ "op": "create", "type": "outbox", "agent": "sender",
+                           "after": { "fields": ready_fields() } }),
+            )
             .send()
             .unwrap(),
     );
     if s == 200 {
         let id = done["note_id"].as_str().unwrap();
-        let (_, note) = body(admin.get(server.url(&format!("/api/notes/{id}"))).send().unwrap());
+        let (_, note) = body(
+            admin
+                .get(server.url(&format!("/api/notes/{id}")))
+                .send()
+                .unwrap(),
+        );
         assert_ne!(
             note["note"]["fields"]["status"], "ready",
             "agent-cli created a ready item as agent sender: {note}"
@@ -205,12 +214,17 @@ fn p4_agent_token_cannot_edit_other_agents_draft_via_apply() {
     let (s, done) = body(
         agent
             .post(server.url("/api/ai/apply"))
-            .json(&json!({ "op": "update", "note_id": id, "base_version": made["version"],
-                           "agent": "clerk", "after": after }))
+            .json(
+                &json!({ "op": "update", "note_id": id, "base_version": made["version"],
+                           "agent": "clerk", "after": after }),
+            )
             .send()
             .unwrap(),
     );
-    assert!(s >= 400, "agent-cli edited clerk's draft as clerk: {s} {done}");
+    assert!(
+        s >= 400,
+        "agent-cli edited clerk's draft as clerk: {s} {done}"
+    );
 }
 
 /// P5: an install code named `user` makes `agent-user`, whose drafts are `drafted_by = user`,
@@ -257,11 +271,20 @@ fn p6_user_token_reserved_prefix_is_refused() {
     );
     assert_eq!(s, 400);
     let _ = made;
-    let (s, made) = body(admin.post(server.url("/api/tokens")).json(&json!({ "name": "ordinary", "scope": "write" })).send().unwrap());
+    let (s, made) = body(
+        admin
+            .post(server.url("/api/tokens"))
+            .json(&json!({ "name": "ordinary", "scope": "write" }))
+            .send()
+            .unwrap(),
+    );
     assert_eq!(s, 201);
     let ops = client(made["secret"].as_str().unwrap());
     let (s, item) = create_ready(&server, &ops);
-    assert_eq!(s, 201, "user token agent-ops lost the user's Outbox rights: {item}");
+    assert_eq!(
+        s, 201,
+        "user token agent-ops lost the user's Outbox rights: {item}"
+    );
 }
 
 /// P7: an install-code token deletes (cancels) the user's ready item.
@@ -279,7 +302,10 @@ fn p7_agent_token_cannot_delete_users_ready_item() {
             .send()
             .unwrap(),
     );
-    assert!(s >= 400, "agent-cli deleted the user's ready item: {s} {done}");
+    assert!(
+        s >= 400,
+        "agent-cli deleted the user's ready item: {s} {done}"
+    );
 }
 
 /// P8: batch create of a ready item and batch delete of a Google event by an install-code token.
@@ -347,5 +373,32 @@ fn p9_agent_token_cannot_restore_users_ready_item() {
             .send()
             .unwrap(),
     );
-    assert!(s >= 400, "agent-cli restored the user's ready item: {s} {done}");
+    assert!(
+        s >= 400,
+        "agent-cli restored the user's ready item: {s} {done}"
+    );
+}
+
+#[test]
+fn agent_token_owns_only_its_drafts_and_legacy_admin_cannot_grant() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let agent = install(&server, &admin, "cli", "admin");
+    for path in ["/api/tokens", "/api/agent-codes", "/api/devices/pair-codes"] {
+        assert_eq!(agent.post(server.url(path)).json(&json!({"name":"escape", "scope":"write"})).send().unwrap().status(), 403);
+    }
+    assert_eq!(agent.put(server.url("/api/agents/sender")).body(SENDER).send().unwrap().status(), 403);
+    for name in ["user", "agent-clerk", "device-clerk"] {
+        assert!(admin.put(server.url(&format!("/api/agents/{name}"))).body(CLERK).send().unwrap().status().is_client_error());
+    }
+    let (s, made) = body(agent.post(server.url("/api/notes?type=outbox")).json(&json!({"note":{"fields":{"title":"Draft", "kind":"email", "subject":"Review"}}})).send().unwrap());
+    assert_eq!(s, 201);
+    assert_eq!(made["note"]["fields"]["drafted_by"], "agent-cli");
+    let id = made["id"].as_str().unwrap();
+    let url = server.url(&format!("/api/notes/{id}"));
+    let other = install(&server, &admin, "other", "write");
+    assert!(other.delete(&url).query(&[("base_version",made["version"].as_str().unwrap())]).send().unwrap().status().is_client_error());
+    assert!(agent.delete(&url).query(&[("base_version",made["version"].as_str().unwrap())]).send().unwrap().status().is_success());
+    assert!(other.post(server.url(&format!("/api/trash/{id}/restore"))).send().unwrap().status().is_client_error());
+    assert!(agent.post(server.url(&format!("/api/trash/{id}/restore"))).send().unwrap().status().is_success());
 }

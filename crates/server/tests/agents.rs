@@ -218,6 +218,7 @@ fn only_an_admin_issues_an_install_code_and_it_carries_the_one_line_command() {
     );
 
     for bad in [
+        json!({ "name": "claude", "scope": "admin" }),
         json!({ "name": "claude", "scope": "owner" }),
         json!({ "name": "", "scope": "write" }),
         json!({ "name": "has space", "scope": "write" }),

@@ -118,7 +118,12 @@ impl State {
         self.create_token_kind(name, scope, "user")
     }
 
-    pub(crate) fn create_token_kind(&self, name: &str, scope: Scope, kind: &str) -> Result<(TokenInfo, String)> {
+    pub(crate) fn create_token_kind(
+        &self,
+        name: &str,
+        scope: Scope,
+        kind: &str,
+    ) -> Result<(TokenInfo, String)> {
         let secret = new_secret();
         let created_ms = self.now();
         let inserted = self.conn().execute(
@@ -163,8 +168,9 @@ impl State {
     /// Every token, by name.
     pub fn list_tokens(&self) -> Result<Vec<TokenInfo>> {
         let conn = self.conn();
-        let mut stmt =
-            conn.prepare("SELECT name, scope, created_ms, last_used_ms, kind FROM tokens ORDER BY name")?;
+        let mut stmt = conn.prepare(
+            "SELECT name, scope, created_ms, last_used_ms, kind FROM tokens ORDER BY name",
+        )?;
         let rows = stmt.query_map([], token_row)?;
         rows.map(|r| finish_token(r?)).collect()
     }

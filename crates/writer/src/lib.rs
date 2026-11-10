@@ -1845,7 +1845,10 @@ impl Writer {
         if let Author::Agent(name) | Author::AgentMail(name) = author {
             let text = |field| doc.field(field).and_then(schema::Value::as_str);
             if text("status") != Some("draft") || text("drafted_by") != Some(name.as_str()) {
-                return Err(Error::BadRequest("agents may delete or restore only their own Outbox drafts".into()));
+                return Err(Error::Invalid(Invalid {
+                    file: "outbox".into(),
+                    issues: vec![Issue::new("status", "agents may delete or restore only their own Outbox drafts")],
+                }));
             }
         }
         Ok(())

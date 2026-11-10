@@ -18,11 +18,14 @@ fn token_kinds_migrate_from_19_and_20_without_losing_credentials() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("state.db");
         let state = State::open(&path, None).unwrap();
-        let credentials: Vec<_> = ["agent-old", "device-old", "plain"].into_iter()
-            .map(|name| state.create_token(name, Scope::Admin).unwrap().1).collect();
+        let credentials: Vec<_> = ["agent-old", "device-old", "plain"]
+            .into_iter()
+            .map(|name| state.create_token(name, Scope::Admin).unwrap().1)
+            .collect();
         drop(state);
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.execute_batch("ALTER TABLE tokens DROP COLUMN kind;").unwrap();
+        conn.execute_batch("ALTER TABLE tokens DROP COLUMN kind;")
+            .unwrap();
         conn.pragma_update(None, "user_version", version).unwrap();
         drop(conn);
         let state = State::open(&path, None).unwrap();

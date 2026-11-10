@@ -405,7 +405,11 @@ async fn identify(sessions: &Arc<Sessions>, headers: &HeaderMap) -> Result<Grant
         .await?
         .ok_or_else(unauthorized)?;
         return Ok(Granted {
-            author: if token.kind == "agent" { Author::Agent(token.name) } else { Author::Token(token.name) },
+            author: if token.kind == "agent" {
+                Author::Agent(token.name)
+            } else {
+                Author::Token(token.name)
+            },
             scope: token.scope,
             renewed: None,
         });
@@ -445,10 +449,19 @@ pub async fn authenticate(
         Err(e) => return e.into_response(),
     };
     if is_agent_token(&granted.author)
-        && ((req.method() == Method::POST && matches!(req.uri().path(), "/api/tokens" | "/api/devices/pair-codes" | "/api/agent-codes"))
+        && ((req.method() == Method::POST
+            && matches!(
+                req.uri().path(),
+                "/api/tokens" | "/api/devices/pair-codes" | "/api/agent-codes"
+            ))
             || is_agent_file_write(req.method(), req.uri().path()))
     {
-        return ApiError::new(StatusCode::FORBIDDEN, "forbidden", "agent tokens may not grant credentials or change agent definitions").into_response();
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "agent tokens may not grant credentials or change agent definitions",
+        )
+        .into_response();
     }
     if is_human_only(req.method(), req.uri().path())
         && !matches!(granted.author, Author::Session(_))
