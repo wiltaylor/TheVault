@@ -250,12 +250,15 @@ async fn serve(
         let root = Arc::new(web);
         app = app.fallback(move |req| api::web::serve(root.clone(), req));
     }
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-        .with_graceful_shutdown(async {
-            shutdown().await;
-            on_shutdown();
-        })
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        shutdown().await;
+        on_shutdown();
+    })
+    .await?;
     Ok(())
 }
 

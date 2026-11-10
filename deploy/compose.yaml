@@ -26,7 +26,11 @@ services:
       VAULT_BROWSER_URL: ${BROWSER_TOKEN:+http://browser:7700}
       VAULT_BROWSER_TOKEN: ${BROWSER_TOKEN:-}
       VAULT_TRUSTED_PROXIES: ${VAULT_TRUSTED_PROXIES-caddy=172.30.141.2,cloudflare=172.30.141.3}
-    networks: [default, browser, proxy]
+    networks:
+      default:
+      browser:
+      proxy:
+        ipv4_address: 172.30.141.4
     volumes:
       # Named volumes unless .env names host folders.
       - ${THEVAULT_DATA:-data}:/data
