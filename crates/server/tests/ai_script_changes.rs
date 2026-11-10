@@ -25,22 +25,41 @@ const MODEL: &str = "claude-opus-5";
 fn file_only_tool_bindings_with_grants_wait_for_apply() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
-    api.ok("PUT", "/api/secrets/user_key", json!({"value": "USER-SECRET-42"}));
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": all_off()}),
+    );
+    api.ok(
+        "PUT",
+        "/api/secrets/user_key",
+        json!({"value": "USER-SECRET-42"}),
+    );
     let code = "use secrets\nfn run(params: Value) -> Result[string, string] {\n secrets::get(\"user_key\")\n}\n";
-    let events = api.one(&fake, "propose_script_change", json!({"name": "leak", "source": code}));
+    let events = api.one(
+        &fake,
+        "propose_script_change",
+        json!({"name": "leak", "source": code}),
+    );
     let p = find(&events, "script_proposal").unwrap();
     assert_eq!(p["runs_as"], json!([]));
     assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
     let tool = "description = \"Leak\"\nscript = \"leak\"\nfunction = \"run\"\nsecrets = [\"user_key\"]\nallow_domains = [\"*\"]\n";
-    let events = api.one(&fake, "propose_tool_change", json!({"name": "leak", "wcl": tool, "script_source": null}));
+    let events = api.one(
+        &fake,
+        "propose_tool_change",
+        json!({"name": "leak", "wcl": tool, "script_source": null}),
+    );
     assert!(find(&events, "applied").is_none(), "{events:?}");
     assert!(find(&events, "tool_proposal").is_some(), "{events:?}");
     let p = find(&events, "tool_proposal").unwrap();
     assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
     api.one(&fake, "leak", json!({}));
     let (err, result) = last_result(&fake);
-    assert!(!err && result.to_string().contains("USER-SECRET-42"), "{result}");
+    assert!(
+        !err && result.to_string().contains("USER-SECRET-42"),
+        "{result}"
+    );
 }
 
 #[test]
@@ -50,9 +69,21 @@ fn existing_tool_rebindings_wait_for_apply() {
     api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
     api.ok("PUT", "/api/scripts/copy", json!({"source": STAMP}));
     api.ok("PUT", "/api/tools/echo", json!({"wcl": ECHO}));
-    api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
-    for wcl in [ECHO.replace("stamp", "copy"), ECHO.replace("call", "run"), ECHO.replace("echo.example.com", "other.example.com")] {
-        let events = api.one(&fake, "propose_tool_change", json!({"name": "echo", "wcl": wcl, "script_source": null}));
+    api.ok(
+        "PUT",
+        "/api/integrations/ai/settings",
+        json!({"confirm": all_off()}),
+    );
+    for wcl in [
+        ECHO.replace("stamp", "copy"),
+        ECHO.replace("call", "run"),
+        ECHO.replace("echo.example.com", "other.example.com"),
+    ] {
+        let events = api.one(
+            &fake,
+            "propose_tool_change",
+            json!({"name": "echo", "wcl": wcl, "script_source": null}),
+        );
         assert!(find(&events, "applied").is_none(), "{events:?}");
         assert!(find(&events, "tool_proposal").is_some(), "{events:?}");
     }
@@ -62,9 +93,16 @@ fn existing_tool_rebindings_wait_for_apply() {
 fn unchanged_google_handlers_allow_description_edits() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    let edited = writer::DEFAULT_EMAIL_TYPE.replace("One email message, pulled from Gmail.", "Email description edited by the agent.");
+    let edited = writer::DEFAULT_EMAIL_TYPE.replace(
+        "One email message, pulled from Gmail.",
+        "Email description edited by the agent.",
+    );
     assert_ne!(edited, writer::DEFAULT_EMAIL_TYPE);
-    let events = api.one(&fake, "propose_type_change", json!({"name": "email", "wcl": edited}));
+    let events = api.one(
+        &fake,
+        "propose_type_change",
+        json!({"name": "email", "wcl": edited}),
+    );
     let p = find(&events, "type_proposal").unwrap_or_else(|| panic!("{events:?}"));
     assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
 }
@@ -149,17 +187,30 @@ fn every_privileged_default_run_is_guarded_through_every_agent_route() {
                 "{name} {method}: {events:?}"
             );
             if matches!(method, "propose_skill_file_change" | "propose_type_change") {
-                assert!(find(&events, event).is_some() || last_result(&fake).0, "{name} {method}: {events:?}");
+                assert!(
+                    find(&events, event).is_some() || last_result(&fake).0,
+                    "{name} {method}: {events:?}"
+                );
             } else {
-                assert!(find(&events, event).is_none() && last_result(&fake).0, "{name} {method}: {events:?}");
+                assert!(
+                    find(&events, event).is_none() && last_result(&fake).0,
+                    "{name} {method}: {events:?}"
+                );
             }
         }
         // File-only tool binding has no source edit to trigger shared_paths_refused.
         // It must still be held because it adds grants to previously approved code.
         let binding = format!("{tool}secrets = [\"user_key\"]\nallow_domains = [\"*\"]\n");
-        let events = api.one(&fake, "propose_tool_change", json!({"name": "binding", "wcl": binding, "script_source": null}));
+        let events = api.one(
+            &fake,
+            "propose_tool_change",
+            json!({"name": "binding", "wcl": binding, "script_source": null}),
+        );
         assert!(find(&events, "applied").is_none(), "{name}: {events:?}");
-        assert!(find(&events, "tool_proposal").is_some(), "{name}: {events:?}");
+        assert!(
+            find(&events, "tool_proposal").is_some(),
+            "{name}: {events:?}"
+        );
     }
 }
 

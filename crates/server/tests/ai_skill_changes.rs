@@ -25,9 +25,22 @@ fn mixed_case_skill_code_paths_are_held_and_cannot_grant_secrets() {
     let api = Api::start(&fake, json!({"skills": false}));
     api.skill("brand", BRAND);
     let safe = "description = \"Safe\"\nscript = \"safe\"\nfunction = \"run\"\n";
-    for path in ["Tools/safe.wcl", "TOOLS/safe.WCL", "Scripts/safe.ws", "SCRIPTS/safe.ws"] {
-        let text = if path.to_ascii_lowercase().starts_with("tools/") {safe} else {"fn run(params: Value) -> string { \"safe\" }\n"};
-        let events = api.one(&fake, "propose_skill_file_change", json!({"name": "brand", "path": path, "text": text, "base64": null}));
+    for path in [
+        "Tools/safe.wcl",
+        "TOOLS/safe.WCL",
+        "Scripts/safe.ws",
+        "SCRIPTS/safe.ws",
+    ] {
+        let text = if path.to_ascii_lowercase().starts_with("tools/") {
+            safe
+        } else {
+            "fn run(params: Value) -> string { \"safe\" }\n"
+        };
+        let events = api.one(
+            &fake,
+            "propose_skill_file_change",
+            json!({"name": "brand", "path": path, "text": text, "base64": null}),
+        );
         assert!(find(&events, "applied").is_none(), "{events:?}");
         let p = last(&events, "skill_proposal").clone();
         if path.to_ascii_lowercase().starts_with("tools/") {
@@ -35,7 +48,11 @@ fn mixed_case_skill_code_paths_are_held_and_cannot_grant_secrets() {
             let mut forged = p.clone();
             forged["after"] = json!(secret);
             assert_eq!(api.apply(&forged).0, StatusCode::FORBIDDEN);
-            let events = api.one(&fake, "propose_skill_file_change", json!({"name": "brand", "path": path, "text": secret, "base64": null}));
+            let events = api.one(
+                &fake,
+                "propose_skill_file_change",
+                json!({"name": "brand", "path": path, "text": secret, "base64": null}),
+            );
             assert!(find(&events, "skill_proposal").is_none());
             last_result(&fake, true);
         }

@@ -1268,7 +1268,9 @@ impl Direct {
                     && p["grants_run_saved"] != true
                     && p["grants_subagents"] != true
             }
-            "tool_proposal" => self.tools && !p["script_after"].is_string() && !tool_binding_changed(p),
+            "tool_proposal" => {
+                self.tools && !p["script_after"].is_string() && !tool_binding_changed(p)
+            }
             // The tools of [`ALWAYS_PROPOSE`]: always the user's Apply (TV-32 Q2 O1).
             "script_proposal" | "task_proposal" | "device_file_proposal" => false,
             "agent_memory_proposal" => self.memories,
@@ -4443,8 +4445,10 @@ fn tool_binding_changed(p: &Value) -> bool {
     let Ok(before) = schema::ScriptTool::parse(name, source) else {
         return true;
     };
-    before.script != after.script || before.function != after.function
-        || before.secrets != after.secrets || before.allow_domains != after.allow_domains
+    before.script != after.script
+        || before.function != after.function
+        || before.secrets != after.secrets
+        || before.allow_domains != after.allow_domains
 }
 
 fn type_handlers_changed(p: &Value) -> bool {
@@ -4466,8 +4470,12 @@ fn type_handlers_changed(p: &Value) -> bool {
 }
 
 fn type_handler_secrets(name: &str, before: Option<&str>, source: &str) -> Result<(), String> {
-    let old = before.map(|s| schema::TypeDef::parse(name, s)).transpose()
-        .map_err(|e| e.to_string())?.map(|t| t.handlers).unwrap_or_default();
+    let old = before
+        .map(|s| schema::TypeDef::parse(name, s))
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .map(|t| t.handlers)
+        .unwrap_or_default();
     let ty = schema::TypeDef::parse(name, source).map_err(|e| e.to_string())?;
     for h in ty.handlers {
         if old.contains(&h) {
