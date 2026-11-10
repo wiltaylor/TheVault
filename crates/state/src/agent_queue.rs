@@ -91,6 +91,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn review_f6_success_survives_later_unsuccessful_jobs_and_retry_exhaustion() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        for status in ["failed", "expired", "cancelled", "exhausted"] {
+            let success = s.enqueue_trigger("clerk", "opened", Some(status), "{}", 0).unwrap().unwrap();
+            s.finish_trigger_job(success, "succeeded", None).unwrap();
+            let later = s.enqueue_trigger("clerk", "opened", Some(status), "{}", 0).unwrap().unwrap();
+            if status == "exhausted" {
+                for _ in 0..4 { s.retry_trigger_job(later, s.now(), Some("failed")).unwrap(); }
+            } else { s.finish_trigger_job(later, status, None).unwrap(); }
+            assert!(s.trigger_record_exists("clerk", "opened", status).unwrap(), "{status} erased success");
+            assert!(s.enqueue_backfill("clerk", "opened", Some(status), "{}", 0).unwrap().is_none());
+        }
+        let rows: i64 = s.conn().query_row("SELECT count(*) FROM trigger_jobs", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 8, "at most success plus latest terminal per note");
+    }
+
+    #[test]
+    fn review_m8_same_agent_note_runs_serially_but_other_notes_can_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        let now = s.now();
+        let first = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().unwrap();
+        s.claim_trigger_job(first).unwrap();
+        assert!(s.begin_trigger_job(first, now).unwrap());
+        let second = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", 0).unwrap().unwrap();
+        s.claim_trigger_job(second).unwrap();
+        assert!(!s.begin_trigger_job(second, now).unwrap(), "same note is already running");
+        let other = s.enqueue_trigger("clerk", "opened", Some("b"), "{}", 0).unwrap().unwrap();
+        s.claim_trigger_job(other).unwrap();
+        assert!(s.begin_trigger_job(other, now).unwrap());
+        s.finish_trigger_job(first, "succeeded", None).unwrap();
+        assert!(s.due_trigger_jobs(now).unwrap().is_empty());
+        assert_eq!(s.due_trigger_jobs(now+30_000).unwrap().len(), 1);
+        assert!(s.claim_trigger_job(second).unwrap());
+        assert!(s.begin_trigger_job(second, now+30_000).unwrap());
+        assert!(!s.begin_trigger_job(second, now+30_000).unwrap(), "start exactly once");
+    }
+
+    #[test]
     fn review_f2_edit_during_running_job_is_not_deduped() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
