@@ -522,6 +522,9 @@ impl Agent {
     /// from any type through an implicit one named `mention`, with no prompt and no type limit, so
     /// every agent can be called; a mention trigger only adds a prompt or limits the types.
     pub fn mention_trigger(&self, type_name: &str) -> Option<Trigger> {
+        if AGENT_CALL_EXCLUDED_TYPES.contains(&type_name) {
+            return None;
+        }
         let mut any = false;
         for t in &self.triggers {
             if let When::Mention(m) = &t.when {

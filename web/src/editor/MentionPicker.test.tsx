@@ -8,6 +8,7 @@ import { callableAgents, refreshAgents } from "../agents";
 import { resetCalls } from "../agentCalls";
 import { type AgentSummary, ApiError, type Block, api } from "../api";
 import { ContentEditor, type EditorHandle } from "./ContentEditor";
+import { ThisNote } from "../views/thisNote";
 
 // jsdom lays nothing out; the editor's menus place themselves by the caret's rectangle.
 if (!Element.prototype.getClientRects) Element.prototype.getClientRects = () => [] as unknown as DOMRectList;
@@ -25,6 +26,8 @@ const AGENTS: AgentSummary[] = [
 ];
 
 beforeEach(async () => {
+  let n = 0;
+  vi.spyOn(api, "issueAgentCall").mockImplementation(async () => ({ call: `01JB8Z4K2MQ7V3X9T5R6W8Y2Z${n++}` }));
   resetCalls();
   vi.spyOn(api, "agents").mockResolvedValue({ agents: AGENTS, tools: [] });
   vi.spyOn(api, "agentCall").mockRejectedValue(new ApiError(404, { error: "not_found", message: "not seen" }));
@@ -46,6 +49,7 @@ describe("callableAgents", () => {
     expect(names("agent_thread")).toEqual([]);
     // Nor does a memory.
     expect(names("agent_memory")).toEqual([]);
+    for (const type of ["email", "message", "call", "conversation", "event", "email_thread"]) expect(names(type)).toEqual([]);
     expect(names("memo", "ni")).toEqual(["owl"]);
     expect(names("memo", "OW")).toEqual(["owl"]);
     expect(names("memo", "x")).toEqual([]);
@@ -56,7 +60,7 @@ describe("the @ picker", () => {
   function mount(blocks: Block[]) {
     const onChange = vi.fn();
     let handle!: EditorHandle;
-    const r = render(() => <ContentEditor blocks={blocks} label="Body" onChange={onChange} onReady={(h) => (handle = h)} />);
+    const r = render(() => <ThisNote.Provider value="01JB8Z4K2MQ7V3X9T5R6W8Y2ZA"><ContentEditor blocks={blocks} label="Body" onChange={onChange} onReady={(h) => (handle = h)} /></ThisNote.Provider>);
     return { ...r, onChange, editor: () => handle.editor };
   }
 
@@ -89,6 +93,7 @@ describe("the @ picker", () => {
     expect(withCall).toHaveLength(1);
     const text = (withCall[0]![0] as Block[])[0]!.fields!.text as string;
     expect(text).toMatch(CALL_TEXT);
+    expect(api.issueAgentCall).toHaveBeenCalledWith("01JB8Z4K2MQ7V3X9T5R6W8Y2ZA", "clerk");
     // The chip shows in the editor, sending until the server has seen the call.
     expect(r.container.querySelector(".agent-call-start")).not.toBeNull();
     expect(await r.findByTestId("agent-call-sending")).toHaveTextContent("Sending…");
@@ -112,6 +117,18 @@ describe("the @ picker", () => {
     expect(ids).toHaveLength(2);
     expect(ids[0]).not.toEqual(ids[1]);
     expect(text).toContain("[@Clerk one\ntwo](agent:clerk?call=");
+    r.unmount();
+  });
+
+  it("keeps the request and explains the connection requirement when issuance fails", async () => {
+    vi.mocked(api.issueAgentCall).mockRejectedValue(new Error("offline"));
+    const r = mount([{ kind: "paragraph", fields: { text: "" } }]);
+    const box = await ask(r);
+    fireEvent.input(box, { target: { value: "tidy this" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await r.findByText("Calling an agent needs a connection to your server.")).toBeVisible();
+    expect(box.value).toBe("tidy this");
+    expect(JSON.stringify(r.onChange.mock.calls)).not.toContain("agent:");
     r.unmount();
   });
 

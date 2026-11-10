@@ -646,7 +646,7 @@ export interface AgentSummary {
    * What a note may call the agent by (agents G16): `null` when it is disabled or has no mention
    * trigger, else the types whose notes may call it, `types: null` for every type.
    */
-  mention?: { types: string[] | null } | null;
+  mention?: { types: string[] | null; excluded_types?: string[] } | null;
   built_in: boolean;
   error?: string;
   /** How many turns run on the agent's threads now (agents G17). */

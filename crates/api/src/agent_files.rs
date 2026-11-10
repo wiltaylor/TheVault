@@ -188,14 +188,14 @@ fn mention_json(a: &Agent) -> Value {
     for t in &a.triggers {
         if let TriggerWhen::Mention(m) = &t.when {
             if m.types.is_empty() {
-                return json!({ "types": null });
+                return json!({ "types": null, "excluded_types": schema::AGENT_CALL_EXCLUDED_TYPES });
             }
             types.extend(m.types.iter().map(String::as_str));
         }
     }
     // No mention trigger of its own: every type may call it (agents G16).
     if types.is_empty() {
-        return json!({ "types": null });
+        return json!({ "types": null, "excluded_types": schema::AGENT_CALL_EXCLUDED_TYPES });
     }
     types.retain(|t| !schema::AGENT_CALL_EXCLUDED_TYPES.contains(t));
     types.sort_unstable();

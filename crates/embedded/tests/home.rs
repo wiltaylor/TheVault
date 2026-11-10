@@ -344,6 +344,11 @@ fn offline_or_unpaired_the_server_routes_say_so_and_the_notes_still_work() {
     let device = Device::pair(&server, "Laptop");
     device.go_offline();
 
+    let out = device.call("POST", "/api/agents/calls", Some(json!({
+        "note": "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA", "agent": "assistant"
+    })), 503);
+    assert_eq!(out["error"], "offline");
+
     for path in ["/api/devices", "/api/notifications", "/api/clients"] {
         let out = device.call("GET", path, None, 503);
         assert_eq!(out["error"], "offline", "{path}: {out}");

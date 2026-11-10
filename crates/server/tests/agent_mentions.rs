@@ -424,6 +424,30 @@ fn issued_calls_are_note_and_agent_bound_and_expire() {
 }
 
 #[test]
+fn an_agent_overwrite_refuses_a_pending_editor_call() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("clerk", CLERK);
+    let (id, asked, issued) = api.called_note("Pending", "@Clerk please answer", "clerk", &[]);
+    let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
+    fake.push(AnthropicMessage::new().tool_use("overwrite", "propose_edit", json!({
+        "id": id, "base_version": version,
+        "note": note_json("Agent overwrite", &[&asked]).to_string()
+    })));
+    fake.push(AnthropicMessage::text("Changed."));
+    let res = api.request("POST", "/api/ai/chat", Some(json!({
+        "agent": "clerk", "messages": [{ "role": "user", "content": [{ "type": "text", "text": "Edit the pending note" }] }]
+    })));
+    assert!(res.status().is_success());
+    let events = res.text().unwrap();
+    assert!(events.contains("event: done"), "{events}");
+    assert_eq!(api.get(&format!("/api/notes/{id}"))["note"]["fields"]["title"], "Agent overwrite");
+    api.advance("PT1S");
+    assert_eq!(fake.message_requests().len(), 2);
+    assert!(api.get(&format!("/api/agents/calls/{issued}"))["thread"].is_null());
+}
+
+#[test]
 fn a_committed_call_starts_one_run_and_leaves_the_note_as_it_was() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
@@ -596,7 +620,7 @@ fn a_type_the_trigger_leaves_out_records_the_call_with_no_run() {
     let assistant = &agents["agents"][0];
     assert_eq!(
         assistant["mention"],
-        json!({ "types": null }),
+        json!({ "types": null, "excluded_types": schema::AGENT_CALL_EXCLUDED_TYPES }),
         "every enabled agent can be called"
     );
 }

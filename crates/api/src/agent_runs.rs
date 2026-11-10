@@ -42,13 +42,11 @@ pub async fn issue_call(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     blocking(w, move |w| {
-        let permitted = match &author {
-            state::Author::Session(_) => true,
-            state::Author::Token(name) => scope == state::Scope::Write
-                && !name.starts_with("agent-")
-                && w.state().device_for_token(name)?.is_some(),
+        let paired = match &author {
+            state::Author::Token(name) => w.state().device_for_token(name)?.is_some(),
             _ => false,
         };
+        let permitted = call_issuer_allowed(&author, scope, paired);
         if !permitted {
             return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden", "calls require an editor session or a paired device write token"));
         }
@@ -72,6 +70,37 @@ pub async fn issue_call(
         w.state().issue_agent_call(&call, note, agent, &format!("{kind}:{name}"))?;
         Ok(Json(json!({ "call": call })))
     }).await
+}
+
+fn call_issuer_allowed(author: &state::Author, scope: state::Scope, paired: bool) -> bool {
+    match author {
+        state::Author::Session(_) => true,
+        state::Author::Token(name) => paired && scope == state::Scope::Write && !name.starts_with("agent-"),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod call_issuer_tests {
+    use super::call_issuer_allowed;
+    use state::{Author, Scope};
+
+    #[test]
+    fn only_editor_principals_issue_call_ids() {
+        assert!(call_issuer_allowed(&Author::Session("owner".into()), Scope::Admin, false));
+        assert!(call_issuer_allowed(&Author::Token("device-phone".into()), Scope::Write, true));
+        for (author, scope, paired) in [
+            (Author::Agent("assistant".into()), Scope::Write, true),
+            (Author::Token("agent-assistant".into()), Scope::Write, true),
+            (Author::Token("device-phone".into()), Scope::Read, true),
+            (Author::Token("api".into()), Scope::Write, false),
+            (Author::Token("api".into()), Scope::Admin, false),
+            (Author::Handler("import".into()), Scope::Write, false),
+            (Author::Task("import".into()), Scope::Write, false),
+        ] {
+            assert!(!call_issuer_allowed(&author, scope, paired), "{author:?}");
+        }
+    }
 }
 
 /// How many runs of each trigger the route answers.

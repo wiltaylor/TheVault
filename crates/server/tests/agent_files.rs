@@ -115,7 +115,7 @@ fn the_vault_starts_with_the_assistant() {
             "model": null,
             "enabled": true,
             "triggers": 0,
-            "mention": { "types": null },
+            "mention": { "types": null, "excluded_types": schema::AGENT_CALL_EXCLUDED_TYPES },
             "running": 0,
             "built_in": true,
         }])
