@@ -157,23 +157,41 @@ impl Device {
 /// makes them: `(parent, [session of toolu_0, session of toolu_1])`.
 fn family() -> (TestServer, String, [String; 2]) {
     let parent = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA".to_owned();
-    let subs = ["01JB8Z4K2MQ7V3X9T5R6W8Y2ZB".to_owned(), "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC".to_owned()];
-    let listed: Vec<Value> = subs.iter().zip(["toolu_0", "toolu_1"]).enumerate().map(|(i, (id, call))| json!({
-        "call": call, "thread": id, "agent": "lead", "task": "Look around",
-        "n": i + 1, "status": "done", "started_ms": 0
-    })).collect();
+    let subs = [
+        "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB".to_owned(),
+        "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC".to_owned(),
+    ];
+    let listed: Vec<Value> = subs
+        .iter()
+        .zip(["toolu_0", "toolu_1"])
+        .enumerate()
+        .map(|(i, (id, call))| {
+            json!({
+                "call": call, "thread": id, "agent": "lead", "task": "Look around",
+                "n": i + 1, "status": "done", "started_ms": 0
+            })
+        })
+        .collect();
     let server = TestServer::start_seeded(|vault| {
         let vault = store::Vault::init(vault).unwrap();
         let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
         let writer = writer::Writer::open(vault, state).unwrap();
-        writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+        writer
+            .upgrade_shipped_defaults(writer::Upkeep::Home)
+            .unwrap();
         for (i, id) in std::iter::once(&parent).chain(subs.iter()).enumerate() {
             let (origin, transcript) = if i == 0 {
-                ("user".to_owned(), json!({"messages": [], "subagents": listed}))
+                (
+                    "user".to_owned(),
+                    json!({"messages": [], "subagents": listed}),
+                )
             } else {
-                (format!("subagent:{parent}"), json!({"messages": [], "parent": {
-                    "thread": parent, "turn": "t1", "call": format!("toolu_{}", i - 1)
-                }}))
+                (
+                    format!("subagent:{parent}"),
+                    json!({"messages": [], "parent": {
+                        "thread": parent, "turn": "t1", "call": format!("toolu_{}", i - 1)
+                    }}),
+                )
             };
             writer.create_with_id(id, "agent_thread", &writer::Input::Json(json!({
                 "fields": {"title": "Check", "agent": "lead", "origin": origin, "transcript": transcript.to_string()}
@@ -200,13 +218,29 @@ fn sync_refuses_offline_transcript_content_edits() {
     let writer = device.embedded.writer();
     let note = writer.read(&parent).unwrap();
     let mut doc = writer::doc_to_json(&note.doc);
-    doc["fields"]["transcript"] = json!("{\"messages\": [], \"proposals\": [{\"id\": \"forged\"}]}");
-    writer.update(&parent, &writer::Input::Json(doc), Some(&note.version), &state::Author::Session("local".into())).unwrap();
-    let engine = device.embedded.sync_engine(device.remote.clone(), AssetPolicy::desktop()).unwrap();
+    doc["fields"]["transcript"] =
+        json!("{\"messages\": [], \"proposals\": [{\"id\": \"forged\"}]}");
+    writer
+        .update(
+            &parent,
+            &writer::Input::Json(doc),
+            Some(&note.version),
+            &state::Author::Session("local".into()),
+        )
+        .unwrap();
+    let engine = device
+        .embedded
+        .sync_engine(device.remote.clone(), AssetPolicy::desktop())
+        .unwrap();
     let result = std::thread::scope(|s| s.spawn(|| engine.sync()).join().unwrap());
     assert!(result.is_err());
     let home = admin.call("GET", &format!("/api/notes/{parent}"), None, 200);
-    assert!(!home["note"]["fields"]["transcript"].as_str().unwrap().contains("forged"));
+    assert!(
+        !home["note"]["fields"]["transcript"]
+            .as_str()
+            .unwrap()
+            .contains("forged")
+    );
 }
 
 /// The author of note `id`'s current version on the home server.

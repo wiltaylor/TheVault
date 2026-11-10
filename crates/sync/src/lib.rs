@@ -1142,8 +1142,15 @@ impl Engine {
                 }
                 value
             };
-            if p.base_deleted || base_doc.as_ref().is_none_or(|base| content(base) != content(&local_doc)) {
-                return Err(Error::Protocol("Agent transcripts cannot be created, edited or restored by device sync.".into()));
+            if p.base_deleted
+                || base_doc
+                    .as_ref()
+                    .is_none_or(|base| content(base) != content(&local_doc))
+            {
+                return Err(Error::Protocol(
+                    "Agent transcripts cannot be created, edited or restored by device sync."
+                        .into(),
+                ));
             }
             let saved = self.server_note(id)?;
             let saved = self.carry_archive(id, saved, base_doc.as_ref(), &local_doc)?;
