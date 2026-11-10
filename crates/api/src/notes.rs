@@ -524,7 +524,7 @@ pub async fn restore_from_trash(
         if !matches!(author, state::Author::Session(_))
             && w.trash()?
                 .iter()
-                .any(|n| n.id == id && n.type_name == crate::agent_threads::THREAD_TYPE)
+                .any(|n| n.note_id == id && n.note_type == crate::agent_threads::THREAD_TYPE)
         {
             return Err(ApiError::new(
                 StatusCode::FORBIDDEN,

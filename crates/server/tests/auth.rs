@@ -76,9 +76,10 @@ fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
         201,
     );
     let id = thread["id"].as_str().unwrap();
-    for scope in ["write", "admin"] {
-        let token = api.token(&format!("thread-{scope}"), scope);
-        let auth = Auth::Bearer(&token);
+    let writer = api.token("thread-write", "write");
+    let admin = api.token("thread-admin", "admin");
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    for auth in [Auth::Bearer(&writer), Auth::Bearer(&admin), Auth::Cookie(&cookie)] {
         expect(
             api.req("POST", "/api/notes?type=agent_thread", auth)
                 .json(&json!({"note": {"fields": {"title": "Forged"}}}))
@@ -96,6 +97,8 @@ fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
         for op in [
             json!({"op": "create", "type": "agent_thread", "note": {"fields": {"title": "Forged"}}}),
             json!({"op": "update", "id": id, "note": {"fields": {"title": "Forged"}}}),
+            json!({"op": "delete", "id": id}),
+            json!({"op": "upsert", "type": "agent_thread", "key": "title", "note": {"fields": {"title": "Forged"}}}),
         ] {
             expect(
                 api.req("POST", "/api/batch", auth)

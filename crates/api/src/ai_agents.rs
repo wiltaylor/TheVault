@@ -169,7 +169,7 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
         }
     }
     // Running its own wscript (script-tools T1): full access, so only an agent that has it may
-    // propose it, and only an admin's Apply grants it .
+    // propose it, and only an admin's Apply grants it.
     if tp.scripts.run_code && !bp.scripts.run_code {
         problems.push(
             "it would turn on Run wscript code (permissions.scripts.run_code), which is off for this agent"
@@ -177,7 +177,7 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
         );
     }
     // Running the vault's saved scripts and tasks: guarded as Run wscript code is, which implies
-    // it .
+    // it.
     if tp.scripts.run_saved && !bp.scripts.runs_saved() {
         problems.push(
             "it would turn on Run saved scripts and tasks (permissions.scripts.run_saved), which is off for this agent"
@@ -186,7 +186,7 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
     }
     // Sub agents (subagents U2): like Run wscript code, only an agent that may start them may
     // propose them, and only for the agents and as many at once as it may itself; only an
-    // admin's Apply grants them .
+    // admin's Apply grants them.
     let (bs, ts) = (&bp.subagents, &tp.subagents);
     if ts.allow && !bs.allow {
         problems.push(
