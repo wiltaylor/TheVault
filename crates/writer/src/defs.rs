@@ -1041,6 +1041,9 @@ impl Writer {
         let _w = self.write_lock();
         let inner = self.lock();
         let (type_name, old) = self.existing(id)?;
+        if type_name == "agent_thread" {
+            return Err(Error::ServerOwnedThread);
+        }
         let path = note_path(&type_name, id);
         let submitted = Input::Wcl(source.to_owned()).parse(&path)?;
         let mut block = match (submitted.fields.is_empty(), submitted.blocks.as_slice()) {

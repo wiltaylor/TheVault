@@ -37,6 +37,7 @@ html-blocks.workspace = true
 image.workspace = true
 p256 = { version = "0.13", default-features = false, features = ["ecdh"] }
 reqwest.workspace = true
+rusqlite.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 testkit.workspace = true
