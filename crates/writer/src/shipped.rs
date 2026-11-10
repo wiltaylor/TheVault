@@ -191,6 +191,7 @@ pub const SHIPPED_FILES: [ShippedFile; 27] = [
             "3529e9ee6cc6f41423d02c8564525badb2c1e6987eeca704b95973b73df7dd6e",
             "9bc72d0981a46efd7e3915fdf88103d8e42e00fc85af0bb9f3a53d69ee1365cd",
             "4c23a158e244825fa3d8e14782d8c0d0397467a2961e85590203ae53956cbd0d",
+            "58b14fe863c28eb3937a035f48465ea2182b1c8b4007520b9dc0150917e31164",
         ],
     },
     // The Google Calendar write-back, named by the shipped `event` type's handlers.

@@ -3469,7 +3469,10 @@ fn run_tool(
             if email && !gmail_actions && !made.is_error {
                 let notice = "Gmail action skipped: the note change was applied only in the vault. Gmail archive/trash needs a user Apply or an opted-in foreground chat, never a trigger or mention run.";
                 made.summary["gmail_skipped"] = json!(notice);
-                let summary_message = made.summary["message"].as_str().unwrap_or_default().to_owned();
+                let summary_message = made.summary["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
                 made.summary["message"] = json!(format!("{summary_message} {notice}").trim());
                 if let Ok(mut content) = serde_json::from_str::<Value>(&made.content) {
                     content["message"] = json!(format!(
