@@ -1,6 +1,6 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { agentCallHref } from "../agentCalls";
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import { AGENT_ICON, agentLabel, agents, callableAgents } from "../agents";
 import type { AgentSummary, Row, TypeDef } from "../api";
 import { TypeIcon } from "../components/Icon";
@@ -161,8 +161,8 @@ export function MentionPicker(props: SolidNodeViewProps) {
       issuing = true;
       try {
         callId = (await api.issueAgentCall(host, content.call.agent.name)).call;
-      } catch {
-        setError("Calling an agent needs a connection to your server.");
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message : "Calling an agent needs a connection to your server.");
         return;
       } finally { issuing = false; }
     }
