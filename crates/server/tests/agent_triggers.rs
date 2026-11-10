@@ -187,6 +187,67 @@ fn safety_note(api: &Api) -> Value {
     )
 }
 
+// Keep every alternate REST representation in this inventory. Aggregates without a
+// safe per-note projection are refused rather than streaming unreviewed content.
+macro_rules! held_rest_route {
+    ($name:ident, $path:expr) => {
+        #[test]
+        fn $name() {
+            let chat = FakeAnthropic::start();
+            let decisions = testkit::FakeDecisions::start();
+            decisions.push(safety_reply("prompt_injection"));
+            let api = safety_setup(&chat, &decisions, "router");
+            let note = safety_note(&api);
+            let id = note["id"].as_str().unwrap();
+            assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
+            let token = api.send("POST", "/api/tokens", json!({"name":"agent-cli", "scope":"write"}));
+            let path = $path.replace("{id}", id);
+            let response = api.client.get(api.server.url(&path))
+                .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap();
+            assert_eq!(response.status(), 403, "{path}");
+        }
+    };
+}
+
+held_rest_route!(safety_rest_history, "/api/notes/{id}/history");
+held_rest_route!(safety_rest_version, "/api/notes/{id}/history/old");
+held_rest_route!(safety_rest_original, "/api/notes/{id}/original");
+held_rest_route!(safety_rest_canvas, "/api/notes/{id}/canvas/main");
+held_rest_route!(safety_rest_graph, "/api/notes/{id}/graph");
+held_rest_route!(safety_rest_events, "/api/events");
+held_rest_route!(safety_rest_sync_export, "/api/sync/changes");
+held_rest_route!(safety_rest_trash, "/api/trash");
+held_rest_route!(safety_rest_flagged, "/api/flagged");
+held_rest_route!(safety_rest_pins, "/api/pins");
+held_rest_route!(safety_rest_notifications, "/api/notifications");
+held_rest_route!(safety_rest_asset_list, "/api/assets");
+held_rest_route!(safety_rest_asset_trash, "/api/assets/trash");
+held_rest_route!(safety_rest_asset_usage, "/api/assets/{id}/usage");
+held_rest_route!(safety_rest_daily, "/api/daily/2026-11-10");
+held_rest_route!(safety_rest_planner, "/api/planner/day/2026-11-10");
+
+#[test]
+fn safety_rest_list_and_post_query_exclude_held_notes() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    decisions.push(safety_reply("prompt_injection"));
+    let api = safety_setup(&chat, &decisions, "router");
+    let note = safety_note(&api);
+    let id = note["id"].as_str().unwrap();
+    assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
+    let token = api.send("POST", "/api/tokens", json!({"name":"agent-cli", "scope":"write"}));
+    for request in [
+        api.client.get(api.server.url("/api/notes")),
+        api.client.post(api.server.url("/api/query")).json(&json!({"query":"from email"})),
+    ] {
+        let response = request.bearer_auth(token["secret"].as_str().unwrap()).send().unwrap();
+        assert_eq!(response.status(), 200);
+        let result: Value = response.json().unwrap();
+        assert!(!result.to_string().contains(id));
+        assert_eq!(result["notice"], "some notes may be held");
+    }
+}
+
 fn safety_wait(api: &Api, id: &str) -> Value {
     let began = std::time::Instant::now();
     loop {

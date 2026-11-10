@@ -213,7 +213,8 @@ fn saved_response(status: StatusCode, headers: &HeaderMap, s: Saved) -> Response
     )
 }
 
-pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+pub async fn list(State(w): Shared, Caller(author): Caller, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+    let agent = crate::auth::is_agent_token(&author);
     let archived = crate::query::archived_param(q.archived.as_deref())?;
     let notes = blocking(w, move |w| {
         if let Some(t) = &q.type_name
@@ -221,7 +222,11 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
         {
             return Err(writer::Error::UnknownType(t.clone()));
         }
-        w.list_with(q.type_name.as_deref(), archived)
+        let mut notes = w.list_with(q.type_name.as_deref(), archived)?;
+        if agent {
+            notes.retain(|n| w.agent_may_read(&n.id));
+        }
+        Ok(notes)
     })
     .await?;
     let notes: Vec<Value> = notes
@@ -239,7 +244,9 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
             })
         })
         .collect();
-    Ok(Json(json!({ "notes": notes })))
+    let mut result = json!({ "notes": notes });
+    if agent { result["notice"] = json!("some notes may be held"); }
+    Ok(Json(result))
 }
 
 pub async fn create(
@@ -556,11 +563,20 @@ fn graph_node(n: &writer::GraphNode, direction: &str) -> Value {
 /// the trash are left out.
 pub async fn graph(
     State(w): Shared,
+    Caller(author): Caller,
     Path(id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let limit = q.limit.unwrap_or(GRAPH_LIMIT).min(GRAPH_MAX);
-    let g = blocking(w, move |w| w.graph(&id, limit)).await?;
+    let agent = crate::auth::is_agent_token(&author);
+    let g = blocking(w, move |w| {
+        let mut graph = w.graph(&id, limit)?;
+        if agent {
+            graph.neighbours.retain(|n| w.agent_may_read(&n.id));
+            graph.edges.retain(|e| w.agent_may_read(&e.from) && w.agent_may_read(&e.to));
+        }
+        Ok::<_, writer::Error>(graph)
+    }).await?;
     let c = &g.center.id;
     let direction = |n: &str| {
         let out = g.edges.iter().any(|e| &e.from == c && e.to == n);
@@ -578,12 +594,14 @@ pub async fn graph(
         .iter()
         .map(|e| json!({ "from": e.from, "to": e.to, "via": e.via, "field": e.field }))
         .collect();
-    Ok(Json(json!({
+    let mut result = json!({
         "id": g.center.id,
         "nodes": nodes,
         "edges": edges,
         "truncated": g.truncated,
-    })))
+    });
+    if agent { result["notice"] = json!("some notes may be held"); }
+    Ok(Json(result))
 }
 
 pub async fn trash(State(w): Shared) -> Result<Json<Value>, ApiError> {
