@@ -189,6 +189,7 @@ impl scheduler::AgentRunner for TriggerRunner {
             notify_needs_you(&self.writer, agent, thread);
         }
         scheduler::TurnReport {
+            no_side_effects: !done.tool_called,
             outcome,
             log: done.log,
         }
@@ -271,13 +272,77 @@ pub async fn list(
             };
             triggers.push(json!({ "name": t.name, "kind": kind, "runs": runs }));
         }
+        let queue = state.trigger_queue_stats(&name)?;
         Ok::<_, ApiError>(json!({
+            "queue": { "waiting": queue.waiting, "failed": queue.failed, "expired": queue.expired, "dropped": queue.dropped },
             "tools": ai_chat::trigger_tools(w, &agent),
             "triggers": triggers,
         }))
     })
     .await?;
     Ok(Json(out))
+}
+
+/// Preview and confirm a backfill. An opaque, single-use ten-minute preview binds the
+/// exact newest-N selection to the signed-in session, agent and trigger.
+pub async fn backfill(
+    State(w): State<Arc<Writer>>,
+    crate::auth::Caller(author): crate::auth::Caller,
+    Path((name, trigger)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    if !backfill_allowed(&author) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "backfill requires a signed-in owner session",
+        ));
+    }
+    let state::Author::Session(principal) = author else {
+        unreachable!();
+    };
+    blocking(w, move |w| {
+        let bad =
+            |message: String| ApiError::new(StatusCode::BAD_REQUEST, "invalid_backfill", message);
+        let scheduler = crate::script_tools::scheduler_for(w)
+            .ok_or_else(|| bad("server has no scheduler".to_owned()))?;
+        if let Some(preview) = body["preview"].as_str() {
+            let payload = w
+                .state()
+                .confirm_trigger_backfill(preview, &principal, &name, &trigger)?
+                .ok_or_else(|| bad("preview expired or already used".to_owned()))?;
+            let notes: Vec<(String, String)> =
+                serde_json::from_str(&payload).map_err(|e| bad(e.to_string()))?;
+            let queued = scheduler
+                .trigger_backfill(&name, &trigger, &notes)
+                .map_err(bad)?;
+            Ok::<_, ApiError>(Json(json!({ "queued": queued })))
+        } else {
+            let limit = body["limit"]
+                .as_u64()
+                .filter(|n| (1..=1000).contains(n))
+                .ok_or_else(|| bad("limit must be 1 to 1000".to_owned()))?
+                as usize;
+            let mut notes = scheduler
+                .trigger_backfill_candidates(&name, &trigger)
+                .map_err(bad)?;
+            let count = notes.len();
+            notes.truncate(limit);
+            let payload = serde_json::to_string(&notes).map_err(|e| bad(e.to_string()))?;
+            let preview = w
+                .state()
+                .preview_trigger_backfill(&principal, &name, &trigger, &payload)?;
+            let unmatched = w.state().unmatched_legacy_trigger_runs(&name, &trigger)?;
+            Ok(Json(
+                json!({ "count": count, "selected": notes.len(), "preview": preview, "unmatched_legacy_runs": unmatched }),
+            ))
+        }
+    })
+    .await
+}
+
+fn backfill_allowed(author: &state::Author) -> bool {
+    matches!(author, state::Author::Session(_))
 }
 
 /// `GET /api/agents/calls/{call}`.
@@ -321,6 +386,22 @@ pub async fn call(
 mod call_issuer_tests {
     use super::call_issuer_allowed;
     use state::{Author, Scope};
+
+    #[test]
+    fn backfill_refuses_every_token_kind_and_agent_run() {
+        assert!(super::backfill_allowed(&Author::Session("owner".into())));
+        for author in [
+            Author::Token("admin".into()),
+            Author::Token("device-phone".into()),
+            Author::Token("agent-clerk".into()),
+            Author::Agent("clerk".into()),
+            Author::AgentMail("clerk".into()),
+            Author::Handler("import".into()),
+            Author::Task("import".into()),
+        ] {
+            assert!(!super::backfill_allowed(&author), "{author:?}");
+        }
+    }
 
     #[test]
     fn only_editor_principals_issue_call_ids() {

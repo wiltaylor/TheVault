@@ -8,6 +8,7 @@
 
 mod activity;
 mod agent_calls;
+mod agent_queue;
 mod agent_runs;
 mod auth;
 mod changes;
@@ -42,6 +43,7 @@ pub use activity::{
     one_line,
 };
 pub use agent_calls::AgentCall;
+pub use agent_queue::{TRIGGER_QUEUE_CAP, TriggerJob, TriggerQueueStats};
 pub use agent_runs::{AgentRun, AgentRunId, AgentRunOutcome};
 pub use auth::{AgentCode, Scope, TokenInfo};
 pub use changes::{ChangeKey, ChangePage, Journaled};
@@ -706,6 +708,10 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                         "ALTER TABLE login_secrets ADD COLUMN {column} {definition}"
                     ))?;
                 }
+            }
+            if version <= 22 {
+                tx.execute_batch(agent_queue::SCHEMA)?;
+                agent_queue::seed_legacy(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
