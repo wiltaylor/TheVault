@@ -77,6 +77,24 @@ fn separate_change_permissions_round_trip_and_default_to_legacy() {
     );
 }
 
+#[test]
+fn change_fields_diagnostics_name_the_type_and_warn_on_unknown_fields() {
+    let unknown =
+        Agent::parse("reader", "permissions { change_fields = { invoice: [] } }").unwrap();
+    let issues = unknown.check(&schema());
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].at, "permissions.change_fields.invoice");
+    let typo = Agent::parse(
+        "reader",
+        "permissions { change_fields = { email: [\"misspelt\"] } }",
+    )
+    .unwrap();
+    let issues = typo.check(&schema());
+    assert_eq!(issues.len(), 1);
+    assert!(issues[0].is_warning());
+    assert_eq!(issues[0].at, "permissions.change_fields.email");
+}
+
 const EMAIL: &str = r#"label = "Email"
 
 field processed {

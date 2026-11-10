@@ -678,18 +678,30 @@ impl Agent {
                 ));
             }
         }
-        for t in self
-            .permissions
-            .change_types
-            .iter()
-            .flatten()
-            .chain(self.permissions.change_fields.keys())
-        {
+        for t in self.permissions.change_types.iter().flatten() {
             if schema.type_def(t).is_none() {
                 issues.push(Issue::new(
                     "permissions.change_types",
                     format!("there is no type {t:?}"),
                 ));
+            }
+        }
+        for (t, fields) in &self.permissions.change_fields {
+            let path = format!("permissions.change_fields.{t}");
+            match schema.type_def(t) {
+                None => issues.push(Issue::new(&path, format!("there is no type {t:?}"))),
+                Some(def) => {
+                    for f in fields {
+                        if def.field(f).is_none()
+                            && !crate::types::RESERVED_FIELDS.contains(&f.as_str())
+                        {
+                            issues.push(Issue::warning(
+                                &path,
+                                format!("there is no field {f:?} in type {t:?}"),
+                            ));
+                        }
+                    }
+                }
             }
         }
         for trigger in &self.triggers {

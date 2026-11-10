@@ -657,6 +657,19 @@ impl Writer {
         Ok(texts.remove(0))
     }
 
+    /// Create an empty type with authorization checked under the write lock.
+    pub fn put_type_checked<E: From<Error>>(
+        &self,
+        name: &str,
+        source: &str,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<String, E> {
+        let _w = self.write_lock();
+        check(self)?;
+        let mut texts = self.put_types_locked(self.lock(), &[(name, source)])?;
+        Ok(texts.remove(0))
+    }
+
     /// Write several type files in one commit, checked as one schema, so types that name each
     /// other can arrive together. Returns each canonical text, in order.
     pub(crate) fn put_types(&self, sources: &[(&str, &str)]) -> Result<Vec<String>> {

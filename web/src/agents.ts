@@ -177,7 +177,7 @@ export function agentForm(a: Agent): AgentForm {
       tools: a.permissions.tools ?? null,
       types: a.permissions.types ?? null,
       ...(a.permissions.change_types != null ? { change_types: [...a.permissions.change_types] } : {}),
-      ...(a.permissions.change_fields ? { change_fields: structuredClone(a.permissions.change_fields) } : {}),
+      ...(a.permissions.change_fields ? { change_fields: Object.fromEntries(Object.entries(a.permissions.change_fields).map(([type, fields]) => [type, [...fields]])) } : {}),
       confirm: { ...a.permissions.confirm },
       web: { ...a.permissions.web },
       outbox: { send_without_review: a.permissions.outbox?.send_without_review ?? false },

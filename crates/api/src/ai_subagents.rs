@@ -384,6 +384,23 @@ mod tests {
     }
 
     #[test]
+    fn intersections_preserve_field_ceilings_and_meet_change_types() {
+        let parent = perms(
+            "permissions {\n change_types = [\"email\"]\n change_fields = { email: [\"processed\"] }\n}\n",
+        );
+        let own = perms(
+            "permissions {\n change_types = [\"email\", \"person\"]\n change_fields = { email: [\"processed\", \"subject\"] }\n}\n",
+        );
+        let result = intersect(&own, &parent);
+        assert_eq!(result.change_types, Some(vec!["email".into()]));
+        assert_eq!(result.change_fields["email"], ["processed"]);
+        assert_eq!(
+            intersect(&perms(""), &parent).change_fields["email"],
+            ["processed"]
+        );
+    }
+
+    #[test]
     fn narrowing_keeps_only_what_the_parent_has() {
         let parent = perms(
             "permissions {\n  tools = [\"get_note\", \"propose_edit\"]\n  types = [\"task\"]\n  confirm {\n    notes = false\n  }\n  web {\n    search = false\n  }\n}\n",

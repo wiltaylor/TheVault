@@ -564,6 +564,21 @@ mod tests {
         let broad = agent("permissions { types = [\"email\", \"person\"] }\n");
         assert!(!escalation(&parent, &broad).is_empty());
         assert!(escalation(&parent, &parent).is_empty());
+        let wider_fields = agent(
+            "permissions {\n types = [\"email\"]\n change_fields = { email: [\"processed\", \"subject\"] }\n}\n",
+        );
+        assert!(!escalation(&parent, &wider_fields).is_empty());
+        let narrower =
+            agent("permissions {\n types = [\"email\"]\n change_fields = { email: [] }\n}\n");
+        assert!(escalation(&parent, &narrower).is_empty());
+        let type_parent = agent(
+            "permissions {\n types = [\"email\", \"person\"]\n change_types = [\"email\"]\n}\n",
+        );
+        assert!(
+            escalation(&type_parent, &broad)
+                .iter()
+                .any(|m| m.contains("person"))
+        );
     }
 
     #[test]

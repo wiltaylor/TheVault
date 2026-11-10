@@ -683,8 +683,9 @@ struct TurnCfg {
 }
 
 /// What a sub agent's turn is (subagents U1).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct SubMark {
+    parent: String,
     /// A throwaway sub agent runs as its parent and writes no memories of its own.
     throwaway: bool,
     /// Its number in the parent thread: a throwaway's changes are authored `<agent>/sub:<n>`.
@@ -1142,11 +1143,13 @@ struct Setup {
 /// or every type. Agent threads and agent memories are left out unless the list names their type,
 /// so an agent does not read chats back as vault content (agents G7), and reaches memories only
 /// through its memory tools (agents G21).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub(crate) struct Limits {
     types: Option<Vec<String>>,
     change_types: Option<Vec<String>>,
     change_fields: std::collections::BTreeMap<String, Vec<String>>,
+    parent: Option<String>,
 }
 
 impl Limits {
@@ -1159,6 +1162,7 @@ impl Limits {
             types: p.types.clone(),
             change_types: p.change_types.clone(),
             change_fields: p.change_fields.clone(),
+            parent: None,
         }
     }
 
@@ -1176,6 +1180,49 @@ impl Limits {
                 .change_types
                 .as_ref()
                 .is_none_or(|types| types.iter().any(|t| t == name))
+    }
+
+    fn check_whole_type(&self, name: &str) -> Result<(), ApplyError> {
+        if !self.allows_change(name) || self.change_fields.contains_key(name) {
+            return Err(ApplyError::Refused(format!(
+                "This agent may not rewrite {name} notes through a definition change."
+            )));
+        }
+        Ok(())
+    }
+
+    fn check_event(&self, w: &Writer, event: &str, p: &Value) -> Result<(), ApplyError> {
+        match event {
+            "proposal" => self.check_change(w, p),
+            "type_proposal" => self.check_whole_type(p["name"].as_str().unwrap_or_default()),
+            "taxonomy_proposal" => {
+                if p["op"] == "delete" {
+                    if self.types.is_some()
+                        || self.change_types.is_some()
+                        || !self.change_fields.is_empty()
+                    {
+                        return Err(ApplyError::Refused(
+                            "A restricted agent may not delete taxonomies.".into(),
+                        ));
+                    }
+                    return Ok(());
+                }
+                let renames = crate::ai_taxonomies::renames_of(p)?;
+                if renames.is_empty() {
+                    return Ok(());
+                }
+                let check = w.check_taxonomy(
+                    p["name"].as_str().unwrap_or_default(),
+                    p["after"].as_str().unwrap_or_default(),
+                    &renames,
+                )?;
+                for id in check.notes {
+                    self.check_whole_type(&w.read(&id)?.type_name)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Check the actual current note and replacement, never the proposal's claimed diff.
@@ -1635,7 +1682,7 @@ impl Turn {
         if proposal && let Some(a) = &self.agent_name {
             data["agent"] = json!(a);
             // A throwaway sub agent's change is applied as it, `<agent>/sub:<n>` (subagents U4).
-            if let Some(sub) = self.sub.filter(|s| s.throwaway) {
+            if let Some(sub) = self.sub.as_ref().filter(|s| s.throwaway) {
                 data["sub"] = json!(sub.n);
             }
         }
@@ -1816,7 +1863,7 @@ impl Turn {
             self.asks,
         );
         // A throwaway sub agent reads its parent's memories but writes none (subagents U1).
-        if self.sub.is_some_and(|s| s.throwaway) {
+        if self.sub.as_ref().is_some_and(|s| s.throwaway) {
             tools.retain(|t| !crate::ai_subagents::MEMORY_WRITES.contains(&t.name.as_str()));
         }
         // Sub agents (subagents U1, U2): with the permission, on a thread, which keeps their
@@ -2303,7 +2350,8 @@ impl Turn {
                 let call = c.clone();
                 let direct = setup.direct;
                 let held = self.held;
-                let limits = setup.limits.clone();
+                let mut limits = setup.limits.clone();
+                limits.parent = self.sub.as_ref().map(|s| s.parent.clone());
                 let agent = setup.agent.clone();
                 let got = tokio::task::spawn_blocking(move || {
                     run_tool(&w, &author, scope, direct, held, &limits, &agent, &call)
@@ -2986,6 +3034,7 @@ impl Turn {
             asks: false,
             retry: self.retry.as_ref().map(|r| r.for_sub(n)),
             sub: Some(SubMark {
+                parent: setup.agent.name.clone(),
                 throwaway: delegated.is_none(),
                 n,
             }),
@@ -3492,9 +3541,15 @@ fn run_tool(
         return crate::ai_outbox::draft(w, scope, agent, limits, &call.name, &call.input);
     }
     let mut out = propose_or_read(w, author, limits, agent, call);
-    if let Some(("proposal", p)) = &mut out.proposal {
+    if let Some((event, p)) = &mut out.proposal
+        && matches!(*event, "proposal" | "type_proposal" | "taxonomy_proposal")
+    {
         p["proposer"] = json!(agent.name);
-        if let Err(e) = limits.check_change(w, p) {
+        if let Some(parent) = &limits.parent {
+            p["proposer_parent"] = json!(parent);
+            p["proposer_limits"] = serde_json::to_value(limits).expect("limits are JSON");
+        }
+        if let Err(e) = limits.check_event(w, event, p) {
             return ToolOut::error(e.to_string());
         }
     }
@@ -3730,6 +3785,39 @@ pub fn apply_change(
     apply_change_with_admin(w, author, event, p, false)
 }
 
+/// Check current agent files and any saved delegation ceiling. Call under the write lock.
+pub(crate) fn authorize_proposal(
+    w: &Writer,
+    author: &Author,
+    event: &str,
+    p: &Value,
+) -> Result<(), ApplyError> {
+    let proposer = p["proposer"].as_str().or(match author {
+        Author::Agent(name) => Some(name.split("/sub:").next().unwrap_or(name)),
+        _ => None,
+    });
+    if let Some(name) = proposer {
+        let agent = w.agent(name)?;
+        if !agent.enabled {
+            return Err(ApplyError::Refused(
+                "The proposing agent is disabled.".into(),
+            ));
+        }
+        Limits::of(&agent).check_event(w, event, p)?;
+        if let Some(parent) = p["proposer_parent"].as_str() {
+            let parent = w.agent(parent)?;
+            if !parent.enabled {
+                return Err(ApplyError::Refused("The parent agent is disabled.".into()));
+            }
+            Limits::of(&parent).check_event(w, event, p)?;
+            let ceiling: Limits = serde_json::from_value(p["proposer_limits"].clone())
+                .map_err(|e| ApplyError::Invalid(format!("invalid delegation limits: {e}")))?;
+            ceiling.check_event(w, event, p)?;
+        }
+    }
+    Ok(())
+}
+
 /// `admin` is the authenticated Apply caller's scope, never the proposal's author or fields.
 pub(crate) fn apply_change_with_admin(
     w: &Writer,
@@ -3755,13 +3843,13 @@ pub(crate) fn apply_change_with_admin(
             )));
         }
         if p["op"] == "delete" {
-            w.delete_type(name)?;
+            w.delete_type_checked(name, |w| authorize_proposal(w, author, event, p))?;
             return Ok(json!({ "op": "type_delete", "type_name": name }));
         }
         let after = member("after")?;
         type_handler_secrets(name, before, after).map_err(ApplyError::Refused)?;
         if before.is_none() {
-            w.put_type(name, after)?;
+            w.put_type_checked(name, after, |w| authorize_proposal(w, author, event, p))?;
             return Ok(json!({ "op": "type_create", "type_name": name }));
         }
         let change = TypeChange {
@@ -3769,7 +3857,9 @@ pub(crate) fn apply_change_with_admin(
             ..TypeChange::default()
         };
         let plan = w.plan_type_change(name, &change)?;
-        w.apply_type_change(name, &change, &plan.token, author)?;
+        w.apply_type_change_checked(name, &change, &plan.token, author, |w| {
+            authorize_proposal(w, author, event, p)
+        })?;
         return Ok(json!({ "op": "type_change", "type_name": name }));
     }
     if event == "taxonomy_proposal" {
@@ -3838,22 +3928,8 @@ pub(crate) fn apply_change_with_admin(
             )));
         }
     };
-    let saved = w.commit_checked_note(write, author, |w| -> Result<(), ApplyError> {
-        let proposer = p["proposer"].as_str().or(match author {
-            Author::Agent(name) => Some(name.split("/sub:").next().unwrap_or(name)),
-            _ => None,
-        });
-        if let Some(name) = proposer {
-            let agent = w.agent(name)?;
-            if !agent.enabled {
-                return Err(ApplyError::Refused(
-                    "The proposing agent is disabled.".into(),
-                ));
-            }
-            Limits::of(&agent).check_change(w, p)?;
-        }
-        Ok(())
-    })?;
+    let saved =
+        w.commit_checked_note(write, author, |w| authorize_proposal(w, author, event, p))?;
     Ok(json!({ "op": op, "note_id": saved.id, "version": saved.version }))
 }
 

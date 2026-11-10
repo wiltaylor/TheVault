@@ -46,6 +46,14 @@ The server checks proposals and rechecks current permissions and note content wh
 Apply commits. Confirmation switches never widen these permissions. The File tab
 edits these restrictions, and saving other settings preserves them.
 
+Pending note, type and taxonomy proposals from a disabled agent cannot be applied. Delegated proposals retain
+their narrowed ceiling and also use the current parent and named agent permissions at Apply.
+Type changes and taxonomy renames that rewrite notes must fit the same change limits.
+These limits do not cover `run_script`, `run_saved_script`, `run_task`, vault and skill
+script tools, or Outbox drafts. Do not grant those routes to a field-restricted triage agent.
+An app from before these permissions refuses files containing `change_types` or
+`change_fields`, so release the updated apps before deploying agent files using them.
+
 An agent's permissions are its own: nothing is inherited from Settings > AI.
 
 - **Tools**: the chat tools the agent is offered. A tool the server cannot offer, such as `web_search` without a Brave Search key, is still left out.
