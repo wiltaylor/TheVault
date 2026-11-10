@@ -122,12 +122,15 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), json!(v)))
         .collect();
-    let outbox: serde_json::Map<String, Value> = p
+    let mut outbox: serde_json::Map<String, Value> = p
         .outbox
         .switches()
         .into_iter()
         .map(|(k, v)| (k.to_owned(), json!(v)))
         .collect();
+    if let Some(c) = &p.outbox.conditions {
+        outbox.insert("conditions".into(), json!(c));
+    }
     let scripts: serde_json::Map<String, Value> = p
         .scripts
         .switches()
@@ -349,7 +352,7 @@ pub struct PermissionsForm {
     #[serde(default)]
     web: BTreeMap<String, bool>,
     #[serde(default)]
-    outbox: BTreeMap<String, bool>,
+    outbox: OutboxForm,
     /// Browser automation (browser B6); absent is off.
     #[serde(default)]
     browser: bool,
@@ -364,6 +367,14 @@ pub struct PermissionsForm {
     /// Sub agents (subagents U2); absent is off.
     #[serde(default)]
     subagents: Option<SubagentsForm>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct OutboxForm {
+    #[serde(default)]
+    send_without_review: bool,
+    conditions: Option<schema::OutboxConditions>,
 }
 
 #[derive(Deserialize, Default)]
@@ -436,14 +447,8 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
             ));
         }
     }
-    for (k, on) in f.permissions.outbox {
-        if !p.outbox.set(&k, on) {
-            issues.push(Issue::new(
-                format!("permissions.outbox.{k}"),
-                "is not a switch",
-            ));
-        }
-    }
+    p.outbox.send_without_review = f.permissions.outbox.send_without_review;
+    p.outbox.conditions = f.permissions.outbox.conditions;
     for (k, on) in f.permissions.scripts {
         if !p.scripts.set(&k, on) {
             issues.push(Issue::new(

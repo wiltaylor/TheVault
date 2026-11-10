@@ -127,6 +127,17 @@ fn strings(doc: &Doc, name: &str) -> Vec<String> {
     }
 }
 
+fn recipient_key(value: &str, kind: &str) -> Option<String> {
+    let value = value.trim();
+    if kind != "sms" {
+        return value.contains('@').then(|| value.to_lowercase());
+    }
+    let value = value.strip_prefix("00").map(|s| format!("+{s}")).unwrap_or_else(|| value.to_owned());
+    if !value.starts_with('+') || !value.chars().all(|c| c.is_ascii_digit() || "+ -().".contains(c)) { return None; }
+    let digits: String = value.chars().filter(char::is_ascii_digit).collect();
+    (digits.len() >= 8 && digits.len() <= 15 && !digits.starts_with('0')).then(|| format!("+{digits}"))
+}
+
 impl ItemChange {
     pub(crate) fn new(id: &str, author: &Author, old: Option<&Doc>, doc: &Doc) -> ItemChange {
         ItemChange {
@@ -175,6 +186,34 @@ fn drafted_title(label: &str, count: usize) -> String {
 }
 
 impl Writer {
+    /// Apply admission limits under the writer's write lock. Refused automatic sends stay drafts.
+    pub(crate) fn limit_outbox(&self, id: &str, doc: &mut Doc, old: Option<&Doc>, author: &Author) -> Result<()> {
+        if text(doc, "status") == Some("sending") && old.is_some_and(|d| text(d, "status") == Some("ready"))
+            && self.state.outbox_deadline(id)?.is_some_and(|at| self.now_ms() < at) {
+            return Err(Error::Invalid(Invalid { file: note_path("outbox", id), issues: vec![Issue::new("status", "cancellation delay has not elapsed")] }));
+        }
+        if text(doc, "status") != Some("ready") || old.is_some_and(|d| text(d, "status") == Some("ready")) {
+            return Ok(());
+        }
+        let name = match author {
+            Author::Agent(n) | Author::AgentMail(n) => n.as_str(),
+            Author::Session(_) | Author::Token(_) if self.state.outbox_deadline(id)?.is_some() => text(doc, "drafted_by").unwrap_or(""),
+            _ => return Ok(()),
+        };
+        let Ok(agent) = self.agent(name) else { set(doc, "status", "draft"); return Ok(()); };
+        let policy = &agent.permissions.outbox;
+        let limits = policy.limits();
+        let kind = text(doc, "kind").unwrap_or("email");
+        let enabled = match kind { "email" => limits.email, "sms" => limits.sms, "event" => limits.event, _ => false };
+        let fields: &[&str] = match kind { "sms" => &["phone"], "event" => &["attendees_raw"], _ => &["to", "cc", "bcc"] };
+        let recipients: Vec<_> = fields.iter().flat_map(|f| strings(doc, f)).collect();
+        let allowed = policy.conditions.is_none() || (!recipients.is_empty() && recipients.iter().all(|r| limits.recipients.iter().any(|a| recipient_key(a, kind) == recipient_key(r, kind) && recipient_key(r, kind).is_some())));
+        if !policy.send_without_review || !enabled || !allowed || !self.state.reserve_outbox(name, id, self.now_ms(), limits.daily_cap, limits.cancel_delay_minutes * 60_000)? {
+            set(doc, "status", "draft");
+        }
+        Ok(())
+    }
+
     /// The bell notifications for committed Outbox writes (outbox X10). A notification that
     /// cannot be stored is logged, never failing the write.
     pub(crate) fn outbox_notifications(&self, items: &[ItemChange]) {

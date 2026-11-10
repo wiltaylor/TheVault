@@ -569,6 +569,27 @@ impl State {
         Ok(())
     }
 
+    /// Atomically reserve a UTC-day send admission and persist its cancellation deadline.
+    /// Reservations are never refunded, including cancellation or a later failed note write.
+    pub fn reserve_outbox(&self, agent: &str, id: &str, now: i64, cap: i64, delay_ms: i64) -> Result<bool> {
+        use rusqlite::{OptionalExtension, params};
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let key = format!("outbox-cap:{agent}:{}", now.div_euclid(86_400_000));
+        let count: Option<String> = tx.query_row("SELECT value FROM meta WHERE key=?1", [&key], |r| r.get(0)).optional()?;
+        let count = count.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        if count >= cap { return Ok(false); }
+        tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, (count + 1).to_string()])?;
+        tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("outbox-delay:{id}"), now.saturating_add(delay_ms).to_string()])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Durable, server-owned earliest dispatch time for an unattended Outbox item.
+    pub fn outbox_deadline(&self, id: &str) -> Result<Option<i64>> {
+        Ok(self.meta(&format!("outbox-delay:{id}"))?.map(|s| s.parse().unwrap_or(i64::MAX)))
+    }
+
     /// The live events of this vault's changes, for open clients (D4).
     pub fn events(&self) -> &Events {
         &self.events

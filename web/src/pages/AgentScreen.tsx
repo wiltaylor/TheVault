@@ -618,13 +618,14 @@ function PermissionsTab(p: AgentTabProps) {
               type="checkbox"
               role="switch"
               checked={perms().outbox?.send_without_review ?? false}
-              onChange={(e) => setPerms({ outbox: { send_without_review: e.currentTarget.checked } })}
+              onChange={(e) => setPerms({ outbox: { ...perms().outbox, send_without_review: e.currentTarget.checked } })}
             />{" "}
             Send from the Outbox without review
           </label>
           <Show when={perms().outbox?.send_without_review}>
             <p class="agent-perm-note" role="note">
               {OUTBOX_WARNING}
+              {!perms().outbox?.conditions && " Legacy limits, set conditions: 20 items per UTC day, five minute cancellation delay."}
             </p>
           </Show>
         </div>

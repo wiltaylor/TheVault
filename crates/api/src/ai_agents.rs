@@ -351,7 +351,8 @@ pub(crate) fn propose_change(
 
 /// Whether writing `agent` as agent `name` turns on `run_code`, which it does not have now.
 fn grants(w: &Writer, name: &str, agent: &Agent) -> bool {
-    agent.permissions.scripts.run_code
+    agent.permissions.outbox.conditions != agent_named(w, name).ok().flatten().and_then(|a| a.permissions.outbox.conditions)
+        || agent.permissions.scripts.run_code
         && !agent_named(w, name)
             .ok()
             .flatten()
