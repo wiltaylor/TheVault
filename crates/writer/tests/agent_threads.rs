@@ -9,6 +9,142 @@ use state::{SecretKey, State};
 use store::Vault;
 use writer::{AGENT_THREAD_TYPE, UpgradeStep, Upkeep, Writer};
 
+#[test]
+fn gitsync_cannot_create_agent_transcripts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let peer = state::Author::Task("gitsync peer".into());
+    assert!(matches!(
+        w.create_remote(
+            "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA",
+            "agent_thread",
+            "title = \"Forged\"\n",
+            &peer
+        ),
+        Err(writer::Error::ServerOwnedThread)
+    ));
+}
+
+#[test]
+fn gitsync_cannot_replace_agent_transcripts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let peer = state::Author::Task("gitsync peer".into());
+    let thread = w.agent_thread_runtime().create(&writer::Input::Json(json!({"fields": {"title": "Thread", "agent": "assistant", "origin": "user", "transcript": "{}"}})), &state::Author::Agent("assistant".into())).unwrap();
+    assert!(matches!(
+        w.replace_remote(
+            &thread.id,
+            "agent_thread",
+            "title = \"Forged\"\n",
+            &thread.version,
+            &peer
+        ),
+        Err(writer::Error::ServerOwnedThread)
+    ));
+    assert!(matches!(
+        w.replace_remote(
+            &thread.id,
+            "fleeting",
+            "title = \"Retyped\"\n",
+            &thread.version,
+            &peer
+        ),
+        Err(writer::Error::ServerOwnedThread)
+    ));
+}
+
+#[test]
+fn gitsync_cannot_retype_a_note_into_an_agent_transcript() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let peer = state::Author::Task("gitsync peer".into());
+    let note = w
+        .create(
+            "fleeting",
+            &writer::Input::Json(json!({"fields": {"title": "Note"}})),
+            &peer,
+        )
+        .unwrap();
+    assert!(matches!(
+        w.replace_remote(
+            &note.id,
+            "agent_thread",
+            "title = \"Forged\"\n",
+            &note.version,
+            &peer
+        ),
+        Err(writer::Error::ServerOwnedThread)
+    ));
+}
+
+#[test]
+fn device_mirror_still_receives_server_transcripts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
+    w.apply_remote(&writer::Remote::Put {
+        id: id.into(),
+        type_name: "agent_thread".into(),
+        wcl: "title = \"Mirror\"\nagent = \"assistant\"\norigin = \"user\"\ntranscript = \"{}\"\n"
+            .into(),
+    })
+    .unwrap();
+    assert_eq!(w.read(id).unwrap().type_name, "agent_thread");
+}
+
+#[test]
+fn transcript_content_needs_runtime_capability_not_an_agent_author() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let input = writer::Input::Json(
+        json!({"fields": {"title": "Thread", "agent": "assistant", "origin": "user", "transcript": "{\"messages\": []}"}}),
+    );
+    let author = state::Author::Agent("assistant".into());
+    assert!(matches!(
+        w.create("agent_thread", &input, &author),
+        Err(writer::Error::ServerOwnedThread)
+    ));
+    let made = w.agent_thread_runtime().create(&input, &author).unwrap();
+    for by in [
+        author.clone(),
+        state::Author::Session("owner".into()),
+        state::Author::Token("admin".into()),
+    ] {
+        assert!(matches!(
+            w.update(&made.id, &input, Some(&made.version), &by),
+            Err(writer::Error::ServerOwnedThread)
+        ));
+        assert!(matches!(
+            w.restore_version(&made.id, &made.version, Some(&made.version), &by),
+            Err(writer::Error::ServerOwnedThread)
+        ));
+        assert!(matches!(
+            w.put_canvas(&made.id, "body.0", "canvas {}", Some(&made.version), &by),
+            Err(writer::Error::ServerOwnedThread)
+        ));
+    }
+    let updated = w
+        .agent_thread_runtime()
+        .update(&made.id, &input, Some(&made.version), &author)
+        .unwrap();
+    let archived = w
+        .set_archived(&made.id, true, Some(&updated.version), &author)
+        .unwrap();
+    w.delete(&made.id, Some(&archived.version), &author)
+        .unwrap();
+    assert!(matches!(
+        w.restore_from_trash(&made.id, &author),
+        Err(writer::Error::ServerOwnedThread)
+    ));
+    w.restore_from_trash(&made.id, &state::Author::Session("owner".into()))
+        .unwrap();
+}
+
 fn open(root: &Path, key: Option<SecretKey>) -> Writer {
     let vault = Vault::init(root).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), key).unwrap();

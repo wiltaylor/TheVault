@@ -1,5 +1,9 @@
 # Git sync between instances
 
+Agent thread transcripts stay on their home server. Git sync neither exports them nor imports
+them from peer branches, including older branches that already contain transcripts. Removing
+an old exported copy leaves the local thread intact. Device sync still mirrors server threads.
+
 Git sync shares chosen notes between your own TheVault instances through a git repo you already have, such as a private repo on GitHub. Each instance publishes the notes that match its export query, and takes the published notes of the other instances that match its import query. Everything an instance writes to the repo is encrypted with a key that only your instances hold.
 
 Git sync is not device sync. The desktop and Android apps sync with their own home server (see [sync.md](sync.md)). Git sync connects separate home servers, each with a vault of its own, for example one at home and one at work.
