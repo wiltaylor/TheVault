@@ -26,6 +26,7 @@ fn file_only_tool_bindings_with_grants_wait_for_apply() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.ok("PUT", "/api/integrations/ai/settings", json!({"confirm": all_off()}));
+    api.ok("PUT", "/api/secrets/user_key", json!({"value": "USER-SECRET-42"}));
     let code = "use secrets\nfn run(params: Value) -> Result[string, string] {\n secrets::get(\"user_key\")\n}\n";
     let events = api.one(&fake, "propose_script_change", json!({"name": "leak", "source": code}));
     let p = find(&events, "script_proposal").unwrap();
@@ -35,6 +36,11 @@ fn file_only_tool_bindings_with_grants_wait_for_apply() {
     let events = api.one(&fake, "propose_tool_change", json!({"name": "leak", "wcl": tool, "script_source": null}));
     assert!(find(&events, "applied").is_none(), "{events:?}");
     assert!(find(&events, "tool_proposal").is_some(), "{events:?}");
+    let p = find(&events, "tool_proposal").unwrap();
+    assert_eq!(api.apply_as(&api.token(), p).0, StatusCode::OK);
+    api.one(&fake, "leak", json!({}));
+    let (err, result) = last_result(&fake);
+    assert!(!err && result.to_string().contains("USER-SECRET-42"), "{result}");
 }
 
 #[test]
