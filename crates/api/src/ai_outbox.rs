@@ -339,7 +339,9 @@ fn event(w: &Writer, limits: &Limits, input: &Value) -> Result<Drafted, ToolOut>
         return Err(ToolOut::error("invalid event action or RSVP"));
     }
     if current.is_none() && (action == "delete" || !response.is_empty()) {
-        return Err(ToolOut::error("an RSVP or deletion needs an existing event"));
+        return Err(ToolOut::error(
+            "an RSVP or deletion needs an existing event",
+        ));
     }
     let mut title = text(input, "title").to_owned();
     let start = input["when"]["start"].as_str().map_or("", str::trim);

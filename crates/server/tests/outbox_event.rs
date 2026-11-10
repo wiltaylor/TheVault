@@ -285,6 +285,9 @@ fn writer_enforces_calendar_author_and_outbox_boundary() {
         ("attendees", json!([])),
         ("my_response", json!("accepted")),
         ("status", json!("cancelled")),
+        ("snapshot", json!({ "my_response": "declined" })),
+        ("etag", json!("forged")),
+        ("google_ref", json!("another-event")),
         ("send_updates", json!("all")),
     ] {
         let mut changed = body.clone();
@@ -371,6 +374,41 @@ fn writer_enforces_calendar_author_and_outbox_boundary() {
         &state::Author::Handler("google_event".into()),
     )
     .unwrap();
+    w.put_agent(
+        "careless",
+        "label = \"Careless\"\npermissions {\n confirm {\n notes = false\n }\n}\n",
+        |_| Vec::new(),
+    )
+    .unwrap();
+    for action in [
+        json!({ "my_response": "accepted" }),
+        json!({ "event_action": "delete" }),
+    ] {
+        let mut fields =
+            json!({ "title": "Review calendar action", "kind": "event", "event": made.id });
+        for (key, value) in action.as_object().unwrap() {
+            fields[key] = value.clone();
+        }
+        let draft = w
+            .create(
+                "outbox",
+                &writer::Input::Json(json!({ "fields": fields })),
+                &agent,
+            )
+            .unwrap();
+        let mut body = writer::doc_to_json(&w.read(&draft.id).unwrap().doc);
+        assert_eq!(body["fields"]["status"], "draft");
+        body["fields"]["status"] = json!("ready");
+        assert!(
+            w.update(
+                &draft.id,
+                &writer::Input::Json(body),
+                Some(&draft.version),
+                &agent
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -405,9 +443,17 @@ fn reviewed_event_rsvp_and_delete_reach_google_through_outbox() {
         ),
     );
     api.settle();
-    let deletes: Vec<_> = api.google.requests().into_iter().filter(|r| r.method == "DELETE").collect();
+    let deletes: Vec<_> = api
+        .google
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "DELETE")
+        .collect();
     assert_eq!(deletes.len(), 1, "{deletes:?}");
-    assert_eq!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
+    assert_eq!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
     assert!(api.gone(&deletion));
 }
 

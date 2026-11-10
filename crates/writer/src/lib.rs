@@ -1793,9 +1793,17 @@ impl Writer {
                     .is_some_and(|v| !v.is_empty())
             });
             let sensitive = next.is_some()
-                && ["attendees", "attendees_raw", "my_response", "status"]
-                    .into_iter()
-                    .any(|name| field(next, name) != field(old.as_ref(), name));
+                && [
+                    "attendees",
+                    "attendees_raw",
+                    "my_response",
+                    "status",
+                    "snapshot",
+                    "etag",
+                    "google_ref",
+                ]
+                .into_iter()
+                .any(|name| field(next, name) != field(old.as_ref(), name));
             if sensitive || (google && change.event == Event::Delete) {
                 return Err(Error::Rejected(
                     "agent calendar attendees, RSVP, cancellation and Google deletes require an Outbox item of kind event".into(),
