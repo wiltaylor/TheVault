@@ -17,17 +17,37 @@ fn outbox_admission_is_atomic_and_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
     let state = Arc::new(State::open(&path, None).unwrap());
-    let threads: Vec<_> = (0..32).map(|i| {
-        let state = state.clone();
-        std::thread::spawn(move || state.reserve_outbox("sender", &i.to_string(), 1000, 20, 300_000).unwrap())
-    }).collect();
-    let admitted = threads.into_iter().map(|t| usize::from(t.join().unwrap())).sum::<usize>();
+    let threads: Vec<_> = (0..32)
+        .map(|i| {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                state
+                    .reserve_outbox("sender", &i.to_string(), 1000, 20, 300_000)
+                    .unwrap()
+            })
+        })
+        .collect();
+    let admitted = threads
+        .into_iter()
+        .map(|t| usize::from(t.join().unwrap()))
+        .sum::<usize>();
     assert_eq!(admitted, 20);
     drop(state);
     let state = State::open(&path, None).unwrap();
-    assert!(!state.reserve_outbox("sender", "extra", 2000, 20, 300_000).unwrap());
-    assert!(state.reserve_outbox("sender", "next", DAY_MS, 20, 300_000).unwrap());
-    assert_eq!(state.outbox_deadline("next").unwrap(), Some(DAY_MS + 300_000));
+    assert!(
+        !state
+            .reserve_outbox("sender", "extra", 2000, 20, 300_000)
+            .unwrap()
+    );
+    assert!(
+        state
+            .reserve_outbox("sender", "next", DAY_MS, 20, 300_000)
+            .unwrap()
+    );
+    assert_eq!(
+        state.outbox_deadline("next").unwrap(),
+        Some(DAY_MS + 300_000)
+    );
 }
 
 struct TestClock(AtomicI64);

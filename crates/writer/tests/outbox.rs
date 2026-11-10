@@ -44,7 +44,9 @@ fn user() -> Author {
 fn explicit_send_conditions_check_every_recipient_and_kind() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    w.put_agent("sender", r#"permissions {
+    w.put_agent(
+        "sender",
+        r#"permissions {
       outbox {
         send_without_review = true
         conditions {
@@ -54,14 +56,27 @@ fn explicit_send_conditions_check_every_recipient_and_kind() {
           daily_cap = 10
         }
       }
-    }"#, |_| Vec::new()).unwrap();
-    for extra in [json!({"cc": ["bad@example.com"]}), json!({"bcc": ["bad@example.com"]}), json!({"to": ["bad@example.com"]}), json!({"kind": "event", "attendees_raw": ["ann@example.com"]})] {
+    }"#,
+        |_| Vec::new(),
+    )
+    .unwrap();
+    for extra in [
+        json!({"cc": ["bad@example.com"]}),
+        json!({"bcc": ["bad@example.com"]}),
+        json!({"to": ["bad@example.com"]}),
+        json!({"kind": "event", "attendees_raw": ["ann@example.com"]}),
+    ] {
         let mut note = email(extra);
         note["fields"]["status"] = json!("ready");
         let id = create(&w, &agent("sender"), note).unwrap();
         assert_eq!(status(&w, &id), "draft");
     }
-    let id = create(&w, &agent("sender"), email(json!({"status": "ready", "cc": ["ann@EXAMPLE.com"]}))).unwrap();
+    let id = create(
+        &w,
+        &agent("sender"),
+        email(json!({"status": "ready", "cc": ["ann@EXAMPLE.com"]})),
+    )
+    .unwrap();
     assert_eq!(status(&w, &id), "ready");
     let id = create(&w, &agent("sender"), json!({"fields": {"kind": "sms", "title": "SMS", "phone": "+1 (555) 123-4567", "status": "ready"}})).unwrap();
     assert_eq!(status(&w, &id), "ready");
@@ -71,17 +86,27 @@ fn explicit_send_conditions_check_every_recipient_and_kind() {
 fn explicit_empty_conditions_fail_closed() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    w.put_agent("sender", "permissions { outbox { send_without_review = true\n conditions {}\n }\n }", |_| Vec::new()).unwrap();
+    w.put_agent(
+        "sender",
+        "permissions { outbox { send_without_review = true\n conditions {}\n }\n }",
+        |_| Vec::new(),
+    )
+    .unwrap();
     let id = create(&w, &agent("sender"), email(json!({"status": "ready"}))).unwrap();
     assert_eq!(status(&w, &id), "draft");
 }
 
 #[test]
 fn legacy_sender_has_cap_delay_cancellation_and_new_deadline_on_retry() {
-    use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    };
     struct Clock(AtomicI64);
     impl state::Clock for Clock {
-        fn now_ms(&self) -> i64 { self.0.load(Ordering::SeqCst) }
+        fn now_ms(&self) -> i64 {
+            self.0.load(Ordering::SeqCst)
+        }
     }
     let dir = tempfile::tempdir().unwrap();
     let clock = Arc::new(Clock(AtomicI64::new(1_000_000)));

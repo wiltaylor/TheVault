@@ -251,8 +251,13 @@ impl Writer {
         };
         let mut recipients: Vec<_> = fields.iter().flat_map(|f| strings(doc, f)).collect();
         // Event updates may keep the original attendees. Those recipients are part of the grant.
-        if kind == "event" && let Some(event) = text(doc, "event").filter(|s| !s.is_empty()) {
-            let existing = schema::is_ulid(event).then(|| std::fs::read_to_string(self.vault.root().join(note_path("event", event)))).and_then(|r| r.ok()).and_then(|s| Input::Wcl(s).parse("event").ok());
+        if kind == "event"
+            && let Some(event) = text(doc, "event").filter(|s| !s.is_empty())
+        {
+            let existing = schema::is_ulid(event)
+                .then(|| std::fs::read_to_string(self.vault.root().join(note_path("event", event))))
+                .and_then(|r| r.ok())
+                .and_then(|s| Input::Wcl(s).parse("event").ok());
             if let Some(note) = existing {
                 recipients.extend(strings(&note, "attendees_raw"));
             } else {
