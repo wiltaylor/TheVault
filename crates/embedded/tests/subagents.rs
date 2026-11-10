@@ -163,8 +163,10 @@ fn family() -> (TestServer, String, [String; 2]) {
         "n": i + 1, "status": "done", "started_ms": 0
     })).collect();
     let server = TestServer::start_seeded(|vault| {
-        let dir = vault.join("notes/agent_thread");
-        std::fs::create_dir_all(&dir).unwrap();
+        let vault = store::Vault::init(vault).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let writer = writer::Writer::open(vault, state).unwrap();
+        writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
         for (i, id) in std::iter::once(&parent).chain(subs.iter()).enumerate() {
             let (origin, transcript) = if i == 0 {
                 ("user".to_owned(), json!({"messages": [], "subagents": listed}))
@@ -173,9 +175,9 @@ fn family() -> (TestServer, String, [String; 2]) {
                     "thread": parent, "turn": "t1", "call": format!("toolu_{}", i - 1)
                 }}))
             };
-            let text = format!("title = \"Check\"\nagent = \"lead\"\norigin = {}\ntranscript = {}\n",
-                serde_json::to_string(&origin).unwrap(), serde_json::to_string(&transcript.to_string()).unwrap());
-            std::fs::write(dir.join(format!("{id}.wcl")), text).unwrap();
+            writer.create_with_id(id, "agent_thread", &writer::Input::Json(json!({
+                "fields": {"title": "Check", "agent": "lead", "origin": origin, "transcript": transcript.to_string()}
+            })), &state::Author::Agent("lead".into())).unwrap();
         }
     });
     (server, parent, subs)
