@@ -618,7 +618,7 @@ function PermissionsTab(p: AgentTabProps) {
               type="checkbox"
               role="switch"
               checked={perms().outbox?.send_without_review ?? false}
-              onChange={(e) => setPerms({ outbox: { send_without_review: e.currentTarget.checked } })}
+              onChange={(e) => setPerms({ outbox: { ...perms().outbox, send_without_review: e.currentTarget.checked, conditions: perms().outbox?.conditions ?? { recipients: [], email: false, sms: false, event: false, daily_cap: 0, cancel_delay_minutes: 5 } } })}
             />{" "}
             Send from the Outbox without review
           </label>
@@ -626,6 +626,25 @@ function PermissionsTab(p: AgentTabProps) {
             <p class="agent-perm-note" role="note">
               {OUTBOX_WARNING}
             </p>
+            <Show when={!perms().outbox?.conditions && !perms().outbox?.conditions_hidden}>
+              <p class="agent-perm-note">Legacy limits, set conditions: 20 items per UTC day, five minute cancellation delay.</p>
+            </Show>
+          </Show>
+          <button type="button" onClick={() => setPerms({ outbox: { ...perms().outbox, send_without_review: perms().outbox?.send_without_review ?? false, conditions: perms().outbox?.conditions ?? { recipients: [], email: false, sms: false, event: false, daily_cap: 0, cancel_delay_minutes: 5 } } })}>
+            Set send conditions
+          </button>
+          <Show when={perms().outbox?.conditions}>
+            {(conditions) => <fieldset>
+              <legend>Send without review conditions</legend>
+              <label>Recipients (one address or E.164 number per line)
+                <textarea value={conditions().recipients.join("\n")} onInput={(e) => setPerms({ outbox: { ...perms().outbox!, conditions: { ...conditions(), recipients: e.currentTarget.value.split("\n").map((s) => s.trim()).filter(Boolean) } } })} />
+              </label>
+              <For each={["email", "sms", "event"] as const}>{(kind) => <label>
+                <input type="checkbox" checked={conditions()[kind]} onChange={(e) => setPerms({ outbox: { ...perms().outbox!, conditions: { ...conditions(), [kind]: e.currentTarget.checked } } })} />{kind}
+              </label>}</For>
+              <label>Daily cap<input type="number" min="0" max="10000" value={conditions().daily_cap} onInput={(e) => setPerms({ outbox: { ...perms().outbox!, conditions: { ...conditions(), daily_cap: Number(e.currentTarget.value) } } })} /></label>
+              <label>Cancellation delay (minutes)<input type="number" min="1" max="1440" value={conditions().cancel_delay_minutes} onInput={(e) => setPerms({ outbox: { ...perms().outbox!, conditions: { ...conditions(), cancel_delay_minutes: Number(e.currentTarget.value) } } })} /></label>
+            </fieldset>}
           </Show>
         </div>
         <h3>Scripts</h3>

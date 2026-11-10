@@ -181,7 +181,7 @@ export function agentForm(a: Agent): AgentForm {
       ...(a.permissions.change_fields ? { change_fields: Object.fromEntries(Object.entries(a.permissions.change_fields).map(([type, fields]) => [type, [...fields]])) } : {}),
       confirm: { ...a.permissions.confirm },
       web: { ...a.permissions.web },
-      outbox: { send_without_review: a.permissions.outbox?.send_without_review ?? false },
+      outbox: { ...a.permissions.outbox, send_without_review: a.permissions.outbox?.send_without_review ?? false },
       // Sent only when on, as the agent file holds it only then (browser B6).
       ...(a.permissions.browser ? { browser: true } : {}),
       ...(a.permissions.gmail_actions ? { gmail_actions: true } : {}),

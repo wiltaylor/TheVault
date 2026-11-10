@@ -419,6 +419,13 @@ fn create(w: &Writer, agent: &Agent, d: Drafted) -> ToolOut {
             return out;
         }
     };
+    let actual = Input::Wcl(saved.wcl.clone()).parse("outbox").ok();
+    let status = actual
+        .as_ref()
+        .and_then(|d| d.field("status"))
+        .and_then(schema::Value::as_str)
+        .unwrap_or("draft");
+    let bypass = status == "ready";
     let what = match d.kind {
         "email" => "email",
         "sms" => "SMS",
@@ -427,7 +434,7 @@ fn create(w: &Writer, agent: &Agent, d: Drafted) -> ToolOut {
     let message = if bypass {
         format!(
             "The {what} is in the Outbox as ready: this agent may send without review, so it is \
-             being sent now. Item id {}.",
+             waiting through the cancellation delay before dispatch. Item id {}.",
             saved.id
         )
     } else {
