@@ -431,7 +431,7 @@ fn login_metadata_api_survives_missing_wrong_keys_and_corrupt_rows() {
         let server = TestServer::start_existing(
             vault,
             api.server.admin_token(),
-            &[("VAULT_SECRET_KEY_FILE", &key)],
+            if wrong { &[("VAULT_SECRET_KEY_FILE", &key)] } else { &[] },
         );
         let caller = client(server.admin_token());
         for path in ["/api/secrets", "/api/secrets/site", "/api/secrets/plain"] {
