@@ -282,7 +282,7 @@ fn done_archives_the_message_in_gmail_and_nothing_else_sends_again() {
 }
 
 #[test]
-fn delete_trashes_the_message_restore_sends_nothing_and_it_is_never_imported_again() {
+fn delete_trashes_and_restore_untrashes_the_message_in_gmail() {
     let api = Api::start(&["one", "two"], &[MODIFY_SCOPE]);
     let one = api.email("one");
 
@@ -302,7 +302,7 @@ fn delete_trashes_the_message_restore_sends_nothing_and_it_is_never_imported_aga
         .collect();
     assert_eq!(refs, [json!("two")]);
 
-    // Restoring it from the vault's trash sends nothing.
+    // Restoring it must also undo Google's trash before its 30-day expiry.
     expect(
         api.req("POST", &format!("/api/trash/{one}/restore"))
             .send()
@@ -310,7 +310,9 @@ fn delete_trashes_the_message_restore_sends_nothing_and_it_is_never_imported_aga
         200,
     );
     api.settle();
-    assert_eq!(api.google.mail_actions(), [trash("one")]);
+    let mut untrash = trash("one");
+    untrash.action = "untrash".to_owned();
+    assert_eq!(api.google.mail_actions(), [trash("one"), untrash]);
     assert_eq!(api.emails().len(), 2);
 }
 
