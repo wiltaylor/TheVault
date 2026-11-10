@@ -100,37 +100,6 @@ fn call_issuer_allowed(author: &state::Author, scope: state::Scope, paired: bool
     }
 }
 
-#[cfg(test)]
-mod call_issuer_tests {
-    use super::call_issuer_allowed;
-    use state::{Author, Scope};
-
-    #[test]
-    fn only_editor_principals_issue_call_ids() {
-        assert!(call_issuer_allowed(
-            &Author::Session("owner".into()),
-            Scope::Admin,
-            false
-        ));
-        assert!(call_issuer_allowed(
-            &Author::Token("device-phone".into()),
-            Scope::Write,
-            true
-        ));
-        for (author, scope, paired) in [
-            (Author::Agent("assistant".into()), Scope::Write, true),
-            (Author::Token("agent-assistant".into()), Scope::Write, true),
-            (Author::Token("device-phone".into()), Scope::Read, true),
-            (Author::Token("api".into()), Scope::Write, false),
-            (Author::Token("api".into()), Scope::Admin, false),
-            (Author::Handler("import".into()), Scope::Write, false),
-            (Author::Task("import".into()), Scope::Write, false),
-        ] {
-            assert!(!call_issuer_allowed(&author, scope, paired), "{author:?}");
-        }
-    }
-}
-
 /// How many runs of each trigger the route answers.
 pub const RUNS_SHOWN: u32 = 20;
 
@@ -325,4 +294,35 @@ pub async fn call(
         "thread": c.thread,
         "running": running,
     })))
+}
+
+#[cfg(test)]
+mod call_issuer_tests {
+    use super::call_issuer_allowed;
+    use state::{Author, Scope};
+
+    #[test]
+    fn only_editor_principals_issue_call_ids() {
+        assert!(call_issuer_allowed(
+            &Author::Session("owner".into()),
+            Scope::Admin,
+            false
+        ));
+        assert!(call_issuer_allowed(
+            &Author::Token("device-phone".into()),
+            Scope::Write,
+            true
+        ));
+        for (author, scope, paired) in [
+            (Author::Agent("assistant".into()), Scope::Write, true),
+            (Author::Token("agent-assistant".into()), Scope::Write, true),
+            (Author::Token("device-phone".into()), Scope::Read, true),
+            (Author::Token("api".into()), Scope::Write, false),
+            (Author::Token("api".into()), Scope::Admin, false),
+            (Author::Handler("import".into()), Scope::Write, false),
+            (Author::Task("import".into()), Scope::Write, false),
+        ] {
+            assert!(!call_issuer_allowed(&author, scope, paired), "{author:?}");
+        }
+    }
 }
