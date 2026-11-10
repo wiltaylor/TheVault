@@ -414,7 +414,7 @@ pub async fn secrets(
     State(w): Shared,
     crate::auth::Caller(by): crate::auth::Caller,
 ) -> Result<Json<Value>, ApiError> {
-    let list = blocking(w, |w| -> Result<_, ApiError> {
+    let list = blocking(w, move |w| -> Result<_, ApiError> {
         let mut list: Vec<Value> = w.state().list_secrets()?.iter().map(secret_json).collect();
         if may_manage_login_secrets(w, &by)? {
             list.extend(w.state().list_login_secrets()?.iter().map(login_json));
