@@ -451,10 +451,7 @@ fn safety_agent_tools_and_scripts_do_not_return_held_note_text() {
     let delivered = requests[1].json().to_string();
     assert!(!delivered.contains("PRIVATE_ASSET_TEXT"), "{delivered}");
     assert!(!delivered.contains("PRIVATE_ASSET.txt"), "{delivered}");
-    assert!(
-        delivered.contains("some notes may be held"),
-        "{delivered}"
-    );
+    assert!(delivered.contains("some notes may be held"), "{delivered}");
     assert!(
         !delivered.contains("Untrusted safety fixture"),
         "{delivered}"
@@ -615,7 +612,10 @@ fn safety_review_dispatch_and_attached_context_refuse_held_note() {
     let _ = res.text().unwrap();
     let request = chat.message_requests()[0].json().to_string();
     assert!(!request.contains("Untrusted safety fixture"), "{request}");
-    assert!(request.contains("This note is held from agents"), "{request}");
+    assert!(
+        request.contains("This note is held from agents"),
+        "{request}"
+    );
 }
 
 #[test]
