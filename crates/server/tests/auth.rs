@@ -43,18 +43,52 @@ template default {
 const WCL: &str = "text/plain; charset=utf-8";
 
 #[test]
+fn apply_and_encoded_note_routes_cannot_write_server_transcripts() {
+    let api = Api::start();
+    let token = api.token("thread-probes", "write");
+    let thread = expect(api.req("POST", "/api/agents/assistant/threads", api.admin()).json(&json!({})).send().unwrap(), 201);
+    let id = thread["id"].as_str().unwrap();
+    let encoded = format!("%{:02X}{}", id.as_bytes()[0], &id[1..]);
+    let note = expect(api.req("GET", &format!("/api/notes/{id}"), api.admin()).send().unwrap(), 200);
+    let base = note["version"].as_str().unwrap();
+    let mut forged = note["note"].clone();
+    forged["fields"]["title"] = json!("Forged transcript");
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    for auth in [Auth::Bearer(&token), api.admin(), Auth::Cookie(&cookie)] {
+        for agent in [Value::Null, json!("assistant")] {
+            for change in [
+                json!({"op": "update", "note_id": id, "base_version": base, "after": forged, "agent": agent}),
+                json!({"op": "create", "type": "agent_thread", "after": forged, "agent": agent}),
+            ] {
+                expect(api.req("POST", "/api/ai/apply", auth).json(&change).send().unwrap(), 403);
+            }
+        }
+        expect(api.req("PUT", &format!("/api/notes/{encoded}"), auth)
+            .header("If-Match", base).json(&json!({"note": forged})).send().unwrap(), 403);
+        expect(api.req("POST", &format!("/api/notes/{encoded}/restore"), auth)
+            .json(&json!({"version": base, "base_version": base})).send().unwrap(), 403);
+        expect(api.req("PUT", &format!("/api/notes/{encoded}/canvas/body.0"), auth)
+            .header("If-Match", base).header(CONTENT_TYPE, WCL).body("canvas {}\n").send().unwrap(), 403);
+    }
+    let unchanged = expect(api.req("GET", &format!("/api/notes/{id}"), api.admin()).send().unwrap(), 200);
+    assert_eq!(unchanged["version"], base);
+}
+
+#[test]
 fn agent_admin_tokens_cannot_mint_credentials_or_reconfigure_authority() {
     let api = Api::start();
     let token = api.token("agent-restricted", "admin");
     for (method, path) in [
         ("POST", "/api/tokens"),
         ("POST", "/api/agent-codes"),
+        ("POST", "/api/devices/pair-codes"),
         ("PUT", "/api/integrations/ai/settings"),
         ("PUT", "/api/integrations/gitsync/settings"),
         ("PUT", "/api/integrations/gitsync/token"),
         ("PUT", "/api/integrations/gitsync/ssh-key"),
         ("PUT", "/api/integrations/gitsync/key"),
         ("POST", "/api/integrations/gitsync/run"),
+        ("DELETE", "/api/integrations/gitsync"),
     ] {
         let response = api
             .req(method, path, Auth::Bearer(&token))

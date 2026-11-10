@@ -417,30 +417,11 @@ pub async fn authenticate(
         return human_only_for(req.uri().path()).into_response();
     }
     let path = req.uri().path();
-    let metadata_only = *req.method() == Method::DELETE
-        || (*req.method() == Method::POST
-            && (path.ends_with("/archive") || path.ends_with("/unarchive")));
-    if !matches!(*req.method(), Method::GET | Method::HEAD)
-        && !metadata_only
-        && let Some(id) = path
-            .strip_prefix("/api/notes/")
-            .and_then(|p| p.split('/').next())
-    {
-        let id = id.to_owned();
-        let checked = blocking(sessions.writer.clone(), move |w| {
-            crate::notes::writable_note(w, &id)
-        })
-        .await;
-        if let Err(e) = checked {
-            return e.into_response();
-        }
-    }
-
     let agent_admin_route = is_definition_write(req.method(), path)
-        || (*req.method() == Method::POST && matches!(path, "/api/tokens" | "/api/agent-codes"))
+        || (*req.method() == Method::POST && matches!(path, "/api/tokens" | "/api/agent-codes" | "/api/devices/pair-codes"))
         || (*req.method() == Method::PUT && path == "/api/integrations/ai/settings")
         || (!matches!(*req.method(), Method::GET | Method::HEAD)
-            && path.starts_with("/api/integrations/gitsync/"));
+            && (path == "/api/integrations/gitsync" || path.starts_with("/api/integrations/gitsync/")));
     if !granted.scope.allows(needed)
         || (agent_admin_route
             && matches!(&granted.author, Author::Token(name) if name.starts_with("agent-")))

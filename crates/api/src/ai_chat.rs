@@ -1238,6 +1238,9 @@ impl Limits {
             .as_ref()
             .map(|n| n.type_name.as_str())
             .unwrap_or_else(|| p["type"].as_str().unwrap_or_default());
+        if t == agent_threads::THREAD_TYPE && matches!(op, "create" | "update") {
+            return Err(ApplyError::Refused("Agent transcripts are written only by the agent runtime.".into()));
+        }
         if !self.allows_change(t) {
             return Err(ApplyError::Refused(format!(
                 "This agent may not change {t} notes."

@@ -172,6 +172,7 @@ impl From<Error> for ApiError {
                 json!({ "error": "id_taken", "id": id }),
             ),
             Error::BadRequest(_) => (StatusCode::BAD_REQUEST, json!({ "error": "bad_request" })),
+            Error::ServerOwnedThread => (StatusCode::FORBIDDEN, json!({ "error": "server_owned" })),
             Error::Missing(_) => (StatusCode::NOT_FOUND, json!({ "error": "not_found" })),
             Error::KeyNotUnique {
                 type_name,

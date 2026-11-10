@@ -193,7 +193,7 @@ fn family() -> (TestServer, String, [String; 2]) {
                     }}),
                 )
             };
-            writer.create_with_id(id, "agent_thread", &writer::Input::Json(json!({
+            writer.agent_thread_runtime().create_with_id(id, &writer::Input::Json(json!({
                 "fields": {"title": "Check", "agent": "lead", "origin": origin, "transcript": transcript.to_string()}
             })), &state::Author::Agent("lead".into())).unwrap();
         }
@@ -210,7 +210,7 @@ fn archived(note: &Value) -> bool {
 }
 
 #[test]
-fn sync_refuses_offline_transcript_content_edits() {
+fn writer_refuses_offline_transcript_content_edits() {
     let (server, parent, _) = family();
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "Phone");
@@ -220,30 +220,22 @@ fn sync_refuses_offline_transcript_content_edits() {
     let mut doc = writer::doc_to_json(&note.doc);
     doc["fields"]["transcript"] =
         json!("{\"messages\": [], \"proposals\": [{\"id\": \"forged\"}]}");
-    writer
+    let rejected = writer
         .update(
             &parent,
             &writer::Input::Json(doc),
             Some(&note.version),
             &state::Author::Session("local".into()),
-        )
-        .unwrap();
+        );
+    assert!(matches!(rejected, Err(writer::Error::ServerOwnedThread)));
     let engine = device
         .embedded
         .sync_engine(device.remote.clone(), AssetPolicy::desktop())
         .unwrap();
     let result = std::thread::scope(|s| s.spawn(|| engine.sync()).join().unwrap());
     let report = result.unwrap();
-    assert!(report.held.iter().any(|held| held.note_id == parent));
-    assert!(
-        device
-            .embedded
-            .queue()
-            .pending()
-            .unwrap()
-            .iter()
-            .any(|p| p.note_id == parent)
-    );
+    assert!(report.held.is_empty());
+    assert!(device.embedded.queue().pending().unwrap().is_empty());
     let home = admin.call("GET", &format!("/api/notes/{parent}"), None, 200);
     assert!(
         !home["note"]["fields"]["transcript"]
