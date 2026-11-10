@@ -42,7 +42,7 @@ fn notify_source() -> String {
         if let Some(vocab::Author::Task(task)) = &j.author {
             return format!("task:{task}");
         }
-        if let Some(vocab::Author::Agent(agent)) = &j.author {
+        if let Some(vocab::Author::Agent(agent) | vocab::Author::AgentMail(agent)) = &j.author {
             return format!("agent:{agent}");
         }
         let note = j.args.first();
@@ -311,7 +311,7 @@ pub fn vault_module(v: Arc<dyn Vault>) -> Module {
                 // An agent's run may read or write notes, but it may not put a command on a
                 // phone: that would send a text the user never reviewed. An agent sends SMS
                 // through an Outbox draft instead.
-                if crate::current_job(|j| matches!(j.author, Some(vocab::Author::Agent(_))))
+                if crate::current_job(|j| matches!(j.author, Some(vocab::Author::Agent(_) | vocab::Author::AgentMail(_))))
                     .unwrap_or(false)
                 {
                     return Err(

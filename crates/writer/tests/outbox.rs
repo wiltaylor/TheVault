@@ -40,6 +40,49 @@ fn user() -> Author {
     Author::Session("test".into())
 }
 
+#[test]
+fn gmail_capability_does_not_bypass_calendar_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let agent = Author::AgentMail("drafter".into());
+    for fields in [
+        json!({"title": "Invite", "attendees_raw": ["ann@example.com"]}),
+        json!({"title": "Invite", "send_updates": "all"}),
+    ] {
+        assert!(matches!(
+            w.create("event", &Input::Json(json!({"fields": fields})), &agent),
+            Err(Error::Rejected(_))
+        ));
+    }
+    let event = w
+        .create(
+            "event",
+            &Input::Json(json!({"fields": {"title": "Imported", "google_ref": "g1"}})),
+            &user(),
+        )
+        .unwrap();
+    assert!(matches!(
+        w.delete(&event.id, Some(&event.version), &agent),
+        Err(Error::Rejected(_))
+    ));
+}
+
+#[test]
+fn gmail_capability_retains_outbox_draft_review_and_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let drafter = Author::AgentMail("drafter".into());
+    let id = create(&w, &drafter, email(json!({}))).unwrap();
+    assert_eq!(status(&w, &id), "draft");
+    assert!(create(&w, &drafter, email(json!({"status": "ready"}))).is_err());
+    assert!(edit(&w, &id, &drafter, json!({"status": "ready"})).is_err());
+    let other = create(&w, &agent("sender"), email(json!({}))).unwrap();
+    assert!(edit(&w, &other, &drafter, json!({"subject": "Not mine"})).is_err());
+    let sender = Author::AgentMail("sender".into());
+    let ready = create(&w, &sender, email(json!({"status": "ready"}))).unwrap();
+    assert_eq!(status(&w, &ready), "ready");
+}
+
 fn agent(name: &str) -> Author {
     Author::Agent(name.into())
 }
