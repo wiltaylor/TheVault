@@ -92,7 +92,13 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let (agent, error) = match Agent::parse(name, &wcl) {
         Ok(mut a) => {
-            a.permissions.browser_secrets.retain(|n| by.permissions.browser && by.permissions.browser_secrets.contains(n) && w.state().browser_secret_active(&by.name, n).unwrap_or(false));
+            a.permissions.browser_secrets.retain(|n| {
+                by.permissions.browser
+                    && by.permissions.browser_secrets.contains(n)
+                    && w.state()
+                        .browser_secret_active(&by.name, n)
+                        .unwrap_or(false)
+            });
             wcl = a.to_wcl();
             let hidden = name != by.name && a.permissions.outbox.conditions.take().is_some();
             if hidden {
@@ -127,7 +133,11 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
 pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
     let (bp, tp) = (&by.permissions, &target.permissions);
     let mut problems = Vec::new();
-    if tp.browser_secrets.iter().any(|n| !bp.browser || !bp.browser_secrets.contains(n)) {
+    if tp
+        .browser_secrets
+        .iter()
+        .any(|n| !bp.browser || !bp.browser_secrets.contains(n))
+    {
         problems.push("it would grant Login secrets this agent does not have".to_owned());
     }
     match (&bp.tools, &tp.tools) {
@@ -369,7 +379,13 @@ pub(crate) fn propose_change(
 
 /// Whether writing `agent` as agent `name` turns on `run_code`, which it does not have now.
 fn grants(w: &Writer, name: &str, agent: &Agent) -> bool {
-    if agent.permissions.browser_secrets != agent_named(w, name).ok().flatten().map(|a| a.permissions.browser_secrets).unwrap_or_default() {
+    if agent.permissions.browser_secrets
+        != agent_named(w, name)
+            .ok()
+            .flatten()
+            .map(|a| a.permissions.browser_secrets)
+            .unwrap_or_default()
+    {
         return true;
     }
     (agent.permissions.outbox.send_without_review

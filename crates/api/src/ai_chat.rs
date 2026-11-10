@@ -1457,7 +1457,12 @@ fn setup(
 ) -> Result<Setup, AiError> {
     let state = w.state();
     let mut effective_agent = agent.clone();
-    effective_agent.permissions.browser_secrets.retain(|name| agent.permissions.browser && state.browser_secret_active(&agent.name, name).unwrap_or(false));
+    effective_agent.permissions.browser_secrets.retain(|name| {
+        agent.permissions.browser
+            && state
+                .browser_secret_active(&agent.name, name)
+                .unwrap_or(false)
+    });
     let agent = &effective_agent;
     let settings = Settings::load(state)?;
     // The request's choice, made in the chat box, wins; without one the agent's account and

@@ -306,6 +306,7 @@ pub async fn read(
     let (wcl, agent, account, hidden, inactive) = blocking(w, move |w| {
         let full = matches!(by, state::Author::Session(_))
             || (scope.allows(state::Scope::Admin) && !crate::auth::is_agent_token(&by));
+        let login_full = crate::tasks::may_manage_login_secrets(w, &by)?;
         let mut wcl = w.read_agent(&name)?;
         let mut agent = w.agent(&name).map_err(|e| {
             let mut err = ApiError::from(e);
@@ -318,12 +319,12 @@ pub async fn read(
         let inactive = agent.permissions.browser_secrets.iter().filter_map(|n| match w.state().browser_secret_active(&name, n) {
             Ok(false) => Some(Ok(n.clone())), Ok(true) => None, Err(e) => Some(Err(e)),
         }).collect::<Result<Vec<_>, _>>()?;
-        if !full { agent.permissions.browser_secrets.clear(); }
-        if hidden || !full {
+        if !login_full { agent.permissions.browser_secrets.clear(); }
+        if hidden || !login_full {
             wcl = agent.to_wcl();
         }
         let account = crate::ai_settings::agent_account_name(w, &agent);
-        Ok::<_, ApiError>((wcl, agent, account, hidden, if full { inactive } else { vec![] }))
+        Ok::<_, ApiError>((wcl, agent, account, hidden, if login_full { inactive } else { vec![] }))
     })
     .await?;
     Ok(agent_response(&headers, &agent, wcl, account, hidden, inactive))
@@ -585,8 +586,7 @@ pub async fn put(
         }
     };
     let (wcl, agent, account, inactive) = blocking(w, move |w| {
-        if let state::Author::Token(token) = &by
-            && (token.to_ascii_lowercase().starts_with("agent-") || token.to_ascii_lowercase().starts_with("device-") || w.state().device_for_token(token)?.is_some()) {
+        if !crate::tasks::may_manage_login_secrets(w, &by)? {
             return Err(ApiError::new(axum::http::StatusCode::FORBIDDEN, "forbidden", "only an owner session or ordinary admin user token may confirm Login grants"));
         }
         let _acting = writer::acting_as(&by);

@@ -1179,9 +1179,19 @@ impl Reader<'_> {
             ),
             ..Permissions::default()
         };
-        p.browser_secrets = self.names(d, "browser_secrets", "permissions.browser_secrets", "secret").unwrap_or_default();
+        p.browser_secrets = self
+            .names(
+                d,
+                "browser_secrets",
+                "permissions.browser_secrets",
+                "secret",
+            )
+            .unwrap_or_default();
         if !p.browser && !p.browser_secrets.is_empty() {
-            self.c.fail("permissions.browser_secrets", "requires Browser automation (browser = true)");
+            self.c.fail(
+                "permissions.browser_secrets",
+                "requires Browser automation (browser = true)",
+            );
         }
         if let Some(value) = d.field("change_fields") {
             match value {

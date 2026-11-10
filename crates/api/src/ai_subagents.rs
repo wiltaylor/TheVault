@@ -174,13 +174,20 @@ pub fn narrow(parent: &AgentPermissions, arg: &Value) -> (AgentPermissions, Vec<
         _ => {}
     }
     if let Some(names) = list(&arg["browser_secrets"]) {
-        p.browser_secrets = names.into_iter().filter(|n| {
-            let allowed = parent.browser_secrets.contains(n);
-            if !allowed { ignored.push("a Login secret you do not have".to_owned()); }
-            allowed
-        }).collect();
+        p.browser_secrets = names
+            .into_iter()
+            .filter(|n| {
+                let allowed = parent.browser_secrets.contains(n);
+                if !allowed {
+                    ignored.push("a Login secret you do not have".to_owned());
+                }
+                allowed
+            })
+            .collect();
     }
-    if !p.browser { p.browser_secrets.clear(); }
+    if !p.browser {
+        p.browser_secrets.clear();
+    }
     match arg["run_code"].as_bool() {
         // Without its own code it may still run the saved scripts and tasks the parent may.
         Some(false) => {
@@ -251,7 +258,12 @@ pub fn intersect(own: &AgentPermissions, parent: &AgentPermissions) -> AgentPerm
         p.outbox.send_without_review = false;
     }
     p.browser = own.browser && parent.browser;
-    p.browser_secrets = own.browser_secrets.iter().filter(|n| p.browser && parent.browser_secrets.contains(n)).cloned().collect();
+    p.browser_secrets = own
+        .browser_secrets
+        .iter()
+        .filter(|n| p.browser && parent.browser_secrets.contains(n))
+        .cloned()
+        .collect();
     p.scripts.run_code = own.scripts.run_code && parent.scripts.run_code;
     p.scripts.run_saved = own.scripts.runs_saved() && parent.scripts.runs_saved();
     p.subagents = schema::AgentSubagents::default();
@@ -416,14 +428,26 @@ mod tests {
 
     #[test]
     fn browser_secrets_cannot_be_widened_by_children() {
-        let parent = perms("permissions {\n browser = true\n browser_secrets = [\"bank\", \"mail\"]\n}\n");
+        let parent =
+            perms("permissions {\n browser = true\n browser_secrets = [\"bank\", \"mail\"]\n}\n");
         let (child, _) = narrow(&parent, &json!({"browser_secrets": ["bank", "other"]}));
         assert_eq!(child.browser_secrets, ["bank"]);
-        let own = perms("permissions {\n browser = true\n browser_secrets = [\"mail\", \"other\"]\n}\n");
+        let own =
+            perms("permissions {\n browser = true\n browser_secrets = [\"mail\", \"other\"]\n}\n");
         assert_eq!(intersect(&own, &parent).browser_secrets, ["mail"]);
         assert!(intersect(&own, &perms("")).browser_secrets.is_empty());
-        assert!(narrow(&parent, &json!({"browser": false})).0.browser_secrets.is_empty());
-        assert!(narrow(&perms(""), &json!({"browser_secrets": ["bank"]})).0.browser_secrets.is_empty());
+        assert!(
+            narrow(&parent, &json!({"browser": false}))
+                .0
+                .browser_secrets
+                .is_empty()
+        );
+        assert!(
+            narrow(&perms(""), &json!({"browser_secrets": ["bank"]}))
+                .0
+                .browser_secrets
+                .is_empty()
+        );
     }
 
     #[test]

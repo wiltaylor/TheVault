@@ -171,6 +171,8 @@ fn browser_secret_grants_require_owner_and_reconfirmation_after_recreation() {
         assert_eq!(hidden["permissions"]["browser_secrets"], json!([]));
         assert!(!hidden["wcl"].as_str().unwrap().contains("bank"));
     }
+    let listed = expect(api.req("GET", "/api/secrets", &external).send().unwrap(), StatusCode::OK);
+    assert!(!listed.to_string().contains("bank"));
     expect(api.put_wcl("clerk", source, api.server.admin_token()), StatusCode::OK);
     assert_eq!(read()["browser_secrets_inactive"], json!([]));
 }

@@ -503,7 +503,7 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByText(/they replace Settings > AI for this agent/)).toBeTruthy();
     const groups = p.getAllByRole("group").map((g) => g.querySelector(":scope > legend")?.textContent).filter(Boolean);
-    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Skills", "Types", "Taxonomies", "Agents", "Skill management", "Outbox", "Assets", "Internet"]);
+    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Skills", "Types", "Taxonomies", "Agents", "Skill management", "Outbox", "Assets", "Internet", "Login secrets"]);
     const web = p.getByRole("checkbox", { name: /Search the web/ });
     expect(web).toBeChecked();
     fireEvent.click(web);
