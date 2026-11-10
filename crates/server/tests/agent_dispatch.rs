@@ -164,11 +164,28 @@ impl Api {
     }
 
     fn note(&self, type_name: &str, title: &str, paragraphs: &[&str]) -> String {
-        let v = self.send(
-            "POST",
-            &format!("/api/notes?type={type_name}"),
-            json!({ "note": note_json(title, paragraphs) }),
-        );
+        let login = self
+            .client
+            .post(self.server.url("/api/login"))
+            .json(&json!({ "password": testkit::PASSWORD }))
+            .send()
+            .unwrap();
+        assert!(login.status().is_success());
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let response = self
+            .client
+            .post(self.server.url(&format!("/api/notes?type={type_name}")))
+            .header("cookie", cookie)
+            .json(&json!({ "note": note_json(title, paragraphs) }))
+            .send()
+            .unwrap();
+        assert!(response.status().is_success());
+        let v: Value = response.json().unwrap();
         v["id"].as_str().unwrap().to_owned()
     }
 
