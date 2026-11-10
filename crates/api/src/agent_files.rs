@@ -264,7 +264,9 @@ pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
             .collect();
         Ok::<_, ApiError>((known_tools(w), warnings))
     }).await?;
-    Ok(Json(json!({ "agents": agents, "tools": tools, "warnings": warnings })))
+    Ok(Json(
+        json!({ "agents": agents, "tools": tools, "warnings": warnings }),
+    ))
 }
 
 /// The response to a read or a write: the agent with its WCL, the name of the account it

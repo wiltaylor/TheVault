@@ -469,15 +469,47 @@ fn p10_legacy_admin_agent_token_cannot_change_ai_accounts() {
     let admin = client(server.admin_token());
     let agent = install(&server, &admin, "cli", "admin");
     let account = json!({ "name": "test", "kind": "openai_compatible", "base_url": "http://127.0.0.1:9/v1", "model": "m" });
-    let (_, made) = body(admin.post(server.url("/api/integrations/ai/accounts")).json(&account).send().unwrap());
-    let id = made["account"]["id"].as_str().or(made["id"].as_str()).unwrap();
+    let (_, made) = body(
+        admin
+            .post(server.url("/api/integrations/ai/accounts"))
+            .json(&account)
+            .send()
+            .unwrap(),
+    );
+    let id = made["account"]["id"]
+        .as_str()
+        .or(made["id"].as_str())
+        .unwrap();
     let statuses = [
-        agent.post(server.url("/api/integrations/ai/accounts")).json(&account).send().unwrap().status(),
-        agent.put(server.url("/api/integrations/ai/default")).json(&json!({ "id": id })).send().unwrap().status(),
-        agent.put(server.url(&format!("/api/integrations/ai/accounts/{id}"))).json(&account).send().unwrap().status(),
-        agent.put(server.url(&format!("/api/integrations/ai/accounts/{id}/key"))).json(&json!({ "key": "fixture" })).send().unwrap().status(),
+        agent
+            .post(server.url("/api/integrations/ai/accounts"))
+            .json(&account)
+            .send()
+            .unwrap()
+            .status(),
+        agent
+            .put(server.url("/api/integrations/ai/default"))
+            .json(&json!({ "id": id }))
+            .send()
+            .unwrap()
+            .status(),
+        agent
+            .put(server.url(&format!("/api/integrations/ai/accounts/{id}")))
+            .json(&account)
+            .send()
+            .unwrap()
+            .status(),
+        agent
+            .put(server.url(&format!("/api/integrations/ai/accounts/{id}/key")))
+            .json(&json!({ "key": "fixture" }))
+            .send()
+            .unwrap()
+            .status(),
     ];
-    assert!(statuses.iter().all(|status| status.as_u16() == 403), "{statuses:?}");
+    assert!(
+        statuses.iter().all(|status| status.as_u16() == 403),
+        "{statuses:?}"
+    );
 }
 
 #[test]
@@ -485,7 +517,11 @@ fn legacy_reserved_agent_files_warn_at_startup_and_in_settings_data() {
     let server = TestServer::start_seeded(|vault| {
         std::fs::create_dir_all(vault.join("agents")).unwrap();
         for name in ["user", "agent-old", "device-old", "ordinary"] {
-            std::fs::write(vault.join(format!("agents/{name}.wcl")), "label = \"Legacy\"\n").unwrap();
+            std::fs::write(
+                vault.join(format!("agents/{name}.wcl")),
+                "label = \"Legacy\"\n",
+            )
+            .unwrap();
         }
     });
     let admin = client(server.admin_token());
@@ -495,11 +531,31 @@ fn legacy_reserved_agent_files_warn_at_startup_and_in_settings_data() {
     assert_eq!(warnings.len(), 3);
     let lines = server.stderr_lines();
     for name in ["user", "agent-old", "device-old"] {
-        assert_eq!(warnings.iter().filter(|w| w.as_str().unwrap().contains(&format!("Agent {name:?} "))).count(), 1);
-        assert_eq!(lines.iter().filter(|line| line.contains(&format!("warning: agent {name:?} "))).count(), 1);
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|w| w.as_str().unwrap().contains(&format!("Agent {name:?} ")))
+                .count(),
+            1
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains(&format!("warning: agent {name:?} ")))
+                .count(),
+            1
+        );
     }
     for name in ["Agent-ops", "DEVICE-x"] {
-        assert_eq!(admin.post(server.url("/api/tokens")).json(&json!({ "name": name, "scope": "write" })).send().unwrap().status(), 400);
+        assert_eq!(
+            admin
+                .post(server.url("/api/tokens"))
+                .json(&json!({ "name": name, "scope": "write" }))
+                .send()
+                .unwrap()
+                .status(),
+            400
+        );
     }
 }
 
@@ -508,9 +564,19 @@ fn agent_integration_guard_covers_methods_paths_and_future_routes() {
     let server = TestServer::start();
     let admin = client(server.admin_token());
     let agent = install(&server, &admin, "cli", "admin");
-    for path in ["/api/integrations", "/api/integrations/future", "/api/integrations/ai/accounts?x=1", "/api/integrations/ai/accounts/", "/api/integrations/%61i/accounts"] {
+    for path in [
+        "/api/integrations",
+        "/api/integrations/future",
+        "/api/integrations/ai/accounts?x=1",
+        "/api/integrations/ai/accounts/",
+        "/api/integrations/%61i/accounts",
+    ] {
         for method in ["POST", "PUT", "PATCH", "DELETE"] {
-            let res = agent.request(method.parse().unwrap(), server.url(path)).json(&json!({})).send().unwrap();
+            let res = agent
+                .request(method.parse().unwrap(), server.url(path))
+                .json(&json!({}))
+                .send()
+                .unwrap();
             assert_eq!(res.status(), 403, "{method} {path}");
         }
     }

@@ -679,14 +679,14 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_call_ids (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, principal TEXT NOT NULL, expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS agent_call_refusals (call TEXT NOT NULL, note TEXT NOT NULL, agent TEXT NOT NULL, created_ms INTEGER NOT NULL, PRIMARY KEY(call,note));")?;
             }
             if version <= 23 {
-            let has_token_kind: bool = tx.query_row(
-                "SELECT EXISTS (SELECT 1 FROM pragma_table_info('tokens') WHERE name = 'kind')",
-                [],
-                |r| r.get(0),
-            )?;
-            if !has_token_kind {
-                tx.execute_batch("ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','device','agent')); UPDATE tokens SET kind = CASE WHEN substr(name,1,6) = 'agent-' THEN 'agent' WHEN substr(name,1,7) = 'device-' THEN 'device' ELSE 'user' END;")?;
-            }
+                let has_token_kind: bool = tx.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM pragma_table_info('tokens') WHERE name = 'kind')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if !has_token_kind {
+                    tx.execute_batch("ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','device','agent')); UPDATE tokens SET kind = CASE WHEN substr(name,1,6) = 'agent-' THEN 'agent' WHEN substr(name,1,7) = 'device-' THEN 'device' ELSE 'user' END;")?;
+                }
             }
             if version <= 21 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);

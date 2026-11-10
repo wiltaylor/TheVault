@@ -822,9 +822,13 @@ impl Writer {
     /// Existing files whose names collide with reserved Outbox identities, including names
     /// too old or invalid to appear in the normal agent list.
     pub fn reserved_agent_names(&self) -> Result<Vec<String>> {
-        let mut names: Vec<_> = self.definitions("agents")?.into_iter()
+        let mut names: Vec<_> = self
+            .definitions("agents")?
+            .into_iter()
             .map(|(name, _)| name)
-            .filter(|name| name == "user" || name.starts_with("agent-") || name.starts_with("device-"))
+            .filter(|name| {
+                name == "user" || name.starts_with("agent-") || name.starts_with("device-")
+            })
             .collect();
         names.sort();
         Ok(names)
