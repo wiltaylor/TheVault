@@ -2918,7 +2918,10 @@ The deterministic communication/script/calendar restrictions remain independent.
 Derived `email_thread` and `conversation` notes also receive one decision for their own
 title/content. This costs **one extra decision per new thread**, not per later message.
 They remain held until that decision allows them and their first committed member is clear.
-The server pins that member in state. A session release overrides both holds. Later edits
+The server pins that member in state with an indexed reverse lookup. Deleting it leaves no
+first member until a later arrival binds one. A session release overrides both holds.
+Server person IDs in `participants` are not classified, so later participants do not
+invalidate the derived title verdict. Other edits
 invalidate the relevant verdict. Contact-derived conversation names therefore cannot borrow
 a message verdict that never reviewed the name.
 

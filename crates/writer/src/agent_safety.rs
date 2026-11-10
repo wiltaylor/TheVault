@@ -127,7 +127,10 @@ fn reduce_image_rendering(value: &mut serde_json::Value) {
     let alt = if value["kind"] == "image" {
         Some(value["fields"]["alt"].as_str().unwrap_or("").to_owned())
     } else if value["kind"] == "paragraph" {
-        value["fields"]["text"].as_str().and_then(html_blocks::pending_image).map(|(alt, _)| alt)
+        value["fields"]["text"]
+            .as_str()
+            .and_then(html_blocks::pending_image)
+            .map(|(alt, _)| alt)
     } else {
         None
     };
@@ -303,12 +306,12 @@ impl Writer {
         let held_json = serde_json::to_string(&held).expect("held ids");
         let notes = self
             .read_index(|index, _| {
-                let mut stmt = index
-                    .connection()
-                    .prepare("SELECT n.id,n.type,n.created FROM json_each(?1) h JOIN notes n ON n.id=h.value
+                let mut stmt = index.connection().prepare(
+                    "SELECT n.id,n.type,n.created FROM json_each(?1) h JOIN notes n ON n.id=h.value
                         WHERE (?2 IS NULL OR n.type=?2)
                         AND (?3 IS NULL OR julianday(n.created)>=julianday(?3))
-                        AND (?4 IS NULL OR julianday(n.created)<=julianday(?4))")?;
+                        AND (?4 IS NULL OR julianday(n.created)<=julianday(?4))",
+                )?;
                 stmt.query_map(rusqlite::params![held_json, kind, since, until], |r| {
                     Ok((
                         r.get::<_, String>(0)?,

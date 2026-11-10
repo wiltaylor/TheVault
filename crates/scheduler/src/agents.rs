@@ -556,7 +556,9 @@ impl Scheduler {
             // Scan latest mentions, including refusal receipts for agent-written calls.
             plan.agents.mentions.remove(&s.id);
             if s.event != Event::Delete {
-                plan.agents.mentions.insert(s.id.clone(), s.type_name.clone());
+                plan.agents
+                    .mentions
+                    .insert(s.id.clone(), s.type_name.clone());
             }
             let Ok(doc) = Doc::parse(&s.wcl, "agent event") else {
                 continue;

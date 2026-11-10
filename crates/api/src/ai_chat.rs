@@ -4173,7 +4173,8 @@ fn propose_or_read(
     ) {
         let omitted = w.take_agent_omissions();
         if omitted > 0 {
-            out.content.push_str("\nsome notes may be held; the user can review and release them.");
+            out.content
+                .push_str("\nsome notes may be held; the user can review and release them.");
         }
     }
     out

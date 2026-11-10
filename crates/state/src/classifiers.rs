@@ -129,7 +129,10 @@ impl State {
         let tx = conn.transaction()?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_safety_parents(parent TEXT PRIMARY KEY, member TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS agent_safety_parents_member ON agent_safety_parents(member);")?;
-        let first = tx.execute("INSERT OR IGNORE INTO meta(key,value) VALUES ('agent_safety.parents_ready','1')", [])?;
+        let first = tx.execute(
+            "INSERT OR IGNORE INTO meta(key,value) VALUES ('agent_safety.parents_ready','1')",
+            [],
+        )?;
         if first == 1 {
             tx.execute("INSERT OR IGNORE INTO agent_safety_parents(parent,member) SELECT substr(key,length('agent_safety.member.')+1),value FROM meta WHERE key GLOB 'agent_safety.member.*'", [])?;
         }
@@ -138,7 +141,14 @@ impl State {
     }
 
     pub fn indexed_agent_safety_hash(&self, id: &str) -> Result<Option<String>> {
-        Ok(self.conn().query_row("SELECT fingerprint FROM agent_safety_index WHERE id=?1", [id], |r| r.get(0)).optional()?)
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT fingerprint FROM agent_safety_index WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     pub fn unbind_deleted_safety_member(&self, member: &str) -> Result<()> {
