@@ -210,7 +210,7 @@ pub(crate) struct AgentPlan {
 
 /// What became of a run asked for.
 enum Admitted {
-    Start(AgentJob),
+    Start(Box<AgentJob>),
     Queued,
     /// Over the hourly limit; `true` when the user is to be told.
     Skipped(bool),
@@ -423,7 +423,7 @@ impl AgentPlan {
         if lane.running < MAX_RUNNING {
             lane.started.push_back(now);
             lane.running += 1;
-            return Admitted::Start(job);
+            return Admitted::Start(Box::new(job));
         }
         if lane.queue.len() >= MAX_QUEUED {
             // A run with a thread is someone's request: only a run with none makes room.
@@ -740,7 +740,7 @@ impl Scheduler {
         let mut starts: Vec<AgentJob> = called_runs
             .into_iter()
             .filter_map(|a| match a {
-                Admitted::Start(j) => Some(j),
+                Admitted::Start(j) => Some(*j),
                 _ => None,
             })
             .collect();
@@ -802,7 +802,7 @@ impl Scheduler {
                         let _ = state.retry_trigger_job(row.id, now, None);
                     } else if state.claim_trigger_job(row.id).unwrap_or(false) {
                         match plan.agents.admit(job, now) {
-                            Admitted::Start(job) => starts.push(job),
+                            Admitted::Start(job) => starts.push(*job),
                             Admitted::Queued => {}
                             _ => {
                                 let _ = state.retry_trigger_job(row.id, now, None);
@@ -1228,7 +1228,7 @@ impl Scheduler {
                 let s = self.clone();
                 thread::Builder::new()
                     .name("agent-dispatch".into())
-                    .spawn(move || s.agent_work(job))
+                    .spawn(move || s.agent_work(*job))
                     .err()
                     .map(|e| {
                         // The slot taken for it is free again.
