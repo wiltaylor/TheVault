@@ -42,6 +42,22 @@ template default {
 
 const WCL: &str = "text/plain; charset=utf-8";
 
+#[test]
+fn read_tokens_cannot_start_or_change_agent_conversations() {
+    let api = Api::start();
+    let token = api.token("reader-chat", "read");
+    for path in [
+        "/api/agents/assistant/threads",
+        "/api/ai/chat",
+        "/api/ai/chat/turns",
+        "/api/ai/discard",
+    ] {
+        let response = api.req("POST", path, Auth::Bearer(&token))
+            .json(&json!({})).send().unwrap();
+        assert_eq!(response.status().as_u16(), 403, "{path}");
+    }
+}
+
 fn seed(vault: &Path) {
     std::fs::create_dir_all(vault.join("types")).unwrap();
     std::fs::write(vault.join("types/task.wcl"), TASK_TYPE).unwrap();
