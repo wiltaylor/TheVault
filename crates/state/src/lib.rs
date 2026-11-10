@@ -768,7 +768,10 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                 if !has_token_kind {
                     tx.execute_batch("ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','device','agent')); UPDATE tokens SET kind = CASE WHEN lower(substr(name,1,6)) = 'agent-' THEN 'agent' WHEN lower(substr(name,1,7)) = 'device-' THEN 'device' ELSE 'user' END;")?;
                 }
-                tx.execute("UPDATE tokens SET scope='write' WHERE kind='agent' AND scope='admin'", [])?;
+                tx.execute(
+                    "UPDATE tokens SET scope='write' WHERE kind='agent' AND scope='admin'",
+                    [],
+                )?;
             }
             if version <= 21 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);

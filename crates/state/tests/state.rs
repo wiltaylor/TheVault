@@ -18,10 +18,16 @@ fn token_kinds_migrate_from_19_20_22_and_23_without_losing_credentials() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("state.db");
         let state = State::open(&path, None).unwrap();
-        let credentials: Vec<_> = ["agent-old", "device-old", "plain", "Agent-Upper", "DEVICE-x"]
-            .into_iter()
-            .map(|name| state.create_token(name, Scope::Admin).unwrap().1)
-            .collect();
+        let credentials: Vec<_> = [
+            "agent-old",
+            "device-old",
+            "plain",
+            "Agent-Upper",
+            "DEVICE-x",
+        ]
+        .into_iter()
+        .map(|name| state.create_token(name, Scope::Admin).unwrap().1)
+        .collect();
         drop(state);
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch("ALTER TABLE tokens DROP COLUMN kind;")
@@ -29,10 +35,20 @@ fn token_kinds_migrate_from_19_20_22_and_23_without_losing_credentials() {
         conn.pragma_update(None, "user_version", version).unwrap();
         drop(conn);
         let state = State::open(&path, None).unwrap();
-        for (secret, kind) in credentials.iter().zip(["agent", "device", "user", "agent", "device"]) {
+        for (secret, kind) in credentials
+            .iter()
+            .zip(["agent", "device", "user", "agent", "device"])
+        {
             let token = state.authenticate_token(secret).unwrap().unwrap();
             assert_eq!(token.kind, kind);
-            assert_eq!(token.scope, if kind == "agent" { Scope::Write } else { Scope::Admin });
+            assert_eq!(
+                token.scope,
+                if kind == "agent" {
+                    Scope::Write
+                } else {
+                    Scope::Admin
+                }
+            );
         }
         drop(state);
         let state = State::open(&path, None).unwrap();
