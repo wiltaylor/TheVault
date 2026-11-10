@@ -79,7 +79,11 @@ fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
     let writer = api.token("thread-write", "write");
     let admin = api.token("thread-admin", "admin");
     let cookie = cookie_pair(&api.login(testkit::PASSWORD));
-    for auth in [Auth::Bearer(&writer), Auth::Bearer(&admin), Auth::Cookie(&cookie)] {
+    for auth in [
+        Auth::Bearer(&writer),
+        Auth::Bearer(&admin),
+        Auth::Cookie(&cookie),
+    ] {
         expect(
             api.req("POST", "/api/notes?type=agent_thread", auth)
                 .json(&json!({"note": {"fields": {"title": "Forged"}}}))
@@ -113,8 +117,10 @@ fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
             .send().unwrap(), 403);
     }
     for action in ["archive", "unarchive"] {
+        let note = expect(api.req("GET", &format!("/api/notes/{id}"), api.admin()).send().unwrap(), 200);
         expect(
             api.req("POST", &format!("/api/notes/{id}/{action}"), api.admin())
+                .header("If-Match", note["version"].as_str().unwrap())
                 .send()
                 .unwrap(),
             200,
@@ -131,8 +137,10 @@ fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
         200,
     );
     assert_ne!(read["title"], "Forged");
+    let note = expect(api.req("GET", &format!("/api/notes/{id}"), api.admin()).send().unwrap(), 200);
     expect(
         api.req("DELETE", &format!("/api/notes/{id}"), api.admin())
+            .header("If-Match", note["version"].as_str().unwrap())
             .send()
             .unwrap(),
         200,
