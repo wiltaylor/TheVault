@@ -701,7 +701,7 @@ fn legacy_type_permissions_keep_definition_operations() {
         ),
         (
             "propose_taxonomy_change",
-            json!({ "name": "unused", "wcl": "label = \"Unused\"\nterm \"One\"\n" }),
+            json!({ "name": "unused", "wcl": "label = \"Unused\"\nterm \"One\"\n", "renames": [] }),
             "taxonomy_proposal",
         ),
         (
@@ -727,6 +727,21 @@ fn legacy_type_permissions_keep_definition_operations() {
             response.text().unwrap()
         );
     }
+}
+
+#[test]
+fn assistant_proposals_apply_without_an_agent_file() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let (memo, version) = api.note("memo", "Original");
+    fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_fields", json!({ "id": memo, "base_version": version, "fields": json!({ "title": "Changed" }).to_string() })));
+    fake.push(AnthropicMessage::text("Done."));
+    let events = api.chat(json!({ "agent": "assistant", "messages": [user("Go.")] }));
+    let proposal = events_named(&events, "proposal")[0].clone();
+    std::fs::remove_file(api.server.vault_path().join("agents/assistant.wcl")).unwrap();
+    let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+    assert!(response.status().is_success(), "{}", response.text().unwrap());
+    assert_eq!(api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"], "Changed");
 }
 
 #[test]
