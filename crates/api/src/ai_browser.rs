@@ -843,7 +843,6 @@ fn stored(asset: &writer::Asset, path: &str) -> Value {
     json!({
         "op": "download",
         "source": "browser",
-        "browser_profile": b.profile,
         "path": path,
         "asset_id": asset.id,
         "filename": asset.filename,
@@ -938,6 +937,7 @@ pub async fn save(
         "id": call_id,
         "op": "download",
         "source": "browser",
+        "browser_profile": b.profile,
         "path": path,
         "url": null,
         "filename": filename,
