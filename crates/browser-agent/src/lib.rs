@@ -20,8 +20,8 @@
 //!   name.
 //! - `GET /health` answers `{ok, version, display, playwright_cli}` without a token.
 
-use std::io;
 use std::collections::HashMap;
+use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -41,7 +41,7 @@ use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpListener;
 use tokio::process::Command;
-use tokio::sync::{Semaphore, RwLock, OwnedRwLockReadGuard};
+use tokio::sync::{OwnedRwLockReadGuard, RwLock, Semaphore};
 
 /// The most of stdout, and of stderr, a run answers: the tail is kept.
 pub const OUTPUT_CAP: usize = 64 * 1024;
@@ -179,15 +179,26 @@ const PROFILE_LIMIT: usize = 64;
 const PROFILE_BYTES: u64 = 512 * 1024 * 1024;
 
 fn profile_lock(state: &AppState, id: &str) -> Arc<RwLock<()>> {
-    state.profile_locks.lock().unwrap_or_else(|e| e.into_inner())
-        .entry(id.to_owned()).or_default().clone()
+    state
+        .profile_locks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(id.to_owned())
+        .or_default()
+        .clone()
 }
 
-async fn profile_access(state: &AppState, headers: &HeaderMap) -> ApiResult<OwnedRwLockReadGuard<()>> {
+async fn profile_access(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> ApiResult<OwnedRwLockReadGuard<()>> {
     let id = profile_id(state, headers)?;
     let guard = profile_lock(state, id).read_owned().await;
     if std::fs::symlink_metadata(state.home.join(".retired-profiles").join(id)).is_ok() {
-        return Err(ApiError::new(StatusCode::GONE, "this browser profile was retired"));
+        return Err(ApiError::new(
+            StatusCode::GONE,
+            "this browser profile was retired",
+        ));
     }
     Ok(guard)
 }
@@ -303,7 +314,10 @@ async fn delete_profile(
     safe_dir(&retired)?;
     let marker = retired.join(id);
     if std::fs::symlink_metadata(&marker).is_err() {
-        std::fs::OpenOptions::new().write(true).create_new(true).open(&marker)
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     if path.exists() {
@@ -311,7 +325,11 @@ async fn delete_profile(
         std::fs::remove_dir_all(&path)
             .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
-    state.profile_locks.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+    state
+        .profile_locks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(id);
     Ok(Json(json!({"ok": true})))
 }
 

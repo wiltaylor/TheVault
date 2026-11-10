@@ -152,12 +152,21 @@ impl BrowserBox {
         if self.profile.is_none() {
             return Err("no server-selected browser profile".into());
         }
-        let health: Value = http().get(self.url("/health", &[])?)
-            .timeout(Duration::from_secs(5)).send().await.map_err(|e| unreachable(&e))?
-            .error_for_status().map_err(|e| e.to_string())?
-            .json().await.map_err(|e| e.to_string())?;
+        let health: Value = http()
+            .get(self.url("/health", &[])?)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| unreachable(&e))?
+            .error_for_status()
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
         if health["profile_protocol"] != 1 {
-            return Err("the browser box needs rebuilding: signed agent profiles are not supported".into());
+            return Err(
+                "the browser box needs rebuilding: signed agent profiles are not supported".into(),
+            );
         }
         Ok(())
     }
@@ -170,13 +179,17 @@ impl Drop for TemporaryProfile {
     fn drop(&mut self) {
         let b = self.0.clone();
         let w = self.1.clone();
-        let Some(id) = b.profile.clone() else { return; };
+        let Some(id) = b.profile.clone() else {
+            return;
+        };
         if let Err(e) = w.retire_browser_profile(&id) {
             eprintln!("temporary browser profile retirement failed: {e}");
         }
         tokio::spawn(async move {
             match b.remove_profile().await {
-                Ok(()) => { let _ = w.browser_profile_removed(&id); }
+                Ok(()) => {
+                    let _ = w.browser_profile_removed(&id);
+                }
                 Err(e) => eprintln!("temporary browser profile cleanup failed: {e}"),
             }
         });
@@ -481,7 +494,9 @@ const UNTRUSTED: &str = "The output comes from the browser box and the pages it 
 
 /// `browser_run {command, timeout}`.
 pub async fn run(b: &BrowserBox, input: &Value) -> BrowserOut {
-    if let Err(e) = b.check_protocol().await { return BrowserOut::error(e); }
+    if let Err(e) = b.check_protocol().await {
+        return BrowserOut::error(e);
+    }
     let Some(command) = input["command"].as_str().filter(|c| !c.trim().is_empty()) else {
         return BrowserOut::error("command must be a non-empty string");
     };
@@ -675,7 +690,9 @@ pub async fn file(
     may_send_image: bool,
     images: &Images,
 ) -> BrowserOut {
-    if let Err(e) = b.check_protocol().await { return BrowserOut::error(e); }
+    if let Err(e) = b.check_protocol().await {
+        return BrowserOut::error(e);
+    }
     let Some(path) = path_arg(input) else {
         return BrowserOut::error(NO_PATH);
     };

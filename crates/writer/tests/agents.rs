@@ -55,7 +55,8 @@ fn browser_profile_survives_label_rename_but_not_delete_and_recreate() {
     let before = w.browser_profile("browser").unwrap();
     w.put_agent("browser", "label = \"After\"\n", none).unwrap();
     assert_eq!(w.browser_profile("browser").unwrap(), before);
-    assert_ne!(w.browser_profile("assistant").unwrap(), before);
+    w.put_agent("other", "label = \"Other\"\n", none).unwrap();
+    assert_ne!(w.browser_profile("other").unwrap(), before);
     w.delete_agent("browser").unwrap();
     assert!(w.browser_profile("browser").is_err());
     assert_eq!(w.retired_browser_profiles().unwrap(), vec![before.clone()]);
