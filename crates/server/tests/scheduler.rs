@@ -428,11 +428,9 @@ fn login_metadata_api_survives_missing_wrong_keys_and_corrupt_rows() {
         if wrong {
             state::SecretKey::create_file(&key).unwrap();
         }
-        let server = TestServer::start_existing(
-            vault,
-            api.server.admin_token(),
-            if wrong { &[("VAULT_SECRET_KEY_FILE", &key)] } else { &[] },
-        );
+        let key_env = [("VAULT_SECRET_KEY_FILE", key.as_path())];
+        let env = if wrong { key_env.as_slice() } else { &[] };
+        let server = TestServer::start_existing(vault, api.server.admin_token(), env);
         let caller = client(server.admin_token());
         for path in ["/api/secrets", "/api/secrets/site", "/api/secrets/plain"] {
             let out = expect(caller.get(server.url(path)).send().unwrap(), 200);
