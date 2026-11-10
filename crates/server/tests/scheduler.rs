@@ -398,6 +398,48 @@ fn login_body() -> Value {
 }
 
 #[test]
+fn login_metadata_api_survives_missing_wrong_keys_and_corrupt_rows() {
+    let api = Api::start();
+    expect(api.put("/api/secrets/site").json(&login_body()).send().unwrap(), 200);
+    expect(api.put("/api/secrets/plain").json(&json!({"value":"made-up-string"})).send().unwrap(), 200);
+    for wrong in [false, true] {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::create_dir(vault.path().join(".vault")).unwrap();
+        let db = vault.path().join(".vault/state.db");
+        let conn = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
+        conn.execute("VACUUM INTO ?1", [db.to_str().unwrap()]).unwrap();
+        drop(conn);
+        let config = tempfile::tempdir().unwrap();
+        let key = config.path().join("key");
+        if wrong { state::SecretKey::create_file(&key).unwrap(); }
+        let server = TestServer::start_existing(vault, api.server.admin_token(), &[("VAULT_SECRET_KEY_FILE", &key)]);
+        let caller = client(server.admin_token());
+        for path in ["/api/secrets", "/api/secrets/site", "/api/secrets/plain"] {
+            let out = expect(caller.get(server.url(path)).send().unwrap(), 200);
+            assert!(!out.to_string().contains("made-up-login-password"));
+            assert!(!out.to_string().contains("JBSWY3DPEHPK3PXP"));
+        }
+        expect(caller.put(server.url("/api/secrets/site")).json(&login_body()).send().unwrap(), 503);
+    }
+    let conn = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
+    conn.execute("UPDATE login_secrets SET ciphertext=x'00' WHERE name='site'", []).unwrap();
+    for path in ["/api/secrets", "/api/secrets/site", "/api/secrets/plain"] {
+        expect(api.get(path).send().unwrap(), 200);
+    }
+    expect(api.put("/api/secrets/site").json(&login_body()).send().unwrap(), 503);
+}
+
+#[test]
+fn login_spaced_seed_is_accepted_and_never_returned() {
+    let api = Api::start();
+    let mut body = login_body();
+    body["totp_seed"] = json!("JBSW Y3DP EHPK 3PXP");
+    let out = expect(api.put("/api/secrets/site").json(&body).send().unwrap(), 200);
+    assert_eq!(out["has_totp"], true);
+    assert!(!out.to_string().contains("JBSW"));
+}
+
+#[test]
 fn login_secrets_are_write_only_and_isolated_from_script_reads_and_debug_logs() {
     let server = TestServer::start_with_env(seed, &[("RUST_LOG", "debug")]);
     let api = Api {

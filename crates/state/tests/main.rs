@@ -8,6 +8,7 @@ mod classifiers;
 mod commands;
 mod devices;
 mod gitsync;
+mod login_origins;
 mod sessions;
 mod shipped;
 mod state;

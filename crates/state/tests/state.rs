@@ -516,6 +516,31 @@ fn login_credentials_are_separate_encrypted_and_name_bound() {
 }
 
 #[test]
+fn login_listing_needs_no_key_and_ignores_corrupt_ciphertext() {
+    let dir = TempDir::new().unwrap();
+    let key = SecretKey::generate();
+    let state = open_with_key(&dir, key.clone());
+    let login = state::LoginSecret { username: "test-user".into(), password: "made-up-password".into(), totp_seed: None, origins: vec!["https://example.com".into()] };
+    for name in ["site", "other"] { state.set_login_secret(name, &login).unwrap(); }
+    drop(state);
+    for key in [None, Some(SecretKey::generate())] {
+        let state = State::open(&dir.path().join("state.db"), key).unwrap();
+        let list = state.list_login_secrets().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].username, "test-user");
+        assert!(matches!(state.get_login_secret("site"), Err(Error::KeyMissing { .. } | Error::WrongKey { .. })));
+        assert!(matches!(state.set_login_secret("site", &login), Err(Error::KeyMissing { .. } | Error::WrongKey { .. })));
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+    conn.execute("UPDATE login_secrets SET ciphertext=x'00' WHERE name='site'", []).unwrap();
+    drop(conn);
+    let state = open_with_key(&dir, key);
+    assert_eq!(state.list_login_secrets().unwrap().len(), 2);
+    assert!(matches!(state.get_login_secret("site"), Err(Error::WrongKey { .. })));
+    assert!(state.get_login_secret("other").unwrap().is_some());
+}
+
+#[test]
 fn secret_plaintext_never_appears_in_state_db_bytes() {
     let dir = TempDir::new().unwrap();
     let plaintext = "plaintext-marker-7f3a9c2e-do-not-store";
