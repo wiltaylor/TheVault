@@ -14,20 +14,48 @@ fn transcript_content_needs_runtime_capability_not_an_agent_author() {
     let tmp = tempfile::tempdir().unwrap();
     let w = open(tmp.path(), None);
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
-    let input = writer::Input::Json(json!({"fields": {"title": "Thread", "agent": "assistant", "origin": "user", "transcript": "{\"messages\": []}"}}));
+    let input = writer::Input::Json(
+        json!({"fields": {"title": "Thread", "agent": "assistant", "origin": "user", "transcript": "{\"messages\": []}"}}),
+    );
     let author = state::Author::Agent("assistant".into());
-    assert!(matches!(w.create("agent_thread", &input, &author), Err(writer::Error::ServerOwnedThread)));
+    assert!(matches!(
+        w.create("agent_thread", &input, &author),
+        Err(writer::Error::ServerOwnedThread)
+    ));
     let made = w.agent_thread_runtime().create(&input, &author).unwrap();
-    for by in [author.clone(), state::Author::Session("owner".into()), state::Author::Token("admin".into())] {
-        assert!(matches!(w.update(&made.id, &input, Some(&made.version), &by), Err(writer::Error::ServerOwnedThread)));
-        assert!(matches!(w.restore_version(&made.id, &made.version, Some(&made.version), &by), Err(writer::Error::ServerOwnedThread)));
-        assert!(matches!(w.put_canvas(&made.id, "body.0", "canvas {}", Some(&made.version), &by), Err(writer::Error::ServerOwnedThread)));
+    for by in [
+        author.clone(),
+        state::Author::Session("owner".into()),
+        state::Author::Token("admin".into()),
+    ] {
+        assert!(matches!(
+            w.update(&made.id, &input, Some(&made.version), &by),
+            Err(writer::Error::ServerOwnedThread)
+        ));
+        assert!(matches!(
+            w.restore_version(&made.id, &made.version, Some(&made.version), &by),
+            Err(writer::Error::ServerOwnedThread)
+        ));
+        assert!(matches!(
+            w.put_canvas(&made.id, "body.0", "canvas {}", Some(&made.version), &by),
+            Err(writer::Error::ServerOwnedThread)
+        ));
     }
-    let updated = w.agent_thread_runtime().update(&made.id, &input, Some(&made.version), &author).unwrap();
-    let archived = w.set_archived(&made.id, true, Some(&updated.version), &author).unwrap();
-    w.delete(&made.id, Some(&archived.version), &author).unwrap();
-    assert!(matches!(w.restore_from_trash(&made.id, &author), Err(writer::Error::ServerOwnedThread)));
-    w.restore_from_trash(&made.id, &state::Author::Session("owner".into())).unwrap();
+    let updated = w
+        .agent_thread_runtime()
+        .update(&made.id, &input, Some(&made.version), &author)
+        .unwrap();
+    let archived = w
+        .set_archived(&made.id, true, Some(&updated.version), &author)
+        .unwrap();
+    w.delete(&made.id, Some(&archived.version), &author)
+        .unwrap();
+    assert!(matches!(
+        w.restore_from_trash(&made.id, &author),
+        Err(writer::Error::ServerOwnedThread)
+    ));
+    w.restore_from_trash(&made.id, &state::Author::Session("owner".into()))
+        .unwrap();
 }
 
 fn open(root: &Path, key: Option<SecretKey>) -> Writer {

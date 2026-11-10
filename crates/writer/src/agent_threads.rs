@@ -30,11 +30,27 @@ impl AgentThreadRuntime<'_> {
             return Err(Error::IdTaken(id.to_owned()));
         }
         let doc = input.parse(&note_path("agent_thread", id))?;
-        let change = w.prepare_put_as(&inner, id, "agent_thread", doc, None, author, None, None, true)?;
+        let change = w.prepare_put_as(
+            &inner,
+            id,
+            "agent_thread",
+            doc,
+            None,
+            author,
+            None,
+            None,
+            true,
+        )?;
         w.apply(inner, vec![change], &|| Ok(()), author).map(first)
     }
 
-    pub fn update(&self, id: &str, input: &Input, base: Option<&str>, author: &Author) -> Result<Saved> {
+    pub fn update(
+        &self,
+        id: &str,
+        input: &Input,
+        base: Option<&str>,
+        author: &Author,
+    ) -> Result<Saved> {
         let w = self.0;
         let _write = w.write_lock();
         let inner = w.lock();
@@ -43,7 +59,17 @@ impl AgentThreadRuntime<'_> {
             return Err(Error::BadRequest("not an agent thread".into()));
         }
         let doc = input.parse(&note_path(&type_name, id))?;
-        let change = w.prepare_put_as(&inner, id, &type_name, doc, Some(&old), author, None, None, true)?;
+        let change = w.prepare_put_as(
+            &inner,
+            id,
+            &type_name,
+            doc,
+            Some(&old),
+            author,
+            None,
+            None,
+            true,
+        )?;
         let check = || w.check_base(id, &type_name, &old, base);
         w.apply(inner, vec![change], &check, author).map(first)
     }

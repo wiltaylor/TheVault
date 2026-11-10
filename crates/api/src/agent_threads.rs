@@ -729,10 +729,9 @@ pub fn create_with(
     if !notes.is_empty() {
         doc["fields"]["notes"] = json!(notes);
     }
-    let saved = w.agent_thread_runtime().create(
-        &Input::Json(doc),
-        &Author::Agent(agent.to_owned()),
-    )?;
+    let saved = w
+        .agent_thread_runtime()
+        .create(&Input::Json(doc), &Author::Agent(agent.to_owned()))?;
     Thread::read(w, &saved.id)
 }
 
@@ -753,7 +752,12 @@ pub fn save(
         let by = author
             .cloned()
             .unwrap_or_else(|| Author::Agent(t.agent.clone()));
-        match w.agent_thread_runtime().update(id, &Input::Json(t.to_doc(label)), Some(&t.version), &by) {
+        match w.agent_thread_runtime().update(
+            id,
+            &Input::Json(t.to_doc(label)),
+            Some(&t.version),
+            &by,
+        ) {
             Ok(_) => return Thread::read(w, id),
             Err(e @ writer::Error::Conflict { .. }) => last = Some(e),
             Err(e) => return Err(e.into()),

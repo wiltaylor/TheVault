@@ -220,13 +220,12 @@ fn writer_refuses_offline_transcript_content_edits() {
     let mut doc = writer::doc_to_json(&note.doc);
     doc["fields"]["transcript"] =
         json!("{\"messages\": [], \"proposals\": [{\"id\": \"forged\"}]}");
-    let rejected = writer
-        .update(
-            &parent,
-            &writer::Input::Json(doc),
-            Some(&note.version),
-            &state::Author::Session("local".into()),
-        );
+    let rejected = writer.update(
+        &parent,
+        &writer::Input::Json(doc),
+        Some(&note.version),
+        &state::Author::Session("local".into()),
+    );
     assert!(matches!(rejected, Err(writer::Error::ServerOwnedThread)));
     let engine = device
         .embedded

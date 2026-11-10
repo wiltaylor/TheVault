@@ -418,10 +418,15 @@ pub async fn authenticate(
     }
     let path = req.uri().path();
     let agent_admin_route = is_definition_write(req.method(), path)
-        || (*req.method() == Method::POST && matches!(path, "/api/tokens" | "/api/agent-codes" | "/api/devices/pair-codes"))
+        || (*req.method() == Method::POST
+            && matches!(
+                path,
+                "/api/tokens" | "/api/agent-codes" | "/api/devices/pair-codes"
+            ))
         || (*req.method() == Method::PUT && path == "/api/integrations/ai/settings")
         || (!matches!(*req.method(), Method::GET | Method::HEAD)
-            && (path == "/api/integrations/gitsync" || path.starts_with("/api/integrations/gitsync/")));
+            && (path == "/api/integrations/gitsync"
+                || path.starts_with("/api/integrations/gitsync/")));
     if !granted.scope.allows(needed)
         || (agent_admin_route
             && matches!(&granted.author, Author::Token(name) if name.starts_with("agent-")))
