@@ -79,6 +79,22 @@ fn open_with_key(dir: &TempDir, key: SecretKey) -> State {
 }
 
 #[test]
+fn browser_secret_deletion_requires_owner_reconfirmation_even_in_same_millisecond() {
+    let dir = TempDir::new().unwrap();
+    let state = open_with_key(&dir, SecretKey::generate());
+    let login = state::LoginSecret { username: "test".into(), password: "made-up".into(), origins: vec![], totp_seed: None };
+    state.set_login_secret("bank", &login).unwrap();
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
+    state.confirm_browser_secrets("clerk").unwrap();
+    assert!(state.browser_secret_active("clerk", "bank").unwrap());
+    state.delete_login_secret("bank").unwrap();
+    state.set_login_secret("bank", &login).unwrap();
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
+    state.confirm_browser_secrets("clerk").unwrap();
+    assert!(state.browser_secret_active("clerk", "bank").unwrap());
+}
+
+#[test]
 fn history_returns_every_version_in_order_with_authors() {
     let dir = TempDir::new().unwrap();
     let clock = TestClock::new(1_000);
