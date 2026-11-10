@@ -131,9 +131,17 @@ impl State {
         let mut nonce = [0u8; NONCE_LEN];
         random_bytes(&mut nonce);
         let aad = format!("login:{name}");
-        let ciphertext = self.key()?.cipher().encrypt(XNonce::from_slice(&nonce), Payload {
-            msg: &payload, aad: aad.as_bytes(),
-        }).map_err(|_| Error::Corrupt("login encryption failed".into()))?;
+        let ciphertext = self
+            .key()?
+            .cipher()
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &payload,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|_| Error::Corrupt("login encryption failed".into()))?;
         self.conn().execute("INSERT INTO login_secrets (name,nonce,ciphertext,created_ms,updated_ms) VALUES (?1,?2,?3,?4,?4) ON CONFLICT(name) DO UPDATE SET nonce=excluded.nonce,ciphertext=excluded.ciphertext,updated_ms=excluded.updated_ms",
             params![name, nonce.as_slice(), ciphertext, self.now()])?;
         Ok(())
@@ -141,40 +149,82 @@ impl State {
 
     /// Server-only reader for browser filling. Not exposed to string-secret consumers.
     pub fn get_login_secret(&self, name: &str) -> Result<Option<LoginSecret>> {
-        let row: Option<(Vec<u8>, Vec<u8>)> = self.conn().query_row(
-            "SELECT nonce,ciphertext FROM login_secrets WHERE name=?1", [name],
-            |r| Ok((r.get(0)?,r.get(1)?)),
-        ).optional()?;
-        let Some((nonce, ciphertext)) = row else { return Ok(None) };
-        if nonce.len() != NONCE_LEN { return Err(Error::Corrupt("malformed login nonce".into())) }
+        let row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn()
+            .query_row(
+                "SELECT nonce,ciphertext FROM login_secrets WHERE name=?1",
+                [name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((nonce, ciphertext)) = row else {
+            return Ok(None);
+        };
+        if nonce.len() != NONCE_LEN {
+            return Err(Error::Corrupt("malformed login nonce".into()));
+        }
         let aad = format!("login:{name}");
-        let plaintext = self.key()?.cipher().decrypt(XNonce::from_slice(&nonce), Payload {
-            msg: &ciphertext, aad: aad.as_bytes(),
-        }).map_err(|_| Error::Corrupt("login decryption failed".into()))?;
-        serde_json::from_slice(&plaintext).map(Some)
+        let plaintext = self
+            .key()?
+            .cipher()
+            .decrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &ciphertext,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|_| Error::Corrupt("login decryption failed".into()))?;
+        serde_json::from_slice(&plaintext)
+            .map(Some)
             .map_err(|_| Error::Corrupt("invalid login payload".into()))
     }
 
     pub fn list_login_secrets(&self) -> Result<Vec<LoginInfo>> {
         let rows = {
             let conn = self.conn();
-            let mut stmt = conn.prepare("SELECT name,created_ms,updated_ms FROM login_secrets ORDER BY name")?;
-            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?,r.get::<_, i64>(1)?,r.get::<_, i64>(2)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?
+            let mut stmt =
+                conn.prepare("SELECT name,created_ms,updated_ms FROM login_secrets ORDER BY name")?;
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        rows.into_iter().map(|(name, created_ms, updated_ms)| {
-            let login = self.get_login_secret(&name)?.ok_or_else(|| Error::UnknownSecret(name.clone()))?;
-            Ok(LoginInfo { name, username: login.username, origins: login.origins,
-                has_totp: login.totp_seed.is_some(), created_ms, updated_ms })
-        }).collect()
+        rows.into_iter()
+            .map(|(name, created_ms, updated_ms)| {
+                let login = self
+                    .get_login_secret(&name)?
+                    .ok_or_else(|| Error::UnknownSecret(name.clone()))?;
+                Ok(LoginInfo {
+                    name,
+                    username: login.username,
+                    origins: login.origins,
+                    has_totp: login.totp_seed.is_some(),
+                    created_ms,
+                    updated_ms,
+                })
+            })
+            .collect()
     }
 
     pub fn is_login_secret(&self, name: &str) -> Result<bool> {
-        Ok(self.conn().query_row("SELECT EXISTS(SELECT 1 FROM login_secrets WHERE name=?1)", [name], |r| r.get(0))?)
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM login_secrets WHERE name=?1)",
+            [name],
+            |r| r.get(0),
+        )?)
     }
 
     pub fn delete_login_secret(&self, name: &str) -> Result<()> {
-        if self.conn().execute("DELETE FROM login_secrets WHERE name=?1", [name])? == 0 {
+        if self
+            .conn()
+            .execute("DELETE FROM login_secrets WHERE name=?1", [name])?
+            == 0
+        {
             return Err(Error::UnknownSecret(name.to_owned()));
         }
         Ok(())

@@ -743,11 +743,22 @@ fn login_backup_contains_only_encrypted_payload_and_restores_it() {
     let dir = tmp_path(&dirs, "login-vault");
     let init = vault.ok(&["init", &dir, "--password-stdin"], "pw\n");
     let key_path = Path::new(s(&init["key_file"]));
-    let state = state::State::open(&Path::new(&dir).join(".vault/state.db"), Some(state::SecretKey::load_file(key_path).unwrap())).unwrap();
-    state.set_login_secret("site", &state::LoginSecret {
-        username: "test-user".into(), password: "made-up-backup-password".into(),
-        totp_seed: Some("JBSWY3DPEHPK3PXP".into()), origins: vec![],
-    }).unwrap();
+    let state = state::State::open(
+        &Path::new(&dir).join(".vault/state.db"),
+        Some(state::SecretKey::load_file(key_path).unwrap()),
+    )
+    .unwrap();
+    state
+        .set_login_secret(
+            "site",
+            &state::LoginSecret {
+                username: "test-user".into(),
+                password: "made-up-backup-password".into(),
+                totp_seed: Some("JBSWY3DPEHPK3PXP".into()),
+                origins: vec![],
+            },
+        )
+        .unwrap();
     drop(state);
     let archive = tmp_path(&dirs, "login.sqlar");
     let out = vault.run(&["backup", &archive, "--vault", &dir], "");
@@ -760,8 +771,15 @@ fn login_backup_contains_only_encrypted_payload_and_restores_it() {
     }
     let into = tmp_path(&dirs, "restored-login");
     vault.ok(&["restore-backup", &archive, &into], "");
-    let state = state::State::open(&Path::new(&into).join(".vault/state.db"), Some(state::SecretKey::load_file(key_path).unwrap())).unwrap();
-    assert_eq!(state.get_login_secret("site").unwrap().unwrap().password, "made-up-backup-password");
+    let state = state::State::open(
+        &Path::new(&into).join(".vault/state.db"),
+        Some(state::SecretKey::load_file(key_path).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        state.get_login_secret("site").unwrap().unwrap().password,
+        "made-up-backup-password"
+    );
     assert_eq!(state.get_secret("site").unwrap(), None);
 }
 

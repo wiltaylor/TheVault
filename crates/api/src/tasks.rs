@@ -303,7 +303,11 @@ fn login_json(s: &state::LoginInfo) -> Value {
 
 fn find_secret_json(w: &Writer, name: &str) -> Result<Value, ApiError> {
     if w.state().is_login_secret(name)? {
-        let info = w.state().list_login_secrets()?.into_iter().find(|s| s.name == name)
+        let info = w
+            .state()
+            .list_login_secrets()?
+            .into_iter()
+            .find(|s| s.name == name)
             .ok_or_else(|| state::Error::UnknownSecret(name.to_owned()))?;
         return Ok(login_json(&info));
     }
@@ -314,50 +318,102 @@ fn find_secret_json(w: &Writer, name: &str) -> Result<Value, ApiError> {
 fn may_manage_login_secrets(w: &Writer, author: &state::Author) -> Result<bool, state::Error> {
     Ok(match author {
         state::Author::Session(_) => true,
-        state::Author::Token(name) => !name.starts_with("agent-") && !name.starts_with("device-")
-            && w.state().device_for_token(name)?.is_none()
-            && w.state().list_tokens()?.iter().any(|t| t.name == *name && t.scope == state::Scope::Admin),
+        state::Author::Token(name) => {
+            !name.starts_with("agent-")
+                && !name.starts_with("device-")
+                && w.state().device_for_token(name)?.is_none()
+                && w.state()
+                    .list_tokens()?
+                    .iter()
+                    .any(|t| t.name == *name && t.scope == state::Scope::Admin)
+        }
         _ => false,
     })
 }
 
 fn require_login_owner(w: &Writer, author: &state::Author) -> Result<(), ApiError> {
-    if may_manage_login_secrets(w, author)? { return Ok(()) }
-    Err(ApiError::new(StatusCode::FORBIDDEN,"forbidden","Login secrets require an owner session or admin user token"))
+    if may_manage_login_secrets(w, author)? {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        "forbidden",
+        "Login secrets require an owner session or admin user token",
+    ))
 }
 
 fn validate_login(b: SecretBody) -> Result<state::LoginSecret, ApiError> {
-    let invalid = || ApiError::bad_request("invalid Login fields, password, base32 seed or site origins");
-    if b.value.is_some() { return Err(invalid()) }
+    let invalid =
+        || ApiError::bad_request("invalid Login fields, password, base32 seed or site origins");
+    if b.value.is_some() {
+        return Err(invalid());
+    }
     let password = b.password.filter(|p| !p.is_empty()).ok_or_else(invalid)?;
     let username = b.username.ok_or_else(invalid)?;
-    let seed = b.totp_seed.filter(|s| !s.is_empty()).map(|s| s.to_ascii_uppercase());
+    let seed = b
+        .totp_seed
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_uppercase());
     if let Some(seed) = &seed {
         let unpadded = seed.trim_end_matches('=');
         let remainder = unpadded.len() % 8;
         let valid_length = matches!(remainder, 0 | 2 | 4 | 5 | 7);
         let expected_padding = (8 - remainder) % 8;
         let padding = seed.len() - unpadded.len();
-        let trailing_bits = match remainder { 2 => 2, 4 => 4, 5 => 1, 7 => 3, _ => 0 };
-        let last = unpadded.bytes().last().and_then(|c| b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".iter().position(|&v| v == c));
-        if unpadded.is_empty() || !valid_length || (padding != 0 && padding != expected_padding)
-            || !unpadded.bytes().all(|c| c.is_ascii_uppercase() || (b'2'..=b'7').contains(&c))
+        let trailing_bits = match remainder {
+            2 => 2,
+            4 => 4,
+            5 => 1,
+            7 => 3,
+            _ => 0,
+        };
+        let last = unpadded.bytes().last().and_then(|c| {
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+                .iter()
+                .position(|&v| v == c)
+        });
+        if unpadded.is_empty()
+            || !valid_length
+            || (padding != 0 && padding != expected_padding)
+            || !unpadded
+                .bytes()
+                .all(|c| c.is_ascii_uppercase() || (b'2'..=b'7').contains(&c))
             || last.is_none_or(|v| v & ((1 << trailing_bits) - 1) != 0)
-        { return Err(invalid()) }
+        {
+            return Err(invalid());
+        }
     }
     let mut origins = Vec::new();
     for origin in b.origins.unwrap_or_default() {
-        let authority = origin.split_once("://").map(|(_, rest)| rest.strip_suffix('/').unwrap_or(rest)).ok_or_else(invalid)?;
-        if origin.trim() != origin || authority.contains(['/', '\\', '@', '?', '#']) { return Err(invalid()) }
+        let authority = origin
+            .split_once("://")
+            .map(|(_, rest)| rest.strip_suffix('/').unwrap_or(rest))
+            .ok_or_else(invalid)?;
+        if origin.trim() != origin || authority.contains(['/', '\\', '@', '?', '#']) {
+            return Err(invalid());
+        }
         let url = reqwest::Url::parse(&origin).map_err(|_| invalid())?;
-        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
-            || !url.username().is_empty() || url.password().is_some()
-            || url.path() != "/" || url.query().is_some() || url.fragment().is_some()
-        { return Err(invalid()) }
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(invalid());
+        }
         let canonical = url.origin().ascii_serialization();
-        if !origins.contains(&canonical) { origins.push(canonical); }
+        if !origins.contains(&canonical) {
+            origins.push(canonical);
+        }
     }
-    Ok(state::LoginSecret { username, password, totp_seed: seed, origins })
+    Ok(state::LoginSecret {
+        username,
+        password,
+        totp_seed: seed,
+        origins,
+    })
 }
 
 fn find_secret(w: &Writer, name: &str) -> Result<SecretInfo, state::Error> {
@@ -373,15 +429,18 @@ pub async fn secrets(State(w): Shared) -> Result<Json<Value>, ApiError> {
     let list = blocking(w, |w| -> Result<_, ApiError> {
         let mut list: Vec<Value> = w.state().list_secrets()?.iter().map(secret_json).collect();
         list.extend(w.state().list_login_secrets()?.iter().map(login_json));
-        list.sort_by(|a,b| a["name"].as_str().cmp(&b["name"].as_str()));
+        list.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
         Ok(list)
-    }).await?;
+    })
+    .await?;
     Ok(Json(json!({ "secrets": list })))
 }
 
 /// `GET /api/secrets/{name}`: the secret's name and times, never its value.
 pub async fn secret(State(w): Shared, Path(name): Path<String>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(blocking(w, move |w| find_secret_json(w, &name)).await?))
+    Ok(Json(
+        blocking(w, move |w| find_secret_json(w, &name)).await?,
+    ))
 }
 
 #[derive(Deserialize, Default)]
@@ -404,25 +463,46 @@ pub async fn put_secret(
     raw: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     check_name("secret", &name)?;
-    let b: SecretBody = body(&headers, &raw, |value| SecretBody { value: Some(value), ..SecretBody::default() })
-        .map_err(|_| ApiError::bad_request("invalid secret body"))?;
+    let b: SecretBody = body(&headers, &raw, |value| SecretBody {
+        value: Some(value),
+        ..SecretBody::default()
+    })
+    .map_err(|_| ApiError::bad_request("invalid secret body"))?;
     let info = blocking(w, move |w| {
         let login = b.kind.as_deref() == Some("login");
-        if login || w.state().is_login_secret(&name)? { require_login_owner(w, &author)?; }
+        if login || w.state().is_login_secret(&name)? {
+            require_login_owner(w, &author)?;
+        }
         if login {
             if w.state().list_secrets()?.iter().any(|s| s.name == name) {
-                return Err(ApiError::new(StatusCode::CONFLICT,"secret_kind","name belongs to a string secret"));
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "secret_kind",
+                    "name belongs to a string secret",
+                ));
             }
             w.state().set_login_secret(&name, &validate_login(b)?)?;
         } else {
             if w.state().is_login_secret(&name)? {
-                return Err(ApiError::new(StatusCode::CONFLICT,"secret_kind","name belongs to a Login secret"));
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "secret_kind",
+                    "name belongs to a Login secret",
+                ));
             }
-            if b.kind.as_deref().is_some_and(|k| k != "string") || b.username.is_some()
-                || b.password.is_some() || b.totp_seed.is_some() || b.origins.is_some() {
+            if b.kind.as_deref().is_some_and(|k| k != "string")
+                || b.username.is_some()
+                || b.password.is_some()
+                || b.totp_seed.is_some()
+                || b.origins.is_some()
+            {
                 return Err(ApiError::bad_request("invalid string secret fields"));
             }
-            w.state().set_secret(&name, &b.value.ok_or_else(|| ApiError::bad_request("value required"))?)?;
+            w.state().set_secret(
+                &name,
+                &b.value
+                    .ok_or_else(|| ApiError::bad_request("value required"))?,
+            )?;
         }
         find_secret_json(w, &name)
     })
@@ -441,9 +521,12 @@ pub async fn delete_secret(
         if w.state().is_login_secret(&n)? {
             require_login_owner(w, &author)?;
             w.state().delete_login_secret(&n)?;
-        } else { w.state().delete_secret(&n)?; }
+        } else {
+            w.state().delete_secret(&n)?;
+        }
         Ok(())
-    }).await?;
+    })
+    .await?;
     Ok(Json(json!({ "name": name, "deleted": true })))
 }
 

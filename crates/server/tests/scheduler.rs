@@ -400,8 +400,17 @@ fn login_body() -> Value {
 #[test]
 fn login_secrets_are_write_only_and_isolated_from_script_reads_and_debug_logs() {
     let server = TestServer::start_with_env(seed, &[("RUST_LOG", "debug")]);
-    let api = Api { client: client(server.admin_token()), server };
-    let saved = expect(api.put("/api/secrets/site").json(&login_body()).send().unwrap(), 200);
+    let api = Api {
+        client: client(server.admin_token()),
+        server,
+    };
+    let saved = expect(
+        api.put("/api/secrets/site")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        200,
+    );
     assert_eq!(saved["kind"], "login");
     assert_eq!(saved["username"], "test-user");
     assert_eq!(saved["origins"], json!(["https://example.com"]));
@@ -442,50 +451,160 @@ fn login_validation_and_namespace_never_echo_credentials() {
         assert!(!text.contains("made-up-login-password"));
         assert!(!text.contains("made-up-invalid-seed!"));
     }
-    expect(api.put("/api/secrets/site").json(&login_body()).send().unwrap(), 200);
-    expect(api.put("/api/secrets/site").json(&json!({"value":"no conversion"})).send().unwrap(), 409);
-    expect(api.put("/api/secrets/plain").json(&json!({"value":"plain value"})).send().unwrap(), 200);
-    expect(api.put("/api/secrets/plain").json(&login_body()).send().unwrap(), 409);
+    expect(
+        api.put("/api/secrets/site")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        200,
+    );
+    expect(
+        api.put("/api/secrets/site")
+            .json(&json!({"value":"no conversion"}))
+            .send()
+            .unwrap(),
+        409,
+    );
+    expect(
+        api.put("/api/secrets/plain")
+            .json(&json!({"value":"plain value"}))
+            .send()
+            .unwrap(),
+        200,
+    );
+    expect(
+        api.put("/api/secrets/plain")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        409,
+    );
     let mut body = login_body();
     body.as_object_mut().unwrap().remove("password");
-    expect(api.put("/api/secrets/site").json(&body).send().unwrap(), 400);
+    expect(
+        api.put("/api/secrets/site").json(&body).send().unwrap(),
+        400,
+    );
 }
 
 #[test]
 fn login_mutations_refuse_agent_device_and_write_tokens() {
     let api = Api::start();
-    expect(api.put("/api/secrets/site").json(&login_body()).send().unwrap(), 200);
-    for (name, scope) in [("agent-test", "admin"), ("device-test", "admin"), ("writer", "write")] {
-        let token = expect(api.post("/api/tokens").json(&json!({"name":name,"scope":scope})).send().unwrap(), 201);
+    expect(
+        api.put("/api/secrets/site")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        200,
+    );
+    for (name, scope) in [
+        ("agent-test", "admin"),
+        ("device-test", "admin"),
+        ("writer", "write"),
+    ] {
+        let token = expect(
+            api.post("/api/tokens")
+                .json(&json!({"name":name,"scope":scope}))
+                .send()
+                .unwrap(),
+            201,
+        );
         let caller = client(token["secret"].as_str().unwrap());
-        expect(caller.put(api.server.url("/api/secrets/new_login")).json(&login_body()).send().unwrap(), 403);
-        expect(caller.put(api.server.url("/api/secrets/site")).json(&login_body()).send().unwrap(), 403);
-        expect(caller.delete(api.server.url("/api/secrets/site")).send().unwrap(), 403);
+        expect(
+            caller
+                .put(api.server.url("/api/secrets/new_login"))
+                .json(&login_body())
+                .send()
+                .unwrap(),
+            403,
+        );
+        expect(
+            caller
+                .put(api.server.url("/api/secrets/site"))
+                .json(&login_body())
+                .send()
+                .unwrap(),
+            403,
+        );
+        expect(
+            caller
+                .delete(api.server.url("/api/secrets/site"))
+                .send()
+                .unwrap(),
+            403,
+        );
     }
-    expect(api.client.delete(api.server.url("/api/secrets/site")).send().unwrap(), 200);
+    expect(
+        api.client
+            .delete(api.server.url("/api/secrets/site"))
+            .send()
+            .unwrap(),
+        200,
+    );
 }
 
 #[test]
 fn login_owner_session_and_canonical_origins() {
     let api = Api::start();
-    let res = api.client.post(api.server.url("/api/login"))
-        .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+    let res = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap();
     assert_eq!(res.status().as_u16(), 200);
-    let cookie = res.headers()[reqwest::header::SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned();
+    let cookie = res.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
     let mut body = login_body();
-    body["origins"] = json!(["https://BÜCHER.example:443", "http://127.0.0.1:8080", "http://[::1]:80"]);
+    body["origins"] = json!([
+        "https://BÜCHER.example:443",
+        "http://127.0.0.1:8080",
+        "http://[::1]:80"
+    ]);
     let plain = Client::new();
-    let saved = expect(plain.put(api.server.url("/api/secrets/site"))
-        .header(reqwest::header::COOKIE, &cookie).json(&body).send().unwrap(), 200);
-    assert_eq!(saved["origins"], json!(["https://xn--bcher-kva.example", "http://127.0.0.1:8080", "http://[::1]"]));
+    let saved = expect(
+        plain
+            .put(api.server.url("/api/secrets/site"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .json(&body)
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(
+        saved["origins"],
+        json!([
+            "https://xn--bcher-kva.example",
+            "http://127.0.0.1:8080",
+            "http://[::1]"
+        ])
+    );
     body["origins"] = json!([]);
     body["totp_seed"] = Value::Null;
-    let saved = expect(plain.put(api.server.url("/api/secrets/site"))
-        .header(reqwest::header::COOKIE, &cookie).json(&body).send().unwrap(), 200);
+    let saved = expect(
+        plain
+            .put(api.server.url("/api/secrets/site"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .json(&body)
+            .send()
+            .unwrap(),
+        200,
+    );
     assert_eq!(saved["origins"], json!([]));
     assert_eq!(saved["has_totp"], false);
-    expect(plain.delete(api.server.url("/api/secrets/site"))
-        .header(reqwest::header::COOKIE, &cookie).send().unwrap(), 200);
+    expect(
+        plain
+            .delete(api.server.url("/api/secrets/site"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .send()
+            .unwrap(),
+        200,
+    );
 }
 
 #[test]

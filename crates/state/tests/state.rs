@@ -474,8 +474,12 @@ fn login_credentials_are_separate_encrypted_and_name_bound() {
     let dir = TempDir::new().unwrap();
     let key = SecretKey::generate();
     let state = open_with_key(&dir, key.clone());
-    let login = state::LoginSecret { username: "made-up-user".into(), password: "made-up-password".into(),
-        totp_seed: Some("JBSWY3DPEHPK3PXP".into()), origins: vec!["https://example.com".into()] };
+    let login = state::LoginSecret {
+        username: "made-up-user".into(),
+        password: "made-up-password".into(),
+        totp_seed: Some("JBSWY3DPEHPK3PXP".into()),
+        origins: vec!["https://example.com".into()],
+    };
     state.set_login_secret("site", &login).unwrap();
     assert_eq!(state.get_secret("site").unwrap(), None);
     assert!(state.list_secrets().unwrap().is_empty());
@@ -487,14 +491,25 @@ fn login_credentials_are_separate_encrypted_and_name_bound() {
     assert!(!debug.contains(login.totp_seed.as_ref().unwrap()));
     drop(state);
     let bytes = read_db_bytes(&dir);
-    for marker in [&login.username, &login.password, login.totp_seed.as_ref().unwrap()] {
+    for marker in [
+        &login.username,
+        &login.password,
+        login.totp_seed.as_ref().unwrap(),
+    ] {
         assert!(!contains(&bytes, marker.as_bytes()));
     }
     let reopened = open_with_key(&dir, key);
-    assert_eq!(reopened.get_login_secret("site").unwrap().unwrap().password, login.password);
+    assert_eq!(
+        reopened.get_login_secret("site").unwrap().unwrap().password,
+        login.password
+    );
     drop(reopened);
     let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
-    conn.execute("UPDATE login_secrets SET name='swapped' WHERE name='site'", []).unwrap();
+    conn.execute(
+        "UPDATE login_secrets SET name='swapped' WHERE name='site'",
+        [],
+    )
+    .unwrap();
     drop(conn);
     let state = open_with_key(&dir, SecretKey::generate());
     assert!(state.get_login_secret("swapped").is_err());
