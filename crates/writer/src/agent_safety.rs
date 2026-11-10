@@ -126,11 +126,17 @@ fn same_image_rendering(old: &serde_json::Value, next: &serde_json::Value) -> bo
     let mut old = old.clone();
     let mut next = next.clone();
     if old["kind"] == "paragraph" && next["kind"] == "image" {
-        let Some((alt, _)) = old["fields"]["text"].as_str().and_then(html_blocks::pending_image) else {
+        let Some((alt, _)) = old["fields"]["text"]
+            .as_str()
+            .and_then(html_blocks::pending_image)
+        else {
             return false;
         };
         // Only the exact placeholder produced by the converter may become an image.
-        if old["fields"].as_object().is_none_or(|fields| fields.len() != 1) {
+        if old["fields"]
+            .as_object()
+            .is_none_or(|fields| fields.len() != 1)
+        {
             return false;
         }
         old["kind"] = serde_json::json!("image");
@@ -148,7 +154,9 @@ fn same_image_rendering(old: &serde_json::Value, next: &serde_json::Value) -> bo
     }
     match (old.get("blocks"), next.get("blocks")) {
         (Some(a), Some(b)) => {
-            let (Some(a), Some(b)) = (a.as_array(), b.as_array()) else { return false; };
+            let (Some(a), Some(b)) = (a.as_array(), b.as_array()) else {
+                return false;
+            };
             if a.len() != b.len() || !a.iter().zip(b).all(|(a, b)| same_image_rendering(a, b)) {
                 return false;
             }
@@ -203,7 +211,9 @@ impl Writer {
     ) -> Result<()> {
         for update in updates {
             match update {
-                index::Update::Put { id, type_name, doc, .. } => {
+                index::Update::Put {
+                    id, type_name, doc, ..
+                } => {
                     self.bind_safety_member(id, type_name, doc)?;
                     self.refresh_agent_safety_index(id, type_name, doc)?;
                 }
@@ -221,17 +231,21 @@ impl Writer {
                     let next: Option<String> = inner.index.connection().query_row(
                         "SELECT n.id FROM field_values f JOIN notes n ON n.id=f.note WHERE f.str=?1 AND ((f.field='thread' AND n.type='email') OR (f.field='conversation' AND n.type='message')) ORDER BY n.created_at,n.id LIMIT 1",
                         [parent], |r| r.get(0),
-                    ).optional()?;
+                    ).optional().map_err(index::Error::from)?;
                     if let Some(next) = next {
                         self.state().bind_agent_safety_member(parent, &next)?;
                         self.refresh_safety_parents(&next)?;
                     } else {
-                        self.state().set_meta(&format!("agent_safety.no_members.{parent}"), "1")?;
-                        if let Some(raw) = self.state().meta(&format!("agent_safety.note.{parent}"))?
+                        self.state()
+                            .set_meta(&format!("agent_safety.no_members.{parent}"), "1")?;
+                        if let Some(raw) =
+                            self.state().meta(&format!("agent_safety.note.{parent}"))?
                             && let Ok(safety) = serde_json::from_str::<Safety>(&raw)
-                            && self.state().indexed_agent_safety_hash(parent)?.as_deref() == Some(&safety.fingerprint)
+                            && self.state().indexed_agent_safety_hash(parent)?.as_deref()
+                                == Some(&safety.fingerprint)
                         {
-                            self.state().set_agent_safety_result(parent, &raw, safety.allowed())?;
+                            self.state()
+                                .set_agent_safety_result(parent, &raw, safety.allowed())?;
                         }
                     }
                 }
@@ -305,7 +319,10 @@ impl Writer {
     }
     fn safety_member_cleared(&self, id: &str) -> Result<bool> {
         let Some(member) = self.state().meta(&format!("agent_safety.member.{id}"))? else {
-            return Ok(self.state().meta(&format!("agent_safety.no_members.{id}"))?.is_some());
+            return Ok(self
+                .state()
+                .meta(&format!("agent_safety.no_members.{id}"))?
+                .is_some());
         };
         Ok(self.state().indexed_agent_note_allowed(&member)?)
     }

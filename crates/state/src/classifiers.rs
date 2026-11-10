@@ -103,7 +103,9 @@ impl State {
     pub fn agent_safety_index_ids(&self) -> Result<Vec<String>> {
         let conn = self.conn();
         let mut stmt = conn.prepare("SELECT id FROM agent_safety_index")?;
-        Ok(stmt.query_map([], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?)
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?)
     }
 
     /// Cached content hashes, joined with server-owned decisions. No vault file reads.

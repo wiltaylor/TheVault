@@ -2899,9 +2899,9 @@ and is not available to agent tools. No automatic backlog classification runs. T
 cost-shown 90-day pass and bulk release are separate work (TV-151).
 
 `classifiers/agent_safety.wcl` classifies newly arriving incoming email, SMS/messages, calls
-(including missed calls), calendar invitations (`my_response` is present), and recurring
-series with an organiser other than their own calendar address. Unknown series ownership
-is treated conservatively. New backfill is included regardless of its sent date. It uses Jev
+(including missed calls), and calendar events and recurring series whose organiser is not
+the connected Google account address. Calendar IDs never establish ownership. An empty
+organiser with a Google reference is also incoming. New backfill is included regardless of its sent date. It uses Jev
 with a projection of the note document as untrusted state and no tools. `fields` remains
 required by the classifier format, but this security classifier supplies its own projection:
 all blocks and fields except workflow/sync bookkeeping (labels, processed, images_pending,
@@ -2933,8 +2933,9 @@ and bound to a fingerprint of the content. Editable classification fields cannot
 Content changes invalidate clearance with reason `content_changed`, without automatic
 reclassification. Routine labels/processed writes preserve clearance. A pending provider
 result also survives same-message image completion by the trusted `google_gmail`
-task. The Gmail id must be unchanged. Body blocks are compared after reducing pending-image
-placeholders and rendered images, retaining all paragraph text, image alt text and captions.
+task. The Gmail id must be unchanged. Only pending-image placeholders becoming images
+with the same alt text, or images changing asset IDs, are rendering-only changes. All other
+image fields and paragraph text must remain identical. Image-to-placeholder changes are held.
 HTML asset identity and attachments may change. Reconversion introducing different text is
 held as `content_changed`, and never inherits a user release. Only that
 server task can carry the verdict to the new rendering fingerprint, including a pending
