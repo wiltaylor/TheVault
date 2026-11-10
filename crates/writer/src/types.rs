@@ -148,13 +148,26 @@ impl Writer {
         token: &str,
         author: &Author,
     ) -> Result<(TypePlan, Vec<Saved>)> {
+        self.apply_type_change_checked(name, change, token, author, |_| Ok::<(), Error>(()))
+    }
+
+    /// Apply a planned schema rewrite after authorization, under the same write lock.
+    pub fn apply_type_change_checked<E: From<Error>>(
+        &self,
+        name: &str,
+        change: &TypeChange,
+        token: &str,
+        author: &Author,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(TypePlan, Vec<Saved>), E> {
         let _w = self.write_lock();
+        check(self)?;
         let current = self.schema();
         let worked = self.work(&current, name, change)?;
         if worked.plan.token != token {
-            return Err(Error::PlanStale(Box::new(worked.plan)));
+            return Err(Error::PlanStale(Box::new(worked.plan)).into());
         }
-        self.apply_worked(name, worked, author)
+        Ok(self.apply_worked(name, worked, author)?)
     }
 
     /// Commit a worked change: the type file and every edited note in one commit. The caller
@@ -242,13 +255,23 @@ impl Writer {
     /// Delete type `name`. A type that still has notes is not deleted, nor is a built-in type
     /// ([`Writer::is_built_in`]); a user's own type holding a built-in's name is.
     pub fn delete_type(&self, name: &str) -> Result<()> {
+        self.delete_type_checked(name, |_| Ok::<(), Error>(()))
+    }
+
+    /// Delete an unused type after authorization under the write lock.
+    pub fn delete_type_checked<E: From<Error>>(
+        &self,
+        name: &str,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
         self.not_built_in(name)?;
         let _w = self.write_lock();
+        check(self)?;
         let mut inner = self.lock();
         let schema = self.schema_without(&inner, name)?;
         let generation = self.commit(vec![Change::delete(type_path(name))])?;
         install(&mut inner, schema)?;
-        inner.index.advance(generation)?;
+        inner.index.advance(generation).map_err(Error::from)?;
         Ok(())
     }
 
