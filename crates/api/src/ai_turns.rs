@@ -606,8 +606,7 @@ pub async fn apply(
         "proposal"
     };
     if matches!(event, "agent_proposal" | "skill_proposal")
-        && (!scope.allows(Scope::Admin)
-            || crate::auth::is_agent_token(&author))
+        && (!scope.allows(Scope::Admin) || crate::auth::is_agent_token(&author))
     {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,

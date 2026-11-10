@@ -434,10 +434,7 @@ pub async fn authenticate(
         || (!matches!(*req.method(), Method::GET | Method::HEAD)
             && (path == "/api/integrations/gitsync"
                 || path.starts_with("/api/integrations/gitsync/")));
-    if !granted.scope.allows(needed)
-        || (agent_admin_route
-            && is_agent_token(&granted.author))
-    {
+    if !granted.scope.allows(needed) || (agent_admin_route && is_agent_token(&granted.author)) {
         return ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden",
