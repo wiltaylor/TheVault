@@ -278,15 +278,20 @@ fn backfill_requires_a_session_and_a_preview_and_skips_records_and_nonmatches() 
     let path = "/api/agents/clerk/triggers/opened/backfill";
     let denied = api.request("POST", path, Some(json!({"limit": 1})));
     assert_eq!(denied.status(), 403);
+    let issued = api.send(
+        "POST",
+        "/api/agent-codes",
+        json!({"name": "clerk", "scope": "write"}),
+    );
     let token = api.send(
         "POST",
-        "/api/tokens",
-        json!({"name": "agent-clerk", "scope": "write"}),
+        "/api/agent-codes/redeem",
+        json!({"code": issued["code"]}),
     );
     let denied = api
         .client
         .post(api.server.url(path))
-        .bearer_auth(token["secret"].as_str().unwrap())
+        .bearer_auth(token["token"].as_str().unwrap())
         .json(&json!({"limit": 1}))
         .send()
         .unwrap();

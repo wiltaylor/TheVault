@@ -645,7 +645,11 @@ fn outbox_rule(
                     }
                     match status {
                         "draft" => {}
-                        "ready" if bypass(name) => {}
+                        "ready"
+                            if !name
+                                .get(..6)
+                                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("agent-"))
+                                && bypass(name) => {}
                         "ready" => {
                             return Err(format!(
                                 "{label} may not send without review: its items start as draft \

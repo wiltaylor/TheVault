@@ -121,6 +121,14 @@ fn main() -> anyhow::Result<()> {
         .upgrade_shipped_defaults(writer::Upkeep::Home)
         .context("bringing the vault's shipped defaults up to date")?;
     handlers.start(&writer);
+    for name in writer
+        .reserved_agent_names()
+        .context("checking reserved agent names")?
+    {
+        eprintln!(
+            "warning: agent {name:?} uses a reserved name and may share Outbox ownership; rename its agents/{name}.wcl file"
+        );
+    }
     classifiers.start(&writer).context("starting classifiers")?;
     // The script hosts' HTTP clients block, so they are made outside the async runtime. Tasks
     // change notes through the writer, so a task's changes run handlers too.

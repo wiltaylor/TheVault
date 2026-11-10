@@ -203,6 +203,14 @@ impl Api {
     }
 
     fn token_of(&self, name: &str, scope: &str) -> String {
+        if let Some(name) = name.strip_prefix("agent-") {
+            let state = state::State::open(&self.server.vault_path().join(".vault/state.db"), None)
+                .unwrap();
+            let code = state
+                .create_agent_code(name, scope.parse().unwrap(), 60_000)
+                .unwrap();
+            return state.redeem_agent_code(&code.code).unwrap().unwrap().1;
+        }
         let v = self.send(
             "POST",
             "/api/tokens",

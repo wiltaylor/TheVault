@@ -166,7 +166,7 @@ impl State {
         }
         let id = self.new_ulid().to_string();
         let token_id = format!("device-{}", id.to_ascii_lowercase());
-        let (token, secret) = self.create_token(&token_id, Scope::Write)?;
+        let (token, secret) = self.create_token_kind(&token_id, Scope::Write, "device")?;
         let inserted = self.conn().execute(
             "INSERT INTO devices (id, name, platform, capabilities, token_id, settings, created_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

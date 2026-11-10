@@ -91,6 +91,11 @@ pub async fn create(
 ) -> Result<Response, ApiError> {
     check_name(&body.name)?;
     let scope: Scope = body.scope.parse()?;
+    if scope == Scope::Admin {
+        return Err(ApiError::bad_request(
+            "agent install codes allow only read or write scope",
+        ));
+    }
     let server_url = request_url(body.server_url, &headers)?;
     let name = body.name;
     let issued = blocking(w, move |w| {
