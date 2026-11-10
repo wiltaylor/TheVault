@@ -81,8 +81,18 @@ fn open_with_key(dir: &TempDir, key: SecretKey) -> State {
 #[test]
 fn browser_secret_deletion_requires_owner_reconfirmation_even_in_same_millisecond() {
     let dir = TempDir::new().unwrap();
-    let state = State::open_with_clock(&dir.path().join("state.db"), Some(SecretKey::generate()), TestClock::new(1000)).unwrap();
-    let login = state::LoginSecret { username: "test".into(), password: "made-up".into(), origins: vec![], totp_seed: None };
+    let state = State::open_with_clock(
+        &dir.path().join("state.db"),
+        Some(SecretKey::generate()),
+        TestClock::new(1000),
+    )
+    .unwrap();
+    let login = state::LoginSecret {
+        username: "test".into(),
+        password: "made-up".into(),
+        origins: vec![],
+        totp_seed: None,
+    };
     state.set_login_secret("bank", &login).unwrap();
     assert!(!state.browser_secret_active("clerk", "bank").unwrap());
     state.confirm_browser_secrets("clerk").unwrap();

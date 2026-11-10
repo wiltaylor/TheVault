@@ -315,7 +315,10 @@ fn find_secret_json(w: &Writer, name: &str) -> Result<Value, ApiError> {
 }
 
 /// TV-142 replaces the prefix checks with the stored token kind when integrated.
-pub(crate) fn may_manage_login_secrets(w: &Writer, author: &state::Author) -> Result<bool, state::Error> {
+pub(crate) fn may_manage_login_secrets(
+    w: &Writer,
+    author: &state::Author,
+) -> Result<bool, state::Error> {
     Ok(match author {
         state::Author::Session(_) => true,
         state::Author::Token(name) => {
@@ -407,7 +410,10 @@ fn find_secret(w: &Writer, name: &str) -> Result<SecretInfo, state::Error> {
 }
 
 /// `GET /api/secrets`: every secret's name and times, never its value.
-pub async fn secrets(State(w): Shared, crate::auth::Caller(by): crate::auth::Caller) -> Result<Json<Value>, ApiError> {
+pub async fn secrets(
+    State(w): Shared,
+    crate::auth::Caller(by): crate::auth::Caller,
+) -> Result<Json<Value>, ApiError> {
     let list = blocking(w, |w| -> Result<_, ApiError> {
         let mut list: Vec<Value> = w.state().list_secrets()?.iter().map(secret_json).collect();
         if may_manage_login_secrets(w, &by)? {

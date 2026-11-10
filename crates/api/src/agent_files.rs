@@ -316,18 +316,35 @@ pub async fn read(
             err
         })?;
         let hidden = !full && agent.permissions.outbox.conditions.take().is_some();
-        let inactive = agent.permissions.browser_secrets.iter().filter_map(|n| match w.state().browser_secret_active(&name, n) {
-            Ok(false) => Some(Ok(n.clone())), Ok(true) => None, Err(e) => Some(Err(e)),
-        }).collect::<Result<Vec<_>, _>>()?;
-        if !login_full { agent.permissions.browser_secrets.clear(); }
+        let inactive = agent
+            .permissions
+            .browser_secrets
+            .iter()
+            .filter_map(|n| match w.state().browser_secret_active(&name, n) {
+                Ok(false) => Some(Ok(n.clone())),
+                Ok(true) => None,
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if !login_full {
+            agent.permissions.browser_secrets.clear();
+        }
         if hidden || !login_full {
             wcl = agent.to_wcl();
         }
         let account = crate::ai_settings::agent_account_name(w, &agent);
-        Ok::<_, ApiError>((wcl, agent, account, hidden, if login_full { inactive } else { vec![] }))
+        Ok::<_, ApiError>((
+            wcl,
+            agent,
+            account,
+            hidden,
+            if login_full { inactive } else { vec![] },
+        ))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl, account, hidden, inactive))
+    Ok(agent_response(
+        &headers, &agent, wcl, account, hidden, inactive,
+    ))
 }
 
 /// The JSON body of `PUT /api/agents/{name}`: `wcl`, or the form `GET` answers. `name`, `kind`,
@@ -587,20 +604,33 @@ pub async fn put(
     };
     let (wcl, agent, account, inactive) = blocking(w, move |w| {
         if !crate::tasks::may_manage_login_secrets(w, &by)? {
-            return Err(ApiError::new(axum::http::StatusCode::FORBIDDEN, "forbidden", "only an owner session or ordinary admin user token may confirm Login grants"));
+            return Err(ApiError::new(
+                axum::http::StatusCode::FORBIDDEN,
+                "forbidden",
+                "only an owner session or ordinary admin user token may confirm Login grants",
+            ));
         }
         let _acting = writer::acting_as(&by);
         let check = tool_check(w);
         let (wcl, agent) = w.put_agent(&name, &source, check)?;
         w.state().confirm_browser_secrets(&name)?;
-        let inactive = agent.permissions.browser_secrets.iter().filter_map(|n| match w.state().browser_secret_active(&name, n) {
-            Ok(false) => Some(Ok(n.clone())), Ok(true) => None, Err(e) => Some(Err(e)),
-        }).collect::<Result<Vec<_>, _>>()?;
+        let inactive = agent
+            .permissions
+            .browser_secrets
+            .iter()
+            .filter_map(|n| match w.state().browser_secret_active(&name, n) {
+                Ok(false) => Some(Ok(n.clone())),
+                Ok(true) => None,
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let account = crate::ai_settings::agent_account_name(w, &agent);
         Ok::<_, ApiError>((wcl, agent, account, inactive))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl, account, false, inactive))
+    Ok(agent_response(
+        &headers, &agent, wcl, account, false, inactive,
+    ))
 }
 
 /// `DELETE /api/agents/{name}`.
