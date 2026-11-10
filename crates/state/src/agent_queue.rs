@@ -5,17 +5,17 @@ use rusqlite::{OptionalExtension, params};
 pub const TRIGGER_QUEUE_CAP: i64 = 10_000;
 const WEEK: i64 = 7 * 24 * 60 * 60 * 1000;
 pub(crate) const SCHEMA: &str = "
-CREATE TABLE trigger_jobs (
+CREATE TABLE IF NOT EXISTS trigger_jobs (
  id INTEGER PRIMARY KEY, agent TEXT NOT NULL, trigger TEXT NOT NULL,
  note TEXT, payload TEXT NOT NULL, queued_ms INTEGER NOT NULL, due_ms INTEGER NOT NULL,
  waits INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
  status TEXT NOT NULL DEFAULT 'waiting', message TEXT
 );
-CREATE INDEX trigger_jobs_due ON trigger_jobs(status, due_ms);
-CREATE INDEX trigger_jobs_note ON trigger_jobs(agent, trigger, note);
-CREATE TABLE trigger_queue_drops (agent TEXT PRIMARY KEY, count INTEGER NOT NULL, notified_ms INTEGER);
-CREATE TABLE trigger_backfill_previews (id TEXT PRIMARY KEY, principal TEXT NOT NULL, agent TEXT NOT NULL, trigger TEXT NOT NULL, payload TEXT NOT NULL, expires_ms INTEGER NOT NULL);
-CREATE TABLE trigger_events (note TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, payload TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS trigger_jobs_due ON trigger_jobs(status, due_ms);
+CREATE INDEX IF NOT EXISTS trigger_jobs_note ON trigger_jobs(agent, trigger, note);
+CREATE TABLE IF NOT EXISTS trigger_queue_drops (agent TEXT PRIMARY KEY, count INTEGER NOT NULL, notified_ms INTEGER);
+CREATE TABLE IF NOT EXISTS trigger_backfill_previews (id TEXT PRIMARY KEY, principal TEXT NOT NULL, agent TEXT NOT NULL, trigger TEXT NOT NULL, payload TEXT NOT NULL, expires_ms INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS trigger_events (note TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, payload TEXT NOT NULL);
 ";
 
 #[derive(Debug, Clone)]
