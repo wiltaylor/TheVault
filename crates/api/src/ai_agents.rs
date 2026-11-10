@@ -344,21 +344,6 @@ fn grants_saved(w: &Writer, name: &str, agent: &Agent) -> bool {
             .is_some_and(|a| a.permissions.scripts.runs_saved())
 }
 
-/// Whether agent proposal `p` would let its agent run saved scripts and tasks, which it may not
-/// now: like `run_code`, such a change is never made by a tool on its own, and only a caller with
-/// `admin` applies it.
-pub(crate) fn grants_run_saved(w: &Writer, p: &Value) -> bool {
-    let (Some(name), Some(after)) = (p["name"].as_str(), p["after"].as_str()) else {
-        return false;
-    };
-    if p["op"] == "delete" {
-        return false;
-    }
-    match Agent::parse(name, after) {
-        Ok(agent) => grants_saved(w, name, &agent),
-        Err(_) => false,
-    }
-}
 
 /// Whether writing `agent` as agent `name` turns on sub agents, or names an agent to delegate to,
 /// that it does not have now (subagents U2).
@@ -372,36 +357,7 @@ fn grants_subs(w: &Writer, name: &str, agent: &Agent) -> bool {
     (s.allow && !now.allow) || s.agents.iter().any(|a| !now.allows_agent(a))
 }
 
-/// Whether agent proposal `p` would turn on sub agents for its agent, or add an agent it may
-/// delegate to (subagents U2): like `run_code`, such a change is never made by a tool on its own,
-/// and only a caller with `admin` applies it.
-pub(crate) fn grants_subagents(w: &Writer, p: &Value) -> bool {
-    let (Some(name), Some(after)) = (p["name"].as_str(), p["after"].as_str()) else {
-        return false;
-    };
-    if p["op"] == "delete" {
-        return false;
-    }
-    match Agent::parse(name, after) {
-        Ok(agent) => grants_subs(w, name, &agent),
-        Err(_) => false,
-    }
-}
 
-/// Whether agent proposal `p` would turn on `run_code` for its agent (script-tools T1): such a
-/// change is never made by a tool on its own, and only a caller with `admin` applies it.
-pub(crate) fn grants_run_code(w: &Writer, p: &Value) -> bool {
-    let (Some(name), Some(after)) = (p["name"].as_str(), p["after"].as_str()) else {
-        return false;
-    };
-    if p["op"] == "delete" {
-        return false;
-    }
-    match Agent::parse(name, after) {
-        Ok(agent) => grants(w, name, &agent),
-        Err(_) => false,
-    }
-}
 
 /// `propose_agent_delete`: check the agent exists, is not built in and is not the proposing
 /// agent `by`, without deleting it, and hand the delete to the user.

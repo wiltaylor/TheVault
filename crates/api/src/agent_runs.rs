@@ -98,6 +98,7 @@ impl scheduler::AgentRunner for TriggerRunner {
         thread: &str,
         prompt: &str,
         scope: Option<state::Scope>,
+        caller: Option<&state::Author>,
     ) -> scheduler::TurnReport {
         let w = self.writer.clone();
         // Open clients show the thread running while the run goes (agents G17).
@@ -111,6 +112,7 @@ impl scheduler::AgentRunner for TriggerRunner {
             prompt,
             self.waits.clone(),
             scope,
+            caller.cloned(),
         ));
         crate::ai_turns::publish(&self.writer, &agent.name, thread, None, false);
         let outcome = done

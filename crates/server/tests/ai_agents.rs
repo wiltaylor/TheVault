@@ -567,7 +567,8 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     assert_eq!(last_result(&fake, false)["applied"], true);
 
     // A write caller cannot inherit the Assistant's admin authority.
-    let write = api.token_of("phone", "write");
+    for (name, scope) in [("phone", "write"), ("agent-chat", "admin")] {
+    let write = api.token_of(name, scope);
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_d",
         "propose_agent_delete",
@@ -584,6 +585,8 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
 
     // Restore the switch for the rest.
     api.anthropic(&fake, json!({ "agents": true }));
+    }
+
 }
 
 #[test]

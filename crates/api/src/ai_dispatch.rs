@@ -213,6 +213,7 @@ pub async fn dispatch(
     State(w): State<Arc<Writer>>,
     Path(name): Path<String>,
     axum::Extension(crate::auth::GrantedScope(scope)): axum::Extension<crate::auth::GrantedScope>,
+    crate::auth::Caller(caller): crate::auth::Caller,
     Json(b): Json<Dispatch>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let request = b.request.trim().to_owned();
@@ -238,6 +239,7 @@ pub async fn dispatch(
                 &title(&request, &notes),
                 &prompt(&request, &notes),
                 scope,
+                caller,
             )
             .map_err(|e| refused(e, &agent.name))?;
         agent_threads::Thread::read(w, &thread)

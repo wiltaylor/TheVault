@@ -246,6 +246,7 @@ pub(crate) async fn run_unattended(
     prompt: &str,
     waits: crate::ai_retry::Waits,
     caller_scope: Option<Scope>,
+    caller: Option<Author>,
 ) -> Unattended {
     let report: Report = Arc::default();
     let retry = CapacityRetry::new(waits, w.clone(), thread, report.clone());
@@ -264,7 +265,7 @@ pub(crate) async fn run_unattended(
         update_skills: false,
         compact: false,
     };
-    let author = Author::Agent(agent.name.clone());
+    let author = caller.unwrap_or_else(|| Author::Agent(agent.name.clone()));
     let (_stop, never) = watch::channel(false);
     let started = start_with(
         w,
@@ -1714,7 +1715,7 @@ impl Turn {
         let asks = self.asks;
         let skills = self.skills.section().map(str::to_owned);
         let uses_skills = crate::ai_skills::uses_skills(&agent);
-        let setup = match tokio::task::spawn_blocking(move || {
+        let mut setup = match tokio::task::spawn_blocking(move || {
             setup(
                 &w,
                 scope,
@@ -1740,6 +1741,10 @@ impl Turn {
                 return;
             }
         };
+        if matches!(&self.owner, Author::Token(name) if name.starts_with("agent-")) {
+            setup.direct.agents = false;
+            setup.direct.skills = false;
+        }
         // Only the tools the agent may use (agents G4); a call naming another is not run.
         let mut tools = turn_tools(
             setup.web,
@@ -4702,6 +4707,8 @@ pub fn diff(before: &Value, after: &Value) -> Vec<Value> {
 /// here.
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn direct_scope_is_capped_by_caller_and_agent() {
         let agent = schema::Agent::parse("a", "label = \"A\"\n").unwrap();
@@ -4718,8 +4725,10 @@ mod tests {
             super::change_scope(state::Scope::Read, &agent),
             state::Scope::Read
         );
+        let reader = Agent::parse("reader", "permissions {\n  tools = [\"search_notes\"]\n}\n").unwrap();
+        assert_eq!(unattended_scope(&reader), Scope::Write);
+        assert_eq!(change_scope(Scope::Admin, &reader), Scope::Write);
     }
-    use super::*;
 
     #[test]
     fn cut_marks_what_it_leaves_out() {

@@ -221,7 +221,17 @@ pub async fn run(
         .collect::<Result<Vec<_>, _>>()?;
     let names: Vec<&'static str> = ops.iter().map(op_name).collect();
     let dry_run = body.dry_run;
-    let report = blocking(w, move |w| w.batch(ops, dry_run, &author)).await?;
+    let report = blocking(w, move |w| {
+        for op in &ops {
+            match op {
+                Op::Create { type_name, .. } | Op::Upsert { type_name, .. } =>
+                    crate::notes::writable_type(type_name)?,
+                Op::Update { id, .. } | Op::Delete { id, .. } =>
+                    crate::notes::writable_note(w, id)?,
+            }
+        }
+        w.batch(ops, dry_run, &author).map_err(ApiError::from)
+    }).await?;
     Ok(report_response(&names, report))
 }
 
@@ -231,6 +241,7 @@ pub async fn upsert(
     Caller(author): Caller,
     Json(body): Json<UpsertBody>,
 ) -> Result<Response, ApiError> {
+    crate::notes::writable_type(&body.type_name)?;
     let input = input("upsert", body.note, body.wcl)?;
     let report = blocking(w, move |w| {
         w.upsert(

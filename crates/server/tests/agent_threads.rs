@@ -853,7 +853,7 @@ fn the_chat_settings_are_the_assistants_and_accounts_answers_them() {
 }
 
 #[test]
-fn an_app_applies_an_agents_type_proposal_from_its_thread_as_the_thread_holds_it() {
+fn an_app_cannot_apply_admin_proposals_even_when_held_in_its_thread() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     // An app's token has `write`, never `admin`.
@@ -879,32 +879,20 @@ fn an_app_applies_an_agents_type_proposal_from_its_thread_as_the_thread_holds_it
             .to_owned()
     };
 
-    // The body sent is not what is applied: the thread's copy is.
+    // A pending proposal does not elevate its caller, even when the body is tampered.
     let mut tampered = proposal.clone();
-    tampered["after"] = json!(MEMO.replace("tab \"Main\"", "tab \"Mine\""));
-    let res = api.request_as(&app, "POST", "/api/ai/apply", Some(tampered));
-    assert_eq!(res.status(), StatusCode::OK);
-    let done: Value = res.json().unwrap();
-    assert_eq!(done, json!({ "op": "type_change", "type_name": "memo" }));
-    assert!(type_file().contains("tab \"Details\""), "{}", type_file());
+    tampered["after"] = json!(MEMO.replace("Main", "Mine"));
+    for change in [tampered, proposal.clone()] {
+        let res = api.request_as(&app, "POST", "/api/ai/apply", Some(change));
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+    assert!(type_file().contains("tab \"Main\""));
     let t = api.read_thread("assistant", &thread);
-    assert_eq!(t["proposals"][0]["status"], "applied", "{t}");
-
-    // Applied, it no longer waits: a second apply needs admin.
-    let res = api.request_as(&app, "POST", "/api/ai/apply", Some(proposal.clone()));
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    let err: Value = res.json().unwrap();
-    assert_eq!(err["error"], "needs_admin");
-
-    // A change no thread holds needs admin as before.
-    let mut loose = proposal;
-    loose["thread"] = Value::Null;
-    loose["id"] = json!("toolu_other");
-    loose["before"] = json!(type_file());
-    loose["after"] = json!(MEMO);
-    let res = api.request_as(&app, "POST", "/api/ai/apply", Some(loose));
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(t["proposals"][0]["status"], "pending", "{t}");
+    let res = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+    assert_eq!(res.status(), StatusCode::OK);
     assert!(type_file().contains("tab \"Details\""));
+
 }
 
 /// The text of every message `request` sent, in order, as `role: text`.

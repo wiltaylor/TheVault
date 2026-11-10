@@ -2053,12 +2053,14 @@ fn a_turn_is_read_only_by_its_caller_by_any_number_of_readers() {
     api.anthropic(&fake);
     fake.push(AnthropicMessage::text(&"slow ".repeat(40)).delay(Duration::from_millis(20)));
     let turn = api.turn(json!([user("Go")]));
-    let other = api.token_of("other", "read");
+    let other = api.token_of("other", "write");
+    let reader = api.token_of("reader-stop", "read");
+    assert_eq!(api.stop_turn(&reader, &turn), StatusCode::FORBIDDEN);
     assert_eq!(
         api.turn_events(&other, &turn).status(),
         StatusCode::NOT_FOUND
     );
-    assert_eq!(api.stop_turn(&other, &turn), StatusCode::FORBIDDEN);
+    assert_eq!(api.stop_turn(&other, &turn), StatusCode::NOT_FOUND);
     let first = api.turn_events(&api.token(), &turn);
     assert_eq!(first.status(), StatusCode::OK);
     let second = api.turn_events(&api.token(), &turn);

@@ -632,7 +632,8 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     assert!(r["message"].as_str().unwrap().contains("use_skill"), "{r}");
 
     // A write caller cannot inherit the agent's admin scope, even with confirmation off.
-    let write = api.token_of("phone", "write");
+    for (name, scope) in [("phone", "write"), ("agent-chat", "admin")] {
+    let write = api.token_of(name, scope);
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_d",
         "propose_skill_delete",
@@ -646,6 +647,8 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"], "needs_admin");
     assert_eq!(api.status("/api/skills/pdf-tools"), StatusCode::OK);
+    }
+
 }
 
 #[test]

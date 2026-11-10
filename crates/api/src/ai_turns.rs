@@ -84,12 +84,6 @@ pub const NEEDS_ADMIN_MESSAGE: &str = "Apply type changes in the web app.";
 /// The 403 a taxonomy change without `admin` answers (ai D31).
 pub const NEEDS_ADMIN_TAXONOMY_MESSAGE: &str = "Apply taxonomy changes in the web app.";
 
-/// The 403 an agent change without `admin` answers (agents G20).
-pub const NEEDS_ADMIN_AGENT_MESSAGE: &str = "Apply agent changes in the web app.";
-
-/// The 403 a skill change without `admin` answers (skills S9).
-pub const NEEDS_ADMIN_SKILL_MESSAGE: &str = "Apply skill changes in the web app.";
-
 /// Why a caller without `admin` cannot apply a script tool proposal (script-tools T3).
 pub const NEEDS_ADMIN_TOOL_MESSAGE: &str = "Apply script tool changes in the web app.";
 /// Why a caller without `admin` cannot apply a saved script proposal that does not wait in its
@@ -98,21 +92,6 @@ pub const NEEDS_ADMIN_SCRIPT_MESSAGE: &str = "Apply script changes in the web ap
 /// Why a caller without `admin` cannot apply a scheduled task proposal that does not wait in its
 /// thread (TV-71).
 pub const NEEDS_ADMIN_TASK_MESSAGE: &str = "Apply scheduled task changes in the web app.";
-
-/// Why a caller without `admin` cannot apply an agent change that turns on Run wscript code
-/// (script-tools T1).
-pub const NEEDS_ADMIN_RUN_CODE_MESSAGE: &str =
-    "Only an admin turns on Run wscript code: apply this agent change in the web app.";
-
-/// Why a caller without `admin` cannot apply an agent change that turns on Run saved scripts and
-/// tasks.
-pub const NEEDS_ADMIN_RUN_SAVED_MESSAGE: &str =
-    "Only an admin turns on Run saved scripts and tasks: apply this agent change in the web app.";
-
-/// Why a caller without `admin` cannot apply an agent change that turns on sub agents or adds an
-/// agent to delegate to (subagents U2).
-pub const NEEDS_ADMIN_SUBAGENTS_MESSAGE: &str =
-    "Only an admin grants sub agents: apply this agent change in the web app.";
 
 /// The most expired turn ids remembered, to answer 410 rather than 404.
 const EXPIRED_KEPT: usize = 10_000;
@@ -594,7 +573,7 @@ pub async fn apply(
     State(a): State<Arc<Ai>>,
     Caller(author): Caller,
     Extension(GrantedScope(scope)): Extension<GrantedScope>,
-    Json(mut change): Json<Value>,
+    Json(change): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     if !change.is_object() {
         return Err(ApiError::bad_request(
@@ -640,43 +619,12 @@ pub async fn apply(
         let message = match event {
             "type_proposal" => Some(NEEDS_ADMIN_MESSAGE),
             "taxonomy_proposal" => Some(NEEDS_ADMIN_TAXONOMY_MESSAGE),
-            "agent_proposal" => Some(NEEDS_ADMIN_AGENT_MESSAGE),
-            "skill_proposal" => Some(NEEDS_ADMIN_SKILL_MESSAGE),
             "tool_proposal" => Some(NEEDS_ADMIN_TOOL_MESSAGE),
             "script_proposal" | "device_file_proposal" => Some(NEEDS_ADMIN_SCRIPT_MESSAGE),
             "task_proposal" => Some(NEEDS_ADMIN_TASK_MESSAGE),
             _ => None,
         };
         if let Some(message) = message {
-            // An agent's proposal waiting in its thread is the user's to apply from an app, whose
-            // token has `write`: the change applied is the one the thread holds, not the body, so
-            // a caller without `admin` applies only what an agent proposed.
-            match waiting_in_thread(&a.writer, event, &change) {
-                Some(stored) => change = stored,
-                None => return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message)),
-            }
-        }
-    }
-    // Turning on an agent's Run wscript code is full access to the vault: only the signed-in
-    // admin grants it, never a write token applying what an agent proposed (script-tools T1).
-    // Run saved scripts and tasks and granting sub agents (subagents U2) are guarded the same way.
-    if event == "agent_proposal" && !scope.allows(Scope::Admin) {
-        let w = a.writer.clone();
-        let c = change.clone();
-        let grants = tokio::task::spawn_blocking(move || {
-            if crate::ai_agents::grants_run_code(&w, &c) {
-                Some(NEEDS_ADMIN_RUN_CODE_MESSAGE)
-            } else if crate::ai_agents::grants_run_saved(&w, &c) {
-                Some(NEEDS_ADMIN_RUN_SAVED_MESSAGE)
-            } else if crate::ai_agents::grants_subagents(&w, &c) {
-                Some(NEEDS_ADMIN_SUBAGENTS_MESSAGE)
-            } else {
-                None
-            }
-        })
-        .await
-        .unwrap_or(Some(NEEDS_ADMIN_RUN_CODE_MESSAGE));
-        if let Some(message) = grants {
             return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message));
         }
     }
@@ -787,19 +735,6 @@ fn apply_as_agent(
 pub struct Discard {
     id: String,
     thread: String,
-}
-
-/// The proposal `change` names, as its thread holds it, when it is an `event` proposal still
-/// waiting for the user there.
-fn waiting_in_thread(w: &writer::Writer, event: &str, change: &Value) -> Option<Value> {
-    let thread = change["thread"].as_str().filter(|s| !s.is_empty())?;
-    let id = change["id"].as_str().filter(|s| !s.is_empty())?;
-    let t = agent_threads::Thread::read(w, thread).ok()?;
-    t.transcript
-        .proposals
-        .iter()
-        .find(|p| p.id() == id && p.event == event && p.waits())
-        .map(|p| p.data.clone())
 }
 
 /// `POST /api/ai/discard` (read): the user discarded a proposal of a thread, recorded there so

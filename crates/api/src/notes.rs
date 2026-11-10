@@ -16,6 +16,23 @@ use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
+/// Transcripts are server records, not user-editable notes.
+pub(crate) fn writable_type(type_name: &str) -> Result<(), ApiError> {
+    if type_name == crate::agent_threads::THREAD_TYPE {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "server_owned",
+            "Agent threads can only be written through the agent runtime."));
+    }
+    Ok(())
+}
+
+pub(crate) fn writable_note(w: &Writer, id: &str) -> Result<(), ApiError> {
+    if let Ok(note) = w.read(id) {
+        writable_type(&note.type_name)?;
+    }
+    Ok(())
+}
+
+
 #[derive(Deserialize)]
 pub struct TypeQuery {
     #[serde(rename = "type")]
@@ -240,6 +257,7 @@ pub async fn create(
         (Some(t), _) | (None, Some(t)) => t,
         (None, None) => return Err(ApiError::bad_request("name the note's type with ?type=")),
     };
+    writable_type(&type_name)?;
     let saved = blocking(w, move |w| w.create(&type_name, &sub.input, &author)).await?;
     Ok(saved_response(StatusCode::CREATED, &headers, saved))
 }
@@ -294,6 +312,7 @@ pub async fn update(
                 return Err(ApiError::bad_request("name the note's type with ?type="));
             }
         };
+        writable_type(&type_name)?;
         let saved = blocking(w, move |w| {
             w.create_with_id(&id, &type_name, &sub.input, &author)
         })

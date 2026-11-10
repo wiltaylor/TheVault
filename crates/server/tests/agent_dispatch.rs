@@ -68,6 +68,41 @@ permissions {
 const CALL: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 
 #[test]
+fn write_callers_cannot_apply_pending_admin_changes_and_agent_tokens_only_propose_definitions() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", "label = \"Keeper\"\npermissions {\n  confirm {\n    agents = false\n    skills = false\n    types = false\n  }\n}\n");
+    let note = api.note("memo", "Roof", &["Gutters."]);
+    let writer = api.token_of("writer", "write");
+    let agent = api.token_of("agent-dispatcher", "admin");
+    for (tool, input, event) in [
+        ("propose_type_change", json!({"name": "memo", "wcl": MEMO.replace("Main", "Details")}), "type_proposal"),
+        ("propose_agent_change", json!({"name": "helper", "wcl": "label = \"Helper\"\n"}), "agent_proposal"),
+        ("propose_skill_change", json!({"name": "demo", "skill_md": "---\nname: demo\ndescription: Example\n---\nExample\n"}), "skill_proposal"),
+    ] {
+        for token in [&writer, &agent] {
+            if token == &agent && event == "type_proposal" { continue; }
+            fake.push(AnthropicMessage::new().tool_use("toolu_scope", tool, input.clone()));
+            fake.push(AnthropicMessage::text("Proposed."));
+            let (status, body) = api.dispatch_as(token, "keeper", json!({"notes": [note], "request": "Propose it."}));
+            assert_eq!(status, 202, "{body}");
+            let thread = body["thread"]["id"].as_str().unwrap();
+            api.wait_run(thread);
+            let stored = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+            let proposal = stored["proposals"].as_array().unwrap().iter()
+                .find(|p| p["event"] == event && p["status"] == "pending")
+                .unwrap_or_else(|| panic!("{stored}"))["data"].clone();
+            let res = api.request_as(token, "POST", "/api/ai/apply", Some(proposal.clone()));
+            assert_eq!(res.status().as_u16(), 403);
+            if event != "type_proposal" {
+                let res = api.request_as(&writer, "POST", "/api/ai/apply", Some(proposal));
+                assert_eq!(res.status().as_u16(), 403);
+            }
+        }
+    }
+}
+
+#[test]
 fn a_write_dispatch_cannot_make_admin_changes_even_with_confirmation_off() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
@@ -541,7 +576,7 @@ fn a_change_left_waiting_needs_you_and_an_app_applies_it_from_the_thread() {
         format!("/agents/keeper/chat?thread={thread}")
     );
 
-    // The app applies the type change the thread holds with its `write` token.
+    // The app cannot elevate itself by applying a thread-held proposal.
     let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
     assert_eq!(read["state"], "needs_you");
     let proposal = read["proposals"]
@@ -558,6 +593,8 @@ fn a_change_left_waiting_needs_you_and_an_app_applies_it_from_the_thread() {
         "/api/ai/apply",
         Some(proposal["data"].clone()),
     );
+    assert_eq!(res.status().as_u16(), 403, "{}", res.text().unwrap());
+    let res = api.request_as(&api.admin(), "POST", "/api/ai/apply", Some(proposal["data"].clone()));
     assert_eq!(res.status().as_u16(), 200, "{}", res.text().unwrap());
     let wcl = api.get("/api/types/memo")["wcl"]
         .as_str()

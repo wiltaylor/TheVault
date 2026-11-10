@@ -43,6 +43,53 @@ template default {
 const WCL: &str = "text/plain; charset=utf-8";
 
 #[test]
+fn agent_admin_tokens_cannot_mint_credentials_or_reconfigure_authority() {
+    let api = Api::start();
+    let token = api.token("agent-restricted", "admin");
+    for (method, path) in [
+        ("POST", "/api/tokens"),
+        ("POST", "/api/agent-codes"),
+        ("PUT", "/api/integrations/ai/settings"),
+        ("PUT", "/api/integrations/gitsync/settings"),
+        ("PUT", "/api/integrations/gitsync/token"),
+        ("PUT", "/api/integrations/gitsync/ssh-key"),
+        ("PUT", "/api/integrations/gitsync/key"),
+        ("POST", "/api/integrations/gitsync/run"),
+    ] {
+        let response = api.req(method, path, Auth::Bearer(&token))
+            .json(&json!({})).send().unwrap();
+        assert_eq!(response.status().as_u16(), 403, "{method} {path}");
+    }
+}
+
+#[test]
+fn external_note_and_batch_writes_cannot_forge_agent_transcripts() {
+    let api = Api::start();
+    let thread = expect(api.req("POST", "/api/agents/assistant/threads", api.admin())
+        .json(&json!({})).send().unwrap(), 201);
+    let id = thread["id"].as_str().unwrap();
+    for scope in ["write", "admin"] {
+        let token = api.token(&format!("thread-{scope}"), scope);
+        let auth = Auth::Bearer(&token);
+        expect(api.req("POST", "/api/notes?type=agent_thread", auth)
+            .json(&json!({"note": {"fields": {"title": "Forged"}}})).send().unwrap(), 403);
+        expect(api.req("PUT", &format!("/api/notes/{id}"), auth)
+            .json(&json!({"note": {"fields": {"title": "Forged"}}})).send().unwrap(), 403);
+        for op in [
+            json!({"op": "create", "type": "agent_thread", "note": {"fields": {"title": "Forged"}}}),
+            json!({"op": "update", "id": id, "note": {"fields": {"title": "Forged"}}}),
+        ] {
+            expect(api.req("POST", "/api/batch", auth).json(&json!({"ops": [op]})).send().unwrap(), 403);
+        }
+        expect(api.req("POST", "/api/upsert", auth)
+            .json(&json!({"type": "agent_thread", "key": "title", "note": {"fields": {"title": "Forged"}}}))
+            .send().unwrap(), 403);
+    }
+    let read = expect(api.req("GET", &format!("/api/agents/assistant/threads/{id}"), api.admin()).send().unwrap(), 200);
+    assert_ne!(read["title"], "Forged");
+}
+
+#[test]
 fn read_tokens_cannot_start_or_change_agent_conversations() {
     let api = Api::start();
     let token = api.token("reader-chat", "read");
