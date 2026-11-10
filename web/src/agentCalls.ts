@@ -1,5 +1,5 @@
 // Calls of agents committed in notes (agents G19). The editor's `@` picker commits a call as one
-// link, `[@<Label> <request>](agent:<name>?call=<ULID>)`, with a call id made here, and the
+// link, `[@<Label> <request>](agent:<name>?call=<ULID>)`, with a server-issued call id, and the
 // note's save carries it whole. The server answers each call id once and never rewrites the
 // note; `GET /api/agents/calls/{call}` says what became of a call: 404 while the server has not
 // seen it yet, then its thread (null for a call it did not run) and whether the thread runs.

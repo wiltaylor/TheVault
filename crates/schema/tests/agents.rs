@@ -459,7 +459,8 @@ fn a_mention_trigger_takes_type_and_an_optional_prompt() {
         ]
     );
     assert!(a.check(&schema()).is_empty());
-    assert_eq!(a.mention_trigger("email").unwrap().name, "asked");
+    assert!(a.mention_trigger("email").is_none());
+    assert_eq!(a.mention_trigger("task").unwrap().name, "asked");
     assert_eq!(a.mention_trigger("note").unwrap().name, "anyone");
     // Written back, the missing prompt stays missing.
     let text = a.to_wcl();

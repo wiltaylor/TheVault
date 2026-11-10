@@ -119,6 +119,7 @@ export function CaptureModal() {
         ids.push(a.asset);
       }
       const agent = hasBody() ? target() : null;
+      const hadRetained = retained !== undefined;
       retained ??= await api.createNote(FLEETING, captureDoc(type(), text(), ids, new Date(), { drawings: drawings() }));
       let call = null;
       if (agent) {
@@ -127,7 +128,7 @@ export function CaptureModal() {
         catch { throw new Error("Saved to inbox. Calling an agent needs a connection to your server."); }
         call = { agent: agent.name, label: agentLabel(agent), call: issued.call };
       }
-      const saved = call ? await api.updateNote(retained.id, captureDoc(type(), text(), ids, new Date(), { drawings: drawings(), call }), retained.version) : retained;
+      const saved = call || hadRetained ? await api.updateNote(retained.id, captureDoc(type(), text(), ids, new Date(), { drawings: drawings(), call }), retained.version) : retained;
       retained = saved;
       const title = saved.note.fields.title;
       if (typeof title === "string") knowTitle(saved.id, title, saved.type);

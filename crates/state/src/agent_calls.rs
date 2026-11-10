@@ -1,5 +1,5 @@
-//! The calls of agents committed in notes (agents G19): each call id, made by the client that
-//! wrote the call, is answered once. A call is recorded with the thread its run writes, or with
+//! The calls of agents committed in notes (agents G19): server-issued, note-and-agent-bound
+//! capabilities are consumed once. A call is recorded with the thread its run writes, or with
 //! none when it was not run (an agent that may not be called from the note, is disabled or is
 //! missing), and is never answered again.
 
