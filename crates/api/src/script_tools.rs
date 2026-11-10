@@ -586,7 +586,9 @@ pub async fn run_route(
     // Carry the external-agent identity into the script worker thread, where vault
     // reads and writes enforce the same held-note rules as internal agents.
     let by = if crate::auth::is_agent_token(&by) {
-        let Author::Token(name) = by else { unreachable!() };
+        let Author::Token(name) = by else {
+            unreachable!()
+        };
         Author::Agent(name)
     } else {
         by

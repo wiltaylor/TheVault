@@ -193,9 +193,15 @@ fn review5_agent_token_rest_reads_of_held_note() {
 fn safety_rest_read_route_inventory() {
     // New read endpoints require a held-content review before updating this list.
     let source = include_str!("../../api/src/lib.rs");
-    let mut actual: Vec<&str> = source.split(".get(").skip(1).filter_map(|part| {
-        part.trim_start().strip_prefix('"').and_then(|s| s.split('"').next())
-    }).collect();
+    let mut actual: Vec<&str> = source
+        .split(".get(")
+        .skip(1)
+        .filter_map(|part| {
+            part.trim_start()
+                .strip_prefix('"')
+                .and_then(|s| s.split('"').next())
+        })
+        .collect();
     actual.sort_unstable();
     actual.dedup();
     let expected = [
@@ -276,7 +282,10 @@ fn safety_rest_read_route_inventory() {
         "/api/types/{name}/templates/{template}",
         "/api/version",
     ];
-    assert_eq!(actual, expected, "Review note-content exposure of new REST routes");
+    assert_eq!(
+        actual, expected,
+        "Review note-content exposure of new REST routes"
+    );
 }
 
 fn safety_note(api: &Api) -> Value {
@@ -454,11 +463,18 @@ fn safety_delete_of_held_note_does_not_enqueue_its_content() {
     let note = safety_note(&api);
     let id = note["id"].as_str().unwrap();
     assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "held");
-    let response = api.request("DELETE", &format!("/api/notes/{id}"), None);
-    assert!(response.status().is_success());
+    let version = note["version"].as_str().unwrap();
+    let path = format!("/api/notes/{id}?base_version={version}");
+    let response = api.request("DELETE", &path, None);
+    assert!(response.status().is_success(), "{}", response.text().unwrap());
     api.advance("PT31S");
     assert!(chat.message_requests().is_empty());
-    assert!(api.get("/api/agents/reader/runs")["runs"].as_array().unwrap().is_empty());
+    assert!(
+        api.get("/api/agents/reader/runs")["runs"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 fn safety_wait(api: &Api, id: &str) -> Value {
