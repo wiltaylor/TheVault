@@ -465,7 +465,7 @@ fn change_permissions_cover_type_and_taxonomy_rewrites() {
         let result = tool_result(&fake, 1);
         assert_eq!(result["is_error"], true, "{tool}: {result}");
     }
-    for (tool, input) in changes {
+    for (tool, input) in changes.clone() {
         // A valid proposal cannot outlive a later field restriction on its affected type.
         api.agent("reader", "label = \"Reader\"\n");
         fake.clear_requests();
@@ -491,6 +491,51 @@ fn change_permissions_cover_type_and_taxonomy_rewrites() {
             response.text().unwrap()
         );
     }
+    api.agent("reader", "permissions { change_types = [\"memo\"] }");
+    for (tool, input) in changes.clone() {
+        fake.clear_requests();
+        fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        let events = api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+        let event = if tool == "propose_type_change" {
+            "type_proposal"
+        } else {
+            "taxonomy_proposal"
+        };
+        let proposal = events_named(&events, event)[0].clone();
+        let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+        assert!(
+            response.status().is_success(),
+            "{}",
+            response.text().unwrap()
+        );
+    }
+    let response = api
+        .client
+        .put(api.server.url("/api/types/log"))
+        .bearer_auth(api.token())
+        .header("content-type", "text/plain")
+        .body(format!(
+            "{LOG}\nfield stage {{ kind = \"taxonomy\"\n taxonomy = \"stage\" }}\n"
+        ))
+        .send()
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().unwrap()
+    );
+    api.send(
+        "POST",
+        "/api/notes?type=log",
+        json!({ "note": { "fields": { "title": "Other", "stage": "Open" } } }),
+    );
+    fake.clear_requests();
+    fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_taxonomy_change",
+        json!({ "name": "stage", "wcl": taxonomy.replace("Todo", "Next"), "renames": [{ "from": "Open", "to": "Next" }] })));
+    fake.push(AnthropicMessage::text("Done."));
+    api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+    assert_eq!(tool_result(&fake, 1)["is_error"], true);
 }
 
 #[test]
@@ -601,33 +646,109 @@ fn apply_rechecks_current_field_permissions_and_does_not_trust_claimed_diff() {
 
 #[test]
 fn apply_rechecks_change_types_disabled_agents_and_author_fallback() {
-    for restriction in [
-        "permissions { change_types = [] }",
-        "enabled = false",
-        "permissions { change_fields = { memo: [] } }",
+    for type_name in ["memo", "email"] {
+        for restriction in [
+            "permissions { change_types = [] }",
+            "enabled = false",
+            "permissions { change_fields = { memo: [] } }",
+        ] {
+            let fake = FakeAnthropic::start();
+            let api = Api::start(&fake);
+            api.agent("reader", "label = \"Reader\"\n");
+            let (memo, version) = api.note(type_name, "Original");
+            fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_edit", json!({ "id": memo, "base_version": version, "note": json!({ "fields": { "title": "Injected" } }).to_string() })));
+            fake.push(AnthropicMessage::text("Done."));
+            let events = api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+            let mut proposal = events_named(&events, "proposal")[0].clone();
+            // An old proposal has no explicit proposer, but Apply authors it as reader.
+            proposal.as_object_mut().unwrap().remove("proposer");
+            let restriction = restriction.replace("memo", type_name);
+            api.agent("reader", &format!("label = \"Reader\"\n{restriction}\n"));
+            let res = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+            assert!(
+                !res.status().is_success(),
+                "{restriction}: {}",
+                res.text().unwrap()
+            );
+            assert_eq!(
+                api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"],
+                "Original"
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_type_permissions_keep_definition_operations() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", "permissions { types = [\"memo\"] }");
+    for (tool, input, event) in [
+        (
+            "propose_type_change",
+            json!({ "name": "fresh", "wcl": LOG }),
+            "type_proposal",
+        ),
+        (
+            "propose_type_change",
+            json!({ "name": "log", "wcl": LOG.replace("Log", "Changed") }),
+            "type_proposal",
+        ),
+        (
+            "propose_type_delete",
+            json!({ "name": "log" }),
+            "type_proposal",
+        ),
+        (
+            "propose_taxonomy_change",
+            json!({ "name": "unused", "wcl": "label = \"Unused\"\nterm \"One\"\n", "renames": [] }),
+            "taxonomy_proposal",
+        ),
+        (
+            "propose_taxonomy_delete",
+            json!({ "name": "unused" }),
+            "taxonomy_proposal",
+        ),
     ] {
-        let fake = FakeAnthropic::start();
-        let api = Api::start(&fake);
-        api.agent("reader", "label = \"Reader\"\n");
-        let (memo, version) = api.note("memo", "Original");
-        fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_edit", json!({ "id": memo, "base_version": version, "note": json!({ "fields": { "title": "Injected" } }).to_string() })));
+        fake.clear_requests();
+        fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
         fake.push(AnthropicMessage::text("Done."));
         let events = api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
-        let mut proposal = events_named(&events, "proposal")[0].clone();
-        // An old proposal has no explicit proposer, but Apply authors it as reader.
-        proposal.as_object_mut().unwrap().remove("proposer");
-        api.agent("reader", &format!("label = \"Reader\"\n{restriction}\n"));
-        let res = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
-        assert!(
-            !res.status().is_success(),
-            "{restriction}: {}",
-            res.text().unwrap()
-        );
         assert_eq!(
-            api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"],
-            "Original"
+            tool_result(&fake, 1)["is_error"],
+            false,
+            "{tool}: {events:?}"
+        );
+        let proposal = events_named(&events, event)[0].clone();
+        let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+        assert!(
+            response.status().is_success(),
+            "{tool}: {}",
+            response.text().unwrap()
         );
     }
+}
+
+#[test]
+fn assistant_proposals_apply_without_an_agent_file() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let (memo, version) = api.note("memo", "Original");
+    fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_fields", json!({ "id": memo, "base_version": version, "fields": json!({ "title": "Changed" }).to_string() })));
+    fake.push(AnthropicMessage::text("Done."));
+    let events = api.chat(json!({ "agent": "assistant", "messages": [user("Go.")] }));
+    let proposal = events_named(&events, "proposal")[0].clone();
+    std::fs::remove_file(api.server.vault_path().join("agents/assistant.wcl")).unwrap();
+    let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().unwrap()
+    );
+    assert_eq!(
+        api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"],
+        "Changed"
+    );
 }
 
 #[test]
