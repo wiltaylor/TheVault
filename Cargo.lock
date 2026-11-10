@@ -3343,6 +3343,7 @@ dependencies = [
  "p256",
  "push",
  "reqwest",
+ "rusqlite",
  "scheduler",
  "script",
  "serde_json",

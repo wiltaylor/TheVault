@@ -557,6 +557,30 @@ fn login_listing_needs_no_key_and_ignores_corrupt_ciphertext() {
 }
 
 #[test]
+fn login_schema_upgrades_from_19_20_and_either_21_layout() {
+    for (version, old_login_table) in [(19, false), (20, false), (21, false), (21, true)] {
+        let dir = TempDir::new().unwrap();
+        let key = SecretKey::generate();
+        let state = open_with_key(&dir, key.clone());
+        state.set_secret("plain", "made-up-string").unwrap();
+        drop(state);
+        let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+        conn.execute_batch("DROP TRIGGER string_namespace; DROP TABLE login_secrets;").unwrap();
+        conn.pragma_update(None, "user_version", version).unwrap();
+        if old_login_table {
+            conn.execute_batch("CREATE TABLE login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);").unwrap();
+        }
+        drop(conn);
+        let state = open_with_key(&dir, key);
+        assert_eq!(state.get_secret("plain").unwrap().as_deref(), Some("made-up-string"));
+        let login = state::LoginSecret { username: "test-user".into(), password: "made-up-password".into(), totp_seed: None, origins: vec![] };
+        state.set_login_secret("site", &login).unwrap();
+        assert_eq!(state.list_login_secrets().unwrap()[0].username, "test-user");
+        assert!(state.set_secret("site", "cannot change kind").is_err());
+    }
+}
+
+#[test]
 fn secret_plaintext_never_appears_in_state_db_bytes() {
     let dir = TempDir::new().unwrap();
     let plaintext = "plaintext-marker-7f3a9c2e-do-not-store";
