@@ -202,7 +202,9 @@ impl Writer {
         inner.index.update(&inner.schema, updates)?;
         for update in updates {
             let (index::Update::Put { id, .. } | index::Update::Delete { id }) = update;
-            if matches!(update, index::Update::Delete { .. }) {
+            if matches!(update, index::Update::Delete { .. })
+                && self.state().meta("agent_safety.activation_ms")?.is_some()
+            {
                 let parents = self.state().agent_safety_parents(id)?;
                 self.state().unbind_deleted_safety_member(id)?;
                 for parent in &parents {
