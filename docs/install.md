@@ -416,16 +416,22 @@ Repeated exhausted windows double this delay, up to 15 minutes. Success resets
 that client's count. After 24 hours without a failed check its backoff resets.
 HTTP 429 includes `Retry-After` in seconds. Fifty failures globally in 60 seconds
 also trigger backoff for clients with recent failures, but not for a clean client.
+During a sustained global flood, an owner who has already failed in the window
+must wait too; a clean attempt from another address key still passes.
 IPv4 uses its full address, including when received as an IPv4-mapped IPv6 address.
 Native IPv6 addresses share a budget within each /64, so rotating privacy addresses
-does not bypass the limit. Concurrent checks reserve the remaining failure budget
-and return 429 when it is full. Incomplete bodies consume no reservation and time
+does not bypass the limit. A fully uploaded check is charged as a provisional
+failure before verification. Success refunds its global charge and resets the
+address's completed failures, but not other pending checks. Cancellation or any
+non-success result retains the charge and can notify the owner, so disconnecting
+cannot bypass the hash budget. Concurrent checks return 429 when the budget is
+full. Incomplete bodies consume no reservation and time
 out after 10 seconds, with a 2 MiB body limit.
 After five failures in a minute the owner gets a notification through the normal
 notification feed and device push, at most once per 15 minutes. Counters are in
 memory and reset on restart. History retains at most 65,536 address keys. A full
 table still admits a clean client using a temporary bucket. If that check fails,
-the oldest non-in-flight history is evicted (clean history first, then failing
+the oldest non-in-flight history is evicted through an ordered index (clean history first, then failing
 history). A successful check evicts nothing. Accepted trade-off: a flood from
 more than 65,536 distinct failing IPv6 /64s or IPv4 addresses can churn the oldest
 failure history, rather than prevent the owner from signing in. Active checks

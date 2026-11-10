@@ -1,6 +1,6 @@
 //! Shared, pre-handler limits for public credential checks. No credentials are retained.
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -23,6 +23,12 @@ const BODY_LIMIT: usize = 2 * 1024 * 1024;
 const MAX_ADDRESSES: usize = 65536;
 type Key = Option<IpAddr>;
 type Bucket = Arc<Mutex<Address>>;
+
+struct Started {
+    bucket: Bucket,
+    at: Instant,
+    id: u64,
+}
 
 #[derive(Default)]
 struct Address {
@@ -57,19 +63,19 @@ impl Address {
         }
         if let Some(until) = self.until.take().filter(|t| *t > now) {
             self.until = Some(until);
-            return Some(until.duration_since(now).as_secs().saturating_add(1));
+            let left = until.duration_since(now);
+            return Some(left.as_secs() + u64::from(left.subsec_nanos() != 0));
         }
         prune(&mut self.failures, now);
-        if self.failures.len() >= 5 || (global_full && !self.failures.is_empty()) {
+        // In-flight checks are provisional failures from admission, not free slots that a
+        // disconnect can refund. Only a successful result clears the address's charges.
+        let charged = self.failures.len() + self.in_flight;
+        if charged >= 5 || (global_full && charged != 0) {
             let delay = (60u64 << self.strikes.min(4)).min(900);
             self.strikes = self.strikes.saturating_add(1);
             self.until = Some(now + Duration::from_secs(delay));
             self.failures.clear();
             return Some(delay);
-        }
-        // Reserve the remaining budget, but do not count pending checks as failures.
-        if self.in_flight + self.failures.len() >= 5 {
-            return Some(1);
         }
         None
     }
@@ -81,6 +87,10 @@ struct Counters {
     // clean client when history is full. Slow bodies never reach this map.
     addresses: HashMap<Key, Bucket>,
     pending: HashMap<Key, Bucket>,
+    // Only non-in-flight history is indexed, so the oldest eligible victim is O(log n).
+    eviction: BTreeSet<(Instant, Key)>,
+    provisional: BTreeSet<(Instant, u64)>,
+    next_id: u64,
     failures: VecDeque<Instant>,
     notified: Option<Instant>,
     pruned: Option<Instant>,
@@ -88,102 +98,110 @@ struct Counters {
 
 impl Counters {
     fn bucket(&self, key: Key) -> Option<Bucket> {
-        self.pending
-            .get(&key)
-            .or_else(|| self.addresses.get(&key))
-            .cloned()
+        self.pending.get(&key).or_else(|| self.addresses.get(&key)).cloned()
+    }
+
+    fn unindex(&mut self, key: Key) {
+        if let Some(bucket) = self.addresses.get(&key)
+            && let Some(last) = bucket.lock().expect("attempt bucket").last
+        {
+            self.eviction.remove(&(last, key));
+        }
+    }
+
+    fn index(&mut self, key: Key) {
+        if let Some(bucket) = self.addresses.get(&key) {
+            let b = bucket.lock().expect("attempt bucket");
+            if b.in_flight == 0
+                && let Some(last) = b.last
+            {
+                self.eviction.insert((last, key));
+            }
+        }
     }
 
     fn precheck(&mut self, key: Key, now: Instant) -> Option<u64> {
         prune(&mut self.failures, now);
-        self.bucket(key).and_then(|b| {
-            b.lock()
-                .expect("attempt bucket")
-                .retry(now, self.failures.len() >= 50)
-        })
+        while self.provisional.first().is_some_and(|(at, _)| now.duration_since(*at) >= WINDOW) {
+            self.provisional.pop_first();
+        }
+        // retry may expire history, so keep its eviction entry consistent.
+        self.unindex(key);
+        let global_full = self.failures.len() + self.provisional.len() >= 50;
+        let retry = self.bucket(key).and_then(|b| b.lock().expect("attempt bucket").retry(now, global_full));
+        let expired = self.addresses.get(&key).is_some_and(|b| {
+            let b = b.lock().expect("attempt bucket");
+            b.last.is_none() && b.in_flight == 0
+        });
+        if expired { self.addresses.remove(&key); }
+        self.index(key);
+        retry
     }
 
-    fn begin(&mut self, key: Key, now: Instant) -> Result<Bucket, u64> {
-        if let Some(delay) = self.precheck(key, now) {
-            return Err(delay);
-        }
+    fn begin(&mut self, key: Key, now: Instant) -> Result<Started, u64> {
+        if let Some(delay) = self.precheck(key, now) { return Err(delay); }
         if !self.addresses.contains_key(&key)
-            && self
-                .pruned
-                .is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1))
+            && self.pruned.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(1))
         {
             self.pruned = Some(now);
-            self.addresses.retain(|_, b| {
-                let b = b.lock().expect("attempt bucket");
-                b.in_flight != 0 || b.last.is_some_and(|t| now.duration_since(t) < HISTORY)
-            });
+            // Bounded work, not a full-table scan, even after every bucket has expired.
+            for _ in 0..64 {
+                if !self.eviction.first().is_some_and(|(at, _)| now.duration_since(*at) >= HISTORY) { break; }
+                let (_, old) = self.eviction.pop_first().expect("oldest history");
+                self.addresses.remove(&old);
+            }
         }
+        self.unindex(key);
         let bucket = self.bucket(key).unwrap_or_default();
-        bucket.lock().expect("attempt bucket").in_flight += 1;
-        self.pending.insert(key, bucket.clone());
-        Ok(bucket)
-    }
-
-    fn release(&mut self, key: Key, bucket: &Bucket) {
-        let mut b = bucket.lock().expect("attempt bucket");
-        b.in_flight -= 1;
-        if b.in_flight == 0 {
-            self.pending.remove(&key);
-        }
-    }
-
-    fn record(&mut self, key: Key, bucket: &Bucket, status: StatusCode, now: Instant) -> bool {
-        // Every lock follows counters -> bucket, and is released before any await.
-        self.release(key, bucket);
-        let failed = matches!(status, StatusCode::UNAUTHORIZED | StatusCode::GONE);
         {
             let mut b = bucket.lock().expect("attempt bucket");
-            if status.is_success() {
+            b.in_flight += 1;
+        }
+        self.pending.insert(key, bucket.clone());
+        let id = self.next_id;
+        self.next_id = self.next_id.checked_add(1).expect("attempt sequence exhausted");
+        self.provisional.insert((now, id));
+        Ok(Started { bucket, at: now, id })
+    }
+
+    fn record(&mut self, key: Key, started: &Started, status: StatusCode, now: Instant) -> bool {
+        // Every lock follows counters -> bucket, and is released before any await.
+        self.unindex(key);
+        self.provisional.remove(&(started.at, started.id));
+        let failed = !status.is_success();
+        {
+            let mut b = started.bucket.lock().expect("attempt bucket");
+            b.in_flight -= 1;
+            if b.in_flight == 0 { self.pending.remove(&key); }
+            if !failed {
+                // Other in-flight charges survive this successful check.
                 b.reset();
                 self.addresses.remove(&key);
-            } else if failed {
+            } else {
                 b.last = Some(now);
                 prune(&mut b.failures, now);
                 b.failures.push_back(now);
             }
         }
-        if !failed {
-            return false;
-        }
+        if !failed { return false; }
         if !self.addresses.contains_key(&key) {
-            if self.addresses.len() >= MAX_ADDRESSES {
-                // Clean history first, then oldest failure. Never evict in-flight checks.
-                let oldest = self
-                    .addresses
-                    .iter()
-                    .filter_map(|(k, b)| {
-                        let b = b.lock().expect("attempt bucket");
-                        (b.in_flight == 0).then_some((*k, b.last))
-                    })
-                    .min_by_key(|(_, last)| *last)
-                    .map(|(k, _)| k);
-                if let Some(oldest) = oldest {
-                    self.addresses.remove(&oldest);
-                }
+            if self.addresses.len() >= MAX_ADDRESSES
+                && let Some((_, oldest)) = self.eviction.pop_first()
+            {
+                self.addresses.remove(&oldest);
             }
             if self.addresses.len() < MAX_ADDRESSES {
-                self.addresses.insert(key, bucket.clone());
+                self.addresses.insert(key, started.bucket.clone());
             }
-            // If all 65,536 history buckets have checks in flight, no safe eviction exists.
-            // The current failure still contributes to the global limit and notification.
+            // With every retained bucket in flight, still count this failure globally.
         }
+        self.index(key);
         prune(&mut self.failures, now);
-        if self.failures.len() == 50 {
-            self.failures.pop_front();
-        }
+        if self.failures.len() == 50 { self.failures.pop_front(); }
         self.failures.push_back(now);
         let notify = self.failures.len() >= 5
-            && self
-                .notified
-                .is_none_or(|t| now.duration_since(t) >= NOTICE_COOLDOWN);
-        if notify {
-            self.notified = Some(now);
-        }
+            && self.notified.is_none_or(|t| now.duration_since(t) >= NOTICE_COOLDOWN);
+        if notify { self.notified = Some(now); }
         notify
     }
 }
@@ -281,37 +299,50 @@ fn limited(seconds: u64) -> Response {
     response
 }
 
-/// Releases the in-flight reservation even if the HTTP task is cancelled.
+/// Counts an unfinished admitted check as a failure even if the HTTP task is cancelled.
 struct Attempt {
     limits: Arc<Limits>,
     key: Key,
-    bucket: Bucket,
+    started: Started,
     finished: bool,
 }
 
 impl Attempt {
-    fn finish(mut self, status: StatusCode) -> bool {
+    fn finish(mut self, status: StatusCode) -> Option<tokio::task::JoinHandle<()>> {
         let notify = self
             .limits
             .counters
             .lock()
             .expect("attempt counters")
-            .record(self.key, &self.bucket, status, Instant::now());
+            .record(self.key, &self.started, status, Instant::now());
         self.finished = true;
-        notify
+        notify.then(|| notify_owner(self.limits.clone()))
     }
 }
 
 impl Drop for Attempt {
     fn drop(&mut self) {
         if !self.finished {
-            self.limits
+            let notify = self.limits
                 .counters
                 .lock()
                 .expect("attempt counters")
-                .release(self.key, &self.bucket);
+                .record(self.key, &self.started, StatusCode::REQUEST_TIMEOUT, Instant::now());
+            if notify { drop(notify_owner(self.limits.clone())); }
         }
     }
+}
+
+fn notify_owner(limits: Arc<Limits>) -> tokio::task::JoinHandle<()> {
+    // Detached from the HTTP future, so disconnecting cannot suppress the notification.
+    tokio::spawn(async move {
+        let result = crate::blocking(limits.writer.clone(), |w| w.notify(&state::NewNotification {
+            title: "Repeated sign-in failures".into(),
+            body: Some("Five or more password or pairing/code checks failed in one minute. Attempt limits are active.".into()),
+            source: "server:auth".into(), note_id: None, url: None,
+        })).await;
+        if result.is_err() { tracing::warn!("could not store authentication failure notification"); }
+    })
 }
 
 pub(crate) async fn check(
@@ -362,31 +393,25 @@ pub(crate) async fn check(
             .into_response();
         }
     };
-    let bucket = match limits
+    let started = match limits
         .counters
         .lock()
         .expect("attempt counters")
         .begin(address, Instant::now())
     {
-        Ok(bucket) => bucket,
+        Ok(started) => started,
         Err(seconds) => return limited(seconds),
     };
     let attempt = Attempt {
         limits: limits.clone(),
         key: address,
-        bucket,
+        started,
         finished: false,
     };
     let response = next.run(Request::from_parts(parts, Body::from(body))).await;
-    if attempt.finish(response.status()) {
-        let result = crate::blocking(limits.writer.clone(), |w| w.notify(&state::NewNotification {
-            title: "Repeated sign-in failures".into(),
-            body: Some("Five or more password or pairing/code checks failed in one minute. Attempt limits are active.".into()),
-            source: "server:auth".into(), note_id: None, url: None,
-        })).await;
-        if result.is_err() {
-            tracing::warn!("could not store authentication failure notification");
-        }
+    if let Some(notice) = attempt.finish(response.status()) {
+        // Dropping this JoinHandle on disconnect detaches rather than cancels the write.
+        let _ = notice.await;
     }
     response
 }
@@ -422,7 +447,7 @@ mod tests {
                 b.failures.push_back(now);
             }
             assert_eq!(b.retry(now, false), Some(delay));
-            assert_eq!(b.retry(now + Duration::from_secs(1), false), Some(delay));
+            assert_eq!(b.retry(now + Duration::from_secs(1), false), Some(delay - 1));
             now += Duration::from_secs(delay);
         }
         now += HISTORY;
@@ -469,7 +494,8 @@ mod tests {
         let now = Instant::now();
         let k = ip("192.0.2.1");
         let checks: Vec<_> = (0..5).map(|_| c.begin(k, now).unwrap()).collect();
-        assert!(matches!(c.begin(k, now), Err(1)));
+        assert!(matches!(c.begin(k, now), Err(60)));
+        assert_eq!(c.provisional.len(), 5);
         assert!(c.failures.is_empty());
         for b in checks {
             c.record(k, &b, StatusCode::UNAUTHORIZED, now);
@@ -499,9 +525,12 @@ mod tests {
                     ..Address::default()
                 })),
             );
+            c.index(k);
         }
         let oldest = ip("10.0.0.0");
+        c.unindex(oldest);
         c.addresses.get(&oldest).unwrap().lock().unwrap().last = Some(now - Duration::from_secs(1));
+        c.index(oldest);
         let owner = ip("192.0.2.1");
         let b = c.begin(owner, now).unwrap();
         assert_eq!(c.addresses.len(), MAX_ADDRESSES);
@@ -513,12 +542,65 @@ mod tests {
         assert!(!c.addresses.contains_key(&oldest));
         assert!(c.addresses.contains_key(&owner));
         // A busy old bucket is protected from eviction even if its failure is older.
+        c.unindex(owner);
         c.addresses.get(&owner).unwrap().lock().unwrap().last = Some(now - Duration::from_secs(2));
+        c.index(owner);
         let held = c.begin(owner, now).unwrap();
         let other = ip("192.0.2.2");
         let b = c.begin(other, now).unwrap();
         c.record(other, &b, StatusCode::UNAUTHORIZED, now);
         assert!(c.addresses.contains_key(&owner));
-        c.release(owner, &held);
+        c.record(owner, &held, StatusCode::UNAUTHORIZED, now);
+        assert_eq!(c.eviction.len(), MAX_ADDRESSES);
+    }
+
+    #[test]
+    fn capacity_eviction_uses_the_index_without_scanning_buckets() {
+        let now = Instant::now();
+        let mut c = Counters { pruned: Some(now), ..Counters::default() };
+        for i in 0..MAX_ADDRESSES as u32 {
+            let k = Some(IpAddr::V4((0x0a000000u32 + i).into()));
+            c.addresses.insert(k, Arc::new(Mutex::new(Address { last: Some(now), ..Address::default() })));
+            c.index(k);
+        }
+        // An unrelated poisoned bucket makes a regression to locking every bucket fail
+        // deterministically, rather than relying only on a wall-clock speed assertion.
+        let unrelated = c.addresses.get(&ip("10.0.255.255")).unwrap().clone();
+        assert!(std::panic::catch_unwind(|| {
+            let _held = unrelated.lock().unwrap();
+            panic!("unrelated eviction sentinel");
+        }).is_err());
+        let start = Instant::now();
+        for i in 0..2000u32 {
+            let k = Some(IpAddr::V4((0xc0000200u32 + i).into()));
+            let check = c.begin(k, now).unwrap();
+            c.record(k, &check, StatusCode::UNAUTHORIZED, now);
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "2000 indexed replacements must stay cheap");
+        assert_eq!(c.addresses.len(), MAX_ADDRESSES);
+        assert_eq!(c.eviction.len(), MAX_ADDRESSES);
+        assert!(c.pending.is_empty());
+        assert!(c.provisional.is_empty());
+    }
+
+    #[test]
+    fn provisional_global_failures_are_removed_only_on_success() {
+        let now = Instant::now();
+        let mut c = Counters::default();
+        let mut checks = Vec::new();
+        for i in 1..=50u32 {
+            let k = Some(IpAddr::V4((0xc0000200u32 + i).into()));
+            checks.push((k, c.begin(k, now).unwrap()));
+        }
+        assert_eq!(c.provisional.len(), 50);
+        assert!(matches!(c.begin(checks[0].0, now), Err(60)));
+        let clean = ip("203.0.113.1");
+        let owner = c.begin(clean, now).unwrap();
+        c.record(clean, &owner, StatusCode::OK, now);
+        for (k, check) in checks { c.record(k, &check, StatusCode::OK, now); }
+        assert!(c.provisional.is_empty());
+        assert!(c.failures.is_empty());
+        assert!(c.addresses.is_empty());
+        assert!(c.eviction.is_empty());
     }
 }
