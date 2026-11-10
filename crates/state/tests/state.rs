@@ -139,7 +139,9 @@ fn browser_secret_deletion_requires_owner_reconfirmation_even_in_same_millisecon
     };
     state.set_login_secret("bank", &login).unwrap();
     assert!(!state.browser_secret_active("clerk", "bank").unwrap());
-    state.confirm_browser_secrets("clerk", &["bank".into()]).unwrap();
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
     assert!(state.browser_secret_active("clerk", "bank").unwrap());
     state.delete_login_secret("bank").unwrap();
     state.set_login_secret("bank", &login).unwrap();
@@ -147,7 +149,9 @@ fn browser_secret_deletion_requires_owner_reconfirmation_even_in_same_millisecon
     drop(state);
     let state = open(&dir);
     assert!(!state.browser_secret_active("clerk", "bank").unwrap());
-    state.confirm_browser_secrets("clerk", &["bank".into()]).unwrap();
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
     assert!(state.browser_secret_active("clerk", "bank").unwrap());
 }
 
@@ -233,15 +237,28 @@ fn history_returns_every_version_in_order_with_authors() {
 fn browser_secret_confirmation_replaces_exact_names_and_revokes_on_delete() {
     let dir = TempDir::new().unwrap();
     let state = open_with_key(&dir, SecretKey::generate());
-    let login = state::LoginSecret { username: "test".into(), password: "made-up".into(), origins: vec![], totp_seed: None };
-    for name in ["bank", "mail"] { state.set_login_secret(name, &login).unwrap(); }
-    state.confirm_browser_secrets("clerk", &["bank".into()]).unwrap();
+    let login = state::LoginSecret {
+        username: "test".into(),
+        password: "made-up".into(),
+        origins: vec![],
+        totp_seed: None,
+    };
+    for name in ["bank", "mail"] {
+        state.set_login_secret(name, &login).unwrap();
+    }
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
     assert!(state.browser_secret_active("clerk", "bank").unwrap());
     assert!(!state.browser_secret_active("clerk", "mail").unwrap());
-    state.confirm_browser_secrets("clerk", &["mail".into()]).unwrap();
+    state
+        .confirm_browser_secrets("clerk", &["mail".into()])
+        .unwrap();
     assert!(!state.browser_secret_active("clerk", "bank").unwrap());
     assert!(state.browser_secret_active("clerk", "mail").unwrap());
-    state.confirm_browser_secrets("other", &["bank".into()]).unwrap();
+    state
+        .confirm_browser_secrets("other", &["bank".into()])
+        .unwrap();
     assert!(!state.browser_secret_active("clerk", "bank").unwrap());
     state.revoke_browser_secrets("clerk").unwrap();
     assert!(!state.browser_secret_active("clerk", "mail").unwrap());

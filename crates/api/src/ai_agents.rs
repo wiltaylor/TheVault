@@ -307,7 +307,11 @@ fn escalation_error(name: &str, problems: &[String]) -> ToolOut {
 /// Recheck Login liveness at both proposal and Apply, not just the file's names.
 fn active_escalation(w: &Writer, by: &Agent, target: &Agent) -> Vec<String> {
     let mut active = by.clone();
-    active.permissions.browser_secrets.retain(|name| w.state().browser_secret_active(&by.name, name).unwrap_or(false));
+    active.permissions.browser_secrets.retain(|name| {
+        w.state()
+            .browser_secret_active(&by.name, name)
+            .unwrap_or(false)
+    });
     escalation(&active, target)
 }
 

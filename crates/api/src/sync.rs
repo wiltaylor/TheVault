@@ -62,7 +62,12 @@ pub struct ChangesQuery {
 }
 
 /// One feed entry, with the content of its note or file as it is now.
-fn entry(w: &Writer, c: &Journaled, full_conditions: bool, full_logins: bool) -> Result<Value, ApiError> {
+fn entry(
+    w: &Writer,
+    c: &Journaled,
+    full_conditions: bool,
+    full_logins: bool,
+) -> Result<Value, ApiError> {
     let state = w.state();
     match &c.key {
         ChangeKey::Note(id) => {
@@ -117,7 +122,8 @@ fn entry(w: &Writer, c: &Journaled, full_conditions: bool, full_logins: bool) ->
                 match schema::Agent::parse(name, source) {
                     Ok(mut agent) => {
                         let had_logins = !agent.permissions.browser_secrets.is_empty();
-                        if !full_conditions && agent.permissions.outbox.conditions.take().is_some() {
+                        if !full_conditions && agent.permissions.outbox.conditions.take().is_some()
+                        {
                             hidden = true;
                         }
                         if !full_logins {

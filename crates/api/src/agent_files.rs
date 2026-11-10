@@ -621,7 +621,8 @@ pub async fn put(
         let _acting = writer::acting_as(&by);
         let check = tool_check(w);
         let (wcl, agent) = w.put_agent(&name, &source, check)?;
-        w.state().confirm_browser_secrets(&name, &agent.permissions.browser_secrets)?;
+        w.state()
+            .confirm_browser_secrets(&name, &agent.permissions.browser_secrets)?;
         let inactive = agent
             .permissions
             .browser_secrets

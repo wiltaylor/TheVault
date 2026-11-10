@@ -584,13 +584,38 @@ fn browser_secret_proposal_apply_rechecks_active_names() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     api.anthropic(&fake, json!({}));
-    let response = api.client.put(api.server.url("/api/secrets/bank")).bearer_auth(api.token()).json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]})).send().unwrap();
+    let response = api
+        .client
+        .put(api.server.url("/api/secrets/bank"))
+        .bearer_auth(api.token())
+        .json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]}))
+        .send()
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    api.put_agent("clerk", &CLERK.replace("tools = [", "browser = true\n browser_secrets = [\"bank\"]\n tools = ["));
-    let helper = HELPER.replace("tools = [", "browser = true\n browser_secrets = [\"bank\"]\n tools = [");
-    let events = api.one(&fake, Some("clerk"), "propose_agent_change", json!({"name":"helper", "wcl":helper}));
+    api.put_agent(
+        "clerk",
+        &CLERK.replace(
+            "tools = [",
+            "browser = true\n browser_secrets = [\"bank\"]\n tools = [",
+        ),
+    );
+    let helper = HELPER.replace(
+        "tools = [",
+        "browser = true\n browser_secrets = [\"bank\"]\n tools = [",
+    );
+    let events = api.one(
+        &fake,
+        Some("clerk"),
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":helper}),
+    );
     let proposal = last(&events, "agent_proposal").clone();
-    let response = api.client.delete(api.server.url("/api/secrets/bank")).bearer_auth(api.token()).send().unwrap();
+    let response = api
+        .client
+        .delete(api.server.url("/api/secrets/bank"))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let (status, result) = api.apply(&proposal);
     assert_eq!(status, StatusCode::FORBIDDEN, "{result}");

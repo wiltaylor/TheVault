@@ -318,12 +318,34 @@ fn read_lists_and_reads_write_cannot_change_admin_writes() {
 #[test]
 fn browser_secrets_outside_file_writes_cannot_add_unconfirmed_names() {
     let mut api = Api::start();
-    expect(api.admin("PUT", "/api/secrets/bank").json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]})).send().unwrap(), StatusCode::OK);
-    expect(api.put_wcl("clerk", "permissions {\n browser = true\n}\n", api.server.admin_token()), StatusCode::OK);
-    std::fs::write(api.server.vault_path().join("agents/clerk.wcl"), "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n").unwrap();
+    expect(
+        api.admin("PUT", "/api/secrets/bank")
+            .json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]}))
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    expect(
+        api.put_wcl(
+            "clerk",
+            "permissions {\n browser = true\n}\n",
+            api.server.admin_token(),
+        ),
+        StatusCode::OK,
+    );
+    std::fs::write(
+        api.server.vault_path().join("agents/clerk.wcl"),
+        "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n",
+    )
+    .unwrap();
     for restart in [false, true] {
-        if restart { api.server.restart(); }
-        let agent = expect(api.admin("GET", "/api/agents/clerk").send().unwrap(), StatusCode::OK);
+        if restart {
+            api.server.restart();
+        }
+        let agent = expect(
+            api.admin("GET", "/api/agents/clerk").send().unwrap(),
+            StatusCode::OK,
+        );
         assert_eq!(agent["browser_secrets_inactive"], json!(["bank"]));
     }
 }
@@ -331,27 +353,75 @@ fn browser_secrets_outside_file_writes_cannot_add_unconfirmed_names() {
 #[test]
 fn browser_secrets_deleting_an_agent_revokes_its_confirmed_names() {
     let api = Api::start();
-    expect(api.admin("PUT", "/api/secrets/bank").json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]})).send().unwrap(), StatusCode::OK);
+    expect(
+        api.admin("PUT", "/api/secrets/bank")
+            .json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]}))
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
     let source = "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n";
-    expect(api.put_wcl("clerk", source, api.server.admin_token()), StatusCode::OK);
-    expect(api.admin("DELETE", "/api/agents/clerk").send().unwrap(), StatusCode::OK);
+    expect(
+        api.put_wcl("clerk", source, api.server.admin_token()),
+        StatusCode::OK,
+    );
+    expect(
+        api.admin("DELETE", "/api/agents/clerk").send().unwrap(),
+        StatusCode::OK,
+    );
     std::fs::write(api.server.vault_path().join("agents/clerk.wcl"), source).unwrap();
-    let agent = expect(api.admin("GET", "/api/agents/clerk").send().unwrap(), StatusCode::OK);
+    let agent = expect(
+        api.admin("GET", "/api/agents/clerk").send().unwrap(),
+        StatusCode::OK,
+    );
     assert_eq!(agent["browser_secrets_inactive"], json!(["bank"]));
 }
 
 #[test]
 fn browser_secrets_sync_hides_names_from_all_non_managers_including_devices() {
     let api = Api::start();
-    expect(api.put_wcl("clerk", "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n", api.server.admin_token()), StatusCode::OK);
-    let code = expect(api.admin("POST", "/api/agent-codes").json(&json!({"name":"probe", "scope":"write"})).send().unwrap(), StatusCode::CREATED);
-    let external = expect(api.client.post(api.server.url("/api/agent-codes/redeem")).json(&json!({"code":code["code"]})).send().unwrap(), StatusCode::CREATED)["token"].as_str().unwrap().to_owned();
+    expect(
+        api.put_wcl(
+            "clerk",
+            "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n",
+            api.server.admin_token(),
+        ),
+        StatusCode::OK,
+    );
+    let code = expect(
+        api.admin("POST", "/api/agent-codes")
+            .json(&json!({"name":"probe", "scope":"write"}))
+            .send()
+            .unwrap(),
+        StatusCode::CREATED,
+    );
+    let external = expect(
+        api.client
+            .post(api.server.url("/api/agent-codes/redeem"))
+            .json(&json!({"code":code["code"]}))
+            .send()
+            .unwrap(),
+        StatusCode::CREATED,
+    )["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let read = api.token("read");
     let write = api.token("write");
     let device = pair_device(&api);
     for token in [&external, &read, &write, &device] {
-        let page = expect(api.req("GET", "/api/sync/changes?since=0&limit=5000", token).send().unwrap(), StatusCode::OK);
-        let entry = page["changes"].as_array().unwrap().iter().find(|e| e["path"] == "agents/clerk.wcl").unwrap();
+        let page = expect(
+            api.req("GET", "/api/sync/changes?since=0&limit=5000", token)
+                .send()
+                .unwrap(),
+            StatusCode::OK,
+        );
+        let entry = page["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["path"] == "agents/clerk.wcl")
+            .unwrap();
         assert_eq!(entry["browser_secrets_hidden"], true);
         assert!(!entry["text"].as_str().unwrap().contains("bank"));
     }

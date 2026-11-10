@@ -271,7 +271,8 @@ impl State {
 
     /// Revokes all confirmed names when an agent is deleted, including proposal Apply.
     pub fn revoke_browser_secrets(&self, agent: &str) -> Result<()> {
-        self.conn().execute("DELETE FROM browser_secret_grants WHERE agent=?1", [agent])?;
+        self.conn()
+            .execute("DELETE FROM browser_secret_grants WHERE agent=?1", [agent])?;
         Ok(())
     }
 
