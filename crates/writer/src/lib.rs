@@ -1676,12 +1676,18 @@ impl Writer {
             }
         }
         for s in &saved {
-            if s.restored && let Ok(doc) = Doc::parse(&s.wcl, "restored note") {
+            if s.restored
+                && let Ok(doc) = Doc::parse(&s.wcl, "restored note")
+            {
                 let mut safety = self.agent_safety_doc(&s.id, &s.type_name, &doc)?;
                 if safety.status == "pending" {
                     safety.status = "held".into();
                     safety.reason = "unclassified".into();
-                    self.state.set_agent_safety_result(&s.id, &serde_json::to_string(&safety).expect("safety"), false)?;
+                    self.state.set_agent_safety_result(
+                        &s.id,
+                        &serde_json::to_string(&safety).expect("safety"),
+                        false,
+                    )?;
                 }
             }
             if s.event == Event::Create

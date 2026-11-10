@@ -231,10 +231,25 @@ fn review_invited_series_is_in_scope() {
 
 #[test]
 fn review_sync_snapshot_is_not_classified_content() {
-    let a = schema::Doc::parse("title = \"Invitation\"\ndict snapshot { title = \"Before sync\" }\n", "event.wcl").unwrap();
-    let b = schema::Doc::parse("title = \"Invitation\"\ndict snapshot { title = \"After sync\" }\n", "event.wcl").unwrap();
-    assert_eq!(writer::agent_safety::fingerprint("event", &a), writer::agent_safety::fingerprint("event", &b));
-    assert!(!writer::agent_safety::classified_content(&a).to_string().contains("Before sync"));
+    let a = schema::Doc::parse(
+        "title = \"Invitation\"\ndict snapshot { title = \"Before sync\" }\n",
+        "event.wcl",
+    )
+    .unwrap();
+    let b = schema::Doc::parse(
+        "title = \"Invitation\"\ndict snapshot { title = \"After sync\" }\n",
+        "event.wcl",
+    )
+    .unwrap();
+    assert_eq!(
+        writer::agent_safety::fingerprint("event", &a),
+        writer::agent_safety::fingerprint("event", &b)
+    );
+    assert!(
+        !writer::agent_safety::classified_content(&a)
+            .to_string()
+            .contains("Before sync")
+    );
 }
 
 #[test]
@@ -287,7 +302,8 @@ fn review_interrupted_pending_is_held_without_retry_on_restart() {
     w.activate_agent_safety().unwrap();
     let note = create(&w, "Pending");
     let read = w.read(&note.id).unwrap();
-    w.register_agent_safety(&note.id, &read.type_name, &read.doc).unwrap();
+    w.register_agent_safety(&note.id, &read.type_name, &read.doc)
+        .unwrap();
     assert_eq!(w.agent_safety(&note.id).unwrap().status, "pending");
     drop(w);
     let w = open(dir.path());

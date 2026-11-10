@@ -50,7 +50,12 @@ pub fn incoming(kind: &str, doc: &Doc) -> bool {
 pub fn classified_content(doc: &Doc) -> serde_json::Value {
     let mut note = doc_to_json(doc);
     if let Some(blocks) = note["blocks"].as_array_mut() {
-        blocks.retain(|block| !matches!(block["labels"][0].as_str(), Some("snapshot" | "inline_images")));
+        blocks.retain(|block| {
+            !matches!(
+                block["labels"][0].as_str(),
+                Some("snapshot" | "inline_images")
+            )
+        });
     }
     if let Some(fields) = note["fields"].as_object_mut() {
         fields.retain(|key, _| {
