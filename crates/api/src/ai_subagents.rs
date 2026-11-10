@@ -405,6 +405,18 @@ mod tests {
     }
 
     #[test]
+    fn browser_secrets_cannot_be_widened_by_children() {
+        let parent = perms("permissions {\n browser = true\n browser_secrets = [\"bank\", \"mail\"]\n}\n");
+        let (child, _) = narrow(&parent, &json!({"browser_secrets": ["bank", "other"]}));
+        assert_eq!(child.browser_secrets, ["bank"]);
+        let own = perms("permissions {\n browser = true\n browser_secrets = [\"mail\", \"other\"]\n}\n");
+        assert_eq!(intersect(&own, &parent).browser_secrets, ["mail"]);
+        assert!(intersect(&own, &perms("")).browser_secrets.is_empty());
+        assert!(narrow(&parent, &json!({"browser": false})).0.browser_secrets.is_empty());
+        assert!(narrow(&perms(""), &json!({"browser_secrets": ["bank"]})).0.browser_secrets.is_empty());
+    }
+
+    #[test]
     fn narrowing_keeps_only_what_the_parent_has() {
         let parent = perms(
             "permissions {\n  tools = [\"get_note\", \"propose_edit\"]\n  types = [\"task\"]\n  confirm {\n    notes = false\n  }\n  web {\n    search = false\n  }\n}\n",
