@@ -967,7 +967,7 @@ fn sending_items(id: string) -> List[string] {
     let out: List[string] = []
     for row in rows {
         let f = row.get("fields").unwrap_or(Value::Null)
-        if text_of(f, "event") == id || text_of(f, "result") == id {
+        if text_of(f, "event") == id || text_of(f, "result") == id || (text_of(f, "event_action") == "delete" && text_of(f, "sent_ref") == id) {
             out.push(text_of(row, "id"))
         }
     }
@@ -988,7 +988,10 @@ fn sent_items(id: string, google_id: string) {
         let f = #{
             "sent_ref": Value::String(google_id),
             "sent_at": Value::String(now_text()),
-            "result": Value::String(id),
+        }
+        match vault::get(id) {
+            Ok(_) => { f["result"] = Value::String(id) },
+            Err(_) => {},
         }
         match vault::patch(item, Value::Map(f), "") {
             Ok(_) => vault::log("Outbox item " + item + " was sent as " + google_id + "."),

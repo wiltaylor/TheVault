@@ -220,7 +220,8 @@ fn settle(id: string) -> Result[(), string] {
         Err(_) => return Ok(()),
     }
     let fields = fields_of(item)
-    if text_of(fields, "status") != "sending" || text_of(fields, "sent_at") == "" || text_of(fields, "result") == "" {
+    let deleted = text_of(fields, "kind") == "event" && text_of(fields, "event_action") == "delete" && text_of(fields, "sent_ref") != ""
+    if text_of(fields, "status") != "sending" || text_of(fields, "sent_at") == "" || (text_of(fields, "result") == "" && !deleted) {
         return Ok(())
     }
     match vault::delete(id, text_of(item, "version")) {
@@ -316,8 +317,9 @@ fn send_event(item: Value) -> Result[Sent, string] {
         return Err("The note to change is not an event.")
     }
     if text_of(fields, "event_action") == "delete" {
+        vault::patch(text_of(item, "id"), Value::Map(#{ "sent_ref": Value::String(target) }), "")?
         vault::delete(target, text_of(event, "version"))?
-        return Ok(Sent { done: false, sent_ref: "", result: target })
+        return Ok(Sent { done: false, sent_ref: "", result: "" })
     }
     let body = event.get("note").unwrap_or(Value::Null)
     let f: Map[string, Value] = match body.get("fields") {
