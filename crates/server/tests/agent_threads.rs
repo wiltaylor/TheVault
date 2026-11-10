@@ -681,6 +681,33 @@ fn apply_rechecks_change_types_disabled_agents_and_author_fallback() {
             let api = Api::start(&fake);
             api.agent("reader", "label = \"Reader\"\n");
             let (memo, version) = api.note(type_name, "Original");
+            if type_name == "email" {
+                // Isolate proposal permissions from incoming-note safety.
+                let safety = api.get(&format!("/api/notes/{memo}"));
+                let login = api
+                    .client
+                    .post(api.server.url("/api/login"))
+                    .json(&json!({"password":testkit::PASSWORD}))
+                    .send()
+                    .unwrap();
+                let cookie = login.headers()["set-cookie"]
+                    .to_str()
+                    .unwrap()
+                    .split(';')
+                    .next()
+                    .unwrap();
+                let released = api
+                    .client
+                    .post(
+                        api.server
+                            .url(&format!("/api/notes/{memo}/agent-safety/release")),
+                    )
+                    .header("cookie", cookie)
+                    .json(&json!({"fingerprint":safety["agent_safety"]["fingerprint"]}))
+                    .send()
+                    .unwrap();
+                assert_eq!(released.status(), StatusCode::OK);
+            }
             fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_edit", json!({ "id": memo, "base_version": version, "note": json!({ "fields": { "title": "Injected" } }).to_string() })));
             fake.push(AnthropicMessage::text("Done."));
             let events = api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));

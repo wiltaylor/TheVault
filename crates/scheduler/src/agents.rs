@@ -745,9 +745,7 @@ impl Scheduler {
     /// next save of the note asks again. The note is left as it is. Answers the admitted runs,
     /// each [`Admitted::Start`] or [`Admitted::Queued`].
     fn mention_jobs(&self, id: &str, now: i64, tell: &mut Vec<AgentJob>) -> Vec<Admitted> {
-        if !self.writer.agent_may_read(id) {
-            return Vec::new();
-        }
+        let held = !self.writer.agent_may_read(id);
         let Some(runner) = self.runner.get() else {
             return Vec::new();
         };
@@ -797,7 +795,8 @@ impl Scheduler {
                 let _ = state.refuse_agent_call_copy(&call.call, id, &call.agent);
                 continue;
             }
-            if matches!(version.author, Author::Agent(_))
+            if held
+                || matches!(version.author, Author::Agent(_))
                 || !self.call_versions_trusted(id, &call.call, &call.agent)
                 || !state
                     .consume_agent_call(&call.call, id, &call.agent, &version.author)
