@@ -12,6 +12,7 @@ CREATE TABLE trigger_jobs (
  status TEXT NOT NULL DEFAULT 'waiting', message TEXT
 );
 CREATE INDEX trigger_jobs_due ON trigger_jobs(status, due_ms);
+CREATE INDEX trigger_jobs_note ON trigger_jobs(agent, trigger, note);
 CREATE TABLE trigger_queue_drops (agent TEXT PRIMARY KEY, count INTEGER NOT NULL, notified_ms INTEGER);
 CREATE TABLE trigger_backfill_previews (id TEXT PRIMARY KEY, principal TEXT NOT NULL, agent TEXT NOT NULL, trigger TEXT NOT NULL, payload TEXT NOT NULL, expires_ms INTEGER NOT NULL);
 CREATE TABLE trigger_events (note TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, payload TEXT NOT NULL);
