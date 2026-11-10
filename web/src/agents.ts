@@ -134,6 +134,7 @@ export function callableAgents(list: readonly AgentSummary[], type: string | und
   return list.filter((a) => {
     const m = a.mention;
     if (!m || a.enabled === false || a.error) return false;
+    if (type && m.excluded_types?.includes(type)) return false;
     const allowed = m.types === null ? type !== AGENT_THREAD_TYPE && type !== AGENT_MEMORY_TYPE : type !== undefined && m.types.includes(type);
     if (!allowed) return false;
     return q === "" || a.name.toLowerCase().startsWith(q) || agentLabel(a).toLowerCase().startsWith(q);

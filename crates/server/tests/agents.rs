@@ -249,6 +249,12 @@ fn a_code_redeems_once_for_a_token_of_its_scope_and_reuse_is_gone() {
     assert_eq!(out["server_url"], server.base_url().as_str());
     let token = out["token"].as_str().unwrap();
     assert!(token.starts_with("tv_"), "{out}");
+    let denied = client(token)
+        .post(server.url("/api/agents/calls"))
+        .json(&json!({ "note": "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA", "agent": "assistant" }))
+        .send()
+        .unwrap();
+    assert_eq!(denied.status().as_u16(), 403);
 
     // Used up.
     assert_eq!(expect(redeem(&server, code), 410)["error"], "gone");

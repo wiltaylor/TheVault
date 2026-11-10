@@ -160,6 +160,7 @@ dependencies = [
  "store",
  "tokio",
  "tracing",
+ "ulid",
  "vocab",
  "writer",
 ]

@@ -133,12 +133,25 @@ fn title_for(body: string, fallback: string) -> string {
     }
 }
 
+// Message text is literal, never inline markup or an agent call.
+fn escape_inline(text: string) -> string {
+    text.replace("\\", "\\\\")
+        .replace("*", "\\*")
+        .replace("`", "\\`")
+        .replace("{{", "\\{{")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace("++", "\\+\\+")
+        .replace("~~", "\\~\\~")
+        .replace("==", "\\=\\=")
+}
+
 fn paragraphs(text: string) -> List[Value] {
     text.split("\n")
         .filter(|l| l.trim() != "")
         .map(|l| Value::Map(#{
             "kind": Value::String("paragraph"),
-            "fields": Value::Map(#{ "text": Value::String(l) }),
+            "fields": Value::Map(#{ "text": Value::String(escape_inline(l)) }),
         }))
 }
 

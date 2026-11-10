@@ -320,6 +320,7 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
         // An agent's memories are notes (agents G21).
         || agent_memories_path(path)
         || (method == Method::POST && agent_dispatch_path(path))
+        || (method == Method::POST && path == "/api/agents/calls")
         || (method == Method::PUT && is_device_own(path))
         || (method == Method::POST && is_device_command_result(path))
         || (method == Method::POST && is_device_commands(path))
