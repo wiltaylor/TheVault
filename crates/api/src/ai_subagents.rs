@@ -197,6 +197,17 @@ pub fn intersect(own: &AgentPermissions, parent: &AgentPermissions) -> AgentPerm
         (Some(x), Some(y)) => Some(x.iter().filter(|t| y.contains(t)).cloned().collect()),
     };
     let mut p = own.clone();
+    p.change_types = match (&own.change_types, &parent.change_types) {
+        (Some(a), Some(b)) => Some(a.iter().filter(|t| b.contains(t)).cloned().collect()),
+        (Some(a), None) | (None, Some(a)) => Some(a.clone()),
+        (None, None) => None,
+    };
+    for (t, fields) in &parent.change_fields {
+        p.change_fields
+            .entry(t.clone())
+            .and_modify(|own| own.retain(|f| fields.contains(f)))
+            .or_insert_with(|| fields.clone());
+    }
     p.tools = lists(&own.tools, &parent.tools);
     p.skills = lists(&own.skills, &parent.skills);
     // An absent types list is every type but threads and memories, so a list meets the other
@@ -370,6 +381,23 @@ mod tests {
 
     fn perms(wcl: &str) -> AgentPermissions {
         Agent::parse("a", wcl).unwrap().permissions
+    }
+
+    #[test]
+    fn intersections_preserve_field_ceilings_and_meet_change_types() {
+        let parent = perms(
+            "permissions {\n change_types = [\"email\"]\n change_fields = { email: [\"processed\"] }\n}\n",
+        );
+        let own = perms(
+            "permissions {\n change_types = [\"email\", \"person\"]\n change_fields = { email: [\"processed\", \"subject\"] }\n}\n",
+        );
+        let result = intersect(&own, &parent);
+        assert_eq!(result.change_types, Some(vec!["email".into()]));
+        assert_eq!(result.change_fields["email"], ["processed"]);
+        assert_eq!(
+            intersect(&perms(""), &parent).change_fields["email"],
+            ["processed"]
+        );
     }
 
     #[test]

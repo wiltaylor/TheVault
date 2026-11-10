@@ -291,12 +291,25 @@ impl Writer {
         renames: &BTreeMap<String, String>,
         author: &Author,
     ) -> Result<(String, Vec<Saved>)> {
+        self.put_taxonomy_checked(name, source, renames, author, |_| Ok::<(), Error>(()))
+    }
+
+    /// Authorize against the vault under the taxonomy rewrite's write lock.
+    pub fn put_taxonomy_checked<E: From<Error>>(
+        &self,
+        name: &str,
+        source: &str,
+        renames: &BTreeMap<String, String>,
+        author: &Author,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(String, Vec<Saved>), E> {
         let _w = self.write_lock();
+        check(self)?;
         let inner = self.lock();
         let (path, text, changes) = self.plan_taxonomy(&inner, name, source, renames)?;
         let saved =
             self.commit_definitions(inner, vec![(path.clone(), Some(text))], changes, author)?;
-        Ok((self.vault.read_text(&path)?, saved))
+        Ok((self.vault.read_text(&path).map_err(Error::from)?, saved))
     }
 
     /// Create taxonomy `name` from `source` unless the vault already has a taxonomy of that
@@ -426,7 +439,17 @@ impl Writer {
     /// Delete taxonomy `name`, unless a type's field uses it. The refusal lists those fields,
     /// then every note holding one of the taxonomy's terms.
     pub fn delete_taxonomy(&self, name: &str) -> Result<()> {
+        self.delete_taxonomy_checked(name, |_| Ok::<(), Error>(()))
+    }
+
+    /// Authorize before deletion under the write lock.
+    pub fn delete_taxonomy_checked<E: From<Error>>(
+        &self,
+        name: &str,
+        check: impl FnOnce(&Writer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
         let _w = self.write_lock();
+        check(self)?;
         let inner = self.lock();
         self.deletable_taxonomy(&inner, name)?;
         let author = Author::Session(crate::ADOPTED_BY.to_owned());
@@ -870,6 +893,7 @@ impl Writer {
         source: &str,
         check: impl FnOnce(&Agent) -> Vec<Issue>,
     ) -> Result<(String, Agent)> {
+        let _w = self.write_lock();
         let mut inner = self.lock();
         let (text, agent) = self.plan_agent(&inner, name, source, check)?;
         let generation = self.commit(vec![Change::write(agent_path(name), text.as_bytes())])?;
@@ -930,6 +954,7 @@ impl Writer {
 
     /// Delete `agents/<name>.wcl`. The built-in agent cannot be deleted.
     pub fn delete_agent(&self, name: &str) -> Result<()> {
+        let _w = self.write_lock();
         let mut inner = self.lock();
         let text = self.read_agent(name)?;
         if name == schema::ASSISTANT_AGENT {
