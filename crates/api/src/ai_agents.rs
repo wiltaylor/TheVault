@@ -152,10 +152,9 @@ pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
             problems.push("it would allow changes to every note type".into())
         }
         Some(types) => {
-            for t in types
-                .iter()
-                .filter(|t| target_limits.allows_change(t) && limits.allows(t) && !limits.allows_change(t))
-            {
+            for t in types.iter().filter(|t| {
+                target_limits.allows_change(t) && limits.allows(t) && !limits.allows_change(t)
+            }) {
                 problems.push(format!("it would allow changes to {t} notes"));
             }
         }
