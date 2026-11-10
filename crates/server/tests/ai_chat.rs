@@ -41,9 +41,10 @@ fn external_agent_token_cannot_drive_another_agents_chat() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
     api.anthropic(&fake);
-    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None)
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    let code = state
+        .create_agent_code("external", state::Scope::Write, 60_000)
         .unwrap();
-    let code = state.create_agent_code("external", state::Scope::Write, 60_000).unwrap();
     let (_, token) = state.redeem_agent_code(&code.code).unwrap().unwrap();
     fake.push(AnthropicMessage::text("Turn ran as Assistant."));
     let res = api.client.post(api.server.url("/api/ai/chat"))
@@ -61,47 +62,100 @@ fn external_agent_token_cannot_start_answer_discard_or_dispatch() {
     let fake = FakeAnthropic::start();
     api.anthropic(&fake);
     let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
-    let code = state.create_agent_code("assistant", state::Scope::Write, 60_000).unwrap();
+    let code = state
+        .create_agent_code("assistant", state::Scope::Write, 60_000)
+        .unwrap();
     let (_, token) = state.redeem_agent_code(&code.code).unwrap().unwrap();
-    let login = api.client.post(api.server.url("/api/login"))
-        .json(&json!({"password": testkit::PASSWORD})).send().unwrap();
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
     assert_eq!(login.status(), StatusCode::OK);
-    let cookie = login.headers()["set-cookie"].to_str().unwrap()
-        .split(';').next().unwrap().to_owned();
-    let thread = api.client.post(api.server.url("/api/agents/assistant/threads"))
-        .header("cookie", &cookie).json(&json!({"title": "Session thread"}))
-        .send().unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let thread = api
+        .client
+        .post(api.server.url("/api/agents/assistant/threads"))
+        .header("cookie", &cookie)
+        .json(&json!({"title": "Session thread"}))
+        .send()
+        .unwrap();
     assert_eq!(thread.status(), StatusCode::CREATED);
     let thread: Value = thread.json().unwrap();
     let id = thread["id"].as_str().unwrap();
     for path in ["/api/ai/chat", "/api/ai/chat/turns"] {
-        for agent in [Value::Null, json!("assistant"), json!(" assistant "), json!("other")] {
+        for agent in [
+            Value::Null,
+            json!("assistant"),
+            json!(" assistant "),
+            json!("other"),
+        ] {
             for thread in [Value::Null, json!(id)] {
-                let res = api.client.post(api.server.url(path)).bearer_auth(&token)
+                let res = api
+                    .client
+                    .post(api.server.url(path))
+                    .bearer_auth(&token)
                     .json(&json!({"agent": agent, "thread": thread, "messages": [user("Answer.")]}))
-                    .send().unwrap();
+                    .send()
+                    .unwrap();
                 assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path}");
-                assert!(res.text().unwrap().contains("agent tokens cannot run in-app agents"));
+                assert!(
+                    res.text()
+                        .unwrap()
+                        .contains("agent tokens cannot run in-app agents")
+                );
             }
         }
     }
     for (path, body) in [
-        ("/api/agents/assistant/threads".to_owned(), json!({"title": "No"})),
+        (
+            "/api/agents/assistant/threads".to_owned(),
+            json!({"title": "No"}),
+        ),
         ("/api/agents/other/threads".to_owned(), json!({})),
-        ("/api/agents/assistant/dispatch".to_owned(), json!({"notes": [id], "request": "Run"})),
-        ("/api/agents/other/dispatch".to_owned(), json!({"notes": [id], "request": "Run"})),
-        ("/api/ai/discard".to_owned(), json!({"thread": id, "id": "proposal"})),
+        (
+            "/api/agents/assistant/dispatch".to_owned(),
+            json!({"notes": [id], "request": "Run"}),
+        ),
+        (
+            "/api/agents/other/dispatch".to_owned(),
+            json!({"notes": [id], "request": "Run"}),
+        ),
+        (
+            "/api/ai/discard".to_owned(),
+            json!({"thread": id, "id": "proposal"}),
+        ),
     ] {
-        let res = api.client.post(api.server.url(&path)).bearer_auth(&token)
-            .json(&body).send().unwrap();
-        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path}: {}", res.text().unwrap());
+        let res = api
+            .client
+            .post(api.server.url(&path))
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "{path}: {}",
+            res.text().unwrap()
+        );
     }
     assert!(fake.message_requests().is_empty());
     fake.push(AnthropicMessage::text("Session still runs."));
-    let res = api.client.post(api.server.url("/api/ai/chat"))
+    let res = api
+        .client
+        .post(api.server.url("/api/ai/chat"))
         .header("cookie", &cookie)
         .json(&json!({"agent": "assistant", "thread": id, "messages": [user("Answer.")]}))
-        .send().unwrap();
+        .send()
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert!(res.text().unwrap().contains("event: done"));
     assert_eq!(fake.message_requests().len(), 1);
