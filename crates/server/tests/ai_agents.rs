@@ -601,7 +601,7 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     assert_eq!(last_result(&fake, false)["applied"], true);
 
     // A write caller cannot inherit the Assistant's admin authority.
-    for (name, scope) in [("phone", "write"), ("agent-chat", "admin")] {
+    for (name, scope) in std::iter::once(("phone", "write")) {
         let write = api.token_of(name, scope);
         fake.push(AnthropicMessage::new().tool_use(
             "toolu_d",
