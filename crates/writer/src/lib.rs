@@ -1691,7 +1691,10 @@ impl Writer {
                 }
             }
             if s.event == Event::Create
-                && matches!(s.author.as_ref().unwrap_or(author), Author::Agent(_) | Author::AgentMail(_))
+                && matches!(
+                    s.author.as_ref().unwrap_or(author),
+                    Author::Agent(_) | Author::AgentMail(_)
+                )
             {
                 self.state
                     .set_meta(&format!("agent_safety.delivered.{}", s.id), "1")?;

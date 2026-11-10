@@ -36,8 +36,11 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
 }
 
 fn agent_reading() -> bool {
-    matches!(crate::activity::acting(), Some(Author::Agent(_) | Author::AgentMail(_)))
-        || script_core::run::peek(|r| matches!(r.author, Author::Agent(_) | Author::AgentMail(_))).unwrap_or(false)
+    matches!(
+        crate::activity::acting(),
+        Some(Author::Agent(_) | Author::AgentMail(_))
+    ) || script_core::run::peek(|r| matches!(r.author, Author::Agent(_) | Author::AgentMail(_)))
+        .unwrap_or(false)
 }
 
 fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
