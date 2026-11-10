@@ -12,10 +12,8 @@
 //! - `DELETE /api/agents/{name}` (admin): removes the file. Its threads stay. The built-in agent
 //!   is a 400 `built_in`.
 //!
-//! Agent files are definitions, so changing one needs `admin`, as types and tasks do
-//! (`auth::required_scope` answers `admin` for any write it does not list). A paired device's
-//! `write` token may also write them, so the apps edit agents as the web app does (see
-//! `auth::device_writes_definition`).
+//! Creating, editing or deleting an agent requires a signed-in session or a non-agent admin
+//! API token. Paired-device, write-scoped and agent-prefixed tokens cannot write definitions.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

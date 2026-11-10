@@ -18,7 +18,8 @@ use state::Author;
 use store::Change;
 
 use crate::{
-    Error, Event, Inner, Input, Result, Saved, Writer, feed::synced_file, first, note_path,
+    AGENT_THREAD_TYPE, Error, Event, Inner, Input, Result, Saved, Writer, feed::synced_file, first,
+    note_path,
 };
 
 /// The author of the versions a device records for notes it received from the home server.
@@ -123,6 +124,9 @@ impl Writer {
     ) -> Result<Saved> {
         let _w = self.write_lock();
         let mut inner = self.lock();
+        if self.locate(id)?.as_deref() == Some(AGENT_THREAD_TYPE) {
+            return Err(Error::ServerOwnedThread);
+        }
         let wcl = self.remote_text(&inner, id, type_name, wcl)?;
         self.put_remote(&mut inner, id, type_name, &wcl, author, Expect::At(base))
     }
@@ -144,6 +148,9 @@ impl Writer {
 
     /// `wcl` in canonical form, for a type this vault has.
     fn remote_text(&self, inner: &Inner, id: &str, type_name: &str, wcl: &str) -> Result<String> {
+        if type_name == AGENT_THREAD_TYPE {
+            return Err(Error::ServerOwnedThread);
+        }
         if !schema::is_ulid(id) || !schema::is_name(type_name) {
             return Err(Error::BadRequest(format!("{type_name}/{id} is not a note")));
         }

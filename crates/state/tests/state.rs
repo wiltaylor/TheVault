@@ -470,6 +470,126 @@ fn secrets_round_trip_and_list_without_values() {
 }
 
 #[test]
+fn login_credentials_are_separate_encrypted_and_name_bound() {
+    let dir = TempDir::new().unwrap();
+    let key = SecretKey::generate();
+    let state = open_with_key(&dir, key.clone());
+    let login = state::LoginSecret {
+        username: "made-up-user".into(),
+        password: "made-up-password".into(),
+        totp_seed: Some("JBSWY3DPEHPK3PXP".into()),
+        origins: vec!["https://example.com".into()],
+    };
+    state.set_login_secret("site", &login).unwrap();
+    assert_eq!(state.get_secret("site").unwrap(), None);
+    assert!(state.list_secrets().unwrap().is_empty());
+    assert!(state.set_secret("site", "string collision").is_err());
+    state.set_secret("plain", "ordinary").unwrap();
+    assert!(state.set_login_secret("plain", &login).is_err());
+    let debug = format!("{:?}", state.list_login_secrets().unwrap());
+    assert!(!debug.contains(&login.password));
+    assert!(!debug.contains(login.totp_seed.as_ref().unwrap()));
+    drop(state);
+    let bytes = read_db_bytes(&dir);
+    for marker in [&login.password, login.totp_seed.as_ref().unwrap()] {
+        assert!(!contains(&bytes, marker.as_bytes()));
+    }
+    let reopened = open_with_key(&dir, key);
+    assert_eq!(
+        reopened.get_login_secret("site").unwrap().unwrap().password,
+        login.password
+    );
+    drop(reopened);
+    let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+    conn.execute(
+        "UPDATE login_secrets SET name='swapped' WHERE name='site'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let state = open_with_key(&dir, SecretKey::generate());
+    assert!(state.get_login_secret("swapped").is_err());
+}
+
+#[test]
+fn login_listing_needs_no_key_and_ignores_corrupt_ciphertext() {
+    let dir = TempDir::new().unwrap();
+    let key = SecretKey::generate();
+    let state = open_with_key(&dir, key.clone());
+    let login = state::LoginSecret {
+        username: "test-user".into(),
+        password: "made-up-password".into(),
+        totp_seed: None,
+        origins: vec!["https://example.com".into()],
+    };
+    for name in ["site", "other"] {
+        state.set_login_secret(name, &login).unwrap();
+    }
+    drop(state);
+    for key in [None, Some(SecretKey::generate())] {
+        let state = State::open(&dir.path().join("state.db"), key).unwrap();
+        let list = state.list_login_secrets().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].username, "test-user");
+        assert!(matches!(
+            state.get_login_secret("site"),
+            Err(Error::KeyMissing { .. } | Error::WrongKey { .. })
+        ));
+        assert!(matches!(
+            state.set_login_secret("site", &login),
+            Err(Error::KeyMissing { .. } | Error::WrongKey { .. })
+        ));
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+    conn.execute(
+        "UPDATE login_secrets SET ciphertext=x'00' WHERE name='site'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let state = open_with_key(&dir, key);
+    assert_eq!(state.list_login_secrets().unwrap().len(), 2);
+    assert!(matches!(
+        state.get_login_secret("site"),
+        Err(Error::WrongKey { .. })
+    ));
+    assert!(state.get_login_secret("other").unwrap().is_some());
+}
+
+#[test]
+fn login_schema_upgrades_from_19_20_and_either_21_layout() {
+    for (version, old_login_table) in [(19, false), (20, false), (21, false), (21, true)] {
+        let dir = TempDir::new().unwrap();
+        let key = SecretKey::generate();
+        let state = open_with_key(&dir, key.clone());
+        state.set_secret("plain", "made-up-string").unwrap();
+        drop(state);
+        let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+        conn.execute_batch("DROP TRIGGER string_namespace; DROP TABLE login_secrets;")
+            .unwrap();
+        conn.pragma_update(None, "user_version", version).unwrap();
+        if old_login_table {
+            conn.execute_batch("CREATE TABLE login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);").unwrap();
+        }
+        drop(conn);
+        let state = open_with_key(&dir, key);
+        assert_eq!(
+            state.get_secret("plain").unwrap().as_deref(),
+            Some("made-up-string")
+        );
+        let login = state::LoginSecret {
+            username: "test-user".into(),
+            password: "made-up-password".into(),
+            totp_seed: None,
+            origins: vec![],
+        };
+        state.set_login_secret("site", &login).unwrap();
+        assert_eq!(state.list_login_secrets().unwrap()[0].username, "test-user");
+        assert!(state.set_secret("site", "cannot change kind").is_err());
+    }
+}
+
+#[test]
 fn secret_plaintext_never_appears_in_state_db_bytes() {
     let dir = TempDir::new().unwrap();
     let plaintext = "plaintext-marker-7f3a9c2e-do-not-store";
@@ -1168,7 +1288,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 20);
+    assert_eq!(version, 22);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.

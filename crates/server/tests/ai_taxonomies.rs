@@ -551,8 +551,8 @@ fn with_taxonomy_confirmation_off_an_admin_change_applies_at_once_and_a_writer_s
     assert_eq!(last(&events, "applied")["op"], "taxonomy_delete");
     assert_eq!(api.taxonomy_wcl("shade"), None);
 
-    // A read-scope caller gets a proposal whatever the switch says.
-    let reader = api.token_of("reader", "read");
+    // A write-scope caller gets a proposal for admin changes whatever the switch says.
+    let reader = api.token_of("reader", "write");
     let fake = FakeAnthropic::start();
     api.anthropic(&fake, json!({ "taxonomies": false }));
     let size = "label = \"Size\"\n\nterm \"Small\"\n";
@@ -568,23 +568,4 @@ fn with_taxonomy_confirmation_off_an_admin_change_applies_at_once_and_a_writer_s
         "{events:?}"
     );
     assert_eq!(api.taxonomy_wcl("size"), None);
-
-    // A write-scope caller's turn, such as an app's, has the agent's own rights (agents G4): the
-    // Assistant may change taxonomies, so with the switch off the change is made.
-    let writer = api.token_of("writer", "write");
-    let fake = FakeAnthropic::start();
-    api.anthropic(&fake, json!({ "taxonomies": false }));
-    let events = api.one_as(
-        &writer,
-        &fake,
-        "propose_taxonomy_change",
-        json!({ "name": "size", "wcl": size, "renames": [] }),
-    );
-    assert_eq!(
-        shape(&events),
-        ["tool", "applied", "tool_result", "text", "done"],
-        "{events:?}"
-    );
-    assert_eq!(last(&events, "applied")["op"], "taxonomy_create");
-    assert_eq!(api.taxonomy_wcl("size").as_deref(), Some(size));
 }

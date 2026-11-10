@@ -93,8 +93,8 @@ pub async fn issue_call(
 fn call_issuer_allowed(author: &state::Author, scope: state::Scope, paired: bool) -> bool {
     match author {
         state::Author::Session(_) => true,
-        state::Author::Token(name) => {
-            paired && scope == state::Scope::Write && !name.starts_with("agent-")
+        state::Author::Token(_) => {
+            paired && scope == state::Scope::Write && !crate::auth::is_agent_token(author)
         }
         _ => false,
     }
@@ -158,7 +158,14 @@ impl scheduler::AgentRunner for TriggerRunner {
             })
     }
 
-    fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str) -> scheduler::TurnReport {
+    fn run_turn(
+        &self,
+        agent: &Agent,
+        thread: &str,
+        prompt: &str,
+        scope: Option<state::Scope>,
+        caller: Option<&state::Author>,
+    ) -> scheduler::TurnReport {
         let w = self.writer.clone();
         // Open clients show the thread running while the run goes (agents G17).
         crate::ai_turns::publish(&w, &agent.name, thread, None, true);
@@ -170,6 +177,8 @@ impl scheduler::AgentRunner for TriggerRunner {
             thread,
             prompt,
             self.waits.clone(),
+            scope,
+            caller.cloned(),
         ));
         crate::ai_turns::publish(&self.writer, &agent.name, thread, None, false);
         let outcome = done
