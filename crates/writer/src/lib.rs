@@ -1836,6 +1836,11 @@ impl Writer {
 
     /// Calendar notifications are an Outbox capability, not a hidden-field convention.
     fn check_calendar_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
+        if let Author::Token(name) = author
+            && let Some(name) = name.strip_prefix("agent-")
+        {
+            return self.check_calendar_write(change, &Author::Agent(name.to_owned()));
+        }
         if change.type_name != "event" && change.type_name != "event_series" {
             return Ok(());
         }
