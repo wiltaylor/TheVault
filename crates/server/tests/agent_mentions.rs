@@ -711,7 +711,7 @@ fn a_type_the_trigger_leaves_out_records_the_call_with_no_run() {
     let assistant = &agents["agents"][0];
     assert_eq!(
         assistant["mention"],
-        json!({ "types": null, "excluded_types": schema::AGENT_CALL_EXCLUDED_TYPES }),
+        json!({ "types": null, "excluded_types": ["email", "message", "call", "conversation", "event", "email_thread"] }),
         "every enabled agent can be called"
     );
 }
