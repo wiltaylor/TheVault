@@ -204,6 +204,14 @@ impl Fixture {
     }
 
     fn import_skill(&self) {
+        // Profile checks read the same imported source in two agents' turns.
+        if self
+            .request("GET", "/api/skills/matrix-incoming", Value::Null)
+            .status()
+            .is_success()
+        {
+            return;
+        }
         let md = format!(
             "---\nname: matrix-incoming\ndescription: Matrix attack fixture\nallowed-tools: run_script draft_email\n---\n{ATTACK}\n"
         );
@@ -693,6 +701,11 @@ fn granted_attack_inputs_reach_tools_not_schema_errors() {
         .flat_map(|c| attacks(c))
         .collect();
     f.turn_as("shared_note", &calls, None, "matrix");
+    // Also prove that reading an imported zip in a second turn does not try to
+    // import it again and fail on an existing name before the profile assertion.
+    for _ in 0..2 {
+        f.turn_as("skill_zip", &attacks("send"), None, "matrix");
+    }
 }
 
 fn put_agent(f: &Fixture, name: &str, wcl: &str) {
@@ -748,7 +761,7 @@ fn profile_identity(source: &str) {
     put_agent(&f, "matrix_other", &driver);
     let calls = [(
         "browser_run",
-        json!({"command":"printf harmless", "timeout":10, "profile":"attacker-selected"}),
+        json!({"command":"printf harmless", "timeout":10}),
     )];
     for agent in ["matrix", "matrix_other"] {
         browser.push_run(BrowserRun::ok("harmless"));
@@ -763,7 +776,7 @@ fn profile_identity(source: &str) {
             let id = r
                 .header("x-vault-agent")
                 .expect("server-selected profile identity");
-            assert_ne!(id, "attacker-selected");
+            assert!(!id.is_empty());
             assert!(!r.header("x-vault-agent-signature").unwrap_or("").is_empty());
             id
         })

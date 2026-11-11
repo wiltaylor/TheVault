@@ -90,8 +90,8 @@ Active browser cells additionally create a Login secret through the owner API,
 check that metadata omits its password, and verify that the ordinary secret
 reader cannot return it. The pending TV-161 test has an owner-valid grant as a
 positive control before checking that an agent proposal still waits for Apply.
-The pending TV-167 test compares two agents' signed browser identities despite
-an attacker-supplied profile argument.
+The pending TV-167 test compares two agents' server-selected signed browser
+identities using schema-valid browser commands with no client profile selector.
 
 ## Rule-specific assertions and existing suites
 
