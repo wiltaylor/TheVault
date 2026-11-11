@@ -132,18 +132,18 @@ impl BrowserBox {
         self
     }
 
-    async fn remove_profile(&self) -> Result<(), (bool, String)> {
-        let url = self.url("/profile", &[]).map_err(|e| (false, e))?;
+    async fn remove_profile(&self) -> Result<(), String> {
+        let url = self.url("/profile", &[])?;
         let response = self
             .auth(http().delete(url))
             .timeout(Duration::from_secs(40))
             .send()
             .await
-            .map_err(|e| (true, e.to_string()))?;
+            .map_err(|e| e.to_string())?;
         if response.status().is_success() {
             Ok(())
         } else {
-            Err((false, box_error(response).await))
+            Err(box_error(response).await)
         }
     }
 
@@ -192,87 +192,65 @@ pub fn cleanup_retired(w: Arc<Writer>) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static RUNNING: AtomicBool = AtomicBool::new(false);
     static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
-    let Some(b) = BrowserBox::from_env() else {
-        return;
-    };
-    // Notify keeps a permit even when the worker is between sweeps and waits.
+    let Some(b) = BrowserBox::from_env() else { return };
     WAKE.notify_one();
-    if RUNNING
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
+    if RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() { return; }
     struct Flight;
     impl Drop for Flight {
-        fn drop(&mut self) {
-            RUNNING.store(false, Ordering::Release);
-        }
+        fn drop(&mut self) { RUNNING.store(false, Ordering::Release); }
     }
     tokio::spawn(async move {
         let _flight = Flight;
         let mut retries = std::collections::HashMap::<String, (Instant, Duration)>::new();
+        let mut active = std::collections::HashSet::<String>::new();
+        let mut deletes = tokio::task::JoinSet::new();
         let mut offline_until = Instant::now();
         let mut offline_delay = Duration::from_secs(30);
         loop {
-            // Offline backoff is global. New turns cannot hammer an unreachable box.
-            if offline_until > Instant::now() {
-                tokio::time::sleep_until(offline_until.into()).await;
-            }
             let ids = w.retired_browser_profiles().unwrap_or_default();
             retries.retain(|id, _| ids.contains(id));
             let now = Instant::now();
-            let due: Vec<_> = ids
-                .into_iter()
-                .filter(|id| retries.get(id).is_none_or(|(next, _)| *next <= now))
-                .collect();
-            let Some(first) = due.first() else {
-                if let Some(next) = retries.values().map(|(next, _)| *next).min() {
-                    tokio::select! {
-                        _ = WAKE.notified() => {},
-                        _ = tokio::time::sleep_until(next.into()) => {},
+            let due: Vec<_> = ids.iter().filter(|id| !active.contains(*id) && retries.get(*id).is_none_or(|(next, _)| *next <= now)).take(64_usize.saturating_sub(active.len())).cloned().collect();
+            if offline_until <= now && let Some(first) = due.first() {
+                // Only a failed health/protocol check starts global offline backoff.
+                if b.clone().with_profile(first.clone()).check_protocol().await.is_ok() {
+                    offline_delay = Duration::from_secs(30);
+                    for id in due {
+                        active.insert(id.clone());
+                        let profile = b.clone().with_profile(id.clone());
+                        deletes.spawn(async move { (id, profile.remove_profile().await) });
                     }
                 } else {
-                    // Keep the single worker alive, so idle-to-running transitions
-                    // cannot lose a retirement between an empty check and teardown.
-                    WAKE.notified().await;
+                    offline_until = Instant::now() + offline_delay;
+                    offline_delay = (offline_delay * 2).min(Duration::from_secs(900));
                 }
-                continue;
+            }
+            let next = if offline_until > Instant::now() {
+                Some(offline_until)
+            } else {
+                retries.iter().filter(|(id, _)| !active.contains(*id)).map(|(_, (next, _))| *next).min()
             };
-            // One protocol check per sweep, not per identity. An offline box
-            // must never delay a turn or startup, or create concurrent retries.
-            if b.clone()
-                .with_profile(first.clone())
-                .check_protocol()
-                .await
-                .is_ok()
-            {
-                offline_delay = Duration::from_secs(30);
-                for id in due {
-                    match b.clone().with_profile(id.clone()).remove_profile().await {
-                        Ok(()) => {
-                            let _ = w.browser_profile_removed(&id);
-                            retries.remove(&id);
-                        }
-                        Err((unreachable, e)) => {
-                            eprintln!("retired browser profile cleanup failed: {e}");
-                            if unreachable {
-                                offline_until = Instant::now() + offline_delay;
-                                offline_delay = (offline_delay * 2).min(Duration::from_secs(900));
-                                break;
+            // A new retirement can wake the scheduler while earlier DELETEs are
+            // still in flight. Awaiting a whole batch would still delay resets.
+            tokio::select! {
+                result = deletes.join_next(), if !deletes.is_empty() => {
+                    if let Some(Ok((id, result))) = result {
+                        active.remove(&id);
+                        match result {
+                            Ok(()) => { let _ = w.browser_profile_removed(&id); retries.remove(&id); }
+                            Err(e) => {
+                                eprintln!("retired browser profile cleanup failed: {e}");
+                                let delay = retries.get(&id).map_or(Duration::from_secs(30), |(_, delay)| (*delay * 2).min(Duration::from_secs(900)));
+                                retries.insert(id, (Instant::now() + delay, delay));
                             }
-                            let delay = retries
-                                .get(&id)
-                                .map_or(Duration::from_secs(30), |(_, delay)| {
-                                    (*delay * 2).min(Duration::from_secs(900))
-                                });
-                            retries.insert(id, (Instant::now() + delay, delay));
                         }
                     }
                 }
-            } else {
-                offline_until = Instant::now() + offline_delay;
-                offline_delay = (offline_delay * 2).min(Duration::from_secs(900));
+                _ = WAKE.notified() => {},
+                _ = async {
+                    if let Some(next) = next { tokio::time::sleep_until(next.into()).await; }
+                    else { std::future::pending::<()>().await; }
+                } => {},
             }
         }
     });

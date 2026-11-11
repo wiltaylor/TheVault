@@ -34,6 +34,15 @@ fn eventually(timeout: u64, mut condition: impl FnMut() -> bool) {
 
 #[test]
 fn a_failed_profile_does_not_delay_another_agents_reset() {
+    independent_reset(false);
+}
+
+#[test]
+fn a_timed_out_profile_does_not_delay_another_agents_reset() {
+    independent_reset(true);
+}
+
+fn independent_reset(slow: bool) {
     let fake = FakeAnthropic::start();
     let browser = FakeBrowser::start();
     browser.require_signed_profiles();
@@ -53,7 +62,8 @@ fn a_failed_profile_does_not_delay_another_agents_reset() {
         .filter(|r| r.route() == "/run")
         .map(|r| r.header("x-vault-agent").unwrap().to_owned())
         .collect();
-    browser.fail_profile_cleanup(&ids[0]);
+    if slow { browser.slow_profile_cleanup(&ids[0]); }
+    else { browser.fail_profile_cleanup(&ids[0]); }
     let reset = |name: &str| {
         let response = api
             .client
@@ -92,6 +102,14 @@ fn a_failed_profile_does_not_delay_another_agents_reset() {
         1,
         "failed id must stay in backoff"
     );
+    if slow {
+        // The request timeout is 40s, followed by the id's 30s backoff.
+        let attempts = || browser.requests().iter().filter(|r| r.method == "DELETE" && r.header("x-vault-agent") == Some(ids[0].as_str())).count();
+        std::thread::sleep(Duration::from_secs(45));
+        assert_eq!(attempts(), 1, "timeout must not immediately retry");
+        eventually(35, || attempts() == 2);
+        assert!(start.elapsed() >= Duration::from_secs(69), "retry ignored per-id backoff");
+    }
 }
 
 #[test]

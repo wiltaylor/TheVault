@@ -113,6 +113,7 @@ struct Shared {
     legacy_protocol: Mutex<bool>,
     cleanup_failure: Mutex<bool>,
     failed_profile: Mutex<Option<String>>,
+    slow_profile: Mutex<Option<String>>,
     profiles: Mutex<BTreeSet<String>>,
 }
 
@@ -173,6 +174,10 @@ impl FakeBrowser {
 
     pub fn fail_profile_cleanup(&self, id: &str) {
         *lock(&self.shared.failed_profile) = Some(id.to_owned());
+    }
+
+    pub fn slow_profile_cleanup(&self, id: &str) {
+        *lock(&self.shared.slow_profile) = Some(id.to_owned());
     }
 
     pub fn profiles(&self) -> Vec<String> {
@@ -262,6 +267,11 @@ fn answer(s: &Shared, r: &Request) -> Reply {
             error(403, "fixture permanently refused profile")
         }
         ("DELETE", "/profile") => {
+            if lock(&s.slow_profile).as_deref() == r.header("x-vault-agent") {
+                let mut response = Reply::json(409, &json!({"error":"fixture slow profile"}));
+                response.delay = std::time::Duration::from_secs(45);
+                return response;
+            }
             lock(&s.profiles).remove(r.header("x-vault-agent").unwrap_or_default());
             Reply::json(200, &json!({"ok": true}))
         }

@@ -326,7 +326,7 @@ fn scoped(state: &AppState, headers: &HeaderMap, admission: bool) -> ApiResult<A
         ));
     }
     safe_dir(&profile)?;
-    let bytes = disk_usage(&profile)
+    let bytes = if admission { disk_usage(&profile) } else { Ok(0) }
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if admission && bytes > PROFILE_BYTES {
         return Err(ApiError::new(
@@ -420,28 +420,30 @@ async fn delete_profile(
 /// Cache tools can leave 0555 directories. Only directories in the managed tree
 /// are changed. Symlinks (including links to another profile) are never followed.
 fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let prepare = || -> io::Result<()> {
-        let metadata = std::fs::symlink_metadata(path)?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Ok(());
-        }
-        std::fs::set_permissions(
-            path,
-            std::fs::Permissions::from_mode(metadata.permissions().mode() | 0o700),
-        )?;
-        for child in std::fs::read_dir(path)? {
-            let child = child?;
-            make_profile_directories_writable(&child.path()).map_err(|e| io::Error::other(e.1))?;
+    use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, chmodat, fchmod, fstat, open, openat, statat};
+    fn walk(fd: &rustix::fd::OwnedFd, label: &str) -> io::Result<()> {
+        let stat = fstat(fd)?;
+        fchmod(fd, Mode::from_raw_mode(stat.st_mode) | Mode::RWXU)?;
+        let mut entries = Dir::read_from(fd)?;
+        while let Some(entry) = entries.read() {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name.to_bytes() == b"." || name.to_bytes() == b".." { continue; }
+            let stat = statat(fd, name, AtFlags::SYMLINK_NOFOLLOW)?;
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory { continue; }
+            let child_label = format!("{label}/{}", name.to_string_lossy());
+            // NOFOLLOW is essential for both chmod and open, including races.
+            chmodat(fd, name, Mode::from_raw_mode(stat.st_mode) | Mode::RWXU, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
+            let child = openat(fd, name, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())
+                .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
+            walk(&child, &child_label)?;
         }
         Ok(())
-    };
-    prepare().map_err(|e| {
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("preparing {} for removal: {e}", path.display()),
-        )
-    })
+    }
+    let result = open(path, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())
+        .map_err(io::Error::from).and_then(|fd| walk(&fd, &path.display().to_string()));
+    result.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("preparing {} for removal: {e}", path.display())))
 }
 
 /// A successful shell can leave detached children behind. Close those too before

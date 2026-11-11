@@ -11,6 +11,34 @@ use tempfile::TempDir;
 const TOKEN: &str = "test-token-0123456789abcdef";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn deletion_repairs_nonsearchable_and_long_directory_trees() {
+    use std::os::unix::fs::PermissionsExt;
+    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+    let b = Agent::start().await;
+    let root = b.home.path().join("profiles/test/home");
+    for (name, mode) in [("no-search", 0o600), ("no-access", 0o000)] {
+        let dir = root.join(name);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("Cookies"), "fixture").unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let mut fd = open(&root, flags, Mode::empty()).unwrap();
+    let component = "d".repeat(200);
+    for _ in 0..30 {
+        mkdirat(&fd, component.as_str(), Mode::RWXU).unwrap();
+        fd = openat(&fd, component.as_str(), flags, Mode::empty()).unwrap();
+    }
+    openat(&fd, "Cookies", OFlags::CREATE | OFlags::WRONLY, Mode::RUSR | Mode::WUSR).unwrap();
+    drop(fd);
+    let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+    assert!(!root.parent().unwrap().exists());
+    let (status, _) = b.run_status(json!({"command":"true"})).await;
+    assert_eq!(status, 410);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn read_only_cache_directories_do_not_block_profile_deletion() {
     use std::os::unix::fs::{PermissionsExt, symlink};
     let b = Agent::start().await;
