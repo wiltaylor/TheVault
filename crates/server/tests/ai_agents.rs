@@ -623,6 +623,64 @@ fn browser_secret_proposal_apply_rechecks_active_names() {
 }
 
 #[test]
+fn browser_secrets_apply_narrowing_revokes_removed_confirmations() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    for name in ["bank", "mail"] {
+        let response = api.client.put(api.server.url(&format!("/api/secrets/{name}"))).bearer_auth(api.token()).json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]})).send().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    api.put_agent("clerk", &CLERK.replace("tools = [", "browser = true\n browser_secrets = [\"bank\"]\n tools = ["));
+    let broad = HELPER.replace("tools = [", "browser = true\n browser_secrets = [\"bank\", \"mail\"]\n tools = [");
+    let narrow = broad.replace("[\"bank\", \"mail\"]", "[\"bank\"]");
+    api.put_agent("helper", &broad);
+    let events = api.one(&fake, Some("clerk"), "propose_agent_change", json!({"name":"helper", "wcl":narrow}));
+    let (status, result) = api.apply(last(&events, "agent_proposal"));
+    assert_eq!(status, StatusCode::OK, "{result}");
+    std::fs::write(api.server.vault_path().join("agents/helper.wcl"), broad).unwrap();
+    let response = api.client.get(api.server.url("/api/agents/helper")).bearer_auth(api.token()).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.json::<Value>().unwrap()["browser_secrets_inactive"], json!(["mail"]));
+}
+
+#[test]
+fn browser_secrets_proposal_events_and_thread_reads_hide_files_for_non_managers() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    api.put_agent("clerk", CLERK);
+    api.put_agent("helper", &HELPER.replace("tools = [", "browser = true\n browser_secrets = [\"bank\"]\n tools = ["));
+    let write = api.token_of("writer", "write");
+    let read = api.token_of("reader", "read");
+    for tool in ["propose_agent_delete", "propose_agent_change"] {
+        let response = api.client.post(api.server.url("/api/agents/clerk/threads")).bearer_auth(&write).json(&json!({})).send().unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let thread = response.json::<Value>().unwrap()["id"].as_str().unwrap().to_owned();
+        let input = if tool == "propose_agent_delete" { json!({"name":"helper"}) } else { json!({"name":"helper", "wcl":HELPER}) };
+        fake.push(AnthropicMessage::new().tool_use("toolu_x", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        let response = api.client.post(api.server.url("/api/ai/chat")).bearer_auth(&write).json(&json!({"agent":"clerk", "thread":thread, "messages":[user("Do it.")]})).send().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let events = read_events(response);
+        let proposal = last(&events, "agent_proposal");
+        assert!(!proposal["before"].as_str().unwrap().contains("bank"));
+        assert_eq!(proposal["browser_secrets_hidden"], true);
+        let path = format!("/api/agents/clerk/threads/{thread}");
+        let response = api.client.get(api.server.url(&path)).bearer_auth(&read).send().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let data = response.json::<Value>().unwrap();
+        assert_eq!(data["id"], thread);
+        assert_eq!(data["proposals"].as_array().unwrap().len(), 1);
+        assert!(!data["proposals"][0]["data"]["before"].as_str().unwrap().contains("bank"));
+        assert_eq!(data["proposals"][0]["data"]["browser_secrets_hidden"], true);
+        let response = api.client.get(api.server.url(&path)).bearer_auth(api.token()).send().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.json::<Value>().unwrap()["proposals"][0]["data"]["before"].as_str().unwrap().contains("bank"));
+    }
+}
+
+#[test]
 fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
