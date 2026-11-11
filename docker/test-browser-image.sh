@@ -204,8 +204,13 @@ id=$first_id
 
 # F13: long names must not retain a full path per ancestor in the service.
 id="$first_id-memory4000"
-r=$(run_cmd 'node -e '\''const fs = require("fs"), n = "d".repeat(255); for (let i=0; i<4000; i++) { fs.mkdirSync(n); process.chdir(n); } fs.writeFileSync("Cookies", "fixture");'\''' 180)
-check "prepare 4000 levels of 255-byte names" jqe '.exit == 0' <<< "$r"
+r=$(run_cmd 'node -e '\''const fs = require("fs"), cp = require("child_process"); const limit = Number(cp.execFileSync("getconf", ["NAME_MAX", "."]).toString().trim()), width = Math.min(200, limit); if (!Number.isInteger(width) || width < 1) throw Error("invalid NAME_MAX"); const n = "d".repeat(width); let depth = 0; for (; depth<4000; depth++) { fs.mkdirSync(n); process.chdir(n); } fs.writeFileSync("Cookies", "fixture"); console.log(JSON.stringify({depth, name_bytes: width}));'\''' 180)
+check "prepare exactly 4000 levels within filesystem NAME_MAX ($(jq -c .stdout <<< "$r"))" \
+  jqe '.exit == 0 and (.stdout | fromjson | .depth == 4000 and .name_bytes > 0 and .name_bytes <= 200)' <<< "$r"
+if ! jqe '.exit == 0 and (.stdout | fromjson | .depth == 4000)' <<< "$r"; then
+  printf 'No memory proof: the setup did not reach depth 4000.\n' >&2
+  exit 1
+fi
 if [ -n "${BOX_URL:-}" ]; then
   service_pid=${BOX_SERVICE_PID:?BOX_SERVICE_PID is required to measure service memory}
   printf 5 > "/proc/$service_pid/clear_refs"
