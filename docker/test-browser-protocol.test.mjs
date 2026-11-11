@@ -3,12 +3,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readdir } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { once } from "node:events";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHmac } from "node:crypto";
 
 test("image gate HTTP checks use signed, separate and resettable profiles", { timeout: 240000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "vault-browser-protocol-"));
@@ -42,6 +42,9 @@ test("image gate HTTP checks use signed, separate and resettable profiles", { ti
       // The dev filesystem can build all4000 levels using external mkdir;
       // allow the script's180s setup budget plus its other HTTP checks.
       timeout: 210000,
+    }).catch((error) => {
+      t.diagnostic(`image script stdout: ${error.stdout || ""}\nimage script stderr: ${error.stderr || ""}`);
+      throw error;
     });
     assert.match(stdout, /all checks passed/);
     assert.match(stdout, /a second profile cannot read the screenshot/);
@@ -49,6 +52,14 @@ test("image gate HTTP checks use signed, separate and resettable profiles", { ti
     assert.match(stdout, /container.*NOT run/);
     t.diagnostic(stdout);
   } finally {
+    // Node's recursive rm cannot handle a leftover path beyond PATH_MAX.
+    // Ask this still-running owned service to remove its managed profiles
+    // with the fd-relative walker before stopping it, also on setup failure.
+    for (const entry of await readdir(join(home, "profiles"), { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isDirectory() || !/^[a-zA-Z0-9-]+$/.test(entry.name)) continue;
+      const signature = createHmac("sha256", token).update(`thevault-browser-profile-v1:${entry.name}`).digest("hex");
+      await fetch(`${base}/profile`, { method: "DELETE", headers: { authorization: `Bearer ${token}`, "x-vault-agent": entry.name, "x-vault-agent-signature": signature }, signal: AbortSignal.timeout(10000) }).catch((error) => t.diagnostic(`profile cleanup failed: ${error.message}`));
+    }
     child.kill("SIGTERM");
     await stopped;
     await rm(root, { recursive: true, force: true });
