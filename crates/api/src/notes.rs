@@ -213,7 +213,12 @@ fn saved_response(status: StatusCode, headers: &HeaderMap, s: Saved) -> Response
     )
 }
 
-pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+pub async fn list(
+    State(w): Shared,
+    Caller(author): Caller,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let agent = crate::auth::is_agent_token(&author);
     let archived = crate::query::archived_param(q.archived.as_deref())?;
     let notes = blocking(w, move |w| {
         if let Some(t) = &q.type_name
@@ -221,7 +226,11 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
         {
             return Err(writer::Error::UnknownType(t.clone()));
         }
-        w.list_with(q.type_name.as_deref(), archived)
+        let mut notes = w.list_with(q.type_name.as_deref(), archived)?;
+        if agent {
+            notes.retain(|n| w.agent_may_read(&n.id));
+        }
+        Ok(notes)
     })
     .await?;
     let notes: Vec<Value> = notes
@@ -239,7 +248,11 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
             })
         })
         .collect();
-    Ok(Json(json!({ "notes": notes })))
+    let mut result = json!({ "notes": notes });
+    if agent {
+        result["notice"] = json!("some notes may be held");
+    }
+    Ok(Json(result))
 }
 
 pub async fn create(
@@ -266,10 +279,27 @@ pub async fn create(
 
 pub async fn read(
     State(w): Shared,
+    Caller(author): Caller,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let note = blocking(w, move |w| w.read(&id)).await?;
+    if crate::auth::is_agent_token(&author) && !w.agent_may_read(&id) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "held",
+            "Note is unavailable to agents",
+        ));
+    }
+    let (note, safety) = blocking(w, move |w| {
+        let note = w.read(&id)?;
+        let safety = if w.state().meta("agent_safety.activation_ms")?.is_some() {
+            json!({"agent_safety": w.agent_safety_doc(&id, &note.type_name, &note.doc)?})
+        } else {
+            json!({})
+        };
+        Ok::<_, writer::Error>((note, safety))
+    })
+    .await?;
     Ok(note_response(
         StatusCode::OK,
         &headers,
@@ -277,8 +307,85 @@ pub async fn read(
         &note.type_name,
         &note.version,
         note.wcl,
-        json!({}),
+        safety,
     ))
+}
+
+#[derive(Deserialize)]
+pub struct SafetyRelease {
+    fingerprint: String,
+}
+
+#[derive(Deserialize)]
+pub struct HeldNotesQuery {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    reason: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+pub async fn held_agent_notes(
+    State(w): Shared,
+    Caller(author): Caller,
+    Query(q): Query<HeldNotesQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(author, Author::Session(_)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "Only the signed-in user may list held notes",
+        ));
+    }
+    for date in [&q.since, &q.until].into_iter().flatten() {
+        chrono::DateTime::parse_from_rfc3339(date)
+            .map_err(|_| ApiError::bad_request("since and until must be RFC3339 dates"))?;
+    }
+    blocking(w, move |w| {
+        let notes = w.held_agent_notes(
+            q.kind.as_deref(),
+            q.since.as_deref(),
+            q.until.as_deref(),
+            q.reason.as_deref(),
+        )?;
+        let total = notes.len();
+        let notes: Vec<_> = notes
+            .into_iter()
+            .skip(q.offset.unwrap_or(0))
+            .take(q.limit.unwrap_or(100).clamp(1, 500))
+            .collect();
+        Ok::<_, ApiError>(Json(json!({"notes":notes,"total":total})))
+    })
+    .await
+}
+
+pub async fn release_agent_safety(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(id): Path<String>,
+    Json(input): Json<SafetyRelease>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(author, Author::Session(_)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "Only the signed-in user may release a held note",
+        ));
+    }
+    blocking(w, move |w| {
+        if !w.release_agent_safety(&id, &input.fingerprint, &author)? {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "content_changed",
+                "The note changed. Review it again before release.",
+            ));
+        }
+        tracing::info!(target: "ai", "agent_safety release note={id} actor=session");
+        Ok(Json(json!({"agent_safety": w.agent_safety(&id)?})))
+    })
+    .await
 }
 
 /// Whether the request carries `If-None-Match: *`: write only if the note does not exist.
@@ -466,11 +573,23 @@ fn graph_node(n: &writer::GraphNode, direction: &str) -> Value {
 /// the trash are left out.
 pub async fn graph(
     State(w): Shared,
+    Caller(author): Caller,
     Path(id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let limit = q.limit.unwrap_or(GRAPH_LIMIT).min(GRAPH_MAX);
-    let g = blocking(w, move |w| w.graph(&id, limit)).await?;
+    let agent = crate::auth::is_agent_token(&author);
+    let g = blocking(w, move |w| {
+        let mut graph = w.graph(&id, limit)?;
+        if agent {
+            graph.neighbours.retain(|n| w.agent_may_read(&n.id));
+            graph
+                .edges
+                .retain(|e| w.agent_may_read(&e.from) && w.agent_may_read(&e.to));
+        }
+        Ok::<_, writer::Error>(graph)
+    })
+    .await?;
     let c = &g.center.id;
     let direction = |n: &str| {
         let out = g.edges.iter().any(|e| &e.from == c && e.to == n);
@@ -488,12 +607,16 @@ pub async fn graph(
         .iter()
         .map(|e| json!({ "from": e.from, "to": e.to, "via": e.via, "field": e.field }))
         .collect();
-    Ok(Json(json!({
+    let mut result = json!({
         "id": g.center.id,
         "nodes": nodes,
         "edges": edges,
         "truncated": g.truncated,
-    })))
+    });
+    if agent {
+        result["notice"] = json!("some notes may be held");
+    }
+    Ok(Json(result))
 }
 
 pub async fn trash(State(w): Shared) -> Result<Json<Value>, ApiError> {

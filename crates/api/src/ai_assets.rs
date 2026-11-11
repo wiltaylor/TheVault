@@ -125,6 +125,7 @@ pub fn find_assets(w: &Writer, input: &Value) -> Read {
     let matched: Vec<_> = all
         .iter()
         .rev()
+        .filter(|a| w.agent_may_read_asset(&a.id))
         .filter(|a| text.is_empty() || a.filename.to_lowercase().contains(&text))
         .collect();
     let total = matched.len();
@@ -164,6 +165,9 @@ pub fn read_asset(w: &Writer, input: &Value, may_send_image: bool, images: &Imag
     else {
         return Read::error("id must be a non-empty string");
     };
+    if !w.agent_may_read_asset(id) {
+        return Read::error("Asset is held from agents.");
+    }
     let asset = match w.asset_info(id) {
         Ok(a) => a,
         Err(e) => return Read::error(e.to_string()),
@@ -295,6 +299,9 @@ pub fn extracted_note(kind: TextKind, text: &str) -> String {
 
 /// Image asset `id` as it is sent, prepared once a turn.
 fn load_image(w: &Writer, id: &str, media: &str, images: &Images) -> Result<ImageData, String> {
+    if schema::is_ulid(id) && !w.agent_may_read_asset(id) {
+        return Err("Asset is held from agents.".into());
+    }
     if let Some(got) = images.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
         return got.clone();
     }

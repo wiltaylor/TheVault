@@ -248,6 +248,7 @@ fn build() -> Built {
         .get("/api/openapi.json", openapi::serve)
         .get("/api/schema", inspect::schema)
         .get("/api/notes", notes::list)
+        .get("/api/agent-safety/held", notes::held_agent_notes)
         .post("/api/notes", notes::create)
         .get("/api/notes/{id}", notes::read)
         .put("/api/notes/{id}", notes::update)
@@ -257,6 +258,10 @@ fn build() -> Built {
         .get("/api/notes/{id}/original", original::original)
         .get("/api/notes/{id}/history/{version}", notes::version)
         .post("/api/notes/{id}/restore", notes::restore_version)
+        .post(
+            "/api/notes/{id}/agent-safety/release",
+            notes::release_agent_safety,
+        )
         .post("/api/notes/{id}/archive", notes::archive)
         .post("/api/notes/{id}/unarchive", notes::unarchive)
         .get("/api/notes/{id}/canvas/{name}", defs::canvas)

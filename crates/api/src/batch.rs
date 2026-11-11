@@ -157,6 +157,10 @@ fn event_name(e: Event) -> &'static str {
 }
 
 fn report_response(names: &[&'static str], report: Report) -> Response {
+    let held = report
+        .items
+        .iter()
+        .any(|item| matches!(item, Err(writer::Error::AgentHeld)));
     let items: Vec<Value> = report
         .items
         .into_iter()
@@ -191,7 +195,9 @@ fn report_response(names: &[&'static str], report: Report) -> Response {
             })
         })
         .collect();
-    let status = if report.ok {
+    let status = if held {
+        StatusCode::FORBIDDEN
+    } else if report.ok {
         StatusCode::OK
     } else {
         StatusCode::UNPROCESSABLE_ENTITY

@@ -23,6 +23,16 @@ check: ci::check
 [group('check')]
 validate: check
 
+# Nightly next checks. Run through the heavy lock on thevault-dev (AGENTS.md).
+[group('check')]
+nightly-e2e:
+	bash scripts/nightly/build.sh e2e
+
+# Prepare the full emulator bundle on dev, then run device.sh on android (AGENTS.md).
+[group('check')]
+nightly-emulator:
+	bash scripts/nightly/build.sh emulator
+
 # Validate a card that touches the Android app: the Android lint, then the app's Rust tests and the Robolectric tests. Runs on thevault-dev after validate, for cards that touch apps/android, crates/embedded, crates/sync, crates/push, or carry the label android (AGENTS.md)
 [group('check')]
 validate-android: android-check android-test

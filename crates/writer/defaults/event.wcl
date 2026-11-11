@@ -132,6 +132,12 @@ field send_updates {
   hidden      = true
 }
 
+field agent_safety_reason {
+  kind    = "select"
+  options = ["allow", "prompt_injection", "sensitive_credentials", "scam", "spam", "marketing"]
+  label   = "Agent safety classification"
+}
+
 handler "after_create" {
   script        = "google_event"
   allow_domains = ["oauth2.googleapis.com", "www.googleapis.com"]

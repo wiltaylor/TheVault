@@ -453,13 +453,14 @@ fn agent_token_owns_only_its_drafts_and_legacy_admin_cannot_grant() {
             .status()
             .is_client_error()
     );
-    assert!(
+    // Safety policy refuses all agent trash restores: no live note has clearance.
+    assert_eq!(
         agent
             .post(server.url(&format!("/api/trash/{id}/restore")))
             .send()
             .unwrap()
-            .status()
-            .is_success()
+            .status(),
+        403
     );
 }
 

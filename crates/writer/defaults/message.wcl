@@ -95,6 +95,12 @@ field device_ref {
   description = "The phone's id for the message, so it is captured once."
 }
 
+field agent_safety_reason {
+  kind    = "select"
+  options = ["allow", "prompt_injection", "sensitive_credentials", "scam", "spam", "marketing"]
+  label   = "Agent safety classification"
+}
+
 template default {
   tab "Message" {
     columns {
