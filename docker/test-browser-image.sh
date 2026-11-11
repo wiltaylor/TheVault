@@ -192,6 +192,33 @@ id=browser-image-other
 code=$(get "/file?path=$profile_home/profiles/$first_id/work/$shot" -o /dev/null -w '%{http_code}')
 check "a second profile cannot read the screenshot (got $code)" test "$code" = 403
 id=$first_id
+
+# F13: long names must not retain a full path per ancestor in the service.
+id="$first_id-memory4000"
+r=$(run_cmd 'node -e '\''const fs = require("fs"), n = "d".repeat(255); for (let i=0; i<4000; i++) { fs.mkdirSync(n); process.chdir(n); } fs.writeFileSync("Cookies", "fixture");'\''')
+check "prepare 4000 levels of 255-byte names" jqe '.exit == 0' <<< "$r"
+if [ -n "${BOX_URL:-}" ]; then
+  service_pid=${BOX_SERVICE_PID:?BOX_SERVICE_PID is required to measure service memory}
+  printf 5 > "/proc/$service_pid/clear_refs"
+  before=$(awk '/^VmHWM:/ {print $2}' "/proc/$service_pid/status")
+else
+  service_pid=$(docker exec "$run" pgrep -x browser-agent)
+  docker exec "$run" sh -c "printf 5 > /proc/$service_pid/clear_refs"
+  before=$(docker exec "$run" awk '/^VmHWM:/ {print $2}' "/proc/$service_pid/status")
+fi
+code=$(get '/profile' -X DELETE -o /dev/null -w '%{http_code}')
+check "reset 4000 long-name levels succeeds (got $code)" test "$code" = 200
+if [ -n "${BOX_URL:-}" ]; then
+  after=$(awk '/^VmHWM:/ {print $2}' "/proc/$service_pid/status")
+  check "4000-level profile directory is gone" test ! -e "$profile_home/profiles/$id"
+else
+  after=$(docker exec "$run" awk '/^VmHWM:/ {print $2}' "/proc/$service_pid/status")
+  check "4000-level profile directory is gone" docker exec "$run" test ! -e "$profile_home/profiles/$id"
+fi
+check "4000-level deletion peak RSS grows less than 64 MiB ($((after-before)) KiB)" test "$((after-before))" -lt 65536
+code=$(get '/files' -o /dev/null -w '%{http_code}')
+check "4000-level profile stays retired (got $code)" test "$code" = 410
+id=$first_id
 code=$(get '/file?path=/etc/passwd' -o /dev/null -w '%{http_code}')
 check "/file refuses /etc/passwd (got $code)" test "$code" = 403
 if [ -z "${BOX_URL:-}" ]; then

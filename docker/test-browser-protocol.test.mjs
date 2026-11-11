@@ -38,7 +38,7 @@ test("image gate HTTP checks use signed, separate and resettable profiles", { ti
       await new Promise((done) => setTimeout(done, 20));
     }
     const { stdout } = await promisify(execFile)("bash", ["docker/test-browser-image.sh"], {
-      env: { ...process.env, BOX_URL: base, BOX_TOKEN: token, BOX_HOME_DIR: home, BOX_EXPECTED_USER: userInfo().username, BOX_EXPECTED_UID: String(process.getuid()), TMPDIR: tmp },
+      env: { ...process.env, BOX_URL: base, BOX_TOKEN: token, BOX_HOME_DIR: home, BOX_SERVICE_PID: String(child.pid), BOX_EXPECTED_USER: userInfo().username, BOX_EXPECTED_UID: String(process.getuid()), TMPDIR: tmp },
       timeout: 20000,
     });
     assert.match(stdout, /all checks passed/);

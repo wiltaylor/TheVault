@@ -435,6 +435,22 @@ fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
     walk_profile_tree(path, false)
 }
 
+fn walk_error<'a>(root: &Path, components: impl Iterator<Item = &'a std::ffi::CStr>, tail: Option<&'a std::ffi::CStr>, error: impl std::fmt::Display) -> io::Error {
+    // Construct labels only on failure. Retaining every full ancestor path
+    // makes a deep tree quadratic in memory even with an iterative walk.
+    let names: Vec<_> = components.chain(tail).collect();
+    let mut label = root.display().to_string();
+    for (i, name) in names.iter().enumerate() {
+        if names.len() > 8 && i >= 3 && i < names.len() - 3 {
+            if i == 3 { label.push_str("/..."); }
+            continue;
+        }
+        label.push('/');
+        label.push_str(&name.to_string_lossy());
+    }
+    io::Error::other(format!("{label} (depth {}): {error}", names.len()))
+}
+
 fn walk_profile_tree(path: &Path, remove: bool) -> ApiResult<()> {
     use rustix::fs::{
         AtFlags, CWD, Dir, FileType, Mode, OFlags, chmodat, fstat, openat, statat, unlinkat,
@@ -493,54 +509,40 @@ fn walk_profile_tree(path: &Path, remove: bool) -> ApiResult<()> {
         let mut fd = prepare(CWD, path)?;
         let names = children(&fd)?;
         let stat = fstat(&fd)?;
-        let mut stack = vec![(
-            names,
-            path.display().to_string(),
-            stat.st_dev,
-            stat.st_ino,
-            None::<std::ffi::CString>,
-        )];
-        while let Some((names, label, _, _, _)) = stack.last_mut() {
-            let Some(name) = names.pop() else {
+        let mut stack = vec![(names, stat.st_dev, stat.st_ino, None::<std::ffi::CString>)];
+        while !stack.is_empty() {
+            let Some(name) = stack.last_mut().expect("current frame").0.pop() else {
                 let completed = stack.pop().expect("current frame");
-                if let Some((_, _, dev, ino, _)) = stack.last() {
-                    let parent = openat(
-                        &fd,
-                        "..",
-                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                        Mode::empty(),
-                    )?;
+                if let Some((_, dev, ino, _)) = stack.last() {
+                    let parent = openat(&fd, "..", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?;
                     let stat = fstat(&parent)?;
                     if (stat.st_dev, stat.st_ino) != (*dev, *ino) {
                         return Err(io::Error::other("profile directory moved during cleanup"));
                     }
                     if remove {
-                        unlinkat(
-                            &parent,
-                            completed.4.as_ref().expect("child name").as_c_str(),
-                            AtFlags::REMOVEDIR,
-                        )?;
+                        unlinkat(&parent, completed.3.as_ref().expect("child name").as_c_str(), AtFlags::REMOVEDIR)
+                            .map_err(|e| walk_error(path, stack.iter().filter_map(|f| f.3.as_deref()), completed.3.as_deref(), e))?;
                     }
                     fd = parent;
                 }
                 continue;
             };
-            let stat = statat(&fd, name.as_c_str(), AtFlags::SYMLINK_NOFOLLOW)?;
+            let stat = statat(&fd, name.as_c_str(), AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|e| walk_error(path, stack.iter().filter_map(|f| f.3.as_deref()), Some(&name), e))?;
             if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
                 if remove {
-                    unlinkat(&fd, name.as_c_str(), AtFlags::empty())?;
+                    unlinkat(&fd, name.as_c_str(), AtFlags::empty())
+                        .map_err(|e| walk_error(path, stack.iter().filter_map(|f| f.3.as_deref()), Some(&name), e))?;
                 }
                 continue;
             }
-            let label = format!("{label}/{}", name.to_string_lossy());
             let child = prepare(&fd, name.as_c_str())
-                .map_err(|e| io::Error::other(format!("{label}: {e}")))?;
-            let names = children(&child).map_err(|e| io::Error::other(format!("{label}: {e}")))?;
+                .map_err(|e| walk_error(path, stack.iter().filter_map(|f| f.3.as_deref()), Some(&name), e))?;
+            let names = children(&child)
+                .map_err(|e| walk_error(path, stack.iter().filter_map(|f| f.3.as_deref()), Some(&name), e))?;
             let stat = fstat(&child)?;
-            // Keep names and inode identities, not one open descriptor per
-            // ancestor: a 3000-level tree must work below RLIMIT_NOFILE.
             fd = child;
-            stack.push((names, label, stat.st_dev, stat.st_ino, Some(name)));
+            stack.push((names, stat.st_dev, stat.st_ino, Some(name)));
         }
         if remove {
             unlinkat(CWD, path, AtFlags::REMOVEDIR)?;
