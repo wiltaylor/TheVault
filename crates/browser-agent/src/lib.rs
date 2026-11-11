@@ -454,8 +454,13 @@ fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
             )
             .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
             let mode = Mode::from_raw_mode(fstat(&pinned)?.st_mode) | Mode::RWXU;
-            chmodat(CWD, format!("/proc/self/fd/{}", pinned.as_raw_fd()), mode, AtFlags::empty())
-                .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
+            chmodat(
+                CWD,
+                format!("/proc/self/fd/{}", pinned.as_raw_fd()),
+                mode,
+                AtFlags::empty(),
+            )
+            .map_err(|e| io::Error::other(format!("{child_label}: pinned-directory chmod requires mounted /proc/self/fd; no path-based fallback: {e}")))?;
             let child = openat(
                 &pinned,
                 ".",

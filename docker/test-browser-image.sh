@@ -211,6 +211,8 @@ r=$(docker exec "$run" sh -c 'ldd /usr/local/bin/browser-agent 2>&1 || true')
 check "browser-agent is statically linked ($r)" grep -qE 'not a dynamic executable|statically linked' <<< "$r"
 fi
 
+r=$(run_cmd 'node -e '\''const fs = require("fs"); for (const [name, mode] of [["no-access", 0], ["no-search", 0o600]]) { fs.mkdirSync(name); fs.writeFileSync(name + "/Cookies", "fixture"); fs.chmodSync(name, mode); } const component = "d".repeat(200); for (let i=0; i<30; i++) { fs.mkdirSync(component); process.chdir(component); } fs.writeFileSync("Cookies", "deep fixture");'\''')
+check "prepare 0000, 0600 and deep directories with Cookies for reset" jqe '.exit == 0 and .timed_out == false' <<< "$r"
 code=$(get '/profile' -X DELETE -o /dev/null -w '%{http_code}')
 check "deleting the profile succeeds (got $code)" test "$code" = 200
 code=$(get '/files' -o /dev/null -w '%{http_code}')
