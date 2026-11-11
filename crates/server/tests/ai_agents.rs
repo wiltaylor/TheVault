@@ -991,14 +991,22 @@ fn browser_secrets_query_filter_oracle_cannot_recover_hidden_names() {
     {
         let conn = rusqlite::Connection::open(&db).unwrap();
         conn.busy_timeout(Duration::from_secs(10)).unwrap();
-        conn.execute("UPDATE notes SET data=?1 WHERE id=?2", rusqlite::params![raw["note"]["fields"].to_string(), thread]).unwrap();
+        conn.execute(
+            "UPDATE notes SET data=?1 WHERE id=?2",
+            rusqlite::params![raw["note"]["fields"].to_string(), thread],
+        )
+        .unwrap();
         conn.pragma_update(None, "user_version", 5).unwrap();
     }
     api.server.restart();
     let conn = rusqlite::Connection::open(&db).unwrap();
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, 6);
-    let data: String = conn.query_row("SELECT data FROM notes WHERE id=?1", [thread], |r| r.get(0)).unwrap();
+    let data: String = conn
+        .query_row("SELECT data FROM notes WHERE id=?1", [thread], |r| r.get(0))
+        .unwrap();
     assert!(!data.contains("bank"));
 }
 

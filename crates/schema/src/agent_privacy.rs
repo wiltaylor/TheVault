@@ -247,7 +247,10 @@ mod tests {
     #[test]
     fn browser_secrets_private_copy_preserves_visible_doc_values() {
         let transcript = json!({"messages":[],"proposals":[{"kind":"agent","name":"helper","before":"permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n"}]}).to_string();
-        let source = format!("title = \"Visible café\"\ntranscript = {}\nmetrics = {{ first: 1.25, second: [true, 3] }}\ncontent body {{ paragraph {{ text = \"Visible line\" }} }}\n", json!(transcript));
+        let source = format!(
+            "title = \"Visible café\"\ntranscript = {}\nmetrics = {{ first: 1.25, second: [true, 3] }}\ncontent body {{ paragraph {{ text = \"Visible line\" }} }}\n",
+            json!(transcript)
+        );
         let original = crate::Doc::parse(&source, "thread.wcl").unwrap();
         let expected = redacted_agent_doc("agent_thread", &original);
         let text = redact_agent_note("agent_thread", &source).unwrap();
