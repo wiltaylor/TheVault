@@ -267,7 +267,10 @@ fn answer(s: &Shared, r: &Request) -> Reply {
             error(403, "fixture permanently refused profile")
         }
         ("DELETE", "/profile") => {
-            if lock(&s.slow_profile).as_deref().is_some_and(|id| id == "*" || Some(id) == r.header("x-vault-agent")) {
+            if lock(&s.slow_profile)
+                .as_deref()
+                .is_some_and(|id| id == "*" || Some(id) == r.header("x-vault-agent"))
+            {
                 let mut response = Reply::json(409, &json!({"error":"fixture slow profile"}));
                 response.delay = std::time::Duration::from_secs(45);
                 return response;

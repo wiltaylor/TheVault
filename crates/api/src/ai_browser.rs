@@ -243,7 +243,8 @@ pub fn cleanup_retired(w: Arc<Writer>) {
                         active.insert(id.clone());
                         let profile = b.clone().with_profile(id.clone());
                         let name = id.clone();
-                        let task = deletes.spawn(async move { (id, profile.remove_profile().await) });
+                        let task =
+                            deletes.spawn(async move { (id, profile.remove_profile().await) });
                         task_ids.insert(task.id(), name);
                     }
                 } else {

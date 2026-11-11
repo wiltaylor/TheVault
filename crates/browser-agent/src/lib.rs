@@ -373,11 +373,15 @@ async fn delete_profile(
     }
     let root = state.home.join("profiles");
     let path = root.join(id);
-    if root.exists() { safe_dir(&root)?; }
+    if root.exists() {
+        safe_dir(&root)?;
+    }
     if path.exists() {
+        safe_dir(&path)?;
         let owned_path = path.clone();
         tokio::task::spawn_blocking(move || make_profile_directories_writable(&owned_path))
-            .await.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+            .await
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
         let profile = scoped(&state, &headers, false)?;
         let outcome = run_command(
             &profile,
@@ -400,14 +404,21 @@ async fn delete_profile(
         if owned_path.exists() {
             make_profile_directories_writable(&owned_path)?;
             for _ in 0..2 {
-                if !owned_path.exists() { break; }
-                std::fs::remove_dir_all(&owned_path).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("removing {}: {e}", owned_path.display())))?;
+                if !owned_path.exists() {
+                    break;
+                }
+                std::fs::remove_dir_all(&owned_path).map_err(|e| {
+                    ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("removing {}: {e}", owned_path.display()),
+                    )
+                })?;
             }
         }
         Ok::<(), ApiError>(())
     })
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let _guard = state.profiles.lock().unwrap_or_else(|e| e.into_inner());
     if root.exists() {
         safe_dir(&root)?;
@@ -428,12 +439,34 @@ async fn delete_profile(
 fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
     use rustix::fs::{AtFlags, CWD, Dir, FileType, Mode, OFlags, chmodat, fstat, openat, statat};
     use std::os::fd::AsRawFd;
-    fn prepare(parent: impl rustix::fd::AsFd, name: impl rustix::path::Arg) -> io::Result<rustix::fd::OwnedFd> {
-        let pinned = openat(parent, name, OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?;
+    fn prepare(
+        parent: impl rustix::fd::AsFd,
+        name: impl rustix::path::Arg,
+    ) -> io::Result<rustix::fd::OwnedFd> {
+        let pinned = openat(
+            parent,
+            name,
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
         let mode = Mode::from_raw_mode(fstat(&pinned)?.st_mode) | Mode::RWXU;
-        chmodat(CWD, format!("/proc/self/fd/{}", pinned.as_raw_fd()), mode, AtFlags::empty())
-            .map_err(|e| io::Error::other(format!("pinned-directory chmod requires mounted /proc/self/fd; no path-based fallback: {e}")))?;
-        let fd = openat(&pinned, ".", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?;
+        chmodat(
+            CWD,
+            format!("/proc/self/fd/{}", pinned.as_raw_fd()),
+            mode,
+            AtFlags::empty(),
+        )
+        .map_err(|e| {
+            io::Error::other(format!(
+                "pinned-directory chmod requires mounted /proc/self/fd; no path-based fallback: {e}"
+            ))
+        })?;
+        let fd = openat(
+            &pinned,
+            ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
         // The pinned descriptor is dropped here, before descent.
         Ok(fd)
     }
@@ -443,7 +476,9 @@ fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
         while let Some(entry) = entries.read() {
             let entry = entry?;
             let name = entry.file_name();
-            if name.to_bytes() == b"." || name.to_bytes() == b".." { continue; }
+            if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                continue;
+            }
             let stat = statat(fd, name, AtFlags::SYMLINK_NOFOLLOW)?;
             if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
                 names.push(name.to_owned());
@@ -457,19 +492,41 @@ fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(io::Error::other("profile path is not a real directory"));
         }
-        let fd = prepare(CWD, path)?;
+        let mut fd = prepare(CWD, path)?;
         let names = children(&fd)?;
-        let mut stack = vec![(fd, names, path.display().to_string())];
-        while let Some((fd, names, label)) = stack.last_mut() {
-            let Some(name) = names.pop() else { stack.pop(); continue; };
+        let stat = fstat(&fd)?;
+        let mut stack = vec![(names, path.display().to_string(), stat.st_dev, stat.st_ino)];
+        while let Some((names, label, _, _)) = stack.last_mut() {
+            let Some(name) = names.pop() else {
+                stack.pop();
+                if let Some((_, _, dev, ino)) = stack.last() {
+                    let parent = openat(&fd, "..", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?;
+                    let stat = fstat(&parent)?;
+                    if (stat.st_dev, stat.st_ino) != (*dev, *ino) {
+                        return Err(io::Error::other("profile directory moved during cleanup"));
+                    }
+                    fd = parent;
+                }
+                continue;
+            };
             let label = format!("{label}/{}", name.to_string_lossy());
-            let child = prepare(&*fd, name.as_c_str()).map_err(|e| io::Error::other(format!("{label}: {e}")))?;
+            let child = prepare(&fd, name.as_c_str())
+                .map_err(|e| io::Error::other(format!("{label}: {e}")))?;
             let names = children(&child).map_err(|e| io::Error::other(format!("{label}: {e}")))?;
-            stack.push((child, names, label));
+            let stat = fstat(&child)?;
+            // Keep names and inode identities, not one open descriptor per
+            // ancestor: a 3000-level tree must work below RLIMIT_NOFILE.
+            fd = child;
+            stack.push((names, label, stat.st_dev, stat.st_ino));
         }
         Ok(())
     })();
-    result.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("preparing {} for removal: {e}", path.display())))
+    result.map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("preparing {} for removal: {e}", path.display()),
+        )
+    })
 }
 
 /// A successful shell can leave detached children behind. Close those too before
