@@ -1008,6 +1008,7 @@ export function AgentScreen() {
                 <Show when={v().a.description}>
                   <p class="muted">{v().a.description}</p>
                 </Show>
+                <p class="muted">Attachments and original HTML of incoming messages are not available to agents, even after the note is allowed or released. You can still open them yourself.</p>
                 <div class="agent-tabs" role="tablist" aria-label="Agent settings" onKeyDown={onTabKey}>
                   <For each={AGENT_TABS}>
                     {(t) => (

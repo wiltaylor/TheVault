@@ -993,6 +993,7 @@ fn incoming_assets_allowed_email_tools_and_script_deny_text() {
     let decisions = testkit::FakeDecisions::start();
     let chat = FakeAnthropic::start();
     let api = safety_setup(&chat, &decisions, "router");
+    api.agent("reader", "label = \"Reader\"\nenabled = false\n");
     let asset: Value = api.client.post(api.server.url("/api/assets?filename=PRIVATE_FILE.txt"))
         .bearer_auth(api.server.admin_token()).body("PRIVATE_BYTES").send().unwrap().json().unwrap();
     let asset = asset["id"].as_str().unwrap();
