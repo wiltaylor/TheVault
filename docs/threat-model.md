@@ -1,6 +1,6 @@
 # Untrusted input and agent authority
 
-TV-143. Rules: the project wiki `security-decisions`, read at revision 37.
+TV-143. Rules: the project wiki `security-decisions`, re-read on 2026-11-11 after TV-137 landed.
 This page describes deterministic server enforcement, not resistance of a model
 to persuasive text. `FakeAnthropic` deliberately requests forbidden actions.
 No network provider, real credential or production vault is used.
@@ -15,8 +15,9 @@ are distinct authorities. A foreground run is not equivalent to a trigger run.
 
 The matrix's active baseline is an agent with `get_note`, `fetch_url` and
 `use_skill` only. The fake provider first reads the source successfully, then
-attempts the column's operations. Every attempted operation must be unoffered
-and return an authority error. Outbox and agent files must remain unchanged.
+attempts the column's operations. Every attempted existing-tool operation must be unoffered
+and return an authority error. Columns without built-in tools inspect a maximal
+agent's offered tool list instead. Outbox and agent files must remain unchanged.
 This is a least-privilege non-escalation test, not evidence for every permitted
 tool's internal confirmation, Google or send-limit branch. Existing dedicated
 suites below test those branches with the tools enabled.
@@ -44,32 +45,46 @@ columns and duplicate registrations when either axis is extended.
 
 | Source | held_notes | send | calendar | gmail | code_secrets | agent_skills | tokens_pairing | integrations | browser_login | triggers_backfill |
 |---|---|---|---|---|---|---|---|---|---|---|
-| email | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| sms | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| message | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| call | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| calendar_event | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| web_page | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| shared_note | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| peer_git_sync | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| device_sync | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| external_agent_token | P TV-137 | B TV-171/TV-142 | B TV-136/TV-142 | B TV-138 | B TV-135 | B TV-140; P TV-185 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170; P TV-185 |
-| agent_run_output | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| skill_zip | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
-| shared_attachment | P TV-137 | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | B TV-142 | B TV-142 | B TV-160; P TV-161/TV-167 | B TV-170 |
+| email | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| sms | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| message | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| call | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| calendar_event | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| web_page | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| shared_note | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| peer_git_sync | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| device_sync | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | HTTP TV-140 scope | HTTP TV-140 scope | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| external_agent_token | TV-137 (active) | B TV-171/TV-142 | B TV-136/TV-142 | B TV-138 | B TV-135 | B TV-140; P TV-185 | HTTP TV-142 | HTTP TV-142 | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| agent_run_output | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| skill_zip | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| shared_attachment | TV-137 (active) | B TV-171 | B TV-136 | B TV-138 | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
 
 Attachments of incoming email inherit that email's source and gate. The
 shared_attachment row represents files shared independently of email.
 
-At this revision there are 118 active cases (117 baseline cells and one
-completeness check) and 40 pending cases: 13 held-note cells for TV-137,
-13 Login-grant proposal checks for TV-161, 13 signed profile selection checks
-for TV-167 and one external-token chat-entry check for TV-185. The latter
-protects every external-token capability, not just the two annotated groups.
-Each pending case contains an executable secure-behaviour assertion and names
-the implementing card in its `ignore` reason. On landing that card, remove the
-corresponding ignores and run the matrix. A failure must become a security
-finding rather than a product patch hidden in this test card.
+There are 132 active cases: 130 source/capability cells, one completeness
+check and one granted-tool schema control. The 27 pending cases are 13
+Login-grant proposal checks for TV-161, 13 signed profile checks for TV-167 and
+one external-token chat-entry check for TV-185. The latter protects every
+external-token capability. Ignore reasons name their implementation cards.
+
+The TV-137 cells read a held target after each source's payload. Email and
+non-note sources target an incoming email. SMS/message and device sources
+target an incoming message, call targets a call, and calendar_event targets an
+event organised by outside@example.com. These are four target-note kinds, not
+13 independent write-path or transport tests. Git-sync gate coverage remains
+in the dedicated writer tests, not in the normalised peer_git_sync fixture.
+
+N is an architectural absence assertion over a maximal agent's offered
+built-in tools, not a refusal of an imaginary call. It does not restrict
+owner-installed script tools. HTTP TV-142 cases use a legacy admin-scope agent
+token seeded through state and exercise the kind guard and admin-to-write cap.
+HTTP TV-140 device cases exercise ordinary scope checks. Every backfill cell
+also checks an ordinary admin user token gets session_required, which reaches
+TV-170's guard rather than stopping at write scope. HTTP checks verify the
+error code as well as status. Sending additionally matches its review-required
+message. Current source/capability checks remain least-privilege baselines,
+not enabled-tool internal-policy coverage.
 
 Active browser cells additionally create a Login secret through the owner API,
 check that metadata omits its password, and verify that the ordinary secret
@@ -80,7 +95,7 @@ an attacker-supplied profile argument.
 
 ## Rule-specific assertions and existing suites
 
-- H (TV-137): no agent reads an incoming note without an allow verdict.
+- H (TV-137, now active): no agent reads an incoming note without an allow verdict.
   Release and reclassification are session controlled. The organiser rule for
   calendar events and fixed held-note notice are part of this boundary.
 - S (TV-171, TV-142): drafting is allowed with the tool, sending requires Outbox
