@@ -1164,7 +1164,8 @@ pub async fn read(
     let value = blocking(w, move |w| {
         let t = Thread::read_of(w, &name, &id)?;
         client_json(w, &t, &author)
-    }).await?;
+    })
+    .await?;
     Ok(Json(value))
 }
 

@@ -837,7 +837,9 @@ impl Writer {
     /// Every `agents/<name>.wcl` with a valid name, parsed, sorted by name. A file that does not
     /// parse is listed with its problems.
     pub fn agents(&self) -> Result<Vec<(String, std::result::Result<Agent, Invalid>)>> {
-        self.state.revoke_missing_browser_secrets(|name| self.vault.root().join(agent_path(name)).is_file())?;
+        self.state.revoke_missing_browser_secrets(|name| {
+            self.vault.root().join(agent_path(name)).is_file()
+        })?;
         let mut files: Vec<_> = self
             .definitions("agents")?
             .into_iter()

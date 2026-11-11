@@ -381,15 +381,34 @@ fn browser_secrets_deleting_an_agent_revokes_its_confirmed_names() {
 fn browser_secrets_external_deletion_revokes_on_startup_and_live_reads() {
     for startup in [true, false] {
         let mut api = Api::start();
-        expect(api.admin("PUT", "/api/secrets/bank").json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]})).send().unwrap(), StatusCode::OK);
+        expect(
+            api.admin("PUT", "/api/secrets/bank")
+                .json(
+                    &json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]}),
+                )
+                .send()
+                .unwrap(),
+            StatusCode::OK,
+        );
         let source = "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n";
-        expect(api.put_wcl("clerk", source, api.server.admin_token()), StatusCode::OK);
+        expect(
+            api.put_wcl("clerk", source, api.server.admin_token()),
+            StatusCode::OK,
+        );
         std::fs::remove_file(api.server.vault_path().join("agents/clerk.wcl")).unwrap();
-        if startup { api.server.restart(); }
-        expect(api.admin("GET", "/api/agents/clerk").send().unwrap(), StatusCode::NOT_FOUND);
+        if startup {
+            api.server.restart();
+        }
+        expect(
+            api.admin("GET", "/api/agents/clerk").send().unwrap(),
+            StatusCode::NOT_FOUND,
+        );
         std::fs::write(api.server.vault_path().join("agents/clerk.wcl"), source).unwrap();
         api.server.restart();
-        let agent = expect(api.admin("GET", "/api/agents/clerk").send().unwrap(), StatusCode::OK);
+        let agent = expect(
+            api.admin("GET", "/api/agents/clerk").send().unwrap(),
+            StatusCode::OK,
+        );
         assert_eq!(agent["browser_secrets_inactive"], json!(["bank"]));
     }
 }
@@ -399,11 +418,18 @@ fn browser_secrets_invalid_names_are_not_disclosed_in_issues() {
     let api = Api::start();
     let read = api.token("read");
     for names in ["[\"bank\", \"bank\"]", "[\"bank-invalid!\"]"] {
-        std::fs::write(api.server.vault_path().join("agents/clerk.wcl"), format!("permissions {{\n browser = true\n browser_secrets = {names}\n}}\n")).unwrap();
+        std::fs::write(
+            api.server.vault_path().join("agents/clerk.wcl"),
+            format!("permissions {{\n browser = true\n browser_secrets = {names}\n}}\n"),
+        )
+        .unwrap();
         let response = api.req("GET", "/api/agents/clerk", &read).send().unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(!response.text().unwrap().contains("bank"));
-        let list = expect(api.req("GET", "/api/agents", &read).send().unwrap(), StatusCode::OK);
+        let list = expect(
+            api.req("GET", "/api/agents", &read).send().unwrap(),
+            StatusCode::OK,
+        );
         assert!(!list.to_string().contains("bank"));
     }
 }

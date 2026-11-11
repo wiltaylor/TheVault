@@ -719,7 +719,11 @@ fn spawn_turn(
         author: cfg.author,
         owner: cfg.owner,
         scope: cfg.scope,
-        out: Out { tx, stop, full_logins },
+        out: Out {
+            tx,
+            stop,
+            full_logins,
+        },
         images: ai_assets::Images::default(),
         agent_name: cfg.agent_name,
         log: prepared.log.map(std::sync::Mutex::new),

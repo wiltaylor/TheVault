@@ -1145,9 +1145,23 @@ impl Reader<'_> {
         let mut seen = HashSet::new();
         for i in &items {
             if !valid(i) {
-                self.c.fail(at, if what == "secret" { "an entry is not a valid secret name".to_owned() } else { format!("{i:?} is not a {what} name") });
+                self.c.fail(
+                    at,
+                    if what == "secret" {
+                        "an entry is not a valid secret name".to_owned()
+                    } else {
+                        format!("{i:?} is not a {what} name")
+                    },
+                );
             } else if !seen.insert(i.as_str()) {
-                self.c.fail(at, if what == "secret" { "a secret name appears more than once".to_owned() } else { format!("{i:?} appears more than once") });
+                self.c.fail(
+                    at,
+                    if what == "secret" {
+                        "a secret name appears more than once".to_owned()
+                    } else {
+                        format!("{i:?} appears more than once")
+                    },
+                );
             }
         }
         (self.c.errors() == before).then_some(items)

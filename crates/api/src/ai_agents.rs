@@ -337,7 +337,10 @@ pub(crate) fn hide_browser_secrets(value: &mut Value) {
         if let Some(source) = value["input"]["wcl"].as_str() {
             let name = value["input"]["name"].as_str().unwrap_or("hidden");
             let text = match Agent::parse(name, source) {
-                Ok(mut agent) => { agent.permissions.browser_secrets.clear(); json!(agent.to_wcl()) }
+                Ok(mut agent) => {
+                    agent.permissions.browser_secrets.clear();
+                    json!(agent.to_wcl())
+                }
                 Err(_) => Value::Null,
             };
             value["input"]["wcl"] = text;
@@ -345,8 +348,16 @@ pub(crate) fn hide_browser_secrets(value: &mut Value) {
         }
     }
     match value {
-        Value::Object(fields) => { for child in fields.values_mut() { hide_browser_secrets(child); } }
-        Value::Array(items) => { for child in items { hide_browser_secrets(child); } }
+        Value::Object(fields) => {
+            for child in fields.values_mut() {
+                hide_browser_secrets(child);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                hide_browser_secrets(child);
+            }
+        }
         _ => {}
     }
 }
@@ -586,7 +597,9 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
         }
     }
     let (_, saved) = w.put_agent(name, after, crate::agent_files::tool_check(w))?;
-    w.state().narrow_browser_secrets(name, &saved.permissions.browser_secrets).map_err(writer::Error::from)?;
+    w.state()
+        .narrow_browser_secrets(name, &saved.permissions.browser_secrets)
+        .map_err(writer::Error::from)?;
     let op = if before.is_some() {
         "agent_change"
     } else {

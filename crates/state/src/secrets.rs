@@ -282,11 +282,15 @@ impl State {
         let tx = conn.transaction()?;
         let previous: Vec<String> = {
             let mut stmt = tx.prepare("SELECT name FROM browser_secret_grants WHERE agent=?1")?;
-            stmt.query_map([agent], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+            stmt.query_map([agent], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?
         };
         for name in previous {
             if !names.contains(&name) {
-                tx.execute("DELETE FROM browser_secret_grants WHERE agent=?1 AND name=?2", params![agent, name])?;
+                tx.execute(
+                    "DELETE FROM browser_secret_grants WHERE agent=?1 AND name=?2",
+                    params![agent, name],
+                )?;
             }
         }
         tx.commit()?;
@@ -298,7 +302,8 @@ impl State {
         let conn = self.conn();
         let agents: Vec<String> = {
             let mut stmt = conn.prepare("SELECT DISTINCT agent FROM browser_secret_grants")?;
-            stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+            stmt.query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?
         };
         for agent in agents {
             if !exists(&agent) {

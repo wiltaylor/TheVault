@@ -271,16 +271,31 @@ fn browser_secret_confirmation_replaces_exact_names_and_revokes_on_delete() {
 fn browser_secrets_narrowing_never_adds_or_refreshes_confirmations() {
     let dir = TempDir::new().unwrap();
     let state = open_with_key(&dir, SecretKey::generate());
-    let login = state::LoginSecret { username: "test".into(), password: "made-up".into(), origins: vec![], totp_seed: None };
-    for name in ["bank", "mail"] { state.set_login_secret(name, &login).unwrap(); }
-    state.confirm_browser_secrets("clerk", &["bank".into()]).unwrap();
-    state.narrow_browser_secrets("clerk", &["bank".into(), "mail".into()]).unwrap();
+    let login = state::LoginSecret {
+        username: "test".into(),
+        password: "made-up".into(),
+        origins: vec![],
+        totp_seed: None,
+    };
+    for name in ["bank", "mail"] {
+        state.set_login_secret(name, &login).unwrap();
+    }
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
+    state
+        .narrow_browser_secrets("clerk", &["bank".into(), "mail".into()])
+        .unwrap();
     assert!(!state.browser_secret_active("clerk", "mail").unwrap());
     state.delete_login_secret("bank").unwrap();
     state.set_login_secret("bank", &login).unwrap();
-    state.narrow_browser_secrets("clerk", &["bank".into()]).unwrap();
+    state
+        .narrow_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
     assert!(!state.browser_secret_active("clerk", "bank").unwrap());
-    state.confirm_browser_secrets("clerk", &["bank".into()]).unwrap();
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
     state.narrow_browser_secrets("clerk", &[]).unwrap();
     assert!(!state.browser_secret_active("clerk", "bank").unwrap());
 }
