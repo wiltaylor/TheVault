@@ -10,7 +10,7 @@ import { createServer } from "node:net";
 import { once } from "node:events";
 import { randomBytes } from "node:crypto";
 
-test("image gate HTTP checks use signed, separate and resettable profiles", { timeout: 30000 }, async (t) => {
+test("image gate HTTP checks use signed, separate and resettable profiles", { timeout: 240000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "vault-browser-protocol-"));
   const home = join(root, "home");
   const work = join(root, "work");
@@ -39,7 +39,9 @@ test("image gate HTTP checks use signed, separate and resettable profiles", { ti
     }
     const { stdout } = await promisify(execFile)("bash", ["docker/test-browser-image.sh"], {
       env: { ...process.env, BOX_URL: base, BOX_TOKEN: token, BOX_HOME_DIR: home, BOX_SERVICE_PID: String(child.pid), BOX_EXPECTED_USER: userInfo().username, BOX_EXPECTED_UID: String(process.getuid()), TMPDIR: tmp },
-      timeout: 20000,
+      // The dev filesystem can build all4000 levels using external mkdir;
+      // allow the script's180s setup budget plus its other HTTP checks.
+      timeout: 210000,
     });
     assert.match(stdout, /all checks passed/);
     assert.match(stdout, /a second profile cannot read the screenshot/);
