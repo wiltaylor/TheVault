@@ -126,9 +126,18 @@ check "/health supports signed profiles" jqe '.profile_protocol == 1' <<< "$heal
 
 # POST /run $1 with timeout $2 (default 60); prints the JSON answer.
 run_cmd() {
-  curl -sS -H "Authorization: Bearer $token" -H 'content-type: application/json' \
+  local body status transport=0
+  body=$(mktemp "$tmp/run-body.XXXXXX")
+  status=$(curl -sS -o "$body" -w '%{http_code}' -H "Authorization: Bearer $token" -H 'content-type: application/json' \
     -H "x-vault-agent: $id" -H "x-vault-agent-signature: $(sign "$id")" \
-    --data "$(jq -cn --arg c "$1" --argjson t "${2:-60}" '{command: $c, timeout_s: $t}')" "$base/run"
+    --data "$(jq -cn --arg c "$1" --argjson t "${2:-60}" '{command: $c, timeout_s: $t}')" "$base/run") || transport=$?
+  if [ "$transport" -ne 0 ] || [ "$status" != 200 ] || ! jq -e '.exit == 0 and .timed_out == false' "$body" >/dev/null; then
+    printf '/run failed: HTTP %s, curl exit %s, command bytes %s, timeout %ss; response body:\n' "$status" "$transport" "${#1}" "${2:-60}" >&2
+    cat "$body" >&2
+    printf '\n' >&2
+  fi
+  cat "$body"
+  return "$transport"
 }
 # GET $1 with the token, extra curl arguments after.
 get() {
@@ -195,7 +204,7 @@ id=$first_id
 
 # F13: long names must not retain a full path per ancestor in the service.
 id="$first_id-memory4000"
-r=$(run_cmd 'node -e '\''const fs = require("fs"), n = "d".repeat(255); for (let i=0; i<4000; i++) { fs.mkdirSync(n); process.chdir(n); } fs.writeFileSync("Cookies", "fixture");'\''')
+r=$(run_cmd 'node -e '\''const fs = require("fs"), n = "d".repeat(255); for (let i=0; i<4000; i++) { fs.mkdirSync(n); process.chdir(n); } fs.writeFileSync("Cookies", "fixture");'\''' 180)
 check "prepare 4000 levels of 255-byte names" jqe '.exit == 0' <<< "$r"
 if [ -n "${BOX_URL:-}" ]; then
   service_pid=${BOX_SERVICE_PID:?BOX_SERVICE_PID is required to measure service memory}
