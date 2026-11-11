@@ -283,12 +283,31 @@ impl Writer {
         self.batch(vec![op], dry_run, author)
     }
 
+    // prepare_op already owns the index lock. Use the same document decision as
+    // agent_may_read without calling read(), which would acquire that lock again.
+    fn check_batch_agent_note(&self, id: &str, author: &Author) -> Result<()> {
+        if matches!(author, Author::Agent(_) | Author::AgentMail(_)) {
+            let allowed = self
+                .existing(id)
+                .and_then(|(kind, text)| {
+                    let doc = Input::Wcl(text).parse(&note_path(&kind, id))?;
+                    self.agent_safety_doc(id, &kind, &doc)
+                })
+                .is_ok_and(|s| s.allowed());
+            if !allowed {
+                return Err(Error::AgentHeld);
+            }
+        }
+        Ok(())
+    }
+
     fn prepare_op(&self, inner: &Inner, op: Op, author: &Author) -> Result<Prepared> {
         match op {
             Op::Create { type_name, input } => {
                 self.prepare_create(inner, &type_name, &input, author, Vec::new())
             }
             Op::Update { id, input, base } => {
+                self.check_batch_agent_note(&id, author)?;
                 let (type_name, old) = self.existing(&id)?;
                 let doc = input.parse(&note_path(&type_name, &id))?;
                 let change = self.prepare_put(inner, &id, &type_name, doc, Some(&old), author)?;
@@ -303,6 +322,7 @@ impl Writer {
                 })
             }
             Op::Delete { id, base } => {
+                self.check_batch_agent_note(&id, author)?;
                 let (type_name, old) = self.existing(&id)?;
                 self.check_base(&id, &type_name, &old, base.as_deref())?;
                 Ok(Prepared {
@@ -401,6 +421,9 @@ impl Writer {
         );
 
         let matches = self.find_by_key(inner, type_name, key, &value)?;
+        for id in &matches {
+            self.check_batch_agent_note(id, author)?;
+        }
         let id = match matches.as_slice() {
             [] => return self.prepare_create(inner, type_name, input, author, vec![key_target]),
             [id] => id.clone(),

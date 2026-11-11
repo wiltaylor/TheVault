@@ -198,6 +198,13 @@ impl Scheduler {
             gitsync: OnceLock::new(),
         });
         s.reload()?;
+        let weak = Arc::downgrade(&s);
+        s.writer.set_agent_safety_wake(Arc::new(move || {
+            if let Some(s) = weak.upgrade() {
+                s.plan().agents.safety_ready = true;
+                s.wake.notify_all();
+            }
+        }));
         Ok(s)
     }
 

@@ -4,6 +4,7 @@
 
 mod activity;
 mod agent_memory;
+mod agent_safety;
 mod agent_threads;
 mod agents;
 mod ai_accounts;
