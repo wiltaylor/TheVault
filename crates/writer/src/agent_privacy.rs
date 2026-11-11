@@ -51,13 +51,26 @@ fn redact_content_in(value: &mut Value, inherited_type: Option<&str>) -> Result<
     }
     match value {
         Value::Object(fields) => {
+            // get_agent returns the same definition twice: parsed JSON and WCL text.
+            if fields.contains_key("agent") && fields.contains_key("format")
+                && let Some(source) = fields.get("wcl").and_then(Value::as_str)
+            {
+                let name = fields.get("name").and_then(Value::as_str).unwrap_or("hidden");
+                let source = match schema::Agent::parse(name, source) {
+                    Ok(mut agent) => { agent.permissions.browser_secrets.clear(); Value::String(agent.to_wcl()) }
+                    Err(_) => Value::Null,
+                };
+                fields.insert("wcl".to_owned(), source);
+            }
             let type_name = fields
                 .get("type")
                 .and_then(Value::as_str)
                 .or(inherited_type)
                 .map(str::to_owned);
             for (key, child) in fields {
-                if matches!(key.as_str(), "wcl" | "current")
+                if key == "browser_secrets" && child.is_array() {
+                    *child = json!([]);
+                } else if matches!(key.as_str(), "wcl" | "current")
                     && let Some(text) = child.as_str()
                 {
                     *child = Value::String(redact_agent_note(
@@ -95,7 +108,8 @@ fn redact_content_in(value: &mut Value, inherited_type: Option<&str>) -> Result<
             if text.trim_start().starts_with('{')
                 && (text.contains("\"proposals\"")
                     || text.contains("\"transcript\"")
-                    || text.contains("\"before\"")) =>
+                    || text.contains("\"before\"")
+                    || text.contains("\"browser_secrets\"")) =>
         {
             if let Ok(mut decoded) = serde_json::from_str::<Value>(text) {
                 let before = decoded.clone();
@@ -162,6 +176,15 @@ pub fn hide_browser_secrets(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_secrets_get_agent_results_do_not_escape_through_encoded_tool_content() {
+        let source = "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n";
+        let result = json!({"name":"helper","wcl":source,"agent":{"name":"helper","permissions":{"browser":true,"browser_secrets":["bank"]}},"format":"agent file vocabulary"});
+        let mut transcript = json!({"messages":[{"content":[{"type":"tool_result","content":result.to_string()}]}],"proposals":[]});
+        redact_agent_content(&mut transcript).unwrap();
+        assert!(!transcript.to_string().contains("bank"));
+    }
 
     #[test]
     fn browser_secrets_redaction_preserves_unrelated_transcript_fields() {
