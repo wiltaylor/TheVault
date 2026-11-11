@@ -133,6 +133,62 @@ fn incoming_assets_google_upload_is_marked_before_note_creation() {
 }
 
 #[test]
+fn round4_upgrade_marks_asset_trash_before_restore() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let asset = w.put_asset("BINNED_SECRET.txt", b"PRIVATE".to_vec()).unwrap();
+    w.cleanup_assets(Some(std::slice::from_ref(&asset.id)), false).unwrap();
+    assert_eq!(w.asset_trash().len(), 1);
+    let w = round4_upgrade(w, dir.path());
+    w.activate_agent_safety().unwrap();
+    w.restore_asset(&asset.id).unwrap();
+    assert!(!w.agent_may_read_asset(&asset.id));
+}
+
+#[test]
+fn round4_upgrade_preserves_local_and_type_only_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    for kind in ["memo", "email"] {
+        w.put_type(kind, "label = \"Note\"\nfield file { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    }
+    let local = w.put_asset("local.txt", b"LOCAL".to_vec()).unwrap();
+    let incoming = w.put_asset("incoming.txt", b"PRIVATE".to_vec()).unwrap();
+    let template = w.put_asset("template.png", b"image".to_vec()).unwrap();
+    for (kind, asset) in [("memo", &local), ("email", &incoming)] {
+        w.create(kind, &Input::Json(serde_json::json!({"fields":{"title":"Before activation", "file":asset.id}})), &Author::Session("owner".into())).unwrap();
+    }
+    w.put_type("template_note", &format!("label = \"Template\"\n# image \"{}\"\ntemplate default {{ tab Main {{ slot title }} }}\n", template.id)).unwrap();
+    let w = round4_upgrade(w, dir.path());
+    w.activate_agent_safety().unwrap();
+    assert!(w.agent_may_read_asset(&local.id), "pre-activation local file must remain readable");
+    assert!(!w.agent_may_read_asset(&incoming.id));
+    assert!(w.agent_may_read_asset(&template.id), "type-only file is not an orphan");
+}
+
+#[test]
+fn round4_in_app_agent_cannot_cleanup_or_restore_assets() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let asset = w.put_asset("SECRET.txt", b"PRIVATE".to_vec()).unwrap();
+    w.cleanup_assets(Some(std::slice::from_ref(&asset.id)), false).unwrap();
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    assert!(w.cleanup_assets(None, true).is_err());
+    assert!(w.cleanup_assets(None, false).is_err());
+    assert!(w.restore_asset(&asset.id).is_err());
+}
+
+fn round4_upgrade(w: Writer, path: &std::path::Path) -> Writer {
+    let vault = store::Vault::init(path).unwrap();
+    let db = vault.server_dir().join("state.db");
+    drop(w);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("DELETE FROM meta WHERE key LIKE 'agent_safety.%'", []).unwrap();
+    drop(conn);
+    Writer::open(vault, state::State::open(&db, None).unwrap()).unwrap()
+}
+
+#[test]
 fn round3_migration_denies_previously_unlinked_incoming_asset() {
     check_round3_orphan_migration(true);
 }
