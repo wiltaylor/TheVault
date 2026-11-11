@@ -602,9 +602,13 @@ impl Writer {
                 self.agent_may_read(&n.note)
                     && self.read(&n.note).is_ok_and(|note| {
                         !self.incoming_agent_note(&note.type_name, &note.doc)
-                            && self.state().meta(&format!("agent_safety.note.{}", n.note))
+                            && self
+                                .state()
+                                .meta(&format!("agent_safety.note.{}", n.note))
                                 .is_ok_and(|v| v.is_none())
-                            && self.state().meta(&format!("agent_safety.legacy.{}", n.note))
+                            && self
+                                .state()
+                                .meta(&format!("agent_safety.legacy.{}", n.note))
                                 .is_ok_and(|v| v.is_none())
                     })
             }) && usage.trashed.is_empty()

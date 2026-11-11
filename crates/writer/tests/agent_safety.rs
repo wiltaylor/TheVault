@@ -30,6 +30,32 @@ fn create(w: &Writer, title: &str) -> writer::Saved {
 }
 
 #[test]
+fn incoming_assets_release_and_shared_local_reference_do_not_clear_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.put_type("memo", "label = \"Memo\"\nfield file { kind = \"asset\" }\n").unwrap();
+    // The test email type needs an asset field just as the shipped incoming type does.
+    w.put_type("email", "label = \"Email\"\nfield file { kind = \"asset\" }\n").unwrap();
+    w.activate_agent_safety().unwrap();
+    let asset = w.put_asset("private.txt", b"PRIVATE_BYTES".to_vec()).unwrap();
+    let local = w.put_asset("local.txt", b"LOCAL".to_vec()).unwrap();
+    let owner = Author::Session("owner".into());
+    let note = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Incoming", "file":asset.id}})), &owner).unwrap();
+    w.create("memo", &Input::Json(serde_json::json!({"fields":{"title":"Shared", "file":asset.id}})), &owner).unwrap();
+    w.create("memo", &Input::Json(serde_json::json!({"fields":{"title":"Local", "file":local.id}})), &owner).unwrap();
+    let hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    w.release_agent_safety(&note.id, &hash, &owner).unwrap();
+    assert!(w.agent_may_read(&note.id));
+    assert!(!w.agent_may_read_asset(&asset.id));
+    assert!(w.agent_may_read_asset(&local.id));
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    assert!(script_core::Vault::asset(&w, &asset.id).unwrap_err().contains("not available to agents"));
+    assert!(script_core::Vault::asset(&w, &local.id).is_ok());
+    let listed = script_core::Vault::assets(&w).unwrap();
+    assert!(!serde_json::to_string(&listed).unwrap().contains("private.txt"));
+}
+
+#[test]
 fn round5_own_google_event_is_exempt_independent_of_calendar() {
     let dir = tempfile::tempdir().unwrap();
     let w = open_key(dir.path(), Some(state::SecretKey::generate()));
