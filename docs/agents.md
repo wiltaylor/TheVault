@@ -124,6 +124,13 @@ write access to the server's agent files, which already permits any file change.
 Applying an agent proposal can only narrow its confirmed names. Proposal text in
 chat events and thread responses hides Login names from non-managers, while the
 server keeps the original text for the owner's Apply.
+Generic note, history, query, sync, trash, write and conflict responses use the
+same caller-aware transcript redaction boundary. Non-manager JSON and WCL
+responses are scanned up to 32 MiB; larger bodies are refused, never passed
+through unscanned. Narrow the query or use an owner session for larger results.
+Sessions and admin user tokens bypass scanning without buffering. SSE, asset
+downloads and zip exports keep their existing streaming authorization boundaries.
+Tool answers are redacted before truncation and before the model sees them.
 Ship updated desktop and Android apps before saving the new permission: old
 apps reject the unknown field, as they do `browser = true`.
 

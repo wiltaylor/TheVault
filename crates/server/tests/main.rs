@@ -18,6 +18,7 @@ mod agent_threads;
 mod agent_triggers;
 mod agents;
 mod ai_agents;
+mod browser_secrets;
 mod ai_browser;
 mod ai_chat;
 mod ai_decide;

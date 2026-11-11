@@ -2172,7 +2172,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2242,7 +2242,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2283,7 +2283,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: got.parts,
                     });
@@ -2315,7 +2315,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: got.parts,
                     });
@@ -2386,7 +2386,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2437,7 +2437,7 @@ impl Turn {
                 }
                 results.push(Content::ToolResult {
                     id: c.id,
-                    content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                     is_error: got.is_error,
                     parts: Vec::new(),
                 });
@@ -2455,13 +2455,21 @@ impl Turn {
                     }
                     results[at] = Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     };
                 }
                 if self.out.gone() {
                     return;
+                }
+            }
+            for result in &mut results {
+                if let Content::ToolResult { content, is_error, .. } = result {
+                    match agent_threads::redact_tool_content(content) {
+                        Ok(redacted) => *content = cut(&redacted, RESULT_LIMIT),
+                        Err(_) => { *content = "The private transcript could not be redacted.".to_owned(); *is_error = true; }
+                    }
                 }
             }
             added.push(Message::tool_results(results));
@@ -4104,6 +4112,9 @@ fn propose_or_read(
             }
             Vault::get(w, id)
                 .map(|mut note| {
+                    if agent_threads::redact_content(&mut note).is_err() {
+                        return ToolOut::error("The private transcript could not be redacted.");
+                    }
                     cut_strings(&mut note, BODY_LIMIT);
                     note["assets"] = json!(ai_assets::note_assets(w, &note["note"]));
                     let summary = json!({ "notes": [{

@@ -782,6 +782,10 @@ fn browser_secrets_thread_note_routes_and_events_hide_raw_transcripts() {
         for version in history["versions"].as_array().unwrap() { paths.push(format!("{path}/history/{}", version["version"].as_str().unwrap())); }
         for route in paths {
             let response = api.client.get(api.server.url(&route)).bearer_auth(token).send().unwrap();
+            if label == "agent" && (route.contains("/history/") || route.starts_with("/api/sync/")) {
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+                continue;
+            }
             assert_eq!(response.status(), StatusCode::OK, "{label} {route}");
             if response.text().unwrap().contains("bank") { leaks.push(format!("{label} {route}")); }
         }

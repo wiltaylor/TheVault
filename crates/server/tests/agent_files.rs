@@ -466,7 +466,8 @@ fn browser_secrets_sync_hides_names_from_all_non_managers_including_devices() {
     let read = api.token("read");
     let write = api.token("write");
     let device = pair_device(&api);
-    for token in [&external, &read, &write, &device] {
+    expect(api.req("GET", "/api/sync/changes?since=0&limit=5000", &external).send().unwrap(), StatusCode::FORBIDDEN);
+    for token in [&read, &write, &device] {
         let page = expect(
             api.req("GET", "/api/sync/changes?since=0&limit=5000", token)
                 .send()

@@ -1156,6 +1156,101 @@ fn client_json(w: &Writer, t: &Thread, author: &state::Author) -> Result<Value, 
     Ok(value)
 }
 
+/// A client copy of a stored note, never the text used by Apply or persistence.
+pub(crate) fn redact_note(w: &Writer, author: &state::Author, type_name: &str, text: &str) -> Result<String, ApiError> {
+    if crate::tasks::may_manage_login_secrets(w, author)? { return Ok(text.to_owned()); }
+    redact_note_text(type_name, text)
+}
+
+fn redaction_error() -> ApiError {
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "private_transcript", "The private transcript could not be redacted.")
+}
+
+fn redact_note_text(type_name: &str, text: &str) -> Result<String, ApiError> {
+    if type_name != THREAD_TYPE && !text.contains("transcript") { return Ok(text.to_owned()); }
+    let mut doc = writer::Input::Wcl(text.to_owned()).parse("private-note.wcl").map_err(|_| redaction_error())?;
+    let mut changed = false;
+    for (name, field) in &mut doc.fields {
+        if name == "transcript" {
+            let mut value: Value = serde_json::from_str(field.as_str().unwrap_or("{}")).map_err(|_| redaction_error())?;
+            redact_content(&mut value)?;
+            *field = schema::Value::Str(value.to_string());
+            changed = true;
+        }
+    }
+    Ok(if changed { writer::print_doc(&doc) } else { text.to_owned() })
+}
+
+/// Covers full notes, selected query fields, conflict text and encoded tool results.
+/// The caller boundary decides whether redaction is needed before calling this.
+pub(crate) fn redact_content(value: &mut Value) -> Result<(), ApiError> {
+    if value["kind"] == "agent" || value["name"] == "propose_agent_change" {
+        crate::ai_agents::hide_browser_secrets(value);
+    }
+    match value {
+        Value::Object(fields) => {
+            let type_name = fields.get("type").and_then(Value::as_str).unwrap_or_default().to_owned();
+            for (key, child) in fields {
+                if matches!(key.as_str(), "wcl" | "current") && let Some(text) = child.as_str() {
+                    *child = Value::String(redact_note_text(&type_name, text)?);
+                } else if key == "transcript" && let Some(text) = child.as_str() {
+                    let mut transcript: Value = serde_json::from_str(text).map_err(|_| redaction_error())?;
+                    redact_content(&mut transcript)?;
+                    *child = Value::String(transcript.to_string());
+                } else {
+                    redact_content(child)?;
+                }
+            }
+        }
+        Value::Array(items) => { for child in items { redact_content(child)?; } }
+        Value::String(text) if text.trim_start().starts_with('{')
+            && (text.contains("\"proposals\"") || text.contains("\"transcript\"") || text.contains("\"before\"")) => {
+            if let Ok(mut decoded) = serde_json::from_str::<Value>(text) {
+                redact_content(&mut decoded)?;
+                *text = decoded.to_string();
+            } else {
+                *text = "The private transcript could not be redacted.".to_owned();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// All tool answers pass here before any provider sees them, including script/query tools.
+pub(crate) fn redact_tool_content(text: &str) -> Result<String, ApiError> {
+    match serde_json::from_str::<Value>(text) {
+        Ok(mut value) => { redact_content(&mut value)?; Ok(value.to_string()) }
+        Err(_) => redact_note_text("", text),
+    }
+}
+
+const REDACTION_LIMIT: usize = 32 * 1024 * 1024;
+
+/// A single response boundary for every authenticated content route, including errors.
+pub(crate) async fn redact_response(w: &Writer, author: &state::Author, path: &str, response: axum::response::Response) -> Result<axum::response::Response, ApiError> {
+    // The owner pays no buffering/parsing cost, even for a large response.
+    if crate::tasks::may_manage_login_secrets(w, author)? { return Ok(response); }
+    let content_type = response.headers().get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let json = content_type.starts_with("application/json");
+    let wcl = content_type.starts_with("text/plain") || content_type.contains("wcl");
+    // Asset downloads, zips and SSE keep their own authorization/streaming boundary.
+    if path.starts_with("/api/assets/") || (!json && !wcl) { return Ok(response); }
+    let (mut parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, REDACTION_LIMIT).await.map_err(|_| ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "response_too_large", "This response exceeds the 32 MiB Login-metadata scan limit. Narrow the query or use an owner session."))?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| redaction_error())?;
+    let text = if json {
+        let mut value: Value = serde_json::from_str(text).map_err(|_| redaction_error())?;
+        redact_content(&mut value)?;
+        value.to_string()
+    } else {
+        let type_name = parts.headers.get("x-note-type").and_then(|v| v.to_str().ok()).unwrap_or_default();
+        redact_note(w, author, type_name, text)?
+    };
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    Ok(axum::response::Response::from_parts(parts, axum::body::Body::from(text)))
+}
+
 pub async fn read(
     State(w): Shared,
     Caller(author): Caller,
@@ -1307,6 +1402,39 @@ pub async fn delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn browser_secrets_response_boundary_is_bounded_and_keeps_streams_unbuffered() {
+        use axum::body::Body;
+        use axum::http::header::CONTENT_TYPE;
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        let reader = state::Author::Token("reader".into());
+        for content_type in ["application/json", "text/plain"] {
+            let response = axum::response::Response::builder().header(CONTENT_TYPE, content_type).body(Body::from("x".repeat(REDACTION_LIMIT + 1))).unwrap();
+            let error = redact_response(&w, &reader, "/api/new-content-route", response).await.unwrap_err();
+            assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+        }
+        // A body which errors when polled proves the bypass did not consume it.
+        for (author, path, content_type) in [
+            (state::Author::Session("owner".into()), "/api/query", "application/json"),
+            (reader.clone(), "/api/ai/chat", "text/event-stream"),
+            (reader.clone(), "/api/assets/id", "application/json"),
+            (reader.clone(), "/api/skills/example/export", "application/zip"),
+        ] {
+            let body = Body::from_stream(futures_util::stream::once(async { Err::<axum::body::Bytes, _>(std::io::Error::other("body was polled")) }));
+            let response = axum::response::Response::builder().header(CONTENT_TYPE, content_type).body(body).unwrap();
+            let response = redact_response(&w, &author, path, response).await.unwrap();
+            assert!(axum::body::to_bytes(response.into_body(), usize::MAX).await.is_err());
+        }
+        let note = writer::Input::Json(json!({"fields":{"transcript":json!({"messages":[],"proposals":[{"kind":"agent", "name":"helper", "before":"permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n"}]}).to_string()},"blocks":[]})).parse("note.wcl").unwrap();
+        let response = axum::response::Response::builder().header(CONTENT_TYPE, "application/json").body(Body::from(json!({"type":"agent_thread","wcl":writer::print_doc(&note)}).to_string())).unwrap();
+        let response = redact_response(&w, &reader, "/api/new-content-route", response).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), REDACTION_LIMIT).await.unwrap();
+        assert!(!std::str::from_utf8(&bytes).unwrap().contains("bank"));
+    }
 
     fn stored(event: &str, data: Value, status: Status) -> Stored {
         Stored {
