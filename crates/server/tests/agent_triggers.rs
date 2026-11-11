@@ -965,20 +965,41 @@ fn safety_rest_list_and_post_query_exclude_held_notes() {
 fn round4_agent_rest_cleanup_and_restore_are_refused() {
     let chat = FakeAnthropic::start();
     let api = Api::start(&chat);
-    let asset: Value = api.client.post(api.server.url("/api/assets?filename=SECRET_ORPHAN.txt"))
-        .bearer_auth(api.server.admin_token()).body("PRIVATE_BYTES").send().unwrap().json().unwrap();
+    let asset: Value = api
+        .client
+        .post(api.server.url("/api/assets?filename=SECRET_ORPHAN.txt"))
+        .bearer_auth(api.server.admin_token())
+        .body("PRIVATE_BYTES")
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
     let token = api.external_agent_token();
-    for (path, body) in [("/api/assets/cleanup", json!({"dry_run":true})),
+    for (path, body) in [
+        ("/api/assets/cleanup", json!({"dry_run":true})),
         ("/api/assets/cleanup", json!({"dry_run":false})),
-        ("/api/assets/trash/restore", json!({"ids":[asset["id"]]}))] {
-        let response = api.client.post(api.server.url(path)).bearer_auth(token["secret"].as_str().unwrap())
-            .json(&body).send().unwrap();
+        ("/api/assets/trash/restore", json!({"ids":[asset["id"]]})),
+    ] {
+        let response = api
+            .client
+            .post(api.server.url(path))
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .json(&body)
+            .send()
+            .unwrap();
         assert_eq!(response.status(), 403);
         assert!(!response.text().unwrap().contains("SECRET_ORPHAN"));
     }
-    assert_eq!(api.send("POST", "/api/assets/cleanup", json!({"dry_run":true}))["count"], 1);
+    assert_eq!(
+        api.send("POST", "/api/assets/cleanup", json!({"dry_run":true}))["count"],
+        1
+    );
     api.send("POST", "/api/assets/cleanup", json!({"dry_run":false}));
-    let restored = api.send("POST", "/api/assets/trash/restore", json!({"ids":[asset["id"]]}));
+    let restored = api.send(
+        "POST",
+        "/api/assets/trash/restore",
+        json!({"ids":[asset["id"]]}),
+    );
     assert!(restored.to_string().contains("SECRET_ORPHAN.txt"));
 }
 

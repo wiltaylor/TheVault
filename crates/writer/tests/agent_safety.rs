@@ -139,11 +139,19 @@ fn round4_migration_timing_5000_assets_and_notes() {
     let vault = store::Vault::init(dir.path()).unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();
     std::fs::create_dir_all(dir.path().join("notes/memo")).unwrap();
-    std::fs::write(dir.path().join("types/memo.wcl"), "label = \"Memo\"\ntemplate default { tab Main { slot title } }\n").unwrap();
+    std::fs::write(
+        dir.path().join("types/memo.wcl"),
+        "label = \"Memo\"\ntemplate default { tab Main { slot title } }\n",
+    )
+    .unwrap();
     for i in 0..5000 {
         let note = ulid::Ulid::new().to_string();
         let asset = ulid::Ulid::new().to_string();
-        std::fs::write(dir.path().join(format!("notes/memo/{note}.wcl")), format!("title = \"Local {i}\"\n")).unwrap();
+        std::fs::write(
+            dir.path().join(format!("notes/memo/{note}.wcl")),
+            format!("title = \"Local {i}\"\n"),
+        )
+        .unwrap();
         let path = dir.path().join(format!("assets/{asset}"));
         std::fs::create_dir_all(&path).unwrap();
         std::fs::write(path.join("orphan.txt"), b"ORPHAN").unwrap();
@@ -151,19 +159,30 @@ fn round4_migration_timing_5000_assets_and_notes() {
     let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
     let w = Writer::open(vault, state).unwrap();
     assert_eq!(w.assets().unwrap().len(), 5000);
-    assert_eq!(w.list_with(None, writer::Archived::Include).unwrap().len(), 5000);
+    assert_eq!(
+        w.list_with(None, writer::Archived::Include).unwrap().len(),
+        5000
+    );
     let start = std::time::Instant::now();
     w.activate_agent_safety().unwrap();
-    println!("5000 assets / 5000 notes activation: {:.3}s", start.elapsed().as_secs_f64());
-    for asset in w.assets().unwrap() { assert!(!w.agent_may_read_asset(&asset.id)); }
+    println!(
+        "5000 assets / 5000 notes activation: {:.3}s",
+        start.elapsed().as_secs_f64()
+    );
+    for asset in w.assets().unwrap() {
+        assert!(!w.agent_may_read_asset(&asset.id));
+    }
 }
 
 #[test]
 fn round4_upgrade_marks_asset_trash_before_restore() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    let asset = w.put_asset("BINNED_SECRET.txt", b"PRIVATE".to_vec()).unwrap();
-    w.cleanup_assets(Some(std::slice::from_ref(&asset.id)), false).unwrap();
+    let asset = w
+        .put_asset("BINNED_SECRET.txt", b"PRIVATE".to_vec())
+        .unwrap();
+    w.cleanup_assets(Some(std::slice::from_ref(&asset.id)), false)
+        .unwrap();
     assert_eq!(w.asset_trash().len(), 1);
     let w = round4_upgrade(w, dir.path());
     w.activate_agent_safety().unwrap();
@@ -182,14 +201,27 @@ fn round4_upgrade_preserves_local_and_type_only_files() {
     let incoming = w.put_asset("incoming.txt", b"PRIVATE".to_vec()).unwrap();
     let template = w.put_asset("template.png", b"image".to_vec()).unwrap();
     for (kind, asset) in [("memo", &local), ("email", &incoming)] {
-        w.create(kind, &Input::Json(serde_json::json!({"fields":{"title":"Before activation", "file":asset.id}})), &Author::Session("owner".into())).unwrap();
+        w.create(
+            kind,
+            &Input::Json(
+                serde_json::json!({"fields":{"title":"Before activation", "file":asset.id}}),
+            ),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
     }
     w.put_type("template_note", &format!("label = \"Template\"\n# image \"{}\"\ntemplate default {{ tab Main {{ slot title }} }}\n", template.id)).unwrap();
     let w = round4_upgrade(w, dir.path());
     w.activate_agent_safety().unwrap();
-    assert!(w.agent_may_read_asset(&local.id), "pre-activation local file must remain readable");
+    assert!(
+        w.agent_may_read_asset(&local.id),
+        "pre-activation local file must remain readable"
+    );
     assert!(!w.agent_may_read_asset(&incoming.id));
-    assert!(w.agent_may_read_asset(&template.id), "type-only file is not an orphan");
+    assert!(
+        w.agent_may_read_asset(&template.id),
+        "type-only file is not an orphan"
+    );
 }
 
 #[test]
@@ -197,7 +229,8 @@ fn round4_in_app_agent_cannot_cleanup_or_restore_assets() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
     let asset = w.put_asset("SECRET.txt", b"PRIVATE".to_vec()).unwrap();
-    w.cleanup_assets(Some(std::slice::from_ref(&asset.id)), false).unwrap();
+    w.cleanup_assets(Some(std::slice::from_ref(&asset.id)), false)
+        .unwrap();
     let _acting = writer::acting_as(&Author::Agent("reader".into()));
     assert!(w.cleanup_assets(None, true).is_err());
     assert!(w.cleanup_assets(None, false).is_err());
@@ -209,7 +242,8 @@ fn round4_upgrade(w: Writer, path: &std::path::Path) -> Writer {
     let db = vault.server_dir().join("state.db");
     drop(w);
     let conn = rusqlite::Connection::open(&db).unwrap();
-    conn.execute("DELETE FROM meta WHERE key LIKE 'agent_safety.%'", []).unwrap();
+    conn.execute("DELETE FROM meta WHERE key LIKE 'agent_safety.%'", [])
+        .unwrap();
     drop(conn);
     Writer::open(vault, state::State::open(&db, None).unwrap()).unwrap()
 }
