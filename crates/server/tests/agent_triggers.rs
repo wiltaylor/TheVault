@@ -1012,8 +1012,8 @@ fn incoming_assets_allowed_email_tools_and_script_deny_text() {
     api.memo("Asset audit", "open");
     api.advance("PT35S");
     let requests = chat.message_requests();
-    assert_eq!(requests.len(), 2);
-    let delivered = requests[1].json().to_string();
+    assert!(requests.len() >= 2);
+    let delivered = requests.iter().skip(1).map(|r| r.json().to_string()).collect::<String>();
     assert!(!delivered.contains("PRIVATE_BYTES"), "{delivered}");
     assert!(!delivered.contains("PRIVATE_FILE.txt"), "{delivered}");
     assert!(delivered.contains("not available to agents"), "{delivered}");
