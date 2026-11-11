@@ -68,6 +68,42 @@ permissions {
 const CALL: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 
 #[test]
+fn external_token_cannot_approve_an_in_app_agents_pending_proposal() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_create", "propose_create",
+        json!({"type": "memo", "note": json!({"fields": {"title": "Forbidden create"}}).to_string()}),
+    ));
+    fake.push(AnthropicMessage::text("Waiting."));
+    let (status, v) = api.dispatch_as(&api.admin(), "keeper",
+        json!({"notes": [roof], "request": "Propose a memo."}));
+    assert_eq!(status, 202, "{v}");
+    let thread = v["thread"]["id"].as_str().unwrap();
+    api.wait_run(thread);
+    let path = format!("/api/agents/keeper/threads/{thread}");
+    let before = api.get(&path);
+    let proposal = before["proposals"].as_array().unwrap().iter()
+        .find(|p| p["status"] == "pending").unwrap_or_else(|| panic!("{before}"))["data"].clone();
+    let notes = api.get("/api/notes?type=memo");
+    let token = api.token_of("agent-external", "write");
+    for variant in 0..4 {
+        let mut body = proposal.clone();
+        if variant > 0 { body.as_object_mut().unwrap().remove("agent"); }
+        if variant > 1 { body.as_object_mut().unwrap().remove("proposer"); }
+        if variant == 3 { body.as_object_mut().unwrap().remove("thread"); body["agent"] = json!("keeper"); }
+        let res = api.request_as(&token, "POST", "/api/ai/apply", Some(body));
+        let status = res.status().as_u16();
+        let body = res.text().unwrap();
+        assert_eq!(api.get(&path), before, "proposal changed: {status} {body}");
+        assert_eq!(api.get("/api/notes?type=memo"), notes, "note written");
+        assert_eq!(status, 403, "{body}");
+    }
+}
+
+#[test]
 fn write_callers_cannot_apply_pending_admin_changes() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
