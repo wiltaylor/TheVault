@@ -526,7 +526,7 @@ An `{id}` is an account's id; an unknown one is a 404.
 
 `POST /api/ai/decide` requires a write or admin token (or an owner session).
 `vault decide [file]` sends the same JSON, reading stdin when the file is omitted
-or `-`. The agent tool `decide` takes the same fields. Scripts call
+or `-`. Scripts call
 `ai::decide(request_json)` and receive `Result[Value, AiError]`. The request is a
 JSON string, not a prompt for a chat model:
 
@@ -542,6 +542,12 @@ JSON string, not a prompt for a chat model:
 
 `account` (id or name) and `model` are optional in JSON requests. The agent
 tool's strict schema requires both keys, with null selecting their defaults.
+Unlike the HTTP and script APIs, the agent tool takes `state` as JSON text and
+`questions` as an array of closed objects with `id`, `type`, `instructions` and
+`criteria`. IDs must be unique. `instructions` is JSON text (including quotes
+for a string), and `criteria` is JSON text or null for noul defaults. For example,
+`{"id":"urgent","type":"noul","instructions":"\"Does this need attention today?\"","criteria":null}`.
+The server decodes these fields into the same decision request and validates it.
 Without an account the vault's
 default is used. The account must be OpenAI-compatible with a base URL ending in
 `/api/v1`, normally `https://openrouter.ai/api/v1`. Set its independent

@@ -1136,8 +1136,10 @@ pub struct NewThread {
 pub async fn start(
     State(w): Shared,
     Path(name): Path<String>,
+    Caller(author): Caller,
     body: Option<Json<NewThread>>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     let title = body.and_then(|Json(b)| b.title);
     let t = blocking(w, move |w| {
         let agent = w.agent(&name)?;
@@ -1234,6 +1236,7 @@ pub async fn truncate(
     Path((name, id)): Path<(String, String)>,
     Json(b): Json<At>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     let t = blocking(w, move |w| {
         let thread = Thread::read_of(w, &name, &id)?;
         let _busy = Busy::take(&thread.id, &name)?;
@@ -1258,6 +1261,7 @@ pub async fn fork(
     Path((name, id)): Path<(String, String)>,
     Json(b): Json<At>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     let t = blocking(w, move |w| {
         let thread = Thread::read_of(w, &name, &id)?;
         let cut = cut(&thread.transcript, b.at)?;
