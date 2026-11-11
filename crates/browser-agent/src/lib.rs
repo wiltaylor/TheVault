@@ -436,7 +436,9 @@ fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
 }
 
 fn walk_profile_tree(path: &Path, remove: bool) -> ApiResult<()> {
-    use rustix::fs::{AtFlags, CWD, Dir, FileType, Mode, OFlags, chmodat, fstat, openat, statat, unlinkat};
+    use rustix::fs::{
+        AtFlags, CWD, Dir, FileType, Mode, OFlags, chmodat, fstat, openat, statat, unlinkat,
+    };
     use std::os::fd::AsRawFd;
     fn prepare(
         parent: impl rustix::fd::AsFd,
@@ -491,7 +493,13 @@ fn walk_profile_tree(path: &Path, remove: bool) -> ApiResult<()> {
         let mut fd = prepare(CWD, path)?;
         let names = children(&fd)?;
         let stat = fstat(&fd)?;
-        let mut stack = vec![(names, path.display().to_string(), stat.st_dev, stat.st_ino, None::<std::ffi::CString>)];
+        let mut stack = vec![(
+            names,
+            path.display().to_string(),
+            stat.st_dev,
+            stat.st_ino,
+            None::<std::ffi::CString>,
+        )];
         while let Some((names, label, _, _, _)) = stack.last_mut() {
             let Some(name) = names.pop() else {
                 let completed = stack.pop().expect("current frame");
@@ -506,14 +514,22 @@ fn walk_profile_tree(path: &Path, remove: bool) -> ApiResult<()> {
                     if (stat.st_dev, stat.st_ino) != (*dev, *ino) {
                         return Err(io::Error::other("profile directory moved during cleanup"));
                     }
-                    if remove { unlinkat(&parent, completed.4.as_ref().expect("child name").as_c_str(), AtFlags::REMOVEDIR)?; }
+                    if remove {
+                        unlinkat(
+                            &parent,
+                            completed.4.as_ref().expect("child name").as_c_str(),
+                            AtFlags::REMOVEDIR,
+                        )?;
+                    }
                     fd = parent;
                 }
                 continue;
             };
             let stat = statat(&fd, name.as_c_str(), AtFlags::SYMLINK_NOFOLLOW)?;
             if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
-                if remove { unlinkat(&fd, name.as_c_str(), AtFlags::empty())?; }
+                if remove {
+                    unlinkat(&fd, name.as_c_str(), AtFlags::empty())?;
+                }
                 continue;
             }
             let label = format!("{label}/{}", name.to_string_lossy());
@@ -526,7 +542,9 @@ fn walk_profile_tree(path: &Path, remove: bool) -> ApiResult<()> {
             fd = child;
             stack.push((names, label, stat.st_dev, stat.st_ino, Some(name)));
         }
-        if remove { unlinkat(CWD, path, AtFlags::REMOVEDIR)?; }
+        if remove {
+            unlinkat(CWD, path, AtFlags::REMOVEDIR)?;
+        }
         Ok(())
     })();
     result.map_err(|e| {

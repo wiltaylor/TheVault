@@ -218,6 +218,19 @@ check "deleting the profile succeeds (got $code)" test "$code" = 200
 code=$(get '/files' -o /dev/null -w '%{http_code}')
 check "a retired profile is refused (got $code)" test "$code" = 410
 
+# Root/home/work permissions and traversal depth must work on the image's kernel
+# and descriptor limit, not only in a developer's service-binary test.
+for scenario in home0000 home0600 root0000 root0600 work0000 deep1000 deep3000; do
+  id="$first_id-$scenario"
+  r=$(run_cmd "node -e 'const fs = require(\"fs\"), path = require(\"path\"); const kind = process.argv[1], home = process.env.HOME; fs.writeFileSync(path.join(home, \"Cookies\"), \"fixture\"); if (kind.startsWith(\"deep\")) { for (let i=0; i<Number(kind.slice(4)); i++) { fs.mkdirSync(\"d\"); process.chdir(\"d\"); } fs.writeFileSync(\"Cookies\", \"deep fixture\"); fs.chmodSync(\".\", 0); } else { const target = kind.startsWith(\"root\") ? path.dirname(home) : kind.startsWith(\"home\") ? home : process.cwd(); fs.chmodSync(target, kind.endsWith(\"0600\") ? 0o600 : 0); }' '$scenario'")
+  check "prepare $scenario profile" jqe '.exit == 0' <<< "$r"
+  code=$(get '/profile' -X DELETE -o /dev/null -w '%{http_code}')
+  check "reset $scenario succeeds (got $code)" test "$code" = 200
+  code=$(get '/files' -o /dev/null -w '%{http_code}')
+  check "$scenario stays retired (got $code)" test "$code" = 410
+done
+id=$first_id
+
 if [ -z "${BOX_URL:-}" ]; then
 size=$(docker image inspect -f '{{.Size}}' "$image")
 echo "image $image: $((size / 1024 / 1024)) MiB"
