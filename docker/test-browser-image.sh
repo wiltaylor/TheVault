@@ -204,7 +204,7 @@ id=$first_id
 
 # F13: long names must not retain a full path per ancestor in the service.
 id="$first_id-memory4000"
-r=$(run_cmd 'node -e '\''const fs = require("fs"), cp = require("child_process"); const limit = Number(cp.execFileSync("getconf", ["NAME_MAX", "."]).toString().trim()), width = Math.min(200, limit); if (!Number.isInteger(width) || width < 1) throw Error("invalid NAME_MAX"); const n = "d".repeat(width); let depth = 0; for (; depth<4000; depth++) { fs.mkdirSync(n); process.chdir(n); } fs.writeFileSync("Cookies", "fixture"); console.log(JSON.stringify({depth, name_bytes: width}));'\''' 180)
+r=$(run_cmd 'unset CDPATH; limit=$(getconf NAME_MAX .); width=$((limit < 200 ? limit : 200)); [ "$width" -gt 0 ] || exit 1; n=$(printf "%0${width}d" 0 | tr 0 d); i=0; while [ "$i" -lt 4000 ]; do mkdir -- "$n" && cd -P -- "$n" || exit 1; i=$((i+1)); done; printf fixture > Cookies; printf "{\"depth\":%s,\"name_bytes\":%s}\n" "$i" "$width"' 180)
 check "prepare exactly 4000 levels within filesystem NAME_MAX ($(jq -c .stdout <<< "$r"))" \
   jqe '.exit == 0 and (.stdout | fromjson | .depth == 4000 and .name_bytes > 0 and .name_bytes <= 200)' <<< "$r"
 if ! jqe '.exit == 0 and (.stdout | fromjson | .depth == 4000)' <<< "$r"; then
