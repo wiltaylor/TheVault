@@ -246,7 +246,7 @@ impl Writer {
         let mut inner = self.lock();
         let inner = &mut *inner;
         install(inner, schema)?;
-        inner.index.update(&inner.schema, &updates)?;
+        self.update_note_index(inner, &updates)?;
         inner.index.advance(generation)?;
         self.announce(&saved, &|_| None);
         Ok((plan, saved))

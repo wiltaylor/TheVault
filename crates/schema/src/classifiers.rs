@@ -16,6 +16,7 @@ pub struct Classifier {
     pub fields: Vec<String>,
     pub questions: Vec<ClassifierQuestion>,
     pub notify: Option<ClassifierNotify>,
+    pub withhold: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +50,21 @@ impl Classifier {
         if !is_name(name) {
             return Err("Invalid classifier name".into());
         }
-        check_fields(doc, &["types", "where", "account", "model", "fields"])?;
+        check_fields(
+            doc,
+            &["types", "where", "account", "model", "fields", "withhold"],
+        )?;
+        let withhold = if doc.field("withhold").is_some() {
+            if name != "agent_safety" {
+                return Err("withhold is only supported by agent_safety".into());
+            }
+            strings(doc, "withhold")?
+        } else {
+            ["prompt_injection", "scam", "sensitive_credentials"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        };
         let types = strings(doc, "types")?;
         let fields = strings(doc, "fields")?;
         let condition = optional_text(doc, "where")?;
@@ -176,6 +191,7 @@ impl Classifier {
             fields,
             questions,
             notify,
+            withhold,
         })
     }
 }

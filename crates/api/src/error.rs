@@ -171,6 +171,7 @@ impl From<Error> for ApiError {
                 StatusCode::CONFLICT,
                 json!({ "error": "id_taken", "id": id }),
             ),
+            Error::AgentHeld => (StatusCode::FORBIDDEN, json!({ "error": "held" })),
             Error::BadRequest(_) => (StatusCode::BAD_REQUEST, json!({ "error": "bad_request" })),
             Error::ServerOwnedThread => (StatusCode::FORBIDDEN, json!({ "error": "server_owned" })),
             Error::Missing(_) => (StatusCode::NOT_FOUND, json!({ "error": "not_found" })),

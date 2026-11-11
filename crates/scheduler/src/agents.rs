@@ -117,6 +117,7 @@ pub trait AgentRunner: Send + Sync {
 /// One run to start: an agent's trigger, the first message and the thread's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentJob {
+    pub source_notes: Vec<String>,
     pub op: Option<String>,
     /// Durable trigger queue identity. Person-requested calls keep their existing lane.
     pub durable: Option<i64>,
@@ -201,6 +202,7 @@ struct Lane {
 /// What the agent triggers know right now, kept in the scheduler's plan.
 #[derive(Default)]
 pub(crate) struct AgentPlan {
+    pub(crate) safety_ready: bool,
     /// The enabled agents whose files parse, by name.
     agents: BTreeMap<String, Agent>,
     /// When each schedule trigger next fires, by agent and trigger, with the schedule it was
@@ -240,6 +242,7 @@ mod persistence_retry_tests {
         let mut plan = AgentPlan::default();
         for i in 0..=state::TRIGGER_QUEUE_CAP {
             plan.retry_persistence(AgentJob {
+                source_notes: vec![],
                 scope: None,
                 caller: None,
                 op: Some("create".to_owned()),
@@ -320,6 +323,7 @@ impl AgentPlan {
                 continue;
             };
             jobs.push(AgentJob {
+                source_notes: vec![],
                 op: None,
                 durable: None,
                 note: None,
@@ -393,7 +397,7 @@ impl AgentPlan {
     /// The soonest time something is due: a schedule firing, a waiting note change, or now when
     /// changes were heard and not yet matched.
     pub(crate) fn next_due(&self, now: i64) -> Option<i64> {
-        if !self.heard.is_empty() || !self.mentions.is_empty() {
+        if self.safety_ready || !self.heard.is_empty() || !self.mentions.is_empty() {
             return Some(now);
         }
         self.next
@@ -667,12 +671,25 @@ impl Scheduler {
         let mut plan = self.plan();
         for s in saved.iter().flat_map(|s| std::iter::once(s).chain(&s.also)) {
             let deleting = plan.agents.deleting.remove(&s.id);
-            // Scan the latest version, including refusals for agent-written calls.
+            // Scan latest mentions, including refusal receipts for agent-written calls.
             plan.agents.mentions.remove(&s.id);
             if s.event != Event::Delete {
                 plan.agents
                     .mentions
                     .insert(s.id.clone(), s.type_name.clone());
+            }
+            let Ok(doc) = Doc::parse(&s.wcl, "agent event") else {
+                continue;
+            };
+            {
+                let safety = self.writer.agent_safety_doc(&s.id, &s.type_name, &doc);
+                if !safety.as_ref().is_ok_and(|safety| {
+                    safety.allowed()
+                        && (s.event != Event::Create
+                            || matches!(safety.status.as_str(), "legacy" | "not_required"))
+                }) {
+                    continue;
+                }
             }
             if matches!(author, Author::Agent(_) | Author::AgentMail(_)) {
                 continue;
@@ -703,6 +720,9 @@ impl Scheduler {
 
     /// The title of note `id`, of `type_name`, when it is in the index and matches `cond`.
     fn note_matches(&self, id: &str, type_name: &str, cond: Option<&Expr>) -> Option<String> {
+        if !self.writer.agent_may_read(id) {
+            return None;
+        }
         let mut filter = Expr::Binary(
             BinOp::Eq,
             Box::new(Expr::Name("id".to_owned())),
@@ -746,6 +766,28 @@ impl Scheduler {
         }
         self.reload_agents();
         let now = self.clock.now_ms();
+        // Clearance is a single durable arrival event, not replay of arbitrary note edits.
+        self.plan().agents.safety_ready = false;
+        let clearances = self
+            .writer
+            .state()
+            .agent_safety_clearances()
+            .unwrap_or_default();
+        let mut admitted_clearances = Vec::new();
+        for id in &clearances {
+            if self.writer.agent_may_read(id)
+                && let Ok(note) = self.writer.read(id)
+            {
+                self.plan().agents.heard.push(Heard {
+                    op: "create",
+                    id: id.clone(),
+                    type_name: note.type_name,
+                    at: now.saturating_sub(DEBOUNCE_MS),
+                    deleting: None,
+                });
+                admitted_clearances.push(id.clone());
+            }
+        }
         let (mut jobs, events) = self.plan().agents.take_due(now);
         jobs.extend(std::mem::take(&mut self.plan().agents.persist_retry));
         let called = self.plan().agents.take_mentions();
@@ -773,6 +815,11 @@ impl Scheduler {
             };
             let Some(title) = title else { continue };
             jobs.push(AgentJob {
+                source_notes: if e.op == "delete" {
+                    vec![]
+                } else {
+                    vec![e.note.clone()]
+                },
                 op: Some(e.op.to_owned()),
                 durable: None,
                 note: Some((e.note.clone(), e.type_name.clone())),
@@ -806,6 +853,13 @@ impl Scheduler {
                 self.plan().agents.retry_persistence(job);
             }
         }
+        // Only acknowledge after trigger matching and admission, not before debounce.
+        for id in admitted_clearances {
+            if failed_notes.contains(&id) {
+                continue;
+            }
+            let _ = self.writer.state().acknowledge_agent_safety_clearance(&id);
+        }
         for note in processed {
             if failed_notes.contains(&note) {
                 continue;
@@ -832,6 +886,7 @@ impl Scheduler {
                         continue;
                     };
                     let job = AgentJob {
+                        source_notes: vec![], // Durable jobs recheck their note below at start.
                         scope: None,
                         caller: None,
                         op: payload["op"].as_str().map(str::to_owned),
@@ -928,8 +983,7 @@ impl Scheduler {
         Ok(inserted)
     }
 
-    /// Shared selection/execution guard. TV-137 adds writer.agent_may_read here when
-    /// integrating its Jev gate, so a queued note is checked again just before it runs.
+    /// Shared selection/execution guard, including the start recheck of queued jobs.
     fn trigger_note_allowed(
         &self,
         id: &str,
@@ -938,6 +992,9 @@ impl Scheduler {
         op: &str,
     ) -> bool {
         event.matches(op, ty)
+            // Delete jobs carry the snapshot checked by deleting() before removal.
+            // Every live-note job must recheck its current content at execution.
+            && (op == "delete" || self.writer.agent_may_read(id))
             && (!is_agent_type(ty) || !event.types.is_empty())
             && (op == "delete"
                 || self
@@ -1002,6 +1059,7 @@ impl Scheduler {
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             let job = AgentJob {
+                source_notes: vec![], // Durable jobs use trigger_note_allowed at start.
                 scope: None,
                 caller: None,
                 op: Some(
@@ -1042,6 +1100,7 @@ impl Scheduler {
     /// next save of the note asks again. The note is left as it is. Answers the admitted runs,
     /// each [`Admitted::Start`] or [`Admitted::Queued`].
     fn mention_jobs(&self, id: &str, now: i64, tell: &mut Vec<AgentJob>) -> Vec<Admitted> {
+        let held = !self.writer.agent_may_read(id);
         let Some(runner) = self.runner.get() else {
             return Vec::new();
         };
@@ -1091,7 +1150,8 @@ impl Scheduler {
                 let _ = state.refuse_agent_call_copy(&call.call, id, &call.agent);
                 continue;
             }
-            if matches!(version.author, Author::Agent(_))
+            if held
+                || matches!(version.author, Author::Agent(_))
                 || !self.call_versions_trusted(id, &call.call, &call.agent)
                 || !state
                     .consume_agent_call(&call.call, id, &call.agent, &version.author)
@@ -1125,6 +1185,7 @@ impl Scheduler {
             .collect::<Vec<_>>()
             .join("\n");
             let mut job = AgentJob {
+                source_notes: vec![id.to_owned()],
                 op: None,
                 durable: None,
                 note: None,
@@ -1253,6 +1314,9 @@ impl Scheduler {
         scope: state::Scope,
         caller: Author,
     ) -> Result<String, DispatchRefused> {
+        if notes.iter().any(|id| !self.writer.agent_may_read(id)) {
+            return Err(DispatchRefused::Thread("A note is held from agents".into()));
+        }
         let runner = self.runner.get().ok_or(DispatchRefused::NoRunner)?.clone();
         let now = self.clock.now_ms();
         // The agent as its file says now, as a run reads it, not as the plan last loaded it.
@@ -1267,6 +1331,7 @@ impl Scheduler {
             .open_thread(&a, DISPATCH_ORIGIN, title, notes)
             .map_err(DispatchRefused::Thread)?;
         let job = AgentJob {
+            source_notes: notes.to_vec(),
             op: None,
             durable: None,
             note: None,
@@ -1340,6 +1405,13 @@ impl Scheduler {
 
     /// Run one job: a new thread and one turn on it, recorded in `agent_runs`.
     fn run_agent_job(&self, job: &AgentJob) {
+        if job
+            .source_notes
+            .iter()
+            .any(|id| !self.writer.agent_may_read(id))
+        {
+            return;
+        }
         let Some(runner) = self.runner.get() else {
             return;
         };

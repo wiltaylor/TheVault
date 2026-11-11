@@ -543,7 +543,7 @@ fn round3_http_agent_read_redacts_conditions_for_both_agent_scopes() {
 }
 
 #[test]
-fn round4_sync_feed_redacts_conditions_for_agent_and_plain_tokens() {
+fn round4_sync_feed_redacts_plain_tokens_and_refuses_agents() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     let source = SENDER.replace("send_without_review = true", "send_without_review = true\n conditions { recipients = [\"private@example.com\"]\n email = true\n daily_cap = 2\n }");
@@ -568,13 +568,18 @@ fn round4_sync_feed_redacts_conditions_for_agent_and_plain_tokens() {
             .unwrap();
         tokens.push(response["token"].as_str().unwrap().to_owned());
     }
-    for token in tokens {
+    for (index, token) in tokens.into_iter().enumerate() {
         let response = api
             .client
             .get(api.server.url("/api/sync/changes?since=0&limit=1000"))
             .bearer_auth(token)
             .send()
             .unwrap();
+        if index >= 2 {
+            // The note-safety gate refuses the unfiltered feed to agent credentials.
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            continue;
+        }
         assert_eq!(response.status(), StatusCode::OK);
         let feed: Value = response.json().unwrap();
         let entry = feed["changes"]
