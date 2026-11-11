@@ -999,7 +999,7 @@ fn round2_unlink_does_not_release_incoming_asset() {
     let token = api.external_agent_token();
     let edited = api.client.put(api.server.url(&format!("/api/notes/{id}")))
         .bearer_auth(token["secret"].as_str().unwrap())
-        .json(&json!({"base":allowed["version"], "note":{"fields":{"title":"Detached", "attachments":[]}}}))
+        .json(&json!({"base_version":allowed["version"], "note":{"fields":{"title":"Detached", "attachments":[]}}}))
         .send().unwrap();
     assert!(edited.status().is_success(), "{}", edited.text().unwrap());
     let response = api.client.get(api.server.url(&format!("/api/assets/{}", asset["id"].as_str().unwrap())))
