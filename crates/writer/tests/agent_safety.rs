@@ -74,9 +74,18 @@ fn incoming_assets_release_and_shared_local_reference_do_not_clear_files() {
     assert!(w.agent_may_read(&note.id));
     assert!(!w.agent_may_read_asset(&asset.id));
     assert!(w.agent_may_read_asset(&local.id));
-    assert_eq!(script_core::Vault::search(&w, "zebraquartz917", 10, script_core::Archived::Exclude).unwrap().len(), 2);
+    assert_eq!(
+        script_core::Vault::search(&w, "zebraquartz917", 10, script_core::Archived::Exclude)
+            .unwrap()
+            .len(),
+        2
+    );
     let _acting = writer::acting_as(&Author::Agent("reader".into()));
-    assert!(script_core::Vault::search(&w, "zebraquartz917", 10, script_core::Archived::Exclude).unwrap().is_empty());
+    assert!(
+        script_core::Vault::search(&w, "zebraquartz917", 10, script_core::Archived::Exclude)
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         script_core::Vault::asset(&w, &asset.id)
             .unwrap_err()
@@ -111,9 +120,12 @@ fn incoming_assets_google_upload_is_marked_before_note_creation() {
             limits: script_core::Limits::default(),
             author: Author::Task(name.into()),
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
-            log: String::new(), timed_out: false,
+            log: String::new(),
+            timed_out: false,
         });
-        let asset = w.put_asset("imported.txt", b"PRIVATE_BYTES".to_vec()).unwrap();
+        let asset = w
+            .put_asset("imported.txt", b"PRIVATE_BYTES".to_vec())
+            .unwrap();
         script_core::run::finish();
         assert!(!w.agent_may_read_asset(&asset.id));
         assert!(w.asset_usage(&asset.id).unwrap().notes.is_empty());
@@ -126,7 +138,13 @@ fn incoming_assets_upgrade_marks_existing_references() {
     let w = open(dir.path());
     w.put_type("email", "label = \"Email\"\nfield file { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
     let asset = w.put_asset("old.txt", b"OLD".to_vec()).unwrap();
-    let note = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Old", "file":asset.id}})), &Author::Session("owner".into())).unwrap();
+    let note = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Old", "file":asset.id}})),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
     // Simulate the pre-TV-156 state, without sticky provenance or a migration marker.
     let vault = store::Vault::init(dir.path()).unwrap();
     let db = vault.server_dir().join("state.db");
@@ -137,10 +155,21 @@ fn incoming_assets_upgrade_marks_existing_references() {
     let state = state::State::open(&db, None).unwrap();
     let w = Writer::open(vault, state).unwrap();
     w.activate_agent_safety().unwrap();
-    w.delete(&note.id, Some(&note.version), &Author::Session("owner".into())).unwrap();
+    w.delete(
+        &note.id,
+        Some(&note.version),
+        &Author::Session("owner".into()),
+    )
+    .unwrap();
     w.purge_from_trash(&note.id).unwrap();
     assert!(!w.agent_may_read_asset(&asset.id));
-    assert_eq!(w.state().meta(&format!("agent_safety.asset.{}", asset.id)).unwrap().as_deref(), Some("1"));
+    assert_eq!(
+        w.state()
+            .meta(&format!("agent_safety.asset.{}", asset.id))
+            .unwrap()
+            .as_deref(),
+        Some("1")
+    );
 }
 
 #[test]

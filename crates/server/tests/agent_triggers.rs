@@ -970,17 +970,39 @@ fn round2_device_upload_is_denied_before_any_note_exists() {
         .send().unwrap().json().unwrap();
     let token = paired["token"].as_str().unwrap();
     let agent = api.external_agent_token();
-    let id = ulid::Ulid::new().to_string();
-    for (method, path) in [("POST", "/api/assets?filename=mms.txt".to_owned()),
-        ("PUT", format!("/api/assets/{id}?filename=mms.txt"))] {
-        let uploaded = api.client.request(reqwest::Method::from_bytes(method.as_bytes()).unwrap(), api.server.url(&path))
-            .bearer_auth(token).body("PRIVATE_BYTES").send().unwrap();
+    let id = "01J00000000000000000000000";
+    for (method, path) in [
+        ("POST", "/api/assets?filename=mms.txt".to_owned()),
+        ("PUT", format!("/api/assets/{id}?filename=mms.txt")),
+    ] {
+        let uploaded = api
+            .client
+            .request(
+                reqwest::Method::from_bytes(method.as_bytes()).unwrap(),
+                api.server.url(&path),
+            )
+            .bearer_auth(token)
+            .body("PRIVATE_BYTES")
+            .send()
+            .unwrap();
         assert!(uploaded.status().is_success());
         let asset: Value = uploaded.json().unwrap();
-        let response = api.client.get(api.server.url(&format!("/api/assets/{}", asset["id"].as_str().unwrap())))
-            .bearer_auth(agent["secret"].as_str().unwrap()).send().unwrap();
+        let response = api
+            .client
+            .get(
+                api.server
+                    .url(&format!("/api/assets/{}", asset["id"].as_str().unwrap())),
+            )
+            .bearer_auth(agent["secret"].as_str().unwrap())
+            .send()
+            .unwrap();
         assert_eq!(response.status(), 403);
-        assert!(response.text().unwrap().contains("Attachments of incoming messages are not available to agents"));
+        assert!(
+            response
+                .text()
+                .unwrap()
+                .contains("Attachments of incoming messages are not available to agents")
+        );
     }
 }
 
