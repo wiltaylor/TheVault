@@ -131,6 +131,18 @@ pub(crate) fn is_agent_token(author: &Author) -> bool {
     matches!(author, Author::Agent(name) if name.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("agent-")))
 }
 
+/// External agent credentials confer no authority to drive an in-app agent.
+pub(crate) fn require_in_app_agent_caller(author: &Author) -> Result<(), ApiError> {
+    if is_agent_token(author) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "agent tokens cannot run in-app agents",
+        ));
+    }
+    Ok(())
+}
+
 /// Aggregates and historical representations have no content-bound clearance.
 /// Agent clients use the filtered query API and current-note reads instead.
 fn agent_unfiltered_route(route: &str) -> bool {

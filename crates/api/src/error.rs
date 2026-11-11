@@ -174,6 +174,10 @@ impl From<Error> for ApiError {
             Error::AgentHeld => (StatusCode::FORBIDDEN, json!({ "error": "held" })),
             Error::BadRequest(_) => (StatusCode::BAD_REQUEST, json!({ "error": "bad_request" })),
             Error::ServerOwnedThread => (StatusCode::FORBIDDEN, json!({ "error": "server_owned" })),
+            Error::AgentMemoryToken => (
+                StatusCode::FORBIDDEN,
+                json!({ "error": "forbidden", "message": "agent tokens cannot run in-app agents" }),
+            ),
             Error::Missing(_) => (StatusCode::NOT_FOUND, json!({ "error": "not_found" })),
             Error::KeyNotUnique {
                 type_name,

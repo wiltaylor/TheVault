@@ -240,6 +240,8 @@ pub enum Error {
     /// Agent transcripts are writable only through the dedicated server runtime capability.
     #[error("Agent threads can only be written through the agent runtime.")]
     ServerOwnedThread,
+    #[error("agent tokens cannot run in-app agents")]
+    AgentMemoryToken,
     /// Something other than a note that the request names does not exist.
     #[error("{0}")]
     Missing(String),
@@ -1421,6 +1423,7 @@ impl Writer {
         computed_from: Option<&Doc>,
         runtime_thread: bool,
     ) -> Result<NoteChange> {
+        Self::check_memory_author(type_name, author)?;
         if type_name == "agent_thread" && !runtime_thread {
             return Err(Error::ServerOwnedThread);
         }
@@ -1857,6 +1860,7 @@ impl Writer {
     /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
     /// and `updated` times and its archived state, and is put back in canonical order.
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+        Self::check_memory_author(&change.type_name, author)?;
         if change.type_name == "outbox" && change.event == Event::Delete {
             let (_, old) = self.existing(&change.id)?;
             let doc = Input::Wcl(old).parse(&note_path("outbox", &change.id))?;
@@ -1891,6 +1895,16 @@ impl Writer {
             .type_def(&change.type_name)
             .ok_or_else(|| Error::UnknownType(change.type_name.clone()))?;
         change.doc = Some(note::arrange(ty, doc, &created, &updated));
+        Ok(())
+    }
+
+    fn check_memory_author(type_name: &str, author: &Author) -> Result<()> {
+        if type_name == builtin::AGENT_MEMORY_TYPE
+            && matches!(author, Author::Agent(name) | Author::AgentMail(name)
+                if name.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("agent-")))
+        {
+            return Err(Error::AgentMemoryToken);
+        }
         Ok(())
     }
 
