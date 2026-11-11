@@ -778,7 +778,7 @@ fn browser_secrets_thread_note_routes_and_events_hide_raw_transcripts() {
     let history: Value = api.client.get(api.server.url(&format!("{path}/history"))).bearer_auth(api.token()).send().unwrap().json().unwrap();
     let mut leaks = Vec::new();
     for (label, token) in [("read", &read), ("write", &write), ("agent", &external)] {
-        let mut paths = vec![path.clone(), "/api/sync/changes?since=0&limit=5000".to_owned(), "/api/query?q=agent_thread".to_owned()];
+        let mut paths = vec![path.clone(), "/api/sync/changes?since=0&limit=5000".to_owned(), "/api/query?q=from%20agent_thread".to_owned()];
         for version in history["versions"].as_array().unwrap() { paths.push(format!("{path}/history/{}", version["version"].as_str().unwrap())); }
         for route in paths {
             let response = api.client.get(api.server.url(&route)).bearer_auth(token).send().unwrap();
