@@ -2888,7 +2888,91 @@ separate, so a crash between them can still lose dispatch. The classifier has no
 and treats note text only as untrusted state. Text can influence answer values. A low
 probability is not proof of safety.
 
-### Shipped scam classifier
+### Agent safety gate
+
+The home server activates the agent safety gate once and records `agent_safety.activation_ms`
+and the IDs already present in server state. Note dates cannot claim a legacy exemption.
+`agent_safety.pre_existing_mode` is a server-state setting: `held` (the default) or
+`legacy_allowed`. In `held` mode, pre-existing incoming notes need explicit user release.
+In `legacy_allowed` mode they retain the earlier behaviour. This setting is not a note field
+and is not available to agent tools. No automatic backlog classification runs. The opt-in,
+cost-shown 90-day pass and bulk release are separate work (TV-151).
+
+`classifiers/agent_safety.wcl` classifies newly arriving incoming email, SMS/messages, calls
+(including missed calls), and calendar events and recurring series whose organiser is not
+the connected Google account address. Calendar IDs never establish ownership. An empty
+organiser with a Google reference is also incoming. New backfill is included regardless of its sent date. It uses Jev
+with a projection of the note document as untrusted state and no tools. `fields` remains
+required by the classifier format, but this security classifier supplies its own projection:
+all blocks and fields except workflow/sync bookkeeping (labels, processed, images_pending,
+inline_images, converter, inbox_catch_up, etag, snapshot, my_response, archived, timestamps
+and *_ref identifiers) and valid typed classification annotations. Unknown/custom fields
+remain in the projection. Title, body, sender/recipient fields, snippet, HTML asset identity,
+attachments, description, location and attendees are included. The exact same projection
+is hashed. Raw asset bytes/extracted text are a separate boundary (TV-156).
+Its `reason` choice writes `agent_safety_reason`. The `withhold` list defaults to
+`["prompt_injection", "scam", "sensitive_credentials"]`. Spam and marketing are labelled,
+not withheld unless the user adds them to that list. A classification is not proof of safety.
+The deterministic communication/script/calendar restrictions remain independent.
+
+Derived `email_thread` and `conversation` notes also receive one decision for their own
+title/content. This costs **one extra decision per new thread**, not per later message.
+They remain held until that decision allows them and their first committed member is clear.
+The server pins that member in state with an indexed reverse lookup. Deleting it leaves no
+first member until a later arrival binds one. A session release overrides both holds.
+Server person IDs in `participants` are not classified, so later participants do not
+invalidate the derived title verdict. Other edits
+invalidate the relevant verdict. Contact-derived conversation names therefore cannot borrow
+a message verdict that never reviewed the name.
+
+Pending, missing, invalid, failed and timed-out decisions withhold the note from agents, not
+the user. The request timeout is 30 seconds, with one attempt and no automatic retry. The
+existing durable pending queue resumes queued work after restart, not an interrupted call.
+No valid definition or a lost dispatch leaves the note held. The decision is server-owned
+and bound to a fingerprint of the content. Editable classification fields cannot clear it.
+Content changes invalidate clearance with reason `content_changed`, without automatic
+reclassification. Routine labels/processed writes preserve clearance. A pending provider
+result also survives same-message image completion by the trusted `google_gmail`
+task. The Gmail id must be unchanged. Only pending-image placeholders becoming images
+with the same alt text, or images changing asset IDs, are rendering-only changes. All other
+image fields and paragraph text must remain identical. Image-to-placeholder changes are held.
+HTML asset identity and attachments may change. Reconversion introducing different text is
+held as `content_changed`, and never inherits a user release. Only that
+server task can carry the verdict to the new rendering fingerprint, including a pending
+verdict. Ordinary session, agent and other-task content edits still invalidate it. User release
+always requires the current fingerprint, never a conversion alias. The task's code is trusted
+server code, not a note-supplied conversion flag. A pending provider
+result cannot undo a user release. Unqueued notes and interrupted attempts recovered at
+startup show held/`unclassified`, not a perpetually polling pending state. Payloads larger
+than 128 KiB of serialized projected state are held as `too_large`, with no provider call.
+
+Agent triggers, mention/call dispatch, read tools, search/query results (including reference
+traversal), script reads and assets used by held notes are gated. User note reads show an
+`agent_safety` object with status, reason and fingerprint. The note page displays the hold
+and a release button. `POST /api/notes/{id}/agent-safety/release` takes `{ fingerprint }`,
+requires a browser session, checks the reviewed content and records the actor in activity.
+Tokens and agent tools cannot release notes. Clearing or releasing a new note queues its
+single arrival event. The scheduler is notified (no periodic safety poll), matches create
+triggers and applies normal run limits before acknowledging the event. Admission is not
+durable execution: a crash after admission can still lose a run. Pre-existing notes already
+had their arrival, and their release does not replay it. Agent-authored creates also never
+replay. Mentions and subsequent releases do not replay an arrival.
+
+An indexed server-state held-ID set is maintained on note commits and verdicts. Agent
+queries use this set without reading/hashing every vault file or taking the writer lock.
+Read tools report the count omitted by that query or backlink call, not the vault-wide total.
+The SQL planner applies exclusions before pagination. Normal startup and the held inventory
+use cached safety hashes and indexed metadata without parsing every note. On devices the gate
+is not locally active: note reads omit safety status, and held-list/release routes require
+the home web app rather than claiming a device-local release succeeded.
+
+`GET /api/agent-safety/held` is session-only. Optional `type`, `reason`, `since` and `until`
+(inclusive RFC3339 **vault creation** dates) filter the inventory. `offset` and `limit`
+(default 100, maximum 500) page it. It returns IDs, types, creation dates and safety status,
+not note text. The writer's actor-checked release and inventory functions support future
+user-authorized bulk review without adding a backfill job here.
+
+### Shipped scam classifier (independent)
 
 `classifiers/scam.wcl` runs on incoming `message` notes and `email` notes without
 `system/SENT` or `system/DRAFT` labels, only when `sent >= now() - days(2)`.

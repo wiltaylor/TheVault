@@ -583,6 +583,8 @@ pub async fn run_route(
     Path(name): Path<String>,
     Json(b): Json<RunBody>,
 ) -> Result<Json<Value>, ApiError> {
+    // Authentication maps stored agent-kind tokens to Agent(full token name).
+    // Preserve that author in the script worker so vault reads enforce the gate.
     let ran = blocking(w, move |w| {
         let Some(host) = host_for(w) else {
             return Err(ApiError::new(

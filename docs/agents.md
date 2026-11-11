@@ -104,11 +104,24 @@ Then revoke the token as above, and remove the line you added to the agent's ins
 | `POST /api/agent-codes` `{ name, scope, server_url? }` | `admin` | Issues a code that works once for 10 minutes. Answers `{ code, expires, name, scope, server_url, command }`. `server_url` defaults to the address the request came in on. |
 | `POST /api/agent-codes/redeem` `{ code }` | None | Creates the `agent-<name>` token, replacing one of that name. Answers 201 `{ server_url, token, name, scope }`, or 410 for a wrong, used or expired code. |
 | `GET /agent/install.sh` | None | The install script, with the server's URL as the request reached it. Behind a proxy, the server reads `X-Forwarded-Host` and `X-Forwarded-Proto`. |
-# External CLI agents
+## External CLI agents
 
-CLI agents authenticated with an agent install-code token cannot run in-app agents.
-Chat, background turns, thread creation, answers, proposal discard and dispatch require
-a signed-in user or an ordinary token with the required scope. Agent tokens cannot
-run even an in-app agent with a matching name. In-app agents use the agent tool for
-sub-agents, not the chat API.
+Agent tokens cannot run even an in-app agent with a matching name. In-app agents
+use the agent tool for sub-agents, not the chat API.
+
+# External agents and held notes
+
+An external agent can use the filtered `/api/query` (GET or POST), `/api/search`,
+and `/api/notes` list. These responses exclude held notes and include the fixed
+notice `some notes may be held`. Current-note reads, note graphs and attachment
+downloads check clearance too. Graphs omit held neighbours. Script tools run
+with the external agent's full token name as their agent execution author.
+
+Agent tokens cannot read history or historical versions, original email HTML,
+canvases, sync changes, event streams, trash, pins, notifications, activity,
+flagged-note lists, asset lists, asset trash or asset usage. Daily/planner aliases
+and aggregate agent-thread, memory, run and dispatch lists are also refused.
+Use filtered queries and current-note reads instead. These historical and
+aggregate representations do not have a content-bound clearance of their own.
+Normal user sessions retain access. Only a user session may release a held note.
 

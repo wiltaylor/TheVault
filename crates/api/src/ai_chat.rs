@@ -1299,6 +1299,9 @@ impl Limits {
             "get_note" | "propose_edit" | "propose_fields" | "propose_archive"
             | "propose_delete" => {
                 let id = input["id"].as_str()?.trim();
+                if !w.agent_may_read(id) {
+                    return Some(ToolOut::error(format!("Note {id} is held from agents.")));
+                }
                 let n = w.read(id).ok()?;
                 let verb = if call.name == "get_note" {
                     "read"
@@ -1497,8 +1500,10 @@ fn setup(
         system.push_str(&memories);
     }
     if let Some(id) = note_id
+        .as_deref()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
+        .filter(|id| w.agent_may_read(id))
         && let Ok(n) = w.read(&id)
     {
         let doc = doc_to_json(&n.doc);
@@ -1511,6 +1516,12 @@ fn setup(
              title {title:?}. \"This note\" means it; read it with get_note.\n",
             n.type_name
         ));
+    }
+    if note_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty() && !w.agent_may_read(id))
+    {
+        system.push_str("\nThis note is held from agents; the user can review and release it.\n");
     }
     // What the agent can do with wscript, so it opens the wscript skill first (script-tools T5).
     let scripts = if change_scope(scope, agent).allows(Scope::Write) {
@@ -4015,6 +4026,8 @@ fn propose_or_read(
     agent: &Agent,
     call: &ToolCall,
 ) -> ToolOut {
+    let _acting = writer::acting_as(&Author::Agent(agent.name.clone()));
+    w.take_agent_omissions();
     if let Some(e) = &call.error {
         return ToolOut::error(e.clone());
     }
@@ -4050,6 +4063,7 @@ fn propose_or_read(
                 .clamp(1, SEARCH_LIMIT);
             Vault::search(w, text, limit, script_core::Archived::Exclude)
                 .map(|mut rows| {
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     rows_out(rows, left_out_of(left_out))
                 })
@@ -4059,6 +4073,7 @@ fn propose_or_read(
             Vault::query_page(w, q, QUERY_LIMIT, None)
                 .map(|page| {
                     let mut rows = page["rows"].as_array().cloned().unwrap_or_default();
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     let mut extra = left_out_of(left_out);
                     extra["total"] = page["total"].clone();
@@ -4068,6 +4083,9 @@ fn propose_or_read(
                 .map_err(|e| ToolOut::error(query_error(q, &e)))
         }),
         "get_note" => str_arg(input, "id").and_then(|id| {
+            if !w.agent_may_read(id) {
+                return Ok(ToolOut::error(format!("Note {id} is held from agents.")));
+            }
             Vault::get(w, id)
                 .map(|mut note| {
                     cut_strings(&mut note, BODY_LIMIT);
@@ -4096,6 +4114,7 @@ fn propose_or_read(
         "backlinks" => str_arg(input, "id").and_then(|id| {
             Vault::backlinks(w, id)
                 .map(|mut rows| {
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     rows_out(rows, left_out_of(left_out))
                 })
@@ -4160,7 +4179,23 @@ fn propose_or_read(
         }
         other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
     };
-    result.unwrap_or_else(|e| e)
+    let mut out = result.unwrap_or_else(|e| e);
+    if matches!(
+        call.name.as_str(),
+        "search_notes" | "query_notes" | "backlinks"
+    ) {
+        let omitted = w.take_agent_omissions();
+        if omitted > 0
+            && let Ok(Value::Object(mut result)) = serde_json::from_str(&out.content)
+        {
+            result.insert(
+                "notice".into(),
+                json!("some notes may be held; the user can review and release them."),
+            );
+            out.content = Value::Object(result).to_string();
+        }
+    }
+    out
 }
 
 /// `propose_edit`: check the edit with a dry-run batch and hand it to the user (ai D14).

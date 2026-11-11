@@ -954,7 +954,7 @@ const PLAIN: &str = r#"label = "Clerk"
 fn notes_sent_to_an_agent_run_once_on_a_dispatch_thread_about_them() {
     let r = Rig::new();
     r.agent("clerk", PLAIN);
-    let notes = vec!["01JB8Z4K2MQ7V3X9T5R6W8Y2ZB".to_owned()];
+    let notes = vec![r.create("memo", "Roof", "open", &user())];
     let thread = r
         .scheduler
         .dispatch(

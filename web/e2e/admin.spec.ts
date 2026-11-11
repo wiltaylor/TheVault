@@ -177,9 +177,17 @@ test("a note is restored from its history and from the trash in the UI", async (
 });
 
 test("a new token's secret is shown once and is gone after a reload", async ({ page, baseURL }) => {
-  const name = `agent-${token()}`;
+  const name = `cli-${token()}`;
   await logIn(page, "/tokens");
   // Exact labels: the "Connect an AI agent" form on this page has "Agent name" and "Agent scope".
+  const reservedName = `agent-${token()}`;
+  await page.getByLabel("Name", { exact: true }).fill(reservedName);
+  await page.getByRole("button", { name: "Create token" }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "token names must not start with the reserved prefixes agent- or device-",
+  );
+  await expect(page.getByRole("region", { name: "New token secret" })).toHaveCount(0);
+  await expect(page.locator(`tr[data-token="${reservedName}"]`)).toHaveCount(0);
   await page.getByLabel("Name", { exact: true }).fill(name);
   await page.getByLabel("Scope", { exact: true }).selectOption("write");
   await page.getByRole("button", { name: "Create token" }).click();
