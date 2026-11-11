@@ -167,6 +167,10 @@ check "xfce4-terminal uses JetBrainsMonoNL Nerd Font Mono, and so does the deskt
 # 4. playwright-cli drives a headed Chromium, and the screenshot reads back.
 r=$(run_cmd 'playwright-cli open about:blank --headed && playwright-cli screenshot' 180)
 printf '%s\n' "$r" > "$tmp/open.json"
+if ! jqe '.exit == 0 and .timed_out == false' <<< "$r"; then
+  printf 'Headed browser command failed (exit, timeout, stdout and stderr):\n' >&2
+  jq '{exit, timed_out, stdout, stderr}' <<< "$r" >&2
+fi
 check "playwright-cli open --headed and screenshot exit 0" jqe '.exit == 0 and .timed_out == false' <<< "$r"
 shot=$(jq -r '.stdout' <<< "$r" | grep -o '\.playwright-cli/[^)]*\.png' | head -n 1 || true)
 check "the screenshot is named in the output ($shot)" test -n "$shot"
