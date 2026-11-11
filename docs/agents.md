@@ -131,6 +131,15 @@ through unscanned. Narrow the query or use an owner session for larger results.
 Sessions and admin user tokens bypass scanning without buffering. SSE, asset
 downloads and zip exports keep their existing streaming authorization boundaries.
 Tool answers are redacted before truncation and before the model sees them.
+Agent-thread indexes also hold only the redacted copy, including full-text data.
+This prevents query conditions from recovering hidden names. Managers can still
+read the raw stored note, but cannot filter on its hidden Login names. Existing
+indexes are rebuilt on upgrade.
+Sync pages target 16 MiB after per-entry redaction and always include at least
+one change. The sync route is exempt from the 32 MiB response scan limit so a
+single large note cannot strand a device cursor. Non-manager query/search pages
+also target 16 MiB and return a continuation cursor. A single oversized query
+row or aggregate may still require selecting fewer fields or an owner session.
 Ship updated desktop and Android apps before saving the new permission: old
 apps reject the unknown field, as they do `browser = true`.
 

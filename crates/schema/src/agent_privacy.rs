@@ -1,5 +1,43 @@
-//! Pure Login-metadata redaction, shared by API clients and agent script reads.
+//! Pure Login-metadata redaction, shared by indexing, API clients and agent script reads.
 use serde_json::{Value, json};
+
+
+fn print_value(value: &crate::Value) -> String {
+    match value {
+        crate::Value::Str(text) => serde_json::to_string(text).expect("string serialization"),
+        crate::Value::Int(n) => n.to_string(),
+        crate::Value::Float(n) => format!("{n:?}"),
+        crate::Value::Bool(value) => value.to_string(),
+        crate::Value::List(values) => format!("[{}]", values.iter().map(print_value).collect::<Vec<_>>().join(", ")),
+        crate::Value::Record(values) => format!("{{ {} }}", values.iter().map(|(key,value)| format!("{key}: {}",print_value(value))).collect::<Vec<_>>().join(", ")),
+    }
+}
+
+fn print_doc(doc: &crate::Doc) -> String {
+    let mut out = String::new();
+    for (name,value) in &doc.fields { out.push_str(&format!("{name} = {}\n", print_value(value))); }
+    for block in &doc.blocks {
+        out.push_str(&block.kind);
+        for label in &block.labels { out.push(' '); out.push_str(&serde_json::to_string(label).expect("label serialization")); }
+        out.push_str(" {\n"); out.push_str(&print_doc(&block.body)); out.push_str("}\n");
+    }
+    out
+}
+
+/// The copy indexed for filtering and full-text search. The stored note stays raw.
+pub fn redacted_agent_doc(type_name: &str, doc: &crate::Doc) -> crate::Doc {
+    let mut copy = doc.clone();
+    if type_name == "agent_thread" {
+        for (name,value) in &mut copy.fields {
+            if name == "transcript" {
+                let mut transcript = serde_json::from_str::<Value>(value.as_str().unwrap_or("{}")).unwrap_or_else(|_| json!({}));
+                if redact_agent_content(&mut transcript).is_err() { transcript = json!({}); }
+                *value = crate::Value::Str(transcript.to_string());
+            }
+        }
+    }
+    copy
+}
 
 fn private_transcript(text: &str) -> bool {
     serde_json::from_str::<Value>(text)
@@ -11,8 +49,7 @@ pub fn redact_agent_note(type_name: &str, text: &str) -> Result<String, String> 
     if (!type_name.is_empty() && type_name != "agent_thread") || !text.contains("transcript") {
         return Ok(text.to_owned());
     }
-    let mut doc = crate::Input::Wcl(text.to_owned())
-        .parse("private-note.wcl")
+    let mut doc = crate::Doc::parse(text, "private-note.wcl")
         .map_err(|_| "The private transcript could not be redacted.".to_owned())?;
     let mut changed = false;
     for (name, field) in &mut doc.fields {
@@ -28,12 +65,12 @@ pub fn redact_agent_note(type_name: &str, text: &str) -> Result<String, String> 
         let before = value.clone();
         redact_agent_content(&mut value)?;
         if value != before {
-            *field = schema::Value::Str(value.to_string());
+            *field = crate::Value::Str(value.to_string());
             changed = true;
         }
     }
     Ok(if changed {
-        crate::print_doc(&doc)
+        print_doc(&doc)
     } else {
         text.to_owned()
     })
@@ -60,7 +97,7 @@ fn redact_content_in(value: &mut Value, inherited_type: Option<&str>) -> Result<
                     .get("name")
                     .and_then(Value::as_str)
                     .unwrap_or("hidden");
-                let source = match schema::Agent::parse(name, source) {
+                let source = match crate::Agent::parse(name, source) {
                     Ok(mut agent) => {
                         agent.permissions.browser_secrets.clear();
                         Value::String(agent.to_wcl())
@@ -139,7 +176,7 @@ pub fn hide_browser_secrets(value: &mut Value) {
         let name = value["name"].as_str().unwrap_or("hidden").to_owned();
         for field in ["before", "after"] {
             if let Some(source) = value[field].as_str() {
-                value[field] = match schema::Agent::parse(&name, source) {
+                value[field] = match crate::Agent::parse(&name, source) {
                     Ok(mut agent) => {
                         agent.permissions.browser_secrets.clear();
                         json!(agent.to_wcl())
@@ -155,7 +192,7 @@ pub fn hide_browser_secrets(value: &mut Value) {
         && let Some(source) = value["input"]["wcl"].as_str()
     {
         let name = value["input"]["name"].as_str().unwrap_or("hidden");
-        let text = match schema::Agent::parse(name, source) {
+        let text = match crate::Agent::parse(name, source) {
             Ok(mut agent) => {
                 agent.permissions.browser_secrets.clear();
                 json!(agent.to_wcl())

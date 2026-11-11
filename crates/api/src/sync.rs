@@ -189,16 +189,24 @@ pub async fn changes(
                     }));
         let page = w.state().changes_since(since, limit)?;
         let full_logins = crate::tasks::may_manage_login_secrets(w, &author)?;
-        let entries = page
-            .changes
-            .iter()
-            .map(|c| entry(w, c, full_conditions, full_logins))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut entries = Vec::new();
+        let mut bytes = 1024usize; // leave room for the page envelope
+        let mut next = since;
+        for change in &page.changes {
+            let mut value = entry(w, change, full_conditions, full_logins)?;
+            if !full_logins { crate::agent_threads::redact_content(&mut value)?; }
+            let size = serde_json::to_vec(&value).map_err(|_| ApiError::bad_request("sync entry could not be serialized"))?.len() + 1;
+            if !entries.is_empty() && bytes.saturating_add(size) > crate::query::PAGE_BYTE_BUDGET { break; }
+            bytes = bytes.saturating_add(size);
+            next = change.seq;
+            entries.push(value);
+        }
+        let remaining = page.remaining + i64::try_from(page.changes.len() - entries.len()).unwrap_or(i64::MAX);
         Ok(json!({
             "changes": entries,
-            "next": page.next,
+            "next": next,
             "latest": page.latest,
-            "remaining": page.remaining,
+            "remaining": remaining,
         }))
     })
     .await?;

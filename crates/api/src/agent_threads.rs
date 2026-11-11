@@ -1209,6 +1209,8 @@ pub(crate) async fn redact_response(
     if crate::tasks::may_manage_login_secrets(w, author)? {
         return Ok(response);
     }
+    // Sync redacts each entry before serialization and must deliver even one huge note.
+    if path == "/api/sync/changes" { return Ok(response); }
     let content_type = response
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
