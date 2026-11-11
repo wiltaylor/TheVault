@@ -256,7 +256,11 @@ fn answer(s: &Shared, r: &Request) -> Reply {
     }
     match (r.method.as_str(), r.route()) {
         ("DELETE", "/profile") if *lock(&s.cleanup_failure) => error(503, "box unavailable"),
-        ("DELETE", "/profile") if lock(&s.failed_profile).as_deref() == r.header("x-vault-agent") => error(403, "fixture permanently refused profile"),
+        ("DELETE", "/profile")
+            if lock(&s.failed_profile).as_deref() == r.header("x-vault-agent") =>
+        {
+            error(403, "fixture permanently refused profile")
+        }
         ("DELETE", "/profile") => {
             lock(&s.profiles).remove(r.header("x-vault-agent").unwrap_or_default());
             Reply::json(200, &json!({"ok": true}))

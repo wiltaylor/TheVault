@@ -21,11 +21,21 @@ async fn read_only_cache_directories_do_not_block_profile_deletion() {
     std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
     symlink(outside.path(), cache.join("outside")).unwrap();
     std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+    let response = identity(b.http.delete(b.url("/profile")), "test")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
     assert!(!cache.join("Cookies").exists());
     assert!(!b.home.path().join("profiles/test").exists());
-    assert_eq!(std::fs::metadata(outside.path()).unwrap().permissions().mode() & 0o777, 0o555);
+    assert_eq!(
+        std::fs::metadata(outside.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o555
+    );
     std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 

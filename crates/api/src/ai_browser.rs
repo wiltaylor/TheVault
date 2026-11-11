@@ -222,7 +222,10 @@ pub fn cleanup_retired(w: Arc<Writer>) {
             let ids = w.retired_browser_profiles().unwrap_or_default();
             retries.retain(|id, _| ids.contains(id));
             let now = Instant::now();
-            let due: Vec<_> = ids.into_iter().filter(|id| retries.get(id).is_none_or(|(next, _)| *next <= now)).collect();
+            let due: Vec<_> = ids
+                .into_iter()
+                .filter(|id| retries.get(id).is_none_or(|(next, _)| *next <= now))
+                .collect();
             let Some(first) = due.first() else {
                 if let Some(next) = retries.values().map(|(next, _)| *next).min() {
                     tokio::select! {
@@ -258,7 +261,11 @@ pub fn cleanup_retired(w: Arc<Writer>) {
                                 offline_delay = (offline_delay * 2).min(Duration::from_secs(900));
                                 break;
                             }
-                            let delay = retries.get(&id).map_or(Duration::from_secs(30), |(_, delay)| (*delay * 2).min(Duration::from_secs(900)));
+                            let delay = retries
+                                .get(&id)
+                                .map_or(Duration::from_secs(30), |(_, delay)| {
+                                    (*delay * 2).min(Duration::from_secs(900))
+                                });
                             retries.insert(id, (Instant::now() + delay, delay));
                         }
                     }
