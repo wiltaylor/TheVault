@@ -333,19 +333,19 @@ pub(crate) fn hide_browser_secrets(value: &mut Value) {
         value["browser_secrets_hidden"] = json!(true);
     }
     // A proposal's after text also occurs in the tool-call input in a transcript/event.
-    if value["name"] == "propose_agent_change" {
-        if let Some(source) = value["input"]["wcl"].as_str() {
-            let name = value["input"]["name"].as_str().unwrap_or("hidden");
-            let text = match Agent::parse(name, source) {
-                Ok(mut agent) => {
-                    agent.permissions.browser_secrets.clear();
-                    json!(agent.to_wcl())
-                }
-                Err(_) => Value::Null,
-            };
-            value["input"]["wcl"] = text;
-            value["browser_secrets_hidden"] = json!(true);
-        }
+    if value["name"] == "propose_agent_change"
+        && let Some(source) = value["input"]["wcl"].as_str()
+    {
+        let name = value["input"]["name"].as_str().unwrap_or("hidden");
+        let text = match Agent::parse(name, source) {
+            Ok(mut agent) => {
+                agent.permissions.browser_secrets.clear();
+                json!(agent.to_wcl())
+            }
+            Err(_) => Value::Null,
+        };
+        value["input"]["wcl"] = text;
+        value["browser_secrets_hidden"] = json!(true);
     }
     match value {
         Value::Object(fields) => {
