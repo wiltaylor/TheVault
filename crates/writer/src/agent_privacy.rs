@@ -52,12 +52,19 @@ fn redact_content_in(value: &mut Value, inherited_type: Option<&str>) -> Result<
     match value {
         Value::Object(fields) => {
             // get_agent returns the same definition twice: parsed JSON and WCL text.
-            if fields.contains_key("agent") && fields.contains_key("format")
+            if fields.contains_key("agent")
+                && fields.contains_key("format")
                 && let Some(source) = fields.get("wcl").and_then(Value::as_str)
             {
-                let name = fields.get("name").and_then(Value::as_str).unwrap_or("hidden");
+                let name = fields
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("hidden");
                 let source = match schema::Agent::parse(name, source) {
-                    Ok(mut agent) => { agent.permissions.browser_secrets.clear(); Value::String(agent.to_wcl()) }
+                    Ok(mut agent) => {
+                        agent.permissions.browser_secrets.clear();
+                        Value::String(agent.to_wcl())
+                    }
                     Err(_) => Value::Null,
                 };
                 fields.insert("wcl".to_owned(), source);
