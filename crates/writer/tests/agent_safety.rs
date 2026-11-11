@@ -210,7 +210,7 @@ fn round4_upgrade_preserves_local_and_type_only_files() {
         )
         .unwrap();
     }
-    w.put_type("template_note", &format!("label = \"Template\"\n# image \"{}\"\ntemplate default {{ tab Main {{ slot title }} }}\n", template.id)).unwrap();
+    w.put_type("template_note", &format!("label = \"Template\"\nfield desk {{ kind = \"location\" map = \"image\" image = \"{}\" }}\ntemplate default {{ tab Main {{ slot title }} }}\n", template.id)).unwrap();
     let w = round4_upgrade(w, dir.path());
     w.activate_agent_safety().unwrap();
     assert!(
