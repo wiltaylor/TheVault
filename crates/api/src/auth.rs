@@ -168,7 +168,9 @@ async fn agent_read_gate(w: Arc<Writer>, req: &mut Request) -> Result<(), ApiErr
         .map(|p| p.as_str())
         .unwrap_or("")
         .to_owned();
-    if matches!(*req.method(), Method::GET | Method::HEAD) && agent_unfiltered_route(&route) {
+    if (matches!(*req.method(), Method::GET | Method::HEAD) && agent_unfiltered_route(&route))
+        || matches!(route.as_str(), "/api/daily/{date}" | "/api/planner/{period}/{date}")
+    {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "held",

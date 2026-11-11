@@ -287,11 +287,16 @@ impl Writer {
     // agent_may_read without calling read(), which would acquire that lock again.
     fn check_batch_agent_note(&self, id: &str, author: &Author) -> Result<()> {
         if matches!(author, Author::Agent(_) | Author::AgentMail(_)) {
-            let allowed = self.existing(id).and_then(|(kind, text)| {
-                let doc = Input::Wcl(text).parse(&note_path(&kind, id))?;
-                self.agent_safety_doc(id, &kind, &doc)
-            }).is_ok_and(|s| s.allowed());
-            if !allowed { return Err(Error::AgentHeld); }
+            let allowed = self
+                .existing(id)
+                .and_then(|(kind, text)| {
+                    let doc = Input::Wcl(text).parse(&note_path(&kind, id))?;
+                    self.agent_safety_doc(id, &kind, &doc)
+                })
+                .is_ok_and(|s| s.allowed());
+            if !allowed {
+                return Err(Error::AgentHeld);
+            }
         }
         Ok(())
     }

@@ -284,13 +284,148 @@ fn safety_rest_read_route_inventory() {
     );
 }
 
+#[test]
+fn safety_rest_mutation_route_inventory() {
+    // Review every new non-GET route, including endpoints that return note text.
+    let source = include_str!("../../api/src/lib.rs");
+    let mut actual = Vec::new();
+    for method in ["post", "post_up_to", "put", "put_up_to", "patch"] {
+        let marker = format!(".{method}(");
+        for part in source.split(&marker).skip(1) {
+            if let Some(path) = part.trim_start().strip_prefix('"').and_then(|s| s.split('"').next()) {
+                actual.push((method, path));
+            }
+        }
+    }
+    actual.sort_unstable();
+    actual.dedup();
+    let reviewed = [
+        ("patch", "/api/agents/{name}/memories/{id}", "caller ownership or session-only agent operations"),
+        ("patch", "/api/agents/{name}/threads/{id}", "caller ownership or session-only agent operations"),
+        ("patch", "/api/assets/{id}", "central id gate"),
+        ("patch", "/api/devices/{id}", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/agent-codes", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/agent-codes/redeem", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/agents/calls", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/agents/{name}/dispatch", "caller ownership or session-only agent operations"),
+        ("post", "/api/agents/{name}/memories", "caller ownership or session-only agent operations"),
+        ("post", "/api/agents/{name}/threads", "caller ownership or session-only agent operations"),
+        ("post", "/api/agents/{name}/threads/{id}/fork", "caller ownership or session-only agent operations"),
+        ("post", "/api/agents/{name}/threads/{id}/truncate", "caller ownership or session-only agent operations"),
+        ("post", "/api/agents/{name}/triggers/{trigger}/backfill", "caller ownership or session-only agent operations"),
+        ("post", "/api/ai/apply", "caller-bound proposal approval"),
+        ("post", "/api/ai/chat", "stored-kind caller and session-owned thread context"),
+        ("post", "/api/ai/chat/turns", "stored-kind caller and session-owned thread context"),
+        ("post", "/api/ai/decide", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/ai/discard", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/assets/cleanup", "caller metadata or asset operation, not stored note body"),
+        ("post", "/api/assets/trash/restore", "caller metadata or asset operation, not stored note body"),
+        ("post", "/api/daily/{date}", "agent alias refused"),
+        ("post", "/api/devices/pair", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/devices/pair-codes", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/devices/{id}/commands", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/devices/{id}/commands/{cid}/result", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/devices/{id}/event-failures", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/devices/{id}/sync-rounds", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/inbox/mark-processed", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/ai/accounts", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/ai/accounts/{id}/chatgpt/disconnect", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/ai/accounts/{id}/chatgpt/finish", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/ai/accounts/{id}/chatgpt/start", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/ai/accounts/{id}/test", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/brave/test", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/gitsync/key/generate", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/gitsync/run", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/gitsync/ssh-key/generate", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/google/disconnect", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/google/finish", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/integrations/google/start", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/login", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/logout", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/notes", "create returns caller supplied note"),
+        ("post", "/api/notes/{id}/agent-safety/release", "central id gate"),
+        ("post", "/api/notes/{id}/archive", "central id gate"),
+        ("post", "/api/notes/{id}/restore", "central id gate"),
+        ("post", "/api/notes/{id}/unarchive", "central id gate"),
+        ("post", "/api/notifications", "caller metadata or asset operation, not stored note body"),
+        ("post", "/api/notifications/read-all", "caller metadata or asset operation, not stored note body"),
+        ("post", "/api/notifications/{id}/read", "caller metadata or asset operation, not stored note body"),
+        ("post", "/api/pins/folders", "caller metadata or asset operation, not stored note body"),
+        ("post", "/api/pins/move", "caller metadata or asset operation, not stored note body"),
+        ("post", "/api/planner/{period}/{date}", "agent alias refused"),
+        ("post", "/api/query", "SQL exclusion before evaluating conditions"),
+        ("post", "/api/query/parse", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/query/text", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/tasks/{name}/run", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/tokens", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/tools/{name}/run", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/trash/empty", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/trash/{id}/restore", "agent_read_gate refuses trashed ids"),
+        ("post", "/api/types/{name}/change", "credentials or configuration or input-only response, scope checked"),
+        ("post", "/api/upsert", "matched ids checked before unchanged response"),
+        ("post_up_to", "/api/assets", "caller metadata or asset operation, not stored note body"),
+        ("post_up_to", "/api/batch", "prepare_op checks held targets before conflict or stored content"),
+        ("post_up_to", "/api/skills/import", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/agents/{name}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/device-files/{platform}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/devices/{id}/bases", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/devices/{id}/health", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/devices/{id}/push", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/ai/accounts/order", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/ai/accounts/{id}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/ai/accounts/{id}/key", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/ai/default", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/ai/settings", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/brave/key", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/gitsync/key", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/gitsync/settings", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/gitsync/ssh-key", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/gitsync/token", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/integrations/google/settings", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/notes/{id}", "central id gate"),
+        ("put", "/api/notes/{id}/canvas/{name}", "central id gate"),
+        ("put", "/api/pins/folders/{id}", "caller metadata or asset operation, not stored note body"),
+        ("put", "/api/pins/{id}", "central id gate"),
+        ("put", "/api/scripts/{name}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/secrets/{name}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/tasks/{name}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/taxonomies/{name}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/tools/{name}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/types/{name}", "credentials or configuration or input-only response, scope checked"),
+        ("put", "/api/types/{name}/templates/{template}", "credentials or configuration or input-only response, scope checked"),
+        ("put_up_to", "/api/assets/{id}", "central id gate"),
+        ("put_up_to", "/api/skills/{name}", "credentials or configuration or input-only response, scope checked"),
+        ("put_up_to", "/api/skills/{name}/files/{*path}", "credentials or configuration or input-only response, scope checked"),
+    ];
+    assert!(reviewed.iter().all(|(_, _, review)| !review.is_empty()));
+    let expected: Vec<_> = reviewed.iter().map(|(method, path, _)| (*method, *path)).collect();
+    assert_eq!(actual, expected, "Review the content returned by every new write route");
+}
+
 fn held_write_fixture(api: &Api) -> Value {
-    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
-        "title":"Held write fixture", "from_raw":"PRIVATE_HELD_WRITE_MARKER",
-        "sent":"2000-01-01T00:00:00Z"
-    }}}));
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Held write fixture", "from_raw":"PRIVATE_HELD_WRITE_MARKER",
+            "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
     safety_wait(api, note["id"].as_str().unwrap());
     api.get(&format!("/api/notes/{}", note["id"].as_str().unwrap()))
+}
+
+#[test]
+fn review6_post_period_aliases_cannot_return_existing_notes() {
+    let chat = FakeAnthropic::start();
+    let api = Api::start(&chat);
+    let token = api.external_agent_token();
+    for path in ["/api/daily/2026-01-05", "/api/planner/day/2026-01-05"] {
+        let response = api.client.post(api.server.url(path))
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .send().unwrap();
+        assert_eq!(response.status(), 403, "{path}");
+    }
 }
 
 #[test]
@@ -302,10 +437,14 @@ fn review6_upsert_returns_held_note_text() {
     held_write_fixture(&api);
     let token = api.external_agent_token();
     for dry_run in [true, false] {
-        let response = api.client.post(api.server.url("/api/upsert"))
+        let response = api
+            .client
+            .post(api.server.url("/api/upsert"))
             .bearer_auth(token["secret"].as_str().unwrap())
             .json(&json!({"type":"email", "key":"title", "dry_run":dry_run,
-                "note":{"fields":{"title":"Held write fixture"}}})).send().unwrap();
+                "note":{"fields":{"title":"Held write fixture"}}}))
+            .send()
+            .unwrap();
         let body = response.text().unwrap();
         assert!(!body.contains("PRIVATE_HELD_WRITE_MARKER"), "{body}");
         assert!(body.contains("held"), "{body}");
@@ -322,10 +461,16 @@ fn review6_batch_returns_held_note_text() {
     let token = api.external_agent_token();
     for op in ["update", "delete"] {
         let mut item = json!({"op":op,"id":note["id"],"base_version":"wrong"});
-        if op == "update" { item["note"] = json!({"fields":{"title":"Replacement"}}); }
-        let response = api.client.post(api.server.url("/api/batch"))
+        if op == "update" {
+            item["note"] = json!({"fields":{"title":"Replacement"}});
+        }
+        let response = api
+            .client
+            .post(api.server.url("/api/batch"))
             .bearer_auth(token["secret"].as_str().unwrap())
-            .json(&json!({"dry_run":true,"ops":[item]})).send().unwrap();
+            .json(&json!({"dry_run":true,"ops":[item]}))
+            .send()
+            .unwrap();
         let body = response.text().unwrap();
         assert!(!body.contains("PRIVATE_HELD_WRITE_MARKER"), "{body}");
         assert!(body.contains("held"), "{body}");
@@ -357,12 +502,30 @@ fn review6_trash_restore_returns_held_note_text() {
     let note = held_write_fixture(&api);
     let id = note["id"].as_str().unwrap();
     let version = note["version"].as_str().unwrap();
-    assert!(api.request("DELETE", &format!("/api/notes/{id}?base_version={version}"), None).status().is_success());
+    assert!(
+        api.request(
+            "DELETE",
+            &format!("/api/notes/{id}?base_version={version}"),
+            None
+        )
+        .status()
+        .is_success()
+    );
     let token = api.external_agent_token();
-    let response = api.client.post(api.server.url(&format!("/api/trash/{id}/restore")))
-        .bearer_auth(token["secret"].as_str().unwrap()).json(&json!({})).send().unwrap();
+    let response = api
+        .client
+        .post(api.server.url(&format!("/api/trash/{id}/restore")))
+        .bearer_auth(token["secret"].as_str().unwrap())
+        .json(&json!({}))
+        .send()
+        .unwrap();
     assert_eq!(response.status(), 403);
-    assert!(!response.text().unwrap().contains("PRIVATE_HELD_WRITE_MARKER"));
+    assert!(
+        !response
+            .text()
+            .unwrap()
+            .contains("PRIVATE_HELD_WRITE_MARKER")
+    );
 }
 
 fn safety_note(api: &Api) -> Value {
