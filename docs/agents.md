@@ -117,6 +117,13 @@ the app or by a proposal can only narrow that confirmed list. Deleting an agent
 revokes its confirmations, so recreating its name cannot inherit them.
 The sync feed hides Login names from non-managers, including paired devices,
 and marks those entries with `browser_secrets_hidden`.
+An observed missing agent file also revokes its confirmations, at startup, on
+agent scans and on missing-file reads. There is no filesystem watcher. Removing
+and recreating a file between observations is not detectable here. That requires
+write access to the server's agent files, which already permits any file change.
+Applying an agent proposal can only narrow its confirmed names. Proposal text in
+chat events and thread responses hides Login names from non-managers, while the
+server keeps the original text for the owner's Apply.
 Ship updated desktop and Android apps before saving the new permission: old
 apps reject the unknown field, as they do `browser = true`.
 

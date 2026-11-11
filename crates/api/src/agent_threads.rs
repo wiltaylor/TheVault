@@ -1148,12 +1148,24 @@ pub async fn start(
 }
 
 /// `GET /api/agents/{name}/threads/{id}`.
+fn client_json(w: &Writer, t: &Thread, author: &state::Author) -> Result<Value, ApiError> {
+    let mut value = t.json();
+    if !crate::tasks::may_manage_login_secrets(w, author)? {
+        crate::ai_agents::hide_browser_secrets(&mut value);
+    }
+    Ok(value)
+}
+
 pub async fn read(
     State(w): Shared,
+    Caller(author): Caller,
     Path((name, id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
-    let t = blocking(w, move |w| Thread::read_of(w, &name, &id)).await?;
-    Ok(Json(t.json()))
+    let value = blocking(w, move |w| {
+        let t = Thread::read_of(w, &name, &id)?;
+        client_json(w, &t, &author)
+    }).await?;
+    Ok(Json(value))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1176,10 +1188,11 @@ pub async fn rename(
     let t = blocking(w, move |w| {
         Thread::read_of(w, &name, &id)?;
         let label = agent_label(w, &name);
-        save(w, &id, &label, Some(&author), |t| t.title = title.clone())
+        let t = save(w, &id, &label, Some(&author), |t| t.title = title.clone())?;
+        client_json(w, &t, &author)
     })
     .await?;
-    Ok(Json(t.json()))
+    Ok(Json(t))
 }
 
 /// Where a thread is cut: before message `at`.
@@ -1242,13 +1255,14 @@ pub async fn truncate(
         // The writer deletes the sub agent sessions of the calls cut (subagents U5). A question
         // the agent asked ended the thread's last turn, after every question of the user's, so
         // the cut always takes it away too (TV-77 D3).
-        save(w, &id, &label, Some(&author), move |t| {
+        let t = save(w, &id, &label, Some(&author), move |t| {
             t.transcript = cut.clone();
             t.question.clear();
-        })
+        })?;
+        client_json(w, &t, &author)
     })
     .await?;
-    Ok(Json(t.json()))
+    Ok(Json(t))
 }
 
 /// `POST /api/agents/{name}/threads/{id}/fork`: a new thread from this one's first `at` messages.
@@ -1264,12 +1278,13 @@ pub async fn fork(
         let title = format!("{} (fork)", thread.title);
         let made = create(w, &thread.agent, Some(&title), "user")?;
         let label = agent_label(w, &name);
-        save(w, &made.id, &label, Some(&author), move |t| {
+        let t = save(w, &made.id, &label, Some(&author), move |t| {
             t.transcript = cut.clone()
-        })
+        })?;
+        client_json(w, &t, &author)
     })
     .await?;
-    Ok((StatusCode::CREATED, Json(t.json())))
+    Ok((StatusCode::CREATED, Json(t)))
 }
 
 /// `DELETE /api/agents/{name}/threads/{id}`: the note goes to the trash.

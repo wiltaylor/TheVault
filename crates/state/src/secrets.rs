@@ -276,6 +276,38 @@ impl State {
         Ok(())
     }
 
+    /// A proposal may remove confirmations, never refresh or add them.
+    pub fn narrow_browser_secrets(&self, agent: &str, names: &[String]) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let previous: Vec<String> = {
+            let mut stmt = tx.prepare("SELECT name FROM browser_secret_grants WHERE agent=?1")?;
+            stmt.query_map([agent], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        };
+        for name in previous {
+            if !names.contains(&name) {
+                tx.execute("DELETE FROM browser_secret_grants WHERE agent=?1 AND name=?2", params![agent, name])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Revoke grants for agent files whose absence the writer has observed.
+    pub fn revoke_missing_browser_secrets(&self, exists: impl Fn(&str) -> bool) -> Result<()> {
+        let conn = self.conn();
+        let agents: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT DISTINCT agent FROM browser_secret_grants")?;
+            stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        };
+        for agent in agents {
+            if !exists(&agent) {
+                conn.execute("DELETE FROM browser_secret_grants WHERE agent=?1", [agent])?;
+            }
+        }
+        Ok(())
+    }
+
     /// Liveness only, not an authorization check: callers must also check the agent's list.
     /// Missing save records fail closed, including files imported without owner confirmation.
     pub fn browser_secret_active(&self, agent: &str, name: &str) -> Result<bool> {

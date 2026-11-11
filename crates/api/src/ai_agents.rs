@@ -315,6 +315,42 @@ fn active_escalation(w: &Writer, by: &Agent, target: &Agent) -> Vec<String> {
     escalation(&active, target)
 }
 
+/// Redact only the client copy. Stored proposals retain their exact text for Apply.
+pub(crate) fn hide_browser_secrets(value: &mut Value) {
+    if value["kind"] == "agent" && (value.get("before").is_some() || value.get("after").is_some()) {
+        let name = value["name"].as_str().unwrap_or("hidden").to_owned();
+        for field in ["before", "after"] {
+            if let Some(source) = value[field].as_str() {
+                value[field] = match Agent::parse(&name, source) {
+                    Ok(mut agent) => {
+                        agent.permissions.browser_secrets.clear();
+                        json!(agent.to_wcl())
+                    }
+                    Err(_) => Value::Null,
+                };
+            }
+        }
+        value["browser_secrets_hidden"] = json!(true);
+    }
+    // A proposal's after text also occurs in the tool-call input in a transcript/event.
+    if value["name"] == "propose_agent_change" {
+        if let Some(source) = value["input"]["wcl"].as_str() {
+            let name = value["input"]["name"].as_str().unwrap_or("hidden");
+            let text = match Agent::parse(name, source) {
+                Ok(mut agent) => { agent.permissions.browser_secrets.clear(); json!(agent.to_wcl()) }
+                Err(_) => Value::Null,
+            };
+            value["input"]["wcl"] = text;
+            value["browser_secrets_hidden"] = json!(true);
+        }
+    }
+    match value {
+        Value::Object(fields) => { for child in fields.values_mut() { hide_browser_secrets(child); } }
+        Value::Array(items) => { for child in items { hide_browser_secrets(child); } }
+        _ => {}
+    }
+}
+
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
@@ -549,7 +585,8 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             )));
         }
     }
-    w.put_agent(name, after, crate::agent_files::tool_check(w))?;
+    let (_, saved) = w.put_agent(name, after, crate::agent_files::tool_check(w))?;
+    w.state().narrow_browser_secrets(name, &saved.permissions.browser_secrets).map_err(writer::Error::from)?;
     let op = if before.is_some() {
         "agent_change"
     } else {
@@ -571,6 +608,18 @@ mod tests {
         let t = agent_format_text();
         assert!(t.starts_with("## Agent files"), "{}", &t[..40]);
         assert!(!t.contains("## Device files"));
+    }
+
+    #[test]
+    fn browser_secrets_client_redaction_covers_before_after_and_tool_inputs() {
+        let source = "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n";
+        let mut value = json!({"proposals":[{"kind":"agent", "name":"helper", "before":source, "after":source}], "messages":[{"name":"propose_agent_change", "input":{"name":"helper", "wcl":source}}]});
+        hide_browser_secrets(&mut value);
+        assert!(!value.to_string().contains("bank"));
+        assert_eq!(value["proposals"][0]["browser_secrets_hidden"], true);
+        let mut invalid = json!({"kind":"agent", "name":"helper", "before":"browser_secrets = [\"bank\"]", "after":null});
+        hide_browser_secrets(&mut invalid);
+        assert_eq!(invalid["before"], Value::Null);
     }
 
     #[test]

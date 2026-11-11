@@ -713,12 +713,13 @@ fn spawn_turn(
         prepared.log.as_ref().map(|l| l.id.clone()),
         &cfg.origin,
     );
+    let full_logins = crate::tasks::may_manage_login_secrets(&w, &cfg.owner).unwrap_or(false);
     let turn = Turn {
         writer: w,
         author: cfg.author,
         owner: cfg.owner,
         scope: cfg.scope,
-        out: Out { tx, stop },
+        out: Out { tx, stop, full_logins },
         images: ai_assets::Images::default(),
         agent_name: cfg.agent_name,
         log: prepared.log.map(std::sync::Mutex::new),
@@ -1071,15 +1072,19 @@ pub(crate) fn receive(
 
 /// Where the events go. A send fails once the client has gone or the turn was stopped.
 struct Out {
+    full_logins: bool,
     tx: mpsc::Sender<Sent>,
     /// Turns true when the turn is stopped (`DELETE /api/ai/chat/turns/{turn}`).
     stop: watch::Receiver<bool>,
 }
 
 impl Out {
-    async fn send(&self, name: &str, data: Value) -> bool {
+    async fn send(&self, name: &str, mut data: Value) -> bool {
         if self.gone() {
             return false;
+        }
+        if !self.full_logins {
+            crate::ai_agents::hide_browser_secrets(&mut data);
         }
         let e = Sent {
             name: name.to_owned(),
