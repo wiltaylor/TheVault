@@ -112,6 +112,7 @@ struct Shared {
     signed_profiles: Mutex<bool>,
     legacy_protocol: Mutex<bool>,
     cleanup_failure: Mutex<bool>,
+    failed_profile: Mutex<Option<String>>,
     profiles: Mutex<BTreeSet<String>>,
 }
 
@@ -168,6 +169,10 @@ impl FakeBrowser {
 
     pub fn fail_cleanup(&self, fail: bool) {
         *lock(&self.shared.cleanup_failure) = fail;
+    }
+
+    pub fn fail_profile_cleanup(&self, id: &str) {
+        *lock(&self.shared.failed_profile) = Some(id.to_owned());
     }
 
     pub fn profiles(&self) -> Vec<String> {
@@ -251,6 +256,7 @@ fn answer(s: &Shared, r: &Request) -> Reply {
     }
     match (r.method.as_str(), r.route()) {
         ("DELETE", "/profile") if *lock(&s.cleanup_failure) => error(503, "box unavailable"),
+        ("DELETE", "/profile") if lock(&s.failed_profile).as_deref() == r.header("x-vault-agent") => error(403, "fixture permanently refused profile"),
         ("DELETE", "/profile") => {
             lock(&s.profiles).remove(r.header("x-vault-agent").unwrap_or_default());
             Reply::json(200, &json!({"ok": true}))

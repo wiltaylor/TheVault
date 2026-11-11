@@ -33,6 +33,33 @@ fn eventually(timeout: u64, mut condition: impl FnMut() -> bool) {
 }
 
 #[test]
+fn a_failed_profile_does_not_delay_another_agents_reset() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    browser.require_signed_profiles();
+    let api = Api::start(&fake, Some(&browser));
+    for name in ["failed", "healthy"] {
+        api.agent(name, DRIVER);
+        api.call(&fake, Some(name), "browser_run", json!({"command":"true", "timeout":null}));
+    }
+    let requests = browser.requests();
+    let ids: Vec<_> = requests.iter().filter(|r| r.route() == "/run").map(|r| r.header("x-vault-agent").unwrap().to_owned()).collect();
+    browser.fail_profile_cleanup(&ids[0]);
+    let reset = |name: &str| {
+        let response = api.client.post(api.server.url(&format!("/api/agents/{name}/browser-profile/reset"))).bearer_auth(api.token()).json(&json!({})).send().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    };
+    reset("failed");
+    eventually(5, || browser.requests().iter().any(|r| r.method == "DELETE" && r.header("x-vault-agent") == Some(ids[0].as_str())));
+    let start = std::time::Instant::now();
+    reset("healthy");
+    eventually(2, || !browser.profiles().contains(&ids[1]));
+    assert!(start.elapsed() < Duration::from_millis(750), "another profile's backoff delayed this reset: {:?}", start.elapsed());
+    assert!(browser.profiles().contains(&ids[0]));
+    assert_eq!(browser.requests().iter().filter(|r| r.method == "DELETE" && r.header("x-vault-agent") == Some(ids[0].as_str())).count(), 1, "failed id must stay in backoff");
+}
+
+#[test]
 fn unanswering_box_cleanup_does_not_delay_turns_or_startup() {
     let fake = FakeAnthropic::start();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

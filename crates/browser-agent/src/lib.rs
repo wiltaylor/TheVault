@@ -396,9 +396,10 @@ async fn delete_profile(
     store_retired(&state.home, &retired)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if path.exists() {
+        make_profile_directories_writable(&path)?;
         // remove_dir_all does not follow symlinks, including children.
         std::fs::remove_dir_all(&path)
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("removing {}: {e}", path.display())))?;
     }
     if path.exists() {
         std::fs::remove_dir_all(&path)
@@ -410,6 +411,26 @@ async fn delete_profile(
         .unwrap_or_else(|e| e.into_inner())
         .remove(id);
     Ok(Json(json!({"ok": true})))
+}
+
+/// Cache tools can leave 0555 directories. Only directories in the managed tree
+/// are changed. Symlinks (including links to another profile) are never followed.
+fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let prepare = || -> io::Result<()> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Ok(());
+        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(metadata.permissions().mode() | 0o700))?;
+        for child in std::fs::read_dir(path)? {
+            let child = child?;
+            make_profile_directories_writable(&child.path())
+                .map_err(|e| io::Error::other(e.1))?;
+        }
+        Ok(())
+    };
+    prepare().map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("preparing {} for removal: {e}", path.display())))
 }
 
 /// A successful shell can leave detached children behind. Close those too before

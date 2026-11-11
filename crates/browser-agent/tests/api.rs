@@ -11,6 +11,25 @@ use tempfile::TempDir;
 const TOKEN: &str = "test-token-0123456789abcdef";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn read_only_cache_directories_do_not_block_profile_deletion() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let b = Agent::start().await;
+    let cache = b.home.path().join("profiles/test/home/.cache/go-mod/x");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("Cookies"), "fixture session").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    symlink(outside.path(), cache.join("outside")).unwrap();
+    std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+    assert!(!cache.join("Cookies").exists());
+    assert!(!b.home.path().join("profiles/test").exists());
+    assert_eq!(std::fs::metadata(outside.path()).unwrap().permissions().mode() & 0o777, 0o555);
+    std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn deleting_a_profile_stops_detached_children_and_prevents_regrowth() {
     let b = Agent::start().await;
     let result = b.run("setsid sh -c 'while :; do mkdir -p \"$HOME/regrow\"; sleep 0.05; done' </dev/null >/dev/null 2>&1 & printf '%s' $!").await;
