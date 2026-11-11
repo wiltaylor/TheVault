@@ -152,10 +152,27 @@ fn check_round3_orphan_migration(unlink: bool) {
     let orphan = w.put_asset("orphan.txt", b"UNCLASSIFIED".to_vec()).unwrap();
     let local = w.put_asset("local.txt", b"LOCAL".to_vec()).unwrap();
     let owner = Author::Session("owner".into());
-    w.create("memo", &Input::Json(serde_json::json!({"fields":{"title":"Local", "file":local.id}})), &owner).unwrap();
+    w.create(
+        "memo",
+        &Input::Json(serde_json::json!({"fields":{"title":"Local", "file":local.id}})),
+        &owner,
+    )
+    .unwrap();
     if unlink {
-        let note = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Incoming", "file":orphan.id}})), &owner).unwrap();
-        w.update(&note.id, &Input::Json(serde_json::json!({"fields":{"title":"Detached"}})), Some(&note.version), &owner).unwrap();
+        let note = w
+            .create(
+                "email",
+                &Input::Json(serde_json::json!({"fields":{"title":"Incoming", "file":orphan.id}})),
+                &owner,
+            )
+            .unwrap();
+        w.update(
+            &note.id,
+            &Input::Json(serde_json::json!({"fields":{"title":"Detached"}})),
+            Some(&note.version),
+            &owner,
+        )
+        .unwrap();
     }
     let vault = store::Vault::init(dir.path()).unwrap();
     let db = vault.server_dir().join("state.db");
@@ -167,8 +184,14 @@ fn check_round3_orphan_migration(unlink: bool) {
     let w = Writer::open(vault, state).unwrap();
     assert!(w.asset_usage(&orphan.id).unwrap().notes.is_empty());
     w.activate_agent_safety().unwrap();
-    assert!(!w.agent_may_read_asset(&orphan.id), "old orphan must fail closed");
-    assert!(w.agent_may_read_asset(&local.id), "referenced local file must remain readable");
+    assert!(
+        !w.agent_may_read_asset(&orphan.id),
+        "old orphan must fail closed"
+    );
+    assert!(
+        w.agent_may_read_asset(&local.id),
+        "referenced local file must remain readable"
+    );
 }
 
 #[test]
