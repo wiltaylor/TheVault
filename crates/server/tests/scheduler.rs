@@ -392,6 +392,312 @@ fn the_secrets_api_never_returns_a_secret_value() {
     assert_eq!(res.status().as_u16(), 404);
 }
 
+fn login_body() -> Value {
+    json!({"kind":"login", "username":"test-user", "password":"made-up-login-password",
+        "totp_seed":"JBSWY3DPEHPK3PXP", "origins":["https://EXAMPLE.com:443/"]})
+}
+
+#[test]
+fn login_metadata_api_survives_missing_wrong_keys_and_corrupt_rows() {
+    let api = Api::start();
+    expect(
+        api.put("/api/secrets/site")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        200,
+    );
+    expect(
+        api.put("/api/secrets/plain")
+            .json(&json!({"value":"made-up-string"}))
+            .send()
+            .unwrap(),
+        200,
+    );
+    for wrong in [false, true] {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::create_dir(vault.path().join(".vault")).unwrap();
+        let db = vault.path().join(".vault/state.db");
+        let conn =
+            rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
+        conn.execute("VACUUM INTO ?1", [db.to_str().unwrap()])
+            .unwrap();
+        drop(conn);
+        let config = tempfile::tempdir().unwrap();
+        let key = config.path().join("key");
+        if wrong {
+            state::SecretKey::create_file(&key).unwrap();
+        }
+        let key_env = [("VAULT_SECRET_KEY_FILE", key.as_path())];
+        let env = if wrong { key_env.as_slice() } else { &[] };
+        let server = TestServer::start_existing(vault, api.server.admin_token(), env);
+        let caller = client(server.admin_token());
+        for path in ["/api/secrets", "/api/secrets/site", "/api/secrets/plain"] {
+            let out = expect(caller.get(server.url(path)).send().unwrap(), 200);
+            assert!(!out.to_string().contains("made-up-login-password"));
+            assert!(!out.to_string().contains("JBSWY3DPEHPK3PXP"));
+        }
+        expect(
+            caller
+                .put(server.url("/api/secrets/site"))
+                .json(&login_body())
+                .send()
+                .unwrap(),
+            503,
+        );
+    }
+    let conn = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
+    conn.execute(
+        "UPDATE login_secrets SET ciphertext=x'00' WHERE name='site'",
+        [],
+    )
+    .unwrap();
+    for path in ["/api/secrets", "/api/secrets/site", "/api/secrets/plain"] {
+        expect(api.get(path).send().unwrap(), 200);
+    }
+    expect(
+        api.put("/api/secrets/site")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        503,
+    );
+}
+
+#[test]
+fn login_spaced_seed_is_accepted_and_never_returned() {
+    let api = Api::start();
+    let mut body = login_body();
+    body["totp_seed"] = json!("JBSW Y3DP EHPK 3PXP");
+    let out = expect(
+        api.put("/api/secrets/site").json(&body).send().unwrap(),
+        200,
+    );
+    assert_eq!(out["has_totp"], true);
+    assert!(!out.to_string().contains("JBSW"));
+}
+
+#[test]
+fn login_secrets_are_write_only_and_isolated_from_script_reads_and_debug_logs() {
+    let server = TestServer::start_with_env(seed, &[("RUST_LOG", "debug")]);
+    let api = Api {
+        client: client(server.admin_token()),
+        server,
+    };
+    let saved = expect(
+        api.put("/api/secrets/site")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(saved["kind"], "login");
+    assert_eq!(saved["username"], "test-user");
+    assert_eq!(saved["origins"], json!(["https://example.com"]));
+    assert_eq!(saved["has_totp"], true);
+    let mut output = saved.to_string();
+    for path in ["/api/secrets", "/api/secrets/site", "/api/sync/changes"] {
+        output.push_str(&api.get(path).send().unwrap().text().unwrap());
+    }
+    // Script/agent tool bindings all use the ordinary string-secret reader.
+    assert_eq!(api.server.secret("site"), None);
+    output.push_str(&api.server.stderr_lines().join("\n"));
+    for value in ["made-up-login-password", "JBSWY3DPEHPK3PXP"] {
+        assert!(!output.contains(value));
+    }
+    let bytes = std::fs::read(api.server.vault_path().join(".vault/state.db")).unwrap();
+    for value in ["made-up-login-password", "JBSWY3DPEHPK3PXP"] {
+        assert!(!bytes.windows(value.len()).any(|w| w == value.as_bytes()));
+    }
+}
+
+#[test]
+fn login_validation_and_namespace_never_echo_credentials() {
+    let api = Api::start();
+    for (field, value) in [
+        ("totp_seed", json!("made-up-invalid-seed!")),
+        ("origins", json!(["https://example.com/path"])),
+        ("origins", json!(["https://example.com/a/.."])),
+        ("origins", json!(["https://user:pass@example.com"])),
+        ("origins", json!(["https://example.com?query"])),
+        ("origins", json!(["file:///tmp"])),
+        ("password", json!("")),
+    ] {
+        let mut body = login_body();
+        body[field] = value;
+        let res = api.put("/api/secrets/site").json(&body).send().unwrap();
+        assert_eq!(res.status().as_u16(), 400);
+        let text = res.text().unwrap();
+        assert!(!text.contains("made-up-login-password"));
+        assert!(!text.contains("made-up-invalid-seed!"));
+    }
+    expect(
+        api.put("/api/secrets/site")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        200,
+    );
+    expect(
+        api.put("/api/secrets/site")
+            .json(&json!({"value":"no conversion"}))
+            .send()
+            .unwrap(),
+        409,
+    );
+    expect(
+        api.put("/api/secrets/plain")
+            .json(&json!({"value":"plain value"}))
+            .send()
+            .unwrap(),
+        200,
+    );
+    expect(
+        api.put("/api/secrets/plain")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        409,
+    );
+    let mut body = login_body();
+    body.as_object_mut().unwrap().remove("password");
+    expect(
+        api.put("/api/secrets/site").json(&body).send().unwrap(),
+        400,
+    );
+}
+
+#[test]
+fn login_mutations_refuse_agent_device_and_write_tokens() {
+    let api = Api::start();
+    expect(
+        api.put("/api/secrets/site")
+            .json(&login_body())
+            .send()
+            .unwrap(),
+        200,
+    );
+    for (name, scope) in [
+        ("agent-test", "admin"),
+        ("device-test", "admin"),
+        ("writer", "write"),
+    ] {
+        let path = api.server.vault_path().join(".vault/state.db");
+        let state = state::State::open(&path, None).unwrap();
+        let secret = if let Some(name) = name.strip_prefix("agent-") {
+            let code = state
+                .create_agent_code(name, scope.parse().unwrap(), 60_000)
+                .unwrap();
+            state.redeem_agent_code(&code.code).unwrap().unwrap().1
+        } else {
+            let (_, secret) = state.create_token(name, scope.parse().unwrap()).unwrap();
+            if name.starts_with("device-") {
+                // A pre-upgrade device token may retain admin scope, never user-kind rights.
+                rusqlite::Connection::open(&path)
+                    .unwrap()
+                    .execute("UPDATE tokens SET kind='device' WHERE name=?1", [name])
+                    .unwrap();
+            }
+            secret
+        };
+        let caller = client(&secret);
+        expect(
+            caller
+                .put(api.server.url("/api/secrets/new_login"))
+                .json(&login_body())
+                .send()
+                .unwrap(),
+            403,
+        );
+        expect(
+            caller
+                .put(api.server.url("/api/secrets/site"))
+                .json(&login_body())
+                .send()
+                .unwrap(),
+            403,
+        );
+        expect(
+            caller
+                .delete(api.server.url("/api/secrets/site"))
+                .send()
+                .unwrap(),
+            403,
+        );
+    }
+    expect(
+        api.client
+            .delete(api.server.url("/api/secrets/site"))
+            .send()
+            .unwrap(),
+        200,
+    );
+}
+
+#[test]
+fn login_owner_session_and_canonical_origins() {
+    let api = Api::start();
+    let res = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    let cookie = res.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let mut body = login_body();
+    body["origins"] = json!([
+        "https://BÜCHER.example:443",
+        "http://127.0.0.1:8080",
+        "http://[::1]:80"
+    ]);
+    let plain = Client::new();
+    let saved = expect(
+        plain
+            .put(api.server.url("/api/secrets/site"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .json(&body)
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(
+        saved["origins"],
+        json!([
+            "https://xn--bcher-kva.example",
+            "http://127.0.0.1:8080",
+            "http://[::1]"
+        ])
+    );
+    body["origins"] = json!([]);
+    body["totp_seed"] = Value::Null;
+    let saved = expect(
+        plain
+            .put(api.server.url("/api/secrets/site"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .json(&body)
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(saved["origins"], json!([]));
+    assert_eq!(saved["has_totp"], false);
+    expect(
+        plain
+            .delete(api.server.url("/api/secrets/site"))
+            .header(reqwest::header::COOKIE, &cookie)
+            .send()
+            .unwrap(),
+        200,
+    );
+}
+
 #[test]
 fn task_files_are_checked_and_changing_tasks_needs_admin() {
     let api = Api::start();

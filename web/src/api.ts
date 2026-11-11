@@ -655,6 +655,8 @@ export interface AgentSummary {
 
 export interface AgentList {
   agents: AgentSummary[];
+  /** Existing agent files whose reserved names may collide with Outbox ownership. */
+  warnings?: string[];
   /** Every tool `permissions.tools` may name. */
   tools: string[];
 }
@@ -714,6 +716,8 @@ export interface AgentSubagents {
 export interface AgentOutbox {
   /** The agent's drafts are created ready and sent at once, without waiting in Draft. */
   send_without_review: boolean;
+  conditions_hidden?: boolean;
+  conditions?: { recipients: string[]; email: boolean; sms: boolean; event: boolean; daily_cap: number; cancel_delay_minutes: number };
 }
 
 /**
@@ -772,6 +776,7 @@ export interface AgentCallInfo {
 }
 
 export interface AgentRuns {
+  queue?: { waiting: number; failed: number; expired: number; dropped: number };
   tools: string[];
   triggers: { name: string; kind: AgentTrigger["kind"]; runs: AgentRun[] }[];
 }
@@ -1137,6 +1142,17 @@ export interface Secret {
   name: string;
   created: number;
   updated: number;
+  kind?: "string" | "login";
+  username?: string;
+  origins?: string[];
+  has_totp?: boolean;
+}
+
+export interface LoginSecretInput {
+  username: string;
+  password: string;
+  totp_seed?: string;
+  origins: string[];
 }
 
 export type Scope = "read" | "write" | "admin";
@@ -1972,6 +1988,8 @@ export const api = {
   deleteAgent: (name: string) => request<unknown>("DELETE", `/api/agents/${enc(name)}`),
   /** The last runs of each of the agent's triggers, and the tools a trigger run is offered (agents G12). */
   agentRuns: (name: string) => request<AgentRuns>("GET", `/api/agents/${enc(name)}/runs`),
+  triggerBackfill: (name: string, trigger: string, body: { limit: number } | { preview: string }) =>
+    request<{ count: number; selected: number; preview: string; queued: number; unmatched_legacy_runs: number }>("POST", `/api/agents/${enc(name)}/triggers/${enc(trigger)}/backfill`, body),
   /**
    * What became of a call of an agent committed in a note (agents G19): its thread, null for a
    * call the server did not run, and whether the thread runs. 404 while the server has not seen it.
@@ -2047,6 +2065,8 @@ export const api = {
   secrets: async () => (await request<{ secrets: Secret[] }>("GET", "/api/secrets")).secrets,
   /** Store or replace a secret's value. It is never read back. */
   putSecret: (name: string, value: string) => request<Secret>("PUT", `/api/secrets/${enc(name)}`, { value }),
+  putLoginSecret: (name: string, login: LoginSecretInput) =>
+    request<Secret>("PUT", `/api/secrets/${enc(name)}`, { kind: "login", ...login }),
   deleteSecret: (name: string) => request<unknown>("DELETE", `/api/secrets/${enc(name)}`),
   /** The Google sync's connection and each side's last run. */
   googleStatus: () => request<GoogleStatus>("GET", "/api/integrations/google"),

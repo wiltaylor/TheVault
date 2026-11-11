@@ -24,6 +24,7 @@ const appInfo = vi.fn();
 const agentThreads = vi.fn();
 const aiAccounts = vi.fn();
 const agentRuns = vi.fn();
+const triggerBackfill = vi.fn();
 const agentThread = vi.fn();
 const cron = vi.fn();
 const agentMemories = vi.fn();
@@ -47,6 +48,7 @@ vi.mock("../api", async (orig) => {
       agentThreads,
       aiAccounts,
       agentRuns,
+      triggerBackfill,
       agentThread,
       cron,
       agentMemories,
@@ -621,7 +623,7 @@ describe("the Permissions tab", () => {
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
     fireEvent.click(p.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(putAgent).toHaveBeenCalled());
-    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true });
+    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true, conditions: { recipients: [], email: false, sms: false, event: false, daily_cap: 0, cancel_delay_minutes: 5 } });
   });
 
   it("shows the switch on for an agent that sends without review", async () => {
@@ -630,6 +632,27 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByRole("switch", { name: "Send from the Outbox without review" })).toBeChecked();
     expect(p.getByText(OUTBOX_WARNING)).toBeTruthy();
+    expect(p.getByText(/Legacy limits, set conditions/)).toBeTruthy();
+  });
+
+  it("does not show legacy limits when conditions are hidden", async () => {
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, outbox: { send_without_review: true, conditions_hidden: true } } }));
+    await open();
+    const p = await tab("Permissions");
+    expect(p.queryByText(/Legacy limits, set conditions/)).toBeNull();
+  });
+
+  it("saves explicit strict send conditions without losing them when toggled", async () => {
+    await open();
+    const p = await tab("Permissions");
+    fireEvent.click(p.getByRole("button", { name: "Set send conditions" }));
+    fireEvent.input(p.getByLabelText(/Recipients \(one address/), { target: { value: "ann@example.com" } });
+    fireEvent.click(p.getByLabelText("email", { exact: true }));
+    fireEvent.input(p.getByLabelText("Daily cap"), { target: { value: "2" } });
+    fireEvent.click(p.getByRole("switch", { name: "Send from the Outbox without review" }));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { outbox: unknown }).outbox).toEqual({ send_without_review: true, conditions: { recipients: ["ann@example.com"], email: true, sms: false, event: false, daily_cap: 2, cancel_delay_minutes: 5 } });
   });
 
   it("offers all skills by default, and saves a chosen list from the vault's skills", async () => {
@@ -824,6 +847,24 @@ describe("the Permissions tab", () => {
 });
 
 describe("the Triggers tab", () => {
+  it("previews a backfill count before confirming the selected newest notes", async () => {
+    const a = triage();
+    a.triggers = [{ name: "opened", kind: "event", on: ["create"], type: ["email"], where: null, prompt: "File." }];
+    agent.mockResolvedValue(a);
+    triggerBackfill.mockResolvedValueOnce({ count: 500, selected: 100, preview: "preview-1", unmatched_legacy_runs: 3 })
+      .mockResolvedValueOnce({ queued: 100 });
+    await open("/agents/inbox_triage/settings/triggers");
+    const t = within(await screen.findByRole("region", { name: "Triggers" }));
+    expect(t.queryByRole("button", { name: "Confirm backfill" })).toBeNull();
+    fireEvent.click(t.getByRole("button", { name: "Count matching notes" }));
+    await t.findByText(/500 matching notes have no trigger record/);
+    expect(t.getByText(/3 runs from before this version could not be matched to a note/)).toBeTruthy();
+    expect(triggerBackfill).toHaveBeenCalledWith("inbox_triage", "opened", { limit: 100 });
+    fireEvent.click(t.getByRole("button", { name: "Confirm backfill" }));
+    await t.findByText("100 jobs queued.");
+    expect(triggerBackfill).toHaveBeenLastCalledWith("inbox_triage", "opened", { preview: "preview-1" });
+  });
+
   it("shows a schedule with its next runs and its last runs, each linking to its thread", async () => {
     await open("/agents/inbox_triage/settings/triggers");
     const t = within(await screen.findByRole("region", { name: "Triggers" }));

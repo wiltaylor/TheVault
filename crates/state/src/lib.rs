@@ -8,6 +8,7 @@
 
 mod activity;
 mod agent_calls;
+mod agent_queue;
 mod agent_runs;
 mod auth;
 mod changes;
@@ -42,6 +43,7 @@ pub use activity::{
     one_line,
 };
 pub use agent_calls::AgentCall;
+pub use agent_queue::{TRIGGER_QUEUE_CAP, TriggerJob, TriggerQueueStats};
 pub use agent_runs::{AgentRun, AgentRunId, AgentRunOutcome};
 pub use auth::{AgentCode, Scope, TokenInfo};
 pub use changes::{ChangeKey, ChangePage, Journaled};
@@ -63,7 +65,7 @@ pub use notifications::{
 };
 pub use pins::{PinEntry, PinKind, PinNode};
 pub use runs::{RunId, RunOutcome, TaskRun};
-pub use secrets::{SecretInfo, SecretKey, key_file_path};
+pub use secrets::{LoginInfo, LoginSecret, SecretInfo, SecretKey, canonical_origin, key_file_path};
 pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck};
 pub use shipped::ShippedRecord;
 
@@ -166,7 +168,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 24;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -569,6 +571,87 @@ impl State {
         Ok(())
     }
 
+    /// Atomically reserve a UTC-day send admission and persist its cancellation deadline.
+    /// Reservations are never refunded, including cancellation or a later failed note write.
+    pub fn reserve_outbox(
+        &self,
+        agent: &str,
+        id: &str,
+        now: i64,
+        cap: i64,
+        delay_ms: i64,
+    ) -> Result<bool> {
+        use rusqlite::{OptionalExtension, params};
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let key = format!("outbox-cap:{agent}:{}", now.div_euclid(86_400_000));
+        let count: Option<String> = tx
+            .query_row("SELECT value FROM meta WHERE key=?1", [&key], |r| r.get(0))
+            .optional()?;
+        let count = count.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        if count >= cap {
+            return Ok(false);
+        }
+        tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, (count + 1).to_string()])?;
+        tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![format!("outbox-delay:{id}"), now.saturating_add(delay_ms).to_string()])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Durable, server-owned earliest dispatch time for an unattended Outbox item.
+    pub fn outbox_deadline(&self, id: &str) -> Result<Option<i64>> {
+        Ok(self
+            .meta(&format!("outbox-delay:{id}"))?
+            .map(|s| s.parse().unwrap_or(i64::MAX)))
+    }
+
+    /// Forget daily counters and cancellation deadlines older than seven days.
+    pub fn prune_outbox_limits(
+        &self,
+        now: i64,
+        keep_deadline: impl Fn(&str) -> bool,
+    ) -> Result<usize> {
+        let cutoff = now.saturating_sub(7 * 86_400_000);
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT key,value FROM meta WHERE key LIKE 'outbox-delay:%' OR key LIKE 'outbox-cap:%'",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut expired = Vec::new();
+        for row in rows {
+            let (key, value) = row?;
+            let old = if let Some(id) = key.strip_prefix("outbox-delay:") {
+                value.parse::<i64>().is_ok_and(|v| v < cutoff) && !keep_deadline(id)
+            } else {
+                key.rsplit(':')
+                    .next()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .is_some_and(|day| day < cutoff.div_euclid(86_400_000))
+            };
+            if old {
+                expired.push(key);
+            }
+        }
+        drop(stmt);
+        for key in &expired {
+            conn.execute("DELETE FROM meta WHERE key=?1", [key])?;
+        }
+        Ok(expired.len())
+    }
+
+    /// Pre-upgrade agent names whose legacy grant has not been revoked.
+    pub fn legacy_outbox_agents(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT key FROM meta WHERE key LIKE 'outbox-legacy:%' AND value='true'")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|k| k.strip_prefix("outbox-legacy:").map(str::to_owned))
+            .collect())
+    }
+
     /// The live events of this vault's changes, for open clients (D4).
     pub fn events(&self) -> &Events {
         &self.events
@@ -604,7 +687,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=19 => {
+        0..=23 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -675,6 +758,45 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             if version <= 19 {
                 tx.execute_batch("CREATE TABLE IF NOT EXISTS agent_call_ids (call TEXT PRIMARY KEY, note TEXT NOT NULL, agent TEXT NOT NULL, principal TEXT NOT NULL, expires_ms INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS agent_call_refusals (call TEXT NOT NULL, note TEXT NOT NULL, agent TEXT NOT NULL, created_ms INTEGER NOT NULL, PRIMARY KEY(call,note));")?;
+            }
+            if version <= 23 {
+                let has_token_kind: bool = tx.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM pragma_table_info('tokens') WHERE name = 'kind')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if !has_token_kind {
+                    tx.execute_batch("ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'user' CHECK(kind IN ('user','device','agent')); UPDATE tokens SET kind = CASE WHEN lower(substr(name,1,6)) = 'agent-' THEN 'agent' WHEN lower(substr(name,1,7)) = 'device-' THEN 'device' ELSE 'user' END;")?;
+                }
+                tx.execute(
+                    "UPDATE tokens SET scope='write' WHERE kind='agent' AND scope='admin'",
+                    [],
+                )?;
+            }
+            if version <= 21 {
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);
+                    CREATE TRIGGER IF NOT EXISTS login_namespace BEFORE INSERT ON login_secrets WHEN EXISTS(SELECT 1 FROM secrets WHERE name=NEW.name) BEGIN SELECT RAISE(ABORT, 'secret kind conflict'); END;
+                    CREATE TRIGGER IF NOT EXISTS string_namespace BEFORE INSERT ON secrets WHEN EXISTS(SELECT 1 FROM login_secrets WHERE name=NEW.name) BEGIN SELECT RAISE(ABORT, 'secret kind conflict'); END;")?;
+            }
+            for (column, definition) in [
+                ("username", "TEXT NOT NULL DEFAULT ''"),
+                ("origins", "TEXT NOT NULL DEFAULT '[]'"),
+                ("has_totp", "INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('login_secrets') WHERE name=?1)",
+                    [column],
+                    |r| r.get(0),
+                )?;
+                if !exists {
+                    tx.execute_batch(&format!(
+                        "ALTER TABLE login_secrets ADD COLUMN {column} {definition}"
+                    ))?;
+                }
+            }
+            if version <= 22 {
+                tx.execute_batch(agent_queue::SCHEMA)?;
+                agent_queue::seed_legacy(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

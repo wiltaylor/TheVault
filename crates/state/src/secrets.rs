@@ -13,6 +13,60 @@ use crate::{Error, Result, State, random_bytes};
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 24;
 
+/// Canonical HTTP(S) origin, shared by stored grants and browser page matching.
+pub fn canonical_origin(origin: &str) -> Option<String> {
+    let rest = origin.split_once("://")?.1;
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    if origin.trim() != origin || authority.contains(['/', '\\', '@', '?', '#']) {
+        return None;
+    }
+    let mut url = url::Url::parse(origin).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    if let Some(url::Host::Domain(domain)) = url.host() {
+        let domain = domain.strip_suffix('.').unwrap_or(domain);
+        if domain.split('.').any(str::is_empty)
+            || !domain
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'.'))
+        {
+            return None;
+        }
+        let domain = domain.to_owned();
+        url.set_host(Some(&domain)).ok()?;
+    }
+    Some(url.origin().ascii_serialization())
+}
+
+/// A Login payload. Never format or serialize it into a response, log or script binding.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoginSecret {
+    pub username: String,
+    pub password: String,
+    pub totp_seed: Option<String>,
+    pub origins: Vec<String>,
+}
+
+/// Safe Login metadata. Credentials deliberately have no fields here.
+#[derive(Debug, Clone)]
+pub struct LoginInfo {
+    pub name: String,
+    pub username: String,
+    pub origins: Vec<String>,
+    pub has_totp: bool,
+    pub created_ms: i64,
+    pub updated_ms: i64,
+}
+
 /// The 32-byte key that encrypts secrets in `state.db`.
 #[derive(Clone)]
 pub struct SecretKey([u8; KEY_LEN]);
@@ -103,6 +157,104 @@ pub struct SecretInfo {
 }
 
 impl State {
+    /// Stores a Login in a separate, encrypted namespace, never readable by `get_secret`.
+    pub fn set_login_secret(&self, name: &str, login: &LoginSecret) -> Result<()> {
+        // Replacing must not silently overwrite a credential under the wrong key.
+        self.get_login_secret(name)?;
+        let payload = serde_json::to_vec(login)
+            .map_err(|_| Error::Corrupt("login encoding failed".into()))?;
+        let mut nonce = [0u8; NONCE_LEN];
+        random_bytes(&mut nonce);
+        let aad = format!("login:{name}");
+        let ciphertext = self
+            .key()?
+            .cipher()
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &payload,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|_| Error::Corrupt("login encryption failed".into()))?;
+        let origins = serde_json::to_string(&login.origins)
+            .map_err(|_| Error::Corrupt("login origins encoding failed".into()))?;
+        self.conn().execute("INSERT INTO login_secrets (name,nonce,ciphertext,created_ms,updated_ms,username,origins,has_totp) VALUES (?1,?2,?3,?4,?4,?5,?6,?7) ON CONFLICT(name) DO UPDATE SET nonce=excluded.nonce,ciphertext=excluded.ciphertext,updated_ms=excluded.updated_ms,username=excluded.username,origins=excluded.origins,has_totp=excluded.has_totp",
+            params![name, nonce.as_slice(), ciphertext, self.now(), login.username, origins, login.totp_seed.is_some()])?;
+        Ok(())
+    }
+
+    /// Server-only reader for browser filling. Not exposed to string-secret consumers.
+    pub fn get_login_secret(&self, name: &str) -> Result<Option<LoginSecret>> {
+        let row: Option<(Vec<u8>, Vec<u8>)> = self
+            .conn()
+            .query_row(
+                "SELECT nonce,ciphertext FROM login_secrets WHERE name=?1",
+                [name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((nonce, ciphertext)) = row else {
+            return Ok(None);
+        };
+        if nonce.len() != NONCE_LEN {
+            return Err(Error::Corrupt("malformed login nonce".into()));
+        }
+        let aad = format!("login:{name}");
+        let plaintext = self
+            .key()?
+            .cipher()
+            .decrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &ciphertext,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .map_err(|_| Error::WrongKey {
+                detail: format!("login {name:?} could not be decrypted with the loaded key file"),
+            })?;
+        serde_json::from_slice(&plaintext)
+            .map(Some)
+            .map_err(|_| Error::Corrupt("invalid login payload".into()))
+    }
+
+    pub fn list_login_secrets(&self) -> Result<Vec<LoginInfo>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT name,created_ms,updated_ms,username,origins,has_totp FROM login_secrets ORDER BY name")?;
+        let rows = stmt.query_map([], |r| {
+            let origins: String = r.get(4)?;
+            Ok(LoginInfo {
+                name: r.get(0)?,
+                created_ms: r.get(1)?,
+                updated_ms: r.get(2)?,
+                username: r.get(3)?,
+                origins: serde_json::from_str(&origins).unwrap_or_default(),
+                has_totp: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn is_login_secret(&self, name: &str) -> Result<bool> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM login_secrets WHERE name=?1)",
+            [name],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn delete_login_secret(&self, name: &str) -> Result<()> {
+        if self
+            .conn()
+            .execute("DELETE FROM login_secrets WHERE name=?1", [name])?
+            == 0
+        {
+            return Err(Error::UnknownSecret(name.to_owned()));
+        }
+        Ok(())
+    }
+
     /// Whether a key file was loaded, so secrets can be read and written.
     pub fn has_secret_key(&self) -> bool {
         self.key.is_some()

@@ -207,6 +207,7 @@ impl Sent {
 /// trail lines.
 #[derive(Debug, Default)]
 pub(crate) struct Unattended {
+    pub(crate) tool_called: bool,
     pub(crate) ended: Option<Result<(), String>>,
     pub(crate) log: Vec<String>,
 }
@@ -288,6 +289,7 @@ pub(crate) async fn run_unattended(
                     .unwrap_or("the turn could not start")
                     .to_owned())),
                 log: Vec::new(),
+                tool_called: false,
             };
         }
     }
@@ -2084,6 +2086,9 @@ impl Turn {
             // The question this round's ask_user calls put to the user (TV-77 D3).
             let mut asked: Option<String> = None;
             for c in calls {
+                // Mark before execution, including scripts and subagents, so a later error
+                // can never cause a trigger retry to repeat an already attempted change.
+                self.report(|r| r.tool_called = true);
                 self.activity.tool_called(&c.id, &c.name, &c.input);
                 if !self
                     .out
@@ -4114,7 +4119,7 @@ fn propose_or_read(
         "propose_taxonomy_change" => crate::ai_taxonomies::propose_change(w, &call.id, input),
         "propose_taxonomy_delete" => crate::ai_taxonomies::propose_delete(w, &call.id, input),
         "list_agents" => crate::ai_agents::list(w),
-        "get_agent" => crate::ai_agents::get(w, input),
+        "get_agent" => crate::ai_agents::get(w, agent, input),
         "propose_agent_change" => crate::ai_agents::propose_change(w, agent, &call.id, input),
         "propose_agent_delete" => crate::ai_agents::propose_delete(w, agent, &call.id, input),
         "list_skills" => crate::ai_skill_changes::list(w, agent),

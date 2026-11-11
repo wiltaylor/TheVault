@@ -408,6 +408,19 @@ impl Shared {
             match writer.state().queued_jobs() {
                 Ok(jobs) => {
                     for job in jobs {
+                        let payload: Json =
+                            serde_json::from_str(&job.payload).unwrap_or(Json::Null);
+                        if payload["type"] == "outbox" {
+                            let id = payload["id"].as_str().unwrap_or_default();
+                            match writer.state().outbox_deadline(id) {
+                                Ok(Some(at)) if writer.now_ms() < at => continue,
+                                Err(e) => {
+                                    eprintln!("outbox deadline: {e}");
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
                         let (outcome, log) = self.run_job(&writer, &job.payload);
                         if let Err(message) = &outcome {
                             eprintln!("after_* handler job {} failed: {message}", job.id);

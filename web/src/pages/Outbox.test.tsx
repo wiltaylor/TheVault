@@ -149,7 +149,15 @@ describe("the Outbox page", () => {
     expect(within(card("Lunch")).getByText("Reconnect Google in Settings > Integrations to send email.")).toBeTruthy();
     await openTab("Ready");
     await screen.findByRole("link", { name: "Hello" });
-    expect(within(card("Hello")).queryAllByRole("button")).toHaveLength(0);
+    expect(within(card("Hello")).getByRole("button", { name: "Cancel send" })).toBeTruthy();
+  });
+
+  it("cancels a ready item back to draft before dispatch", async () => {
+    render(() => <Outbox />);
+    await openTab("Ready");
+    await screen.findByRole("link", { name: "Hello" });
+    fireEvent.click(within(card("Hello")).getByRole("button", { name: "Cancel send" }));
+    await waitFor(() => expect(items["01READY"]!.note.fields.status).toBe("draft"));
   });
 
   it("shows each item's status as a chip, with AI beside an agent's draft and no drafted-by line", async () => {

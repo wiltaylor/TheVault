@@ -398,6 +398,15 @@ impl Api {
 
     /// Create a token with the admin token and return its secret.
     fn token(&self, name: &str, scope: &str) -> String {
+        if let Some(name) = name.strip_prefix("agent-") {
+            // Legacy admin install codes must remain restricted after upgrade.
+            let state = state::State::open(&self.server.vault_path().join(".vault/state.db"), None)
+                .unwrap();
+            let code = state
+                .create_agent_code(name, scope.parse().unwrap(), 60_000)
+                .unwrap();
+            return state.redeem_agent_code(&code.code).unwrap().unwrap().1;
+        }
         let res = self
             .req("POST", "/api/tokens", self.admin())
             .json(&json!({ "name": name, "scope": scope }))

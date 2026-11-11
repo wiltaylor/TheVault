@@ -4965,6 +4965,7 @@ dependencies = [
  "chrono-tz",
  "croner",
  "query-syntax",
+ "serde",
  "serde_json",
  "store",
  "thiserror 2.0.21",
@@ -5605,11 +5606,14 @@ dependencies = [
  "argon2",
  "chacha20poly1305",
  "rusqlite",
+ "schema",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.21",
  "tokio",
  "ulid",
+ "url",
  "vocab",
 ]
 

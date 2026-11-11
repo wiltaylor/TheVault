@@ -508,16 +508,11 @@ fn an_admin_token_writes_agent_files() {
     assert!(api.server.vault_path().join("types/email.wcl").is_file());
 
     // An API token with `write` is not a device, whatever it is called.
-    let named = expect(
-        api.admin("POST", "/api/tokens")
-            .json(&json!({ "name": "device-fake", "scope": "write" }))
-            .send()
-            .unwrap(),
-        StatusCode::CREATED,
-    )["secret"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    // Existing user-kind tokens with this prefix still need a real device record.
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    let (_, named) = state
+        .create_token("device-fake", state::Scope::Write)
+        .unwrap();
     expect(
         api.put_wcl("clerk", "label = \"Mine\"\n", &named),
         StatusCode::FORBIDDEN,

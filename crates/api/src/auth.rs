@@ -126,10 +126,9 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrantedScope(pub Scope);
 
-/// Agent credentials share one identity check. TV-142 will switch this implementation to
-/// stored token kind when that representation lands after TV-140.
+/// Agent-kind credentials become Agent authors at authentication, never by token name.
 pub(crate) fn is_agent_token(author: &Author) -> bool {
-    matches!(author, Author::Token(name) if name.starts_with("agent-"))
+    matches!(author, Author::Agent(name) if name.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("agent-")))
 }
 
 /// Whether `path` is `/api/devices/{id}/push`, `/api/devices/{id}/bases` or
@@ -378,9 +377,18 @@ async fn identify(sessions: &Arc<Sessions>, headers: &HeaderMap) -> Result<Grant
         })
         .await?
         .ok_or_else(unauthorized)?;
+        let scope = if token.kind == "agent" && token.scope == Scope::Admin {
+            Scope::Write
+        } else {
+            token.scope
+        };
         return Ok(Granted {
-            author: Author::Token(token.name),
-            scope: token.scope,
+            author: if token.kind == "agent" {
+                Author::Agent(token.name)
+            } else {
+                Author::Token(token.name)
+            },
+            scope,
             renewed: None,
         });
     }
@@ -430,10 +438,8 @@ pub async fn authenticate(
                 path,
                 "/api/tokens" | "/api/agent-codes" | "/api/devices/pair-codes"
             ))
-        || (*req.method() == Method::PUT && path == "/api/integrations/ai/settings")
         || (!matches!(*req.method(), Method::GET | Method::HEAD)
-            && (path == "/api/integrations/gitsync"
-                || path.starts_with("/api/integrations/gitsync/")));
+            && (path == "/api/integrations" || path.starts_with("/api/integrations/")));
     if !granted.scope.allows(needed) || (agent_admin_route && is_agent_token(&granted.author)) {
         return ApiError::new(
             StatusCode::FORBIDDEN,

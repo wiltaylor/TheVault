@@ -63,6 +63,107 @@ fn issue(server: &TestServer, admin: &Client, name: &str, scope: &str) -> Value 
 }
 
 #[test]
+fn agent_code_token_cannot_create_ready_outbox_item() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let issued = issue(&server, &admin, "cli", "write");
+    let token = expect(redeem(&server, issued["code"].as_str().unwrap()), 201);
+    let agent = client(token["token"].as_str().unwrap());
+    let response = agent
+        .post(server.url("/api/notes?type=outbox"))
+        .json(&json!({ "note": { "fields": {
+            "title": "Unreviewed mail", "kind": "email", "status": "ready",
+            "to": ["outside@example.com"], "subject": "Must wait for review"
+        }}}))
+        .send()
+        .unwrap();
+    let status = response.status();
+    let body = response.text().unwrap();
+    assert!(
+        status.is_client_error() && body.contains("agent"),
+        "expected agent review refusal, got {status}: {body}"
+    );
+}
+
+#[test]
+fn agent_code_token_drafts_but_cannot_approve_or_forge_results() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let issued = issue(&server, &admin, "cli", "write");
+    let token = expect(redeem(&server, issued["code"].as_str().unwrap()), 201);
+    let agent = client(token["token"].as_str().unwrap());
+    let made = send(agent.post(server.url("/api/notes?type=outbox")).json(&json!({
+        "note": { "fields": { "title": "Draft", "kind": "email", "to": ["ann@example.com"], "subject": "Review" }}
+    })), 201);
+    assert_eq!(made["note"]["fields"]["status"], "draft");
+    assert_eq!(made["note"]["fields"]["drafted_by"], "agent-cli");
+    for (field, value) in [
+        ("status", json!("ready")),
+        ("drafted_by", json!("user")),
+        ("sent_ref", json!("forged")),
+    ] {
+        let mut note = made["note"].clone();
+        note["fields"][field] = value;
+        let res = agent
+            .put(server.url(&format!("/api/notes/{}", made["id"].as_str().unwrap())))
+            .json(&json!({ "note": note, "base_version": made["version"] }))
+            .send()
+            .unwrap();
+        let status = res.status();
+        let body = res.text().unwrap();
+        assert!(
+            status.is_client_error() && body.contains("agent"),
+            "{field}: {status}: {body}"
+        );
+    }
+}
+
+#[test]
+fn agent_code_token_calendar_changes_require_outbox() {
+    let server = TestServer::start();
+    let admin = client(server.admin_token());
+    let issued = issue(&server, &admin, "cli", "write");
+    let token = expect(redeem(&server, issued["code"].as_str().unwrap()), 201);
+    let agent = client(token["token"].as_str().unwrap());
+    let made = send(admin.post(server.url("/api/notes?type=event")).json(&json!({ "note": { "fields": {
+        "title": "Meeting", "google_ref": "meeting", "calendar": "primary",
+        "when": { "start": "2026-04-03", "end": "2026-04-03" }, "my_response": "needs_action"
+    }}})), 201);
+    let url = server.url(&format!("/api/notes/{}", made["id"].as_str().unwrap()));
+    for (field, value) in [
+        ("my_response", json!("accepted")),
+        ("attendees_raw", json!(["ann@example.com"])),
+        ("status", json!("cancelled")),
+        ("send_updates", json!("all")),
+    ] {
+        let mut note = made["note"].clone();
+        note["fields"][field] = value;
+        let res = agent
+            .put(&url)
+            .json(&json!({ "note": note, "base_version": made["version"] }))
+            .send()
+            .unwrap();
+        let status = res.status();
+        let body = res.text().unwrap();
+        assert!(
+            status.is_client_error() && body.contains("agent"),
+            "{field}: {status}: {body}"
+        );
+    }
+    let res = agent
+        .delete(&url)
+        .query(&[("base_version", made["version"].as_str().unwrap())])
+        .send()
+        .unwrap();
+    let status = res.status();
+    let body = res.text().unwrap();
+    assert!(
+        status.is_client_error() && body.contains("agent"),
+        "delete: {status}: {body}"
+    );
+}
+
+#[test]
 fn only_an_admin_issues_an_install_code_and_it_carries_the_one_line_command() {
     let server = TestServer::start_seeded(seed);
     let admin = client(server.admin_token());
@@ -117,6 +218,7 @@ fn only_an_admin_issues_an_install_code_and_it_carries_the_one_line_command() {
     );
 
     for bad in [
+        json!({ "name": "claude", "scope": "admin" }),
         json!({ "name": "claude", "scope": "owner" }),
         json!({ "name": "", "scope": "write" }),
         json!({ "name": "has space", "scope": "write" }),
@@ -203,7 +305,7 @@ fn a_code_redeems_once_for_a_token_of_its_scope_and_reuse_is_gone() {
     let full = expect(
         redeem(
             &server,
-            issue(&server, &admin, "boss", "admin")["code"]
+            issue(&server, &admin, "boss", "write")["code"]
                 .as_str()
                 .unwrap(),
         ),
@@ -211,7 +313,7 @@ fn a_code_redeems_once_for_a_token_of_its_scope_and_reuse_is_gone() {
     );
     send(
         client(full["token"].as_str().unwrap()).get(server.url("/api/tokens")),
-        200,
+        403,
     );
 
     // The tokens are listed with the others and revoke like them.

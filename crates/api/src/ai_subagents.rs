@@ -237,6 +237,10 @@ pub fn intersect(own: &AgentPermissions, parent: &AgentPermissions) -> AgentPerm
     }
     p.outbox.send_without_review =
         own.outbox.send_without_review && parent.outbox.send_without_review;
+    p.outbox.conditions = parent.outbox.conditions.clone();
+    if own.outbox.conditions != parent.outbox.conditions {
+        p.outbox.send_without_review = false;
+    }
     p.browser = own.browser && parent.browser;
     p.scripts.run_code = own.scripts.run_code && parent.scripts.run_code;
     p.scripts.run_saved = own.scripts.runs_saved() && parent.scripts.runs_saved();

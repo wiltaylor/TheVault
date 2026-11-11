@@ -79,6 +79,11 @@ fn is_template(item: &Item, name: &str) -> bool {
 }
 
 fn check_name(what: &str, name: &str) -> Result<()> {
+    if what == "agent"
+        && (name == "user" || name.starts_with("agent-") || name.starts_with("device-"))
+    {
+        return Err(Error::BadRequest("reserved agent name".into()));
+    }
     if schema::is_name(name) {
         Ok(())
     } else {
@@ -814,6 +819,21 @@ impl Writer {
 
     // ---- agents ---------------------------------------------------------------------------
 
+    /// Existing files whose names collide with reserved Outbox identities, including names
+    /// too old or invalid to appear in the normal agent list.
+    pub fn reserved_agent_names(&self) -> Result<Vec<String>> {
+        let mut names: Vec<_> = self
+            .definitions("agents")?
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|name| {
+                name == "user" || name.starts_with("agent-") || name.starts_with("device-")
+            })
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
     /// Every `agents/<name>.wcl` with a valid name, parsed, sorted by name. A file that does not
     /// parse is listed with its problems.
     pub fn agents(&self) -> Result<Vec<(String, std::result::Result<Agent, Invalid>)>> {
@@ -843,8 +863,52 @@ impl Writer {
 
     /// Agent `name`, parsed. A file that does not parse is [`Error::Invalid`].
     pub fn agent(&self, name: &str) -> Result<Agent> {
-        let text = self.read_agent(name)?;
-        Agent::parse(name, &text).map_err(Error::Invalid)
+        let text = match self.read_agent(name) {
+            Ok(text) => text,
+            Err(e) => {
+                self.revoke_outbox_legacy(name)?;
+                return Err(e);
+            }
+        };
+        let mut agent = match Agent::parse(name, &text) {
+            Ok(agent) => agent,
+            Err(e) => {
+                self.revoke_outbox_legacy(name)?;
+                return Err(Error::Invalid(e));
+            }
+        };
+        if !agent.permissions.outbox.send_without_review
+            || agent.permissions.outbox.conditions.is_some()
+        {
+            self.revoke_outbox_legacy(name)?;
+        }
+        if agent.permissions.outbox.send_without_review
+            && agent.permissions.outbox.conditions.is_none()
+            && self
+                .state
+                .meta(&format!("outbox-legacy:{name}"))?
+                .as_deref()
+                != Some("true")
+        {
+            agent.permissions.outbox.conditions = Some(schema::OutboxConditions::default());
+        }
+        Ok(agent)
+    }
+
+    fn revoke_outbox_legacy(&self, name: &str) -> Result<()> {
+        let key = format!("outbox-legacy:{name}");
+        if self.state.meta(&key)?.as_deref() == Some("true") {
+            self.state.set_meta(&key, "false")?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn refresh_outbox_legacy(&self) -> Result<()> {
+        for name in self.state.legacy_outbox_agents()? {
+            // agent() revokes missing, invalid, disabled and explicitly constrained files.
+            let _ = self.agent(&name);
+        }
+        Ok(())
     }
 
     /// Check `source` as `agents/<name>.wcl` without writing it: the file alone, against the
@@ -895,9 +959,66 @@ impl Writer {
     ) -> Result<(String, Agent)> {
         let _w = self.write_lock();
         let mut inner = self.lock();
-        let (text, agent) = self.plan_agent(&inner, name, source, check)?;
+        let stored_legacy = self
+            .read_agent(name)
+            .ok()
+            .and_then(|s| Agent::parse(name, &s).ok())
+            .is_some_and(|a| {
+                a.permissions.outbox.send_without_review
+                    && a.permissions.outbox.conditions.is_none()
+            });
+        if !stored_legacy {
+            self.revoke_outbox_legacy(name)?;
+        }
+        let (mut text, mut agent) = self.plan_agent(&inner, name, source, check)?;
+        if agent.permissions.outbox.send_without_review
+            && agent.permissions.outbox.conditions.is_none()
+            && self
+                .state
+                .meta(&format!("outbox-legacy:{name}"))?
+                .as_deref()
+                != Some("true")
+        {
+            agent.permissions.outbox.conditions = Some(schema::OutboxConditions::default());
+            text = agent.to_wcl();
+        }
+        if let Some(Author::Token(token)) = crate::activity::acting()
+            && self.state.device_for_token(&token)?.is_some()
+        {
+            let previous = self
+                .agent(name)
+                .map(|a| a.permissions.outbox)
+                .unwrap_or_default();
+            let mut previous_limits = previous.clone();
+            previous_limits.send_without_review = true;
+            if previous_limits.conditions.is_none() && !previous.send_without_review {
+                previous_limits.conditions = Some(schema::OutboxConditions::default());
+            }
+            let mut proposed_limits = agent.permissions.outbox.clone();
+            if proposed_limits.conditions.is_none() && !proposed_limits.send_without_review {
+                proposed_limits.conditions = Some(schema::OutboxConditions::default());
+            }
+            proposed_limits.send_without_review = true;
+            if !previous.allows(&agent.permissions.outbox)
+                || !previous_limits.allows(&proposed_limits)
+            {
+                return Err(Error::Invalid(Invalid {
+                    file: agent_path(name),
+                    issues: vec![Issue::new(
+                        "permissions.outbox",
+                        "a device may narrow send conditions but not broaden them",
+                    )],
+                }));
+            }
+        }
         let generation = self.commit(vec![Change::write(agent_path(name), text.as_bytes())])?;
         inner.index.advance(generation)?;
+        if agent.permissions.outbox.conditions.is_some()
+            || !agent.permissions.outbox.send_without_review
+        {
+            self.state
+                .set_meta(&format!("outbox-legacy:{name}"), "false")?;
+        }
         Ok((text, agent))
     }
 
@@ -967,6 +1088,8 @@ impl Writer {
         }
         let generation = self.commit(vec![Change::delete(agent_path(name))])?;
         inner.index.advance(generation)?;
+        self.state
+            .set_meta(&format!("outbox-legacy:{name}"), "false")?;
         Ok(())
     }
 

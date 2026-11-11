@@ -395,6 +395,7 @@ export async function appPage(timeout = 30_000) {
   // A device left open keeps polling adb and keeps the run's process alive (TV-51), so one whose
   // WebView did not come up is closed before the error goes on.
   try {
+    await until("WebView devtools socket", () => /@webview_devtools_remote_/.test(shellTry("cat /proc/net/unix")), { timeout, every: 500 });
     const webview = await device.webView({ pkg: PKG }, { timeout });
     const page = await webview.page();
     return { device, page };

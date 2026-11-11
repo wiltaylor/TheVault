@@ -951,6 +951,9 @@ impl Writer {
             .find(|t| t.note_id == id)
             .ok_or_else(|| Error::NotInTrash(id.to_owned()))?;
         let doc = Input::Wcl(entry.content.clone()).parse(&note_path(&entry.note_type, id))?;
+        if entry.note_type == "outbox" {
+            self.check_outbox_owner(&doc, author)?;
+        }
         let created = created_of(&doc);
         // A note archived when it was deleted comes back archived.
         let archived = note::is_archived(&doc);
@@ -1447,6 +1450,7 @@ impl Writer {
             }
         }
         if outbox {
+            self.limit_outbox(id, &mut doc, old_doc.as_ref(), author)?;
             self.check_outbox(ty, &path, &doc, old_doc.as_ref(), author)?;
         }
         let archived = archived.unwrap_or_else(|| old_doc.as_ref().is_some_and(note::is_archived));
@@ -1813,6 +1817,11 @@ impl Writer {
     /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
     /// and `updated` times and its archived state, and is put back in canonical order.
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+        if change.type_name == "outbox" && change.event == Event::Delete {
+            let (_, old) = self.existing(&change.id)?;
+            let doc = Input::Wcl(old).parse(&note_path("outbox", &change.id))?;
+            self.check_outbox_owner(&doc, author)?;
+        }
         self.check_calendar_write(change, author)?;
         let archived = change.doc.as_ref().is_some_and(note::is_archived);
         let stamps = change.doc.as_ref().map(|d| {
@@ -1842,6 +1851,22 @@ impl Writer {
             .type_def(&change.type_name)
             .ok_or_else(|| Error::UnknownType(change.type_name.clone()))?;
         change.doc = Some(note::arrange(ty, doc, &created, &updated));
+        Ok(())
+    }
+
+    fn check_outbox_owner(&self, doc: &schema::Doc, author: &Author) -> Result<()> {
+        if let Author::Agent(name) | Author::AgentMail(name) = author {
+            let text = |field| doc.field(field).and_then(schema::Value::as_str);
+            if text("status") != Some("draft") || text("drafted_by") != Some(name.as_str()) {
+                return Err(Error::Invalid(Invalid {
+                    file: "outbox".into(),
+                    issues: vec![Issue::new(
+                        "status",
+                        "agents may delete or restore only their own Outbox drafts",
+                    )],
+                }));
+            }
+        }
         Ok(())
     }
 

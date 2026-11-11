@@ -109,6 +109,7 @@ impl AgentRunner for Fake {
             .push((agent.name.clone(), thread.to_owned(), prompt.to_owned()));
         self.running.fetch_sub(1, Ordering::SeqCst);
         TurnReport {
+            no_side_effects: true,
             outcome: match self.fail.lock().unwrap().clone() {
                 Some(m) => Err(m),
                 None => Ok(()),
@@ -358,6 +359,65 @@ fn note_events_start_runs_with_the_event_line_after_the_debounce() {
 }
 
 #[test]
+fn persistence_errors_leave_the_event_unacknowledged_until_retry_succeeds() {
+    let r = Rig::new();
+    r.agent("watcher", WATCHER);
+    let conn = rusqlite::Connection::open(r._dir.path().join(".vault/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER refuse_trigger_insert BEFORE INSERT ON trigger_jobs BEGIN SELECT RAISE(FAIL,'test persistence failure'); END;").unwrap();
+    r.create("memo", "Persist me", "open", &user());
+    r.advance(31);
+    assert!(r.fake.turns().is_empty());
+    assert_eq!(r.writer.state().trigger_events().unwrap().len(), 1);
+    conn.execute_batch("DROP TRIGGER refuse_trigger_insert;")
+        .unwrap();
+    r.advance(31);
+    assert_eq!(r.fake.turns().len(), 1);
+    assert!(r.writer.state().trigger_events().unwrap().is_empty());
+}
+
+#[test]
+fn backfill_refuses_delete_only_and_queued_ops_are_rechecked() {
+    let r = Rig::new();
+    r.agent("watcher", WATCHER);
+    let id = r.create("memo", "Roof", "open", &Author::Agent("other".into()));
+    assert!(
+        r.scheduler
+            .trigger_backfill_candidates("watcher", "gone")
+            .is_err()
+    );
+    for (trigger, op) in [("opened", "create"), ("gone", "delete")] {
+        let payload =
+            json!({"prompt":"original", "title":"Roof", "type":"memo", "op":op}).to_string();
+        r.writer
+            .state()
+            .enqueue_trigger("watcher", trigger, Some(&id), &payload, r.clock.now_ms())
+            .unwrap();
+    }
+    r.agent(
+        "watcher",
+        &WATCHER
+            .replace("[\"create\", \"update\"]", "[\"update\"]")
+            .replace("[\"delete\"]", "[\"update\"]"),
+    );
+    r.scheduler.tick();
+    // The second job can first wait behind the first job's per-note claim. Once the
+    // capacity backoff elapses it must also recheck the now-removed operation.
+    r.advance(31);
+    assert!(
+        r.fake.turns().is_empty(),
+        "removed create and delete ops must cancel"
+    );
+    assert_eq!(
+        r.writer
+            .state()
+            .trigger_queue_stats("watcher")
+            .unwrap()
+            .waiting,
+        0
+    );
+}
+
+#[test]
 fn changes_to_one_note_within_the_debounce_coalesce_into_one_run() {
     let r = Rig::new();
     r.agent("watcher", WATCHER);
@@ -450,7 +510,44 @@ fn an_agent_runs_at_most_two_at_once_and_queues_the_rest() {
 }
 
 #[test]
-fn an_agent_starts_at_most_sixty_runs_an_hour_and_says_so_once() {
+fn edits_during_a_run_wait_for_that_agent_note_before_running_once() {
+    let r = Rig::new();
+    r.agent("watcher", WATCHER);
+    let id = r.create("memo", "Roof", "open", &user());
+    r.fake.hold.store(true, Ordering::SeqCst);
+    let second_tick_returned = thread::scope(|s| {
+        s.spawn(|| r.advance(31));
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        while r.fake.running.load(Ordering::SeqCst) == 0 {
+            if std::time::Instant::now() >= until {
+                r.fake.hold.store(false, Ordering::SeqCst);
+                panic!("first job did not start");
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        r.set_status(&id, "open", &user());
+        let (tx, rx) = mpsc::channel();
+        let tick = &r;
+        s.spawn(move || {
+            tick.advance(31);
+            tx.send(()).unwrap();
+        });
+        let returned = rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        r.fake.hold.store(false, Ordering::SeqCst);
+        returned
+    });
+    assert!(
+        second_tick_returned,
+        "same-note job must defer instead of entering the held runner"
+    );
+    assert_eq!(r.fake.most.load(Ordering::SeqCst), 1);
+    r.advance(31);
+    assert_eq!(r.fake.turns().len(), 2);
+    assert_eq!(r.fake.most.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn an_agent_starts_at_most_sixty_runs_an_hour_and_retries_the_overflow() {
     let r = Rig::new();
     r.agent("any", ANY);
     // A few at a time, so none is dropped from the queue.
@@ -459,19 +556,14 @@ fn an_agent_starts_at_most_sixty_runs_an_hour_and_says_so_once() {
         r.advance(31);
     }
     assert_eq!(r.fake.turns().len(), 60);
-    let notes = r.writer.state().notifications(false, 50, None).unwrap();
-    let limits: Vec<_> = notes
-        .items
-        .iter()
-        .filter(|n| n.title.contains("60 trigger runs in an hour"))
-        .collect();
-    assert_eq!(limits.len(), 1, "{:?}", notes.items);
-    assert_eq!(limits[0].url.as_deref(), Some("/agents/any/triggers"));
+    let queue = r.writer.state().trigger_queue_stats("any").unwrap();
+    assert_eq!(queue.waiting, 2);
+    assert_eq!(queue.dropped, 0);
     // An hour on, runs start again.
     r.clock.advance(Duration::from_secs(3600));
     r.create("log", "Later", "", &user());
     r.advance(31);
-    assert_eq!(r.fake.turns().len(), 61);
+    assert_eq!(r.fake.turns().len(), 63);
 }
 
 #[test]
@@ -1001,7 +1093,7 @@ fn a_full_queue_keeps_its_dispatch_runs_when_a_trigger_run_comes() {
                 .unwrap(),
         );
     }
-    // A trigger run finds the queue full of runs with threads: it is dropped, and no thread opens.
+    // A trigger run finds the queue full of runs with threads: it stays on disk.
     r.create("memo", "Roof", "open", &user());
     r.advance(31);
     assert_eq!(r.fake.threads.lock().unwrap().len(), room);
@@ -1011,10 +1103,12 @@ fn a_full_queue_keeps_its_dispatch_runs_when_a_trigger_run_comes() {
     ran.sort();
     sent.sort();
     assert_eq!(ran, sent, "every dispatch run ran");
+    r.advance(31);
+    assert_eq!(r.fake.turns().len(), room + 1);
 }
 
 #[test]
-fn a_dispatch_takes_the_place_of_a_trigger_run_waiting_in_a_full_queue() {
+fn a_dispatch_defers_a_durable_trigger_run_waiting_in_a_full_queue() {
     let r = Rig::new();
     r.agent("any", ANY);
     r.fake.hold.store(true, Ordering::SeqCst);
@@ -1047,9 +1141,15 @@ fn a_dispatch_takes_the_place_of_a_trigger_run_waiting_in_a_full_queue() {
         sent
     });
     r.fake.wait_turns(room);
-    // One trigger run was dropped, so the turns are the room's count, the dispatch among them.
+    // One trigger run was deferred, so the turns are the room's count, the dispatch among them.
     assert_eq!(r.fake.turns().len(), room);
     assert!(r.fake.turns().iter().any(|t| t.1 == sent), "{sent} ran");
+    r.advance(31);
+    assert_eq!(
+        r.fake.turns().len(),
+        room + 1,
+        "the displaced trigger is retried"
+    );
 }
 
 #[test]

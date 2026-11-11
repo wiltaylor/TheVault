@@ -12,6 +12,91 @@ const NOTE_A: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
 const NOTE_B: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
+#[test]
+fn token_kinds_migrate_from_19_20_22_and_23_without_losing_credentials() {
+    for version in [19, 20, 22, 23] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state.db");
+        let state = State::open(&path, None).unwrap();
+        let credentials: Vec<_> = [
+            "agent-old",
+            "device-old",
+            "plain",
+            "Agent-Upper",
+            "DEVICE-x",
+        ]
+        .into_iter()
+        .map(|name| state.create_token(name, Scope::Admin).unwrap().1)
+        .collect();
+        drop(state);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("ALTER TABLE tokens DROP COLUMN kind;")
+            .unwrap();
+        conn.pragma_update(None, "user_version", version).unwrap();
+        drop(conn);
+        let state = State::open(&path, None).unwrap();
+        for (secret, kind) in credentials
+            .iter()
+            .zip(["agent", "device", "user", "agent", "device"])
+        {
+            let token = state.authenticate_token(secret).unwrap().unwrap();
+            assert_eq!(token.kind, kind);
+            assert_eq!(
+                token.scope,
+                if kind == "agent" {
+                    Scope::Write
+                } else {
+                    Scope::Admin
+                }
+            );
+        }
+        drop(state);
+        let state = State::open(&path, None).unwrap();
+        assert_eq!(state.list_tokens().unwrap().len(), 5);
+    }
+}
+
+#[test]
+fn outbox_admission_is_atomic_and_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let state = Arc::new(State::open(&path, None).unwrap());
+    let threads: Vec<_> = (0..32)
+        .map(|i| {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                state
+                    .reserve_outbox("sender", &i.to_string(), 1000, 20, 300_000)
+                    .unwrap()
+            })
+        })
+        .collect();
+    let admitted = threads
+        .into_iter()
+        .map(|t| usize::from(t.join().unwrap()))
+        .sum::<usize>();
+    assert_eq!(admitted, 20);
+    drop(state);
+    let state = State::open(&path, None).unwrap();
+    assert!(
+        !state
+            .reserve_outbox("sender", "extra", 2000, 20, 300_000)
+            .unwrap()
+    );
+    assert!(
+        state
+            .reserve_outbox("sender", "next", DAY_MS, 20, 300_000)
+            .unwrap()
+    );
+    assert_eq!(
+        state.outbox_deadline("next").unwrap(),
+        Some(DAY_MS + 300_000)
+    );
+    assert!(state.prune_outbox_limits(10 * DAY_MS, |_| false).unwrap() > 0);
+    assert_eq!(state.outbox_deadline("next").unwrap(), None);
+    assert_eq!(state.meta("outbox-cap:sender:0").unwrap(), None);
+}
+
 struct TestClock(AtomicI64);
 
 impl TestClock {
@@ -467,6 +552,126 @@ fn secrets_round_trip_and_list_without_values() {
         state.delete_secret("weather"),
         Err(Error::UnknownSecret(_))
     ));
+}
+
+#[test]
+fn login_credentials_are_separate_encrypted_and_name_bound() {
+    let dir = TempDir::new().unwrap();
+    let key = SecretKey::generate();
+    let state = open_with_key(&dir, key.clone());
+    let login = state::LoginSecret {
+        username: "made-up-user".into(),
+        password: "made-up-password".into(),
+        totp_seed: Some("JBSWY3DPEHPK3PXP".into()),
+        origins: vec!["https://example.com".into()],
+    };
+    state.set_login_secret("site", &login).unwrap();
+    assert_eq!(state.get_secret("site").unwrap(), None);
+    assert!(state.list_secrets().unwrap().is_empty());
+    assert!(state.set_secret("site", "string collision").is_err());
+    state.set_secret("plain", "ordinary").unwrap();
+    assert!(state.set_login_secret("plain", &login).is_err());
+    let debug = format!("{:?}", state.list_login_secrets().unwrap());
+    assert!(!debug.contains(&login.password));
+    assert!(!debug.contains(login.totp_seed.as_ref().unwrap()));
+    drop(state);
+    let bytes = read_db_bytes(&dir);
+    for marker in [&login.password, login.totp_seed.as_ref().unwrap()] {
+        assert!(!contains(&bytes, marker.as_bytes()));
+    }
+    let reopened = open_with_key(&dir, key);
+    assert_eq!(
+        reopened.get_login_secret("site").unwrap().unwrap().password,
+        login.password
+    );
+    drop(reopened);
+    let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+    conn.execute(
+        "UPDATE login_secrets SET name='swapped' WHERE name='site'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let state = open_with_key(&dir, SecretKey::generate());
+    assert!(state.get_login_secret("swapped").is_err());
+}
+
+#[test]
+fn login_listing_needs_no_key_and_ignores_corrupt_ciphertext() {
+    let dir = TempDir::new().unwrap();
+    let key = SecretKey::generate();
+    let state = open_with_key(&dir, key.clone());
+    let login = state::LoginSecret {
+        username: "test-user".into(),
+        password: "made-up-password".into(),
+        totp_seed: None,
+        origins: vec!["https://example.com".into()],
+    };
+    for name in ["site", "other"] {
+        state.set_login_secret(name, &login).unwrap();
+    }
+    drop(state);
+    for key in [None, Some(SecretKey::generate())] {
+        let state = State::open(&dir.path().join("state.db"), key).unwrap();
+        let list = state.list_login_secrets().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].username, "test-user");
+        assert!(matches!(
+            state.get_login_secret("site"),
+            Err(Error::KeyMissing { .. } | Error::WrongKey { .. })
+        ));
+        assert!(matches!(
+            state.set_login_secret("site", &login),
+            Err(Error::KeyMissing { .. } | Error::WrongKey { .. })
+        ));
+    }
+    let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+    conn.execute(
+        "UPDATE login_secrets SET ciphertext=x'00' WHERE name='site'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let state = open_with_key(&dir, key);
+    assert_eq!(state.list_login_secrets().unwrap().len(), 2);
+    assert!(matches!(
+        state.get_login_secret("site"),
+        Err(Error::WrongKey { .. })
+    ));
+    assert!(state.get_login_secret("other").unwrap().is_some());
+}
+
+#[test]
+fn login_schema_upgrades_from_19_20_and_either_21_layout() {
+    for (version, old_login_table) in [(19, false), (20, false), (21, false), (21, true)] {
+        let dir = TempDir::new().unwrap();
+        let key = SecretKey::generate();
+        let state = open_with_key(&dir, key.clone());
+        state.set_secret("plain", "made-up-string").unwrap();
+        drop(state);
+        let conn = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
+        conn.execute_batch("DROP TRIGGER string_namespace; DROP TABLE login_secrets;")
+            .unwrap();
+        conn.pragma_update(None, "user_version", version).unwrap();
+        if old_login_table {
+            conn.execute_batch("CREATE TABLE login_secrets (name TEXT PRIMARY KEY, nonce BLOB NOT NULL, ciphertext BLOB NOT NULL, created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL);").unwrap();
+        }
+        drop(conn);
+        let state = open_with_key(&dir, key);
+        assert_eq!(
+            state.get_secret("plain").unwrap().as_deref(),
+            Some("made-up-string")
+        );
+        let login = state::LoginSecret {
+            username: "test-user".into(),
+            password: "made-up-password".into(),
+            totp_seed: None,
+            origins: vec![],
+        };
+        state.set_login_secret("site", &login).unwrap();
+        assert_eq!(state.list_login_secrets().unwrap()[0].username, "test-user");
+        assert!(state.set_secret("site", "cannot change kind").is_err());
+    }
 }
 
 #[test]
@@ -1168,7 +1373,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 20);
+    assert_eq!(version, 24);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.
