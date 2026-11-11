@@ -327,9 +327,35 @@ fn send_event(item: Value) -> Result[Sent, string] {
         return Err("The note to change is not an event.")
     }
     if text_of(fields, "event_action") == "delete" {
+        // Keep the note (and the retry target) until Google confirms the deletion.
+        let event_fields = fields_of(event)
+        let google_ref = text_of(event_fields, "google_ref")
+        if google_ref != "" {
+            match secrets::get("google_refresh_token") {
+                Ok(_) => {},
+                Err(_) => return Err("Google Calendar is not connected."),
+            }
+            let settings = secret_json("google_settings")
+            let endpoints = settings.get("endpoints").unwrap_or(Value::Null)
+            let token = access_token(endpoint(endpoints, "token", "https://oauth2.googleapis.com/token"))?
+            let calendar = text_of(event_fields, "calendar")
+            if calendar == "" {
+                calendar = text_of(settings, "default_calendar")
+            }
+            if calendar == "" {
+                calendar = "primary"
+            }
+            let url = endpoint(endpoints, "calendar", "https://www.googleapis.com/calendar/v3") +
+                "/calendars/" + encode(calendar) + "/events/" + encode(google_ref) + "?sendUpdates=all"
+            let reply = http::request("DELETE", url, #{ "authorization": "Bearer " + token, "accept": "application/json" }, "")?
+            if reply.status != 200 && reply.status != 204 && reply.status != 404 && reply.status != 410 {
+                let body = json::parse(reply.body).unwrap_or(Value::Null)
+                return Err(fmt("Google Calendar events.delete of {} answered {}: {}", google_ref, reply.status, text_of(body.get("error").unwrap_or(Value::Null), "message")))
+            }
+        }
         vault::patch(text_of(item, "id"), Value::Map(#{ "sent_ref": Value::String(target) }), "")?
         vault::delete(target, text_of(event, "version"))?
-        return Ok(Sent { done: false, sent_ref: "", result: "" })
+        return Ok(Sent { done: true, sent_ref: target, result: "" })
     }
     let body = event.get("note").unwrap_or(Value::Null)
     let f: Map[string, Value] = match body.get("fields") {

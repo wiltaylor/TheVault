@@ -423,6 +423,33 @@ impl Shared {
                         }
                         let (outcome, log) = self.run_job(&writer, &job.payload);
                         if let Err(message) = &outcome {
+                            // A deadline faults the script before it can record its normal
+                            // Outbox error. Preserve the delete target and expose manual retry.
+                            if payload["type"] == "outbox"
+                                && payload["script"] == "outbox_send"
+                                && let Some(id) = payload["id"].as_str()
+                                && let Ok(note) = writer.read(id)
+                            {
+                                let body = doc_to_json(&note.doc);
+                                let fields = &body["fields"];
+                                if fields["kind"] == "event"
+                                    && fields["event_action"] == "delete"
+                                    && fields["status"] == "sending"
+                                    && fields["sent_at"].as_str().unwrap_or_default().is_empty()
+                                {
+                                    let mut body = body;
+                                    body["fields"]["status"] = json!("failed");
+                                    body["fields"]["error"] = json!(message);
+                                    if let Err(e) = writer.update(
+                                        id,
+                                        &Input::Json(body),
+                                        Some(&note.version),
+                                        &Author::Handler("outbox_send".into()),
+                                    ) {
+                                        eprintln!("recording failed Outbox deletion: {e}");
+                                    }
+                                }
+                            }
                             eprintln!("after_* handler job {} failed: {message}", job.id);
                             let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
                             let s = |k: &str| p[k].as_str().unwrap_or_default().to_owned();
