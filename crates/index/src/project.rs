@@ -73,7 +73,9 @@ pub(crate) fn project(ty: &TypeDef, id: &str, doc: &Doc, report: &NoteReport) ->
     let doc = if ty.name == "agent_thread" {
         redacted = schema::redacted_agent_doc(&ty.name, doc);
         &redacted
-    } else { doc };
+    } else {
+        doc
+    };
     let str_field = |name: &str| doc.field(name).and_then(Value::as_str).map(str::to_owned);
     let title = str_field("title").unwrap_or_default();
     let archived = doc.field("archived") == Some(&Value::Bool(true));

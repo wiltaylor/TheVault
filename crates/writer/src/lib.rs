@@ -76,11 +76,11 @@ use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
 pub use activity::{Acting, acting_as};
-pub use schema::{hide_browser_secrets, redact_agent_content, redact_agent_note};
 pub use agent_threads::AgentThreadRuntime;
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
+pub use schema::{hide_browser_secrets, redact_agent_content, redact_agent_note};
 
 /// A single note write whose authorization must be checked under the write lock.
 pub enum CheckedNoteWrite<'a> {

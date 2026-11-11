@@ -194,14 +194,22 @@ pub async fn changes(
         let mut next = since;
         for change in &page.changes {
             let mut value = entry(w, change, full_conditions, full_logins)?;
-            if !full_logins { crate::agent_threads::redact_content(&mut value)?; }
-            let size = serde_json::to_vec(&value).map_err(|_| ApiError::bad_request("sync entry could not be serialized"))?.len() + 1;
-            if !entries.is_empty() && bytes.saturating_add(size) > crate::query::PAGE_BYTE_BUDGET { break; }
+            if !full_logins {
+                crate::agent_threads::redact_content(&mut value)?;
+            }
+            let size = serde_json::to_vec(&value)
+                .map_err(|_| ApiError::bad_request("sync entry could not be serialized"))?
+                .len()
+                + 1;
+            if !entries.is_empty() && bytes.saturating_add(size) > crate::query::PAGE_BYTE_BUDGET {
+                break;
+            }
             bytes = bytes.saturating_add(size);
             next = change.seq;
             entries.push(value);
         }
-        let remaining = page.remaining + i64::try_from(page.changes.len() - entries.len()).unwrap_or(i64::MAX);
+        let remaining =
+            page.remaining + i64::try_from(page.changes.len() - entries.len()).unwrap_or(i64::MAX);
         Ok(json!({
             "changes": entries,
             "next": next,

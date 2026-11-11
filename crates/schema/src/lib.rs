@@ -7,8 +7,8 @@
 //! references and the terms it holds. [`parse_skill_md`] checks an Agent Skill's `SKILL.md`
 //! (skills S2).
 
-mod agents;
 mod agent_privacy;
+mod agents;
 mod blocks;
 mod change;
 mod classifiers;
@@ -24,9 +24,11 @@ mod taxonomy;
 mod tools;
 mod types;
 
+pub use agent_privacy::{
+    hide_browser_secrets, redact_agent_content, redact_agent_note, redacted_agent_doc,
+};
 use std::collections::BTreeMap;
 use std::fmt;
-pub use agent_privacy::{hide_browser_secrets, redact_agent_content, redact_agent_note, redacted_agent_doc};
 
 pub use agents::{
     AGENT_CALL_EXCLUDED_TYPES, AGENT_EFFORTS, AGENT_PROMPT_MAX, AGENT_PROVIDERS, ASSISTANT_AGENT,

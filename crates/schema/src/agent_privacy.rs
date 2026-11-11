@@ -1,25 +1,45 @@
 //! Pure Login-metadata redaction, shared by indexing, API clients and agent script reads.
 use serde_json::{Value, json};
 
-
 fn print_value(value: &crate::Value) -> String {
     match value {
         crate::Value::Str(text) => serde_json::to_string(text).expect("string serialization"),
         crate::Value::Int(n) => n.to_string(),
         crate::Value::Float(n) => format!("{n:?}"),
         crate::Value::Bool(value) => value.to_string(),
-        crate::Value::List(values) => format!("[{}]", values.iter().map(print_value).collect::<Vec<_>>().join(", ")),
-        crate::Value::Record(values) => format!("{{ {} }}", values.iter().map(|(key,value)| format!("{key}: {}",print_value(value))).collect::<Vec<_>>().join(", ")),
+        crate::Value::List(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(print_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        crate::Value::Record(values) => format!(
+            "{{ {} }}",
+            values
+                .iter()
+                .map(|(key, value)| format!("{key}: {}", print_value(value)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
 fn print_doc(doc: &crate::Doc) -> String {
     let mut out = String::new();
-    for (name,value) in &doc.fields { out.push_str(&format!("{name} = {}\n", print_value(value))); }
+    for (name, value) in &doc.fields {
+        out.push_str(&format!("{name} = {}\n", print_value(value)));
+    }
     for block in &doc.blocks {
         out.push_str(&block.kind);
-        for label in &block.labels { out.push(' '); out.push_str(&serde_json::to_string(label).expect("label serialization")); }
-        out.push_str(" {\n"); out.push_str(&print_doc(&block.body)); out.push_str("}\n");
+        for label in &block.labels {
+            out.push(' ');
+            out.push_str(&serde_json::to_string(label).expect("label serialization"));
+        }
+        out.push_str(" {\n");
+        out.push_str(&print_doc(&block.body));
+        out.push_str("}\n");
     }
     out
 }
@@ -28,10 +48,13 @@ fn print_doc(doc: &crate::Doc) -> String {
 pub fn redacted_agent_doc(type_name: &str, doc: &crate::Doc) -> crate::Doc {
     let mut copy = doc.clone();
     if type_name == "agent_thread" {
-        for (name,value) in &mut copy.fields {
+        for (name, value) in &mut copy.fields {
             if name == "transcript" {
-                let mut transcript = serde_json::from_str::<Value>(value.as_str().unwrap_or("{}")).unwrap_or_else(|_| json!({}));
-                if redact_agent_content(&mut transcript).is_err() { transcript = json!({}); }
+                let mut transcript = serde_json::from_str::<Value>(value.as_str().unwrap_or("{}"))
+                    .unwrap_or_else(|_| json!({}));
+                if redact_agent_content(&mut transcript).is_err() {
+                    transcript = json!({});
+                }
                 *value = crate::Value::Str(transcript.to_string());
             }
         }
