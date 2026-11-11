@@ -862,6 +862,57 @@ fn browser_secrets_thread_note_routes_and_events_hide_raw_transcripts() {
 }
 
 #[test]
+fn browser_secrets_query_filter_oracle_cannot_recover_hidden_names() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    let clerk = CLERK.replace("\"get_note\",", "\"query_notes\", \"get_note\",").replace("types = [\"memo\"]", "types = [\"memo\", \"agent_thread\"]");
+    api.put_agent("clerk", &clerk);
+    api.put_agent("helper", &HELPER.replace("tools = [", "browser = true\n browser_secrets = [\"bank\"]\n tools = ["));
+    let writer = api.token_of("writer", "write");
+    let reader = api.token_of("reader", "read");
+    let external = api.token_of("agent-oracle", "write");
+    let made: Value = api.client.post(api.server.url("/api/agents/clerk/threads")).bearer_auth(&writer).json(&json!({})).send().unwrap().json().unwrap();
+    let thread = made["id"].as_str().unwrap();
+    fake.push(AnthropicMessage::new().tool_use("toolu_p", "propose_agent_change", json!({"name":"helper","wcl":HELPER})));
+    fake.push(AnthropicMessage::text("Done."));
+    let response = api.client.post(api.server.url("/api/ai/chat")).bearer_auth(&writer).json(&json!({"agent":"clerk","thread":thread,"messages":[user("Do it.")]})).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    read_events(response);
+    let mut leaks = Vec::new();
+    for token in [&reader, &writer, &external] {
+        for suffix in ["", " sort transcript", " group by transcript"] {
+            let mut counts = Vec::new();
+            for needle in ["bank", "zzqxv"] {
+                let query = format!("from agent_thread where contains(transcript, {}){suffix}", json!(needle));
+                let response = api.client.get(api.server.url("/api/query")).bearer_auth(token).query(&[("q",query)]).send().unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                counts.push(response.json::<Value>().unwrap()["total"].clone());
+            }
+            if counts[0] != counts[1] { leaks.push(format!("query {suffix}")); }
+        }
+        let mut counts = Vec::new();
+        for needle in ["bank", "zzqxv"] {
+            let response = api.client.get(api.server.url("/api/search")).bearer_auth(token).query(&[("q",needle)]).send().unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            counts.push(response.json::<Value>().unwrap()["total"].clone());
+        }
+        if counts[0] != counts[1] { leaks.push("search".to_owned()); }
+    }
+    for needle in ["bank", "zzqxv"] {
+        let query = format!("from agent_thread where contains(transcript, {})", json!(needle));
+        let events = api.one(&fake, Some("clerk"), "query_notes", json!({"query":query}));
+        if !last(&events, "tool_result")["summary"]["notes"].as_array().unwrap().is_empty() { leaks.push(format!("query_notes {needle}")); }
+    }
+    let prefix = "browser_secrets = [\\\"b";
+    let response: Value = api.client.get(api.server.url("/api/query")).bearer_auth(&reader).query(&[("q",format!("from agent_thread where contains(transcript, {})",json!(prefix)))]).send().unwrap().json().unwrap();
+    if response["total"] != 0 { leaks.push("prefix extraction".to_owned()); }
+    assert!(leaks.is_empty(), "hidden-name oracle: {leaks:?}");
+    let raw = api.client.get(api.server.url(&format!("/api/notes/{thread}"))).bearer_auth(api.token()).send().unwrap();
+    assert!(raw.text().unwrap().contains("bank"));
+}
+
+#[test]
 fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
     let api = Api::start();
     let fake = FakeAnthropic::start();

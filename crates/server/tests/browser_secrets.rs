@@ -4,6 +4,72 @@ use serde_json::{Value, json};
 use std::time::Instant;
 use testkit::{PASSWORD, TestServer};
 
+fn large_note_server(count: usize, bytes: usize) -> TestServer {
+    TestServer::start_seeded(|vault| {
+        std::fs::create_dir_all(vault.join("types")).unwrap();
+        std::fs::create_dir_all(vault.join("notes/memo")).unwrap();
+        std::fs::write(vault.join("types/memo.wcl"), "label = \"Memo\"\nfield status { kind = \"string\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+        for i in 0..count {
+            let id = format!("01JB8Z4K2MQ7V3X9{i:010}");
+            std::fs::write(vault.join(format!("notes/memo/{id}.wcl")),format!("title = \"Memo {i}\"\ncreated = \"2026-10-01T09:00:00Z\"\nupdated = \"2026-10-01T09:00:00Z\"\nstatus = \"{}\"\n", "x".repeat(bytes))).unwrap();
+        }
+    })
+}
+
+#[test]
+fn browser_secrets_large_sync_and_query_pages_make_progress_under_the_budget() {
+    let server = large_note_server(24, 1500 * 1024);
+    let client = Client::new();
+    let token: Value = client.post(server.url("/api/tokens")).bearer_auth(server.admin_token()).json(&json!({"name":"writer","scope":"write"})).send().unwrap().json().unwrap();
+    let token = token["secret"].as_str().unwrap();
+    let mut since = 0;
+    let mut notes = std::collections::HashSet::new();
+    for _ in 0..100 {
+        let response = client.get(server.url("/api/sync/changes")).bearer_auth(token).query(&[("since",since.to_string()),("limit","500".to_owned())]).send().unwrap();
+        assert!(response.status().is_success(), "sync status {}",response.status());
+        let body = response.bytes().unwrap();
+        assert!(body.len() < 32 * 1024 * 1024);
+        let page: Value = serde_json::from_slice(&body).unwrap();
+        for entry in page["changes"].as_array().unwrap() { if entry["type"] == "memo" { assert!(notes.insert(entry["id"].as_str().unwrap().to_owned())); } }
+        if page["remaining"] == 0 { break; }
+        let next = page["next"].as_i64().unwrap(); assert!(next > since); since = next;
+    }
+    assert_eq!(notes.len(),24);
+    let mut cursor = None::<String>;
+    let mut rows = std::collections::HashSet::new();
+    for _ in 0..100 {
+        let mut params = vec![("q","from memo select status".to_owned()),("page_size","1000".to_owned())];
+        if let Some(value) = cursor { params.push(("cursor",value)); }
+        let response = client.get(server.url("/api/query")).bearer_auth(token).query(&params).send().unwrap();
+        assert!(response.status().is_success(), "query status {}",response.status());
+        let body = response.bytes().unwrap(); assert!(body.len() < 32 * 1024 * 1024);
+        let page: Value = serde_json::from_slice(&body).unwrap();
+        for row in page["rows"].as_array().unwrap() { assert!(rows.insert(row["id"].as_str().unwrap().to_owned())); }
+        cursor = page["next"].as_str().map(str::to_owned);
+        if cursor.is_none() { break; }
+    }
+    assert_eq!(rows.len(),24);
+}
+
+#[test]
+fn browser_secrets_device_sync_accepts_one_forty_megabyte_note() {
+    let server = large_note_server(1, 40 * 1024 * 1024);
+    let client = Client::new();
+    let token: Value = client.post(server.url("/api/devices/pair")).json(&json!({"password":PASSWORD,"name":"Phone","platform":"android"})).send().unwrap().json().unwrap();
+    let token = token["token"].as_str().unwrap();
+    let mut since = 0;
+    let mut seen = false;
+    for _ in 0..100 {
+        let response = client.get(server.url("/api/sync/changes")).bearer_auth(token).query(&[("since",since.to_string()),("limit","500".to_owned())]).send().unwrap();
+        assert!(response.status().is_success(), "device sync status {}",response.status());
+        let page: Value = response.json().unwrap();
+        for entry in page["changes"].as_array().unwrap() { if entry["type"] == "memo" { assert!(entry["wcl"].as_str().unwrap().len() > 40 * 1024 * 1024); seen = true; } }
+        if page["remaining"] == 0 { break; }
+        let next = page["next"].as_i64().unwrap(); assert!(next > since); since = next;
+    }
+    assert!(seen);
+}
+
 fn reviewed_routes() -> Vec<String> {
     include_str!("browser_secrets_routes.txt")
         .lines()
