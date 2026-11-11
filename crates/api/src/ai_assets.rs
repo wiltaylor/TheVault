@@ -166,7 +166,9 @@ pub fn read_asset(w: &Writer, input: &Value, may_send_image: bool, images: &Imag
         return Read::error("id must be a non-empty string");
     };
     if !w.agent_may_read_asset(id) {
-        return Read::error("Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.");
+        return Read::error(
+            "Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.",
+        );
     }
     let asset = match w.asset_info(id) {
         Ok(a) => a,
