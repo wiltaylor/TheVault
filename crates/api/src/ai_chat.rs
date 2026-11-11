@@ -5294,11 +5294,44 @@ mod tests {
 
     #[test]
     fn tools_are_strict_objects() {
-        for t in tool_specs() {
-            let s = &t.input_schema;
-            assert_eq!(s["additionalProperties"], false);
-            let props = s["properties"].as_object().unwrap().len();
-            assert_eq!(s["required"].as_array().unwrap().len(), props, "{}", t.name);
+        fn check(s: &Value, path: &str) {
+            let object = s["type"] == "object"
+                || s["type"].as_array().is_some_and(|ts| ts.contains(&json!("object")));
+            if object {
+                assert_eq!(s["additionalProperties"], false, "{path}: open object");
+                let props = s["properties"].as_object().expect("object properties");
+                let required = s["required"].as_array().expect("required properties");
+                assert_eq!(props.len(), required.len(), "{path}");
+                for name in props.keys() {
+                    assert!(required.contains(&json!(name)), "{path}/{name}: optional");
+                }
+            }
+            if let Some(props) = s["properties"].as_object() {
+                for (name, child) in props {
+                    check(child, &format!("{path}/{name}"));
+                }
+            }
+            if let Some(items) = s.get("items") {
+                check(items, &format!("{path}/items"));
+            }
+            for keyword in ["anyOf", "oneOf", "allOf"] {
+                if let Some(children) = s[keyword].as_array() {
+                    for child in children {
+                        check(child, path);
+                    }
+                }
+            }
+        }
+        let mut tools = tool_specs();
+        tools.extend(crate::ai_browser::tool_specs());
+        tools.extend(crate::ai_scripts::tool_specs());
+        tools.push(crate::ai_scripts::run_script_spec());
+        tools.extend(crate::ai_saved::specs());
+        tools.push(crate::brave::tool_spec());
+        tools.push(crate::ai_skills::install_spec());
+        tools.push(crate::ai_subagents::spec(&Agent::parse("test", "label = \"Test\"\n").unwrap()));
+        for t in tools {
+            check(&t.input_schema, &t.name);
         }
     }
 }
