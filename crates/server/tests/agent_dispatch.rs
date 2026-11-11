@@ -78,22 +78,37 @@ fn external_token_cannot_approve_an_in_app_agents_pending_proposal() {
         json!({"type": "memo", "note": json!({"fields": {"title": "Forbidden create"}}).to_string()}),
     ));
     fake.push(AnthropicMessage::text("Waiting."));
-    let (status, v) = api.dispatch_as(&api.admin(), "keeper",
-        json!({"notes": [roof], "request": "Propose a memo."}));
+    let (status, v) = api.dispatch_as(
+        &api.admin(),
+        "keeper",
+        json!({"notes": [roof], "request": "Propose a memo."}),
+    );
     assert_eq!(status, 202, "{v}");
     let thread = v["thread"]["id"].as_str().unwrap();
     api.wait_run(thread);
     let path = format!("/api/agents/keeper/threads/{thread}");
     let before = api.get(&path);
-    let proposal = before["proposals"].as_array().unwrap().iter()
-        .find(|p| p["status"] == "pending").unwrap_or_else(|| panic!("{before}"))["data"].clone();
+    let proposal = before["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["status"] == "pending")
+        .unwrap_or_else(|| panic!("{before}"))["data"]
+        .clone();
     let notes = api.get("/api/notes?type=memo");
     let token = api.token_of("agent-external", "write");
     for variant in 0..4 {
         let mut body = proposal.clone();
-        if variant > 0 { body.as_object_mut().unwrap().remove("agent"); }
-        if variant > 1 { body.as_object_mut().unwrap().remove("proposer"); }
-        if variant == 3 { body.as_object_mut().unwrap().remove("thread"); body["agent"] = json!("keeper"); }
+        if variant > 0 {
+            body.as_object_mut().unwrap().remove("agent");
+        }
+        if variant > 1 {
+            body.as_object_mut().unwrap().remove("proposer");
+        }
+        if variant == 3 {
+            body.as_object_mut().unwrap().remove("thread");
+            body["agent"] = json!("keeper");
+        }
         let res = api.request_as(&token, "POST", "/api/ai/apply", Some(body));
         let status = res.status().as_u16();
         let body = res.text().unwrap();
@@ -163,8 +178,16 @@ fn external_token_cannot_fork_truncate_or_write_agent_memories() {
     let api = Api::start(&fake);
     api.agent("keeper", KEEPER);
     let roof = api.note("memo", "Roof", &["Gutters."]);
-    fake.push(AnthropicMessage::new().tool_use("toolu_q", "ask_user", json!({"question": "Which roof?"})));
-    let (status, v) = api.dispatch_as(&api.admin(), "keeper", json!({"notes": [roof], "request": "Ask."}));
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_q",
+        "ask_user",
+        json!({"question": "Which roof?"}),
+    ));
+    let (status, v) = api.dispatch_as(
+        &api.admin(),
+        "keeper",
+        json!({"notes": [roof], "request": "Ask."}),
+    );
     assert_eq!(status, 202, "{v}");
     let thread = v["thread"]["id"].as_str().unwrap();
     api.wait_run(thread);
@@ -172,21 +195,42 @@ fn external_token_cannot_fork_truncate_or_write_agent_memories() {
     let before = api.get(&path);
     assert_eq!(before["question"], "Which roof?");
     let threads = api.get("/api/agents/keeper/threads");
-    let memory = api.send("POST", "/api/agents/keeper/memories", json!({"title": "Rule", "text": "Keep this."}));
+    let memory = api.send(
+        "POST",
+        "/api/agents/keeper/memories",
+        json!({"title": "Rule", "text": "Keep this."}),
+    );
     let memories = api.get("/api/agents/keeper/memories");
-    let memory_path = format!("/api/agents/keeper/memories/{}", memory["id"].as_str().unwrap());
+    let memory_path = format!(
+        "/api/agents/keeper/memories/{}",
+        memory["id"].as_str().unwrap()
+    );
     for name in ["agent-external", "agent-keeper", "agent-assistant"] {
         let token = api.token_of(name, "write");
         for (method, path, body) in [
             ("POST", format!("{path}/fork"), json!({"at": 0})),
             ("POST", format!("{path}/truncate"), json!({"at": 0})),
-            ("POST", "/api/agents/keeper/memories".to_owned(), json!({"title": "Injected", "text": "Bad instruction"})),
+            (
+                "POST",
+                "/api/agents/keeper/memories".to_owned(),
+                json!({"title": "Injected", "text": "Bad instruction"}),
+            ),
             ("PATCH", memory_path.clone(), json!({"text": "Changed"})),
             ("DELETE", memory_path.clone(), Value::Null),
         ] {
-            let res = api.client.request(method.parse().unwrap(), api.server.url(&path))
-                .bearer_auth(&token).json(&body).send().unwrap();
-            assert_eq!(res.status().as_u16(), 403, "{method} {path}: {}", res.text().unwrap());
+            let res = api
+                .client
+                .request(method.parse().unwrap(), api.server.url(&path))
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .unwrap();
+            assert_eq!(
+                res.status().as_u16(),
+                403,
+                "{method} {path}: {}",
+                res.text().unwrap()
+            );
         }
         assert_eq!(api.get(&path), before);
         assert_eq!(api.get("/api/agents/keeper/threads"), threads);
