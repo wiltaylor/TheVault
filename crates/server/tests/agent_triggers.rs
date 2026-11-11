@@ -337,6 +337,11 @@ fn safety_rest_mutation_route_inventory() {
         ),
         (
             "post",
+            "/api/agents/{name}/browser-profile/reset",
+            "owner-only session/admin-user action, returns reset and cleanup status only",
+        ),
+        (
+            "post",
             "/api/agents/{name}/dispatch",
             "caller ownership or session-only agent operations",
         ),
