@@ -86,3 +86,4 @@ release-test: (require-tool "git") (require-tool "jq") (require-tool "dpkg") (re
 	scripts/release/test.sh
 	node --test scripts/release/gradle-wrapper.test.mjs
 	node --test scripts/release/cache.test.mjs
+	node --test scripts/nightly/nightly.test.mjs
