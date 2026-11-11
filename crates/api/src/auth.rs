@@ -179,6 +179,7 @@ async fn agent_read_gate(w: Arc<Writer>, req: &mut Request) -> Result<(), ApiErr
     if route.starts_with("/api/notes/{id}")
         || route == "/api/assets/{id}"
         || route == "/api/pins/{id}"
+        || route == "/api/trash/{id}/restore"
     {
         let Path(params) = req
             .extract_parts::<Path<std::collections::HashMap<String, String>>>()

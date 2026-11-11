@@ -157,6 +157,8 @@ pub struct TypeCheck {
 /// Errors from the write path.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Note is unavailable to agents")]
+    AgentHeld,
     /// The submitted WCL does not parse.
     #[error("{file}: {message}")]
     Parse { file: String, message: String },
