@@ -133,6 +133,32 @@ fn incoming_assets_google_upload_is_marked_before_note_creation() {
 }
 
 #[test]
+#[ignore = "manual migration timing fixture"]
+fn round4_migration_timing_5000_assets_and_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("types")).unwrap();
+    std::fs::create_dir_all(dir.path().join("notes/memo")).unwrap();
+    std::fs::write(dir.path().join("types/memo.wcl"), "label = \"Memo\"\ntemplate default { tab Main { slot title } }\n").unwrap();
+    for i in 0..5000 {
+        let note = ulid::Ulid::new().to_string();
+        let asset = ulid::Ulid::new().to_string();
+        std::fs::write(dir.path().join(format!("notes/memo/{note}.wcl")), format!("title = \"Local {i}\"\n")).unwrap();
+        let path = dir.path().join(format!("assets/{asset}"));
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("orphan.txt"), b"ORPHAN").unwrap();
+    }
+    let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+    let w = Writer::open(vault, state).unwrap();
+    assert_eq!(w.assets().unwrap().len(), 5000);
+    assert_eq!(w.list_with(None, writer::Archived::Include).unwrap().len(), 5000);
+    let start = std::time::Instant::now();
+    w.activate_agent_safety().unwrap();
+    println!("5000 assets / 5000 notes activation: {:.3}s", start.elapsed().as_secs_f64());
+    for asset in w.assets().unwrap() { assert!(!w.agent_may_read_asset(&asset.id)); }
+}
+
+#[test]
 fn round4_upgrade_marks_asset_trash_before_restore() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());

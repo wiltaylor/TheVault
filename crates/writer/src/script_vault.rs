@@ -83,7 +83,7 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
     })
 }
 
-fn agent_reading() -> bool {
+pub(crate) fn agent_reading() -> bool {
     matches!(
         crate::activity::acting(),
         Some(Author::Agent(_) | Author::AgentMail(_))

@@ -462,11 +462,13 @@ impl Writer {
             }
             // Old failed imports and pre-upgrade unlinks have no surviving provenance.
             // Withhold these orphans, without changing files still used by local notes.
-            for asset in self.assets()? {
-                let usage = self.asset_usage(&asset.id)?;
-                if usage.notes.is_empty() && usage.trashed.is_empty() {
-                    self.mark_incoming_asset(&asset.id)?;
+            for summary in self.asset_summaries()? {
+                if summary.used_by() == 0 {
+                    self.mark_incoming_asset(&summary.asset.id)?;
                 }
+            }
+            for entry in self.asset_trash() {
+                self.mark_incoming_asset(&entry.asset.id)?;
             }
             self.state().set_meta("agent_safety.assets_migrated", "1")?;
         }
@@ -634,10 +636,6 @@ impl Writer {
                                 .state()
                                 .meta(&format!("agent_safety.note.{}", n.note))
                                 .is_ok_and(|v| v.is_none())
-                            && self
-                                .state()
-                                .meta(&format!("agent_safety.legacy.{}", n.note))
-                                .is_ok_and(|v| v.is_none())
                     })
             }) && usage.trashed.is_empty()
         })
@@ -655,10 +653,6 @@ impl Writer {
             || self
                 .state()
                 .meta(&format!("agent_safety.note.{id}"))?
-                .is_some()
-            || self
-                .state()
-                .meta(&format!("agent_safety.legacy.{id}"))?
                 .is_some()
         {
             fn walk(w: &Writer, value: &serde_json::Value) -> Result<()> {
