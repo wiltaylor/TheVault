@@ -15,7 +15,10 @@ async fn long_component_deletion_has_bounded_peak_memory() {
     use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
     struct Child(std::process::Child);
     impl Drop for Child {
-        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -25,19 +28,36 @@ async fn long_component_deletion_has_bounded_peak_memory() {
     let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = reservation.local_addr().unwrap();
     drop(reservation);
-    let child = Child(std::process::Command::new(env!("CARGO_BIN_EXE_browser-agent"))
-        .env("BROWSER_TOKEN", TOKEN).env("BROWSER_LISTEN", addr.to_string())
-        .env("BROWSER_HOME_DIR", &home).env("BROWSER_WORK_DIR", &work)
-        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap());
+    let child = Child(
+        std::process::Command::new(env!("CARGO_BIN_EXE_browser-agent"))
+            .env("BROWSER_TOKEN", TOKEN)
+            .env("BROWSER_LISTEN", addr.to_string())
+            .env("BROWSER_HOME_DIR", &home)
+            .env("BROWSER_WORK_DIR", &work)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let http = reqwest::Client::new();
     let base = format!("http://{addr}");
     let start = Instant::now();
     loop {
-        if http.get(format!("{base}/health")).send().await.is_ok() { break; }
+        if http.get(format!("{base}/health")).send().await.is_ok() {
+            break;
+        }
         assert!(start.elapsed() < Duration::from_secs(5));
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(identity(http.post(format!("{base}/run")), "test").json(&json!({"command":"true"})).send().await.unwrap().status().is_success());
+    assert!(
+        identity(http.post(format!("{base}/run")), "test")
+            .json(&json!({"command":"true"}))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
     let profile = home.join("profiles/test");
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
     let mut fd = open(profile.join("home"), flags, Mode::empty()).unwrap();
@@ -46,19 +66,38 @@ async fn long_component_deletion_has_bounded_peak_memory() {
         mkdirat(&fd, name.as_str(), Mode::RWXU).unwrap();
         fd = openat(&fd, name.as_str(), flags, Mode::empty()).unwrap();
     }
-    openat(&fd, "Cookies", OFlags::CREATE | OFlags::WRONLY, Mode::RUSR | Mode::WUSR).unwrap();
+    openat(
+        &fd,
+        "Cookies",
+        OFlags::CREATE | OFlags::WRONLY,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .unwrap();
     drop(fd);
     let proc = std::path::PathBuf::from(format!("/proc/{}", child.0.id()));
     let peak = || -> u64 {
-        std::fs::read_to_string(proc.join("status")).unwrap().lines().find_map(|line| line.strip_prefix("VmHWM:").map(|s| s.split_whitespace().next().unwrap().parse().unwrap())).unwrap()
+        std::fs::read_to_string(proc.join("status"))
+            .unwrap()
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("VmHWM:")
+                    .map(|s| s.split_whitespace().next().unwrap().parse().unwrap())
+            })
+            .unwrap()
     };
     std::fs::write(proc.join("clear_refs"), "5").unwrap();
     let before = peak();
-    let response = identity(http.delete(format!("{base}/profile")), "test").send().await.unwrap();
+    let response = identity(http.delete(format!("{base}/profile")), "test")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
     assert!(!profile.exists());
     let growth = peak().saturating_sub(before);
-    assert!(growth < 64 * 1024, "4000x255 walk grew peak RSS by {growth}KiB");
+    assert!(
+        growth < 64 * 1024,
+        "4000x255 walk grew peak RSS by {growth}KiB"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
