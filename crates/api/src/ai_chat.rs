@@ -2437,7 +2437,7 @@ impl Turn {
                 }
                 results.push(Content::ToolResult {
                     id: c.id,
-                        content: got.content,
+                    content: got.content,
                     is_error: got.is_error,
                     parts: Vec::new(),
                 });
@@ -2465,10 +2465,16 @@ impl Turn {
                 }
             }
             for result in &mut results {
-                if let Content::ToolResult { content, is_error, .. } = result {
+                if let Content::ToolResult {
+                    content, is_error, ..
+                } = result
+                {
                     match agent_threads::redact_tool_content(content) {
                         Ok(redacted) => *content = cut(&redacted, RESULT_LIMIT),
-                        Err(_) => { *content = "The private transcript could not be redacted.".to_owned(); *is_error = true; }
+                        Err(_) => {
+                            *content = "The private transcript could not be redacted.".to_owned();
+                            *is_error = true;
+                        }
                     }
                 }
             }

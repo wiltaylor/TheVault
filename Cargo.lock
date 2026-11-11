@@ -178,6 +178,7 @@ dependencies = [
  "sha2",
  "state",
  "store",
+ "tempfile",
  "tokio",
  "tracing",
  "ulid",
