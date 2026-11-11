@@ -576,17 +576,11 @@ pub async fn apply(
     Extension(GrantedScope(scope)): Extension<GrantedScope>,
     Json(change): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     if !change.is_object() {
         return Err(ApiError::bad_request(
             "send the proposal as the chat sent it",
         ));
-    }
-    if crate::auth::is_agent_token(&author)
-        && ["agent", "proposer", "thread"]
-            .iter()
-            .any(|key| change[*key].as_str().is_some_and(|s| !s.is_empty()))
-    {
-        crate::auth::require_in_app_agent_caller(&author)?;
     }
     // A taxonomy or agent proposal says so in `kind` (ai D31, agents G20), as does a type delete; a
     // type proposal's `after` is the type file's WCL text; a note proposal's is a note.

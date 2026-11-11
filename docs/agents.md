@@ -19,7 +19,7 @@ To ask about your notes without an agent, use the AI panel in the web app or the
 | `read` token | Read only, no new turns or threads | Read only |
 | `write` token, including a paired device | Start turns and threads, direct changes capped at write | No create, edit, delete, import or Apply |
 | Non-agent `admin` API token | Direct changes capped by the agent's permissions | Manage definitions and Apply, subject to proposal guards |
-| `agent-<name>` token, even admin | No turns, thread creation, answers, discard or dispatch | No agent/skill definition writes or Apply, credential creation, Assistant settings changes or git-sync mutations |
+| `agent-<name>` token, even admin | No turns, thread creation or fork, answers, truncate, discard, dispatch, Apply or memory writes | No agent/skill definition writes, credential creation, Assistant settings changes or git-sync mutations |
 | Signed-in session | Direct changes capped by the agent's permissions | Manage definitions and Apply |
 
 Chat mutations, including stopping a turn and discarding proposals, require write. Query POSTs and authorized event reads still require only read. Autonomous triggers use the agent's scope. Explicit dispatch runs retain their caller's scope ceiling.
@@ -104,6 +104,7 @@ Then revoke the token as above, and remove the line you added to the agent's ins
 | `POST /api/agent-codes` `{ name, scope, server_url? }` | `admin` | Issues a code that works once for 10 minutes. Answers `{ code, expires, name, scope, server_url, command }`. `server_url` defaults to the address the request came in on. |
 | `POST /api/agent-codes/redeem` `{ code }` | None | Creates the `agent-<name>` token, replacing one of that name. Answers 201 `{ server_url, token, name, scope }`, or 410 for a wrong, used or expired code. |
 | `GET /agent/install.sh` | None | The install script, with the server's URL as the request reached it. Behind a proxy, the server reads `X-Forwarded-Host` and `X-Forwarded-Proto`. |
+
 ## External CLI agents
 
 Agent tokens cannot run even an in-app agent with a matching name. In-app agents

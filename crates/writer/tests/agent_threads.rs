@@ -10,6 +10,25 @@ use store::Vault;
 use writer::{AGENT_THREAD_TYPE, UpgradeStep, Upkeep, Writer};
 
 #[test]
+fn external_tokens_cannot_write_memory_even_without_api_guards() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let user = state::Author::Token("writer".into());
+    let external = state::Author::Agent("agent-external".into());
+    let input = writer::Input::Json(json!({"fields": {"title": "Rule", "agent": "assistant"}}));
+    assert!(matches!(w.create("agent_memory", &input, &external), Err(writer::Error::AgentMemoryToken)));
+    let m = w.create("agent_memory", &input, &user).unwrap();
+    assert!(matches!(w.update(&m.id, &input, Some(&m.version), &external), Err(writer::Error::AgentMemoryToken)));
+    assert!(matches!(w.set_archived(&m.id, true, Some(&m.version), &external), Err(writer::Error::AgentMemoryToken)));
+    assert!(matches!(w.delete(&m.id, Some(&m.version), &external), Err(writer::Error::AgentMemoryToken)));
+    assert!(matches!(w.restore_version(&m.id, &m.version, Some(&m.version), &external), Err(writer::Error::AgentMemoryToken)));
+    w.delete(&m.id, Some(&m.version), &user).unwrap();
+    assert!(matches!(w.restore_from_trash(&m.id, &external), Err(writer::Error::AgentMemoryToken)));
+    assert!(matches!(w.create_remote("01JB8Z4K2MQ7V3X9T5R6W8Y2ZA", "agent_memory", "title = \"Injected\"\nagent = \"assistant\"\n", &external), Err(writer::Error::AgentMemoryToken)));
+}
+
+#[test]
 fn gitsync_cannot_create_agent_transcripts() {
     let tmp = tempfile::tempdir().unwrap();
     let w = open(tmp.path(), None);

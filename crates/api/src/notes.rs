@@ -28,9 +28,17 @@ pub(crate) fn writable_type(type_name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-pub(crate) fn writable_note(w: &Writer, id: &str) -> Result<(), ApiError> {
+pub(crate) fn agent_may_write(author: &Author, type_name: &str) -> Result<(), ApiError> {
+    if type_name == crate::agent_memory::MEMORY_TYPE {
+        crate::auth::require_in_app_agent_caller(author)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn writable_note(w: &Writer, id: &str, author: &Author) -> Result<(), ApiError> {
     if let Ok(note) = w.read(id) {
         writable_type(&note.type_name)?;
+        agent_may_write(author, &note.type_name)?;
     }
     Ok(())
 }
@@ -273,6 +281,7 @@ pub async fn create(
         (None, None) => return Err(ApiError::bad_request("name the note's type with ?type=")),
     };
     writable_type(&type_name)?;
+    agent_may_write(&author, &type_name)?;
     let saved = blocking(w, move |w| w.create(&type_name, &sub.input, &author)).await?;
     Ok(saved_response(StatusCode::CREATED, &headers, saved))
 }
@@ -422,6 +431,7 @@ pub async fn update(
             }
         };
         writable_type(&type_name)?;
+        agent_may_write(&author, &type_name)?;
         let saved = blocking(w, move |w| {
             w.create_with_id(&id, &type_name, &sub.input, &author)
         })
@@ -429,7 +439,9 @@ pub async fn update(
         return Ok(saved_response(StatusCode::CREATED, &headers, saved));
     }
     let saved = blocking(w, move |w| {
+        writable_note(w, &id, &author)?;
         w.update(&id, &sub.input, sub.base.as_deref(), &author)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
@@ -443,7 +455,10 @@ pub async fn delete(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
-    let saved = blocking(w, move |w| w.delete(&id, base.as_deref(), &author)).await?;
+    let saved = blocking(w, move |w| {
+        writable_note(w, &id, &author)?;
+        w.delete(&id, base.as_deref(), &author).map_err(ApiError::from)
+    }).await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 
@@ -479,7 +494,9 @@ async fn set_archived(
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
+        writable_note(w, &id, &author)?;
         w.set_archived(&id, archived, base.as_deref(), &author)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
@@ -541,7 +558,9 @@ pub async fn restore_version(
 ) -> Result<Response, ApiError> {
     let base = body.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
+        writable_note(w, &id, &author)?;
         w.restore_version(&id, &body.version, base.as_deref(), &author)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
@@ -644,6 +663,9 @@ pub async fn restore_from_trash(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let saved = blocking(w, move |w| {
+        if let Some(note) = w.trash()?.iter().find(|n| n.note_id == id) {
+            agent_may_write(&author, &note.note_type)?;
+        }
         if !matches!(author, state::Author::Session(_))
             && w.trash()?
                 .iter()
@@ -691,6 +713,14 @@ pub async fn purge_from_trash(
     Caller(author): Caller,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let checked_author = author.clone();
+    let checked_id = id.clone();
+    blocking(w.clone(), move |w| {
+        if let Some(note) = w.trash()?.iter().find(|n| n.note_id == checked_id) {
+            agent_may_write(&checked_author, &note.note_type)?;
+        }
+        Ok::<_, ApiError>(())
+    }).await?;
     human_only(&author)?;
     Ok(purged_json(
         blocking(w, move |w| w.purge_from_trash(&id)).await?,
