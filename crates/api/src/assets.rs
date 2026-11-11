@@ -28,7 +28,11 @@ type Shared = State<Arc<Writer>>;
 // provenance, so fail closed for device-uploaded files, including manual device uploads.
 fn mark_device_upload(w: &Writer, author: &state::Author, id: &str) -> writer::Result<()> {
     if let state::Author::Token(name) = author
-        && w.state().list_tokens()?.iter().any(|t| t.name == *name && t.kind == "device") {
+        && w.state()
+            .list_tokens()?
+            .iter()
+            .any(|t| t.name == *name && t.kind == "device")
+    {
         w.mark_incoming_asset(id)?;
     }
     Ok(())
@@ -111,7 +115,8 @@ pub async fn upload(
         let id = ulid::Ulid::new().to_string();
         mark_device_upload(w, &author, &id)?;
         w.put_asset_file_with_id(&id, &filename, &file)
-    }).await?;
+    })
+    .await?;
     Ok((StatusCode::CREATED, Json(asset_json(&asset))).into_response())
 }
 

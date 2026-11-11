@@ -142,7 +142,7 @@ impl Index {
         sql::functions(&conn)?;
         let missing = !search_dir.join("meta.json").is_file();
         let (search, reset) = search::Search::open(search_dir)?;
-        let note_dir = search_dir.with_file_name("note-search-v1");
+        let note_dir = search_dir.with_extension("note-search-v1");
         let note_missing = !note_dir.join("meta.json").is_file();
         let (note_search, note_reset) = search::Search::open(&note_dir)?;
         if missing || reset || note_missing || note_reset {

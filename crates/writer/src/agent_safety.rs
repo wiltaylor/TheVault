@@ -610,8 +610,11 @@ impl Writer {
     }
 
     pub fn agent_may_read_asset(&self, id: &str) -> bool {
-        if !self.state().meta(&format!("agent_safety.asset.{id}"))
-            .is_ok_and(|v| v.is_none()) {
+        if !self
+            .state()
+            .meta(&format!("agent_safety.asset.{id}"))
+            .is_ok_and(|v| v.is_none())
+        {
             return false;
         }
         self.asset_usage(id).is_ok_and(|usage| {
@@ -634,20 +637,37 @@ impl Writer {
 
     /// Sticky provenance. Unlinking, deleting or purging a note never releases its files.
     pub fn mark_incoming_asset(&self, id: &str) -> Result<()> {
-        self.state().set_meta(&format!("agent_safety.asset.{id}"), "1")?;
+        self.state()
+            .set_meta(&format!("agent_safety.asset.{id}"), "1")?;
         Ok(())
     }
 
     fn mark_incoming_note_assets(&self, id: &str, kind: &str, doc: &Doc) -> Result<()> {
         if self.incoming_agent_note(kind, doc)
-            || self.state().meta(&format!("agent_safety.note.{id}"))?.is_some()
-            || self.state().meta(&format!("agent_safety.legacy.{id}"))?.is_some()
+            || self
+                .state()
+                .meta(&format!("agent_safety.note.{id}"))?
+                .is_some()
+            || self
+                .state()
+                .meta(&format!("agent_safety.legacy.{id}"))?
+                .is_some()
         {
             fn walk(w: &Writer, value: &serde_json::Value) -> Result<()> {
                 match value {
-                    serde_json::Value::String(s) if schema::is_ulid(s) => w.mark_incoming_asset(s)?,
-                    serde_json::Value::Array(a) => for v in a { walk(w, v)?; },
-                    serde_json::Value::Object(o) => for v in o.values() { walk(w, v)?; },
+                    serde_json::Value::String(s) if schema::is_ulid(s) => {
+                        w.mark_incoming_asset(s)?
+                    }
+                    serde_json::Value::Array(a) => {
+                        for v in a {
+                            walk(w, v)?;
+                        }
+                    }
+                    serde_json::Value::Object(o) => {
+                        for v in o.values() {
+                            walk(w, v)?;
+                        }
+                    }
                     _ => {}
                 }
                 Ok(())

@@ -54,9 +54,14 @@ pub(crate) fn check_filename(name: &str) -> Result<()> {
 impl Writer {
     // Importers may store HTML/images before the corresponding incoming note exists.
     fn mark_imported_asset_upload(&self, id: &str) -> Result<()> {
-        if script_core::run::peek(|run| matches!(run.job.name.as_str(),
-            "google_gmail" | "google_calendar" | "google_mail"))
-            .unwrap_or(false) {
+        if script_core::run::peek(|run| {
+            matches!(
+                run.job.name.as_str(),
+                "google_gmail" | "google_calendar" | "google_mail"
+            )
+        })
+        .unwrap_or(false)
+        {
             self.mark_incoming_asset(id)?;
         }
         Ok(())

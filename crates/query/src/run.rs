@@ -278,9 +278,9 @@ impl<'a> Runner<'a> {
                 } else {
                     ctx.index.search_hits(text, Some(types))
                 })?
-                    .into_iter()
-                    .map(|h| (h.id, h.score))
-                    .collect(),
+                .into_iter()
+                .map(|h| (h.id, h.score))
+                .collect(),
             ),
             None => None,
         };
