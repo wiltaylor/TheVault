@@ -17,12 +17,21 @@ fn browser_secrets_agent_script_reads_are_redacted_before_transformation() {
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
     let transcript = json!({"messages":[],"proposals":[{"kind":"agent","name":"helper","before":"permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n"}]}).to_string();
     let note = w.agent_thread_runtime().create(&writer::Input::Json(json!({"fields":{"title":"Thread","agent":"assistant","origin":"user","transcript":transcript}})), &state::Author::Agent("assistant".into())).unwrap();
-    assert!(script_core::Vault::get(&w, &note.id).unwrap().to_string().contains("bank"));
+    assert!(
+        script_core::Vault::get(&w, &note.id)
+            .unwrap()
+            .to_string()
+            .contains("bank")
+    );
     {
         let _acting = writer::acting_as(&state::Author::Agent("reader".into()));
         let read = script_core::Vault::get(&w, &note.id).unwrap();
         assert!(!read.to_string().contains("bank"));
-        for query in ["from agent_thread", "from agent_thread select transcript", "from agent_thread group by transcript"] {
+        for query in [
+            "from agent_thread",
+            "from agent_thread select transcript",
+            "from agent_thread group by transcript",
+        ] {
             let read = w.query_page(query, 100, None).unwrap();
             assert!(!read.to_string().contains("bank"), "{query}");
         }

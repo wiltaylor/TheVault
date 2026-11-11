@@ -47,8 +47,8 @@ pub fn redact_agent_content(value: &mut Value) -> Result<(), String> {
                 } else if key == "transcript"
                     && let Some(text) = child.as_str()
                 {
-                    let mut transcript: Value =
-                        serde_json::from_str(text).map_err(|_| "The private transcript could not be redacted.".to_owned())?;
+                    let mut transcript: Value = serde_json::from_str(text)
+                        .map_err(|_| "The private transcript could not be redacted.".to_owned())?;
                     redact_agent_content(&mut transcript)?;
                     *child = Value::String(transcript.to_string());
                 } else {

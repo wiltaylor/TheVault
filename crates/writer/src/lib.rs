@@ -34,9 +34,9 @@
 //! joins the write in progress, so it commits with it or not at all (D30).
 
 mod activity;
+mod agent_privacy;
 pub mod agent_safety;
 mod agent_threads;
-mod agent_privacy;
 mod asset_use;
 mod assets;
 mod batch;
@@ -77,8 +77,8 @@ use state::{Author, Clock, State, SystemClock, TrashEntry, Version};
 use store::{Change, CommitStep, Vault};
 
 pub use activity::{Acting, acting_as};
-pub use agent_threads::AgentThreadRuntime;
 pub use agent_privacy::{hide_browser_secrets, redact_agent_content, redact_agent_note};
+pub use agent_threads::AgentThreadRuntime;
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};

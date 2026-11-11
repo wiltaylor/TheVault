@@ -78,10 +78,16 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
             for row in &mut result.rows {
                 let mut fields = Json::Object(std::mem::take(&mut row.fields));
                 crate::redact_agent_content(&mut fields)?;
-                if let Json::Object(fields) = fields { row.fields = fields; }
-                if let Some(group) = &mut row.group { crate::redact_agent_content(group)?; }
+                if let Json::Object(fields) = fields {
+                    row.fields = fields;
+                }
+                if let Some(group) = &mut row.group {
+                    crate::redact_agent_content(group)?;
+                }
             }
-            for group in &mut result.groups { crate::redact_agent_content(&mut group.value)?; }
+            for group in &mut result.groups {
+                crate::redact_agent_content(&mut group.value)?;
+            }
         }
         if excluded.is_some() {
             // Never evaluate the condition against held content, even for a count.
@@ -208,7 +214,9 @@ impl Vault for Writer {
             "version": n.version,
             "note": doc_to_json(&n.doc),
         });
-        if agent_reading() { crate::redact_agent_content(&mut value)?; }
+        if agent_reading() {
+            crate::redact_agent_content(&mut value)?;
+        }
         Ok(value)
     }
 
