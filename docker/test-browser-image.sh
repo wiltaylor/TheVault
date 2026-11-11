@@ -202,13 +202,15 @@ code=$(get "/file?path=$profile_home/profiles/$first_id/work/$shot" -o /dev/null
 check "a second profile cannot read the screenshot (got $code)" test "$code" = 403
 id=$first_id
 
-# F13: long names must not retain a full path per ancestor in the service.
+# F13: exercise the maximum depth this image filesystem can actually create.
+# Overlayfs can reject deep relative mkdir with ENAMETOOLONG. The unit test on
+# the dev filesystem retains the full 4000-level/255-byte-name requirement.
 id="$first_id-memory4000"
-r=$(run_cmd 'unset CDPATH; limit=$(getconf NAME_MAX .); width=$((limit < 200 ? limit : 200)); [ "$width" -gt 0 ] || exit 1; n=$(printf "%0${width}d" 0 | tr 0 d); i=0; while [ "$i" -lt 4000 ]; do mkdir -- "$n" && cd -P -- "$n" || exit 1; i=$((i+1)); done; printf fixture > Cookies; printf "{\"depth\":%s,\"name_bytes\":%s}\n" "$i" "$width"' 180)
-check "prepare exactly 4000 levels within filesystem NAME_MAX ($(jq -c .stdout <<< "$r"))" \
-  jqe '.exit == 0 and (.stdout | fromjson | .depth == 4000 and .name_bytes > 0 and .name_bytes <= 200)' <<< "$r"
-if ! jqe '.exit == 0 and (.stdout | fromjson | .depth == 4000)' <<< "$r"; then
-  printf 'No memory proof: the setup did not reach depth 4000.\n' >&2
+r=$(run_cmd 'unset CDPATH; export LC_ALL=C; limit=$(getconf NAME_MAX .); width=$((limit < 32 ? limit : 32)); [ "$width" -gt 0 ] || exit 1; n=$(printf "%0${width}d" 0 | tr 0 d); i=0; while [ "$i" -lt 4000 ]; do if error=$(mkdir -- "$n" 2>&1); then cd -P -- "$n" || exit 1; i=$((i+1)); else case "$error" in *"File name too long"*) break ;; *) printf "%s\n" "$error" >&2; exit 1 ;; esac; fi; done; printf fixture > Cookies; printf "{\"depth\":%s,\"name_bytes\":%s}\n" "$i" "$width"' 180)
+check "prepare filesystem-limited depth, at least 100 levels ($(jq -c .stdout <<< "$r"))" \
+  jqe '.exit == 0 and (.stdout | fromjson | .depth >= 100 and .depth <= 4000 and .name_bytes > 0 and .name_bytes <= 32)' <<< "$r"
+if ! jqe '.exit == 0 and (.stdout | fromjson | .depth >= 100)' <<< "$r"; then
+  printf 'No memory proof: the setup did not reach at least 100 levels.\n' >&2
   exit 1
 fi
 if [ -n "${BOX_URL:-}" ]; then
@@ -221,17 +223,17 @@ else
   before=$(docker exec "$run" awk '/^VmHWM:/ {print $2}' "/proc/$service_pid/status")
 fi
 code=$(get '/profile' -X DELETE -o /dev/null -w '%{http_code}')
-check "reset 4000 long-name levels succeeds (got $code)" test "$code" = 200
+check "reset filesystem-limited deep tree succeeds (got $code)" test "$code" = 200
 if [ -n "${BOX_URL:-}" ]; then
   after=$(awk '/^VmHWM:/ {print $2}' "/proc/$service_pid/status")
-  check "4000-level profile directory is gone" test ! -e "$profile_home/profiles/$id"
+  check "filesystem-limited deep profile directory is gone" test ! -e "$profile_home/profiles/$id"
 else
   after=$(docker exec "$run" awk '/^VmHWM:/ {print $2}' "/proc/$service_pid/status")
-  check "4000-level profile directory is gone" docker exec "$run" test ! -e "$profile_home/profiles/$id"
+  check "filesystem-limited deep profile directory is gone" docker exec "$run" test ! -e "$profile_home/profiles/$id"
 fi
-check "4000-level deletion peak RSS grows less than 64 MiB ($((after-before)) KiB)" test "$((after-before))" -lt 65536
+check "deep deletion peak RSS grows less than 64 MiB ($((after-before)) KiB)" test "$((after-before))" -lt 65536
 code=$(get '/files' -o /dev/null -w '%{http_code}')
-check "4000-level profile stays retired (got $code)" test "$code" = 410
+check "filesystem-limited deep profile stays retired (got $code)" test "$code" = 410
 id=$first_id
 code=$(get '/file?path=/etc/passwd' -o /dev/null -w '%{http_code}')
 check "/file refuses /etc/passwd (got $code)" test "$code" = 403
