@@ -177,20 +177,42 @@ impl Api {
     }
 
     fn assert_trashed(&self, id: &str) {
-        assert_eq!(self.req("GET", &format!("/api/notes/{id}")).send().unwrap().status(), 404);
+        assert_eq!(
+            self.req("GET", &format!("/api/notes/{id}"))
+                .send()
+                .unwrap()
+                .status(),
+            404
+        );
         let trash = expect(self.req("GET", "/api/trash").send().unwrap(), 200);
-        assert!(trash["notes"].as_array().unwrap().iter().any(|n| n["id"] == id), "{trash}");
+        assert!(
+            trash["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["id"] == id),
+            "{trash}"
+        );
     }
 
     fn delete_item(&self, id: &str) -> String {
-        self.create("outbox", invite(json!({ "title": "Delete standup", "event": id, "event_action": "delete" }), None))
+        self.create(
+            "outbox",
+            invite(
+                json!({ "title": "Delete standup", "event": id, "event_action": "delete" }),
+                None,
+            ),
+        )
     }
 
     fn retry_delete(&self, item: &str, id: &str) {
         self.edit(item, json!({ "status": "ready" }));
         assert!(self.gone(item));
         self.assert_trashed(id);
-        assert_eq!(self.google.event("primary", "standup").unwrap()["status"], "cancelled");
+        assert_eq!(
+            self.google.event("primary", "standup").unwrap()["status"],
+            "cancelled"
+        );
     }
 
     /// Change fields of note `id` as the user would, then let its handlers finish.
@@ -518,10 +540,30 @@ fn outbox_delete_disconnected_keeps_event_for_retry() {
     );
     api.server.settle_handlers();
     assert_eq!(api.fields(&item)["status"], "failed");
-    assert_ne!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
-    assert_eq!(api.req("GET", &format!("/api/notes/{id}")).send().unwrap().status(), 200);
-    assert!(api.fields(&item)["error"].as_str().unwrap().contains("not connected"));
-    expect(api.req("PUT", "/api/secrets/google_refresh_token").json(&json!({ "value": DEFAULT_REFRESH_TOKEN })).send().unwrap(), 200);
+    assert_ne!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
+    assert_eq!(
+        api.req("GET", &format!("/api/notes/{id}"))
+            .send()
+            .unwrap()
+            .status(),
+        200
+    );
+    assert!(
+        api.fields(&item)["error"]
+            .as_str()
+            .unwrap()
+            .contains("not connected")
+    );
+    expect(
+        api.req("PUT", "/api/secrets/google_refresh_token")
+            .json(&json!({ "value": DEFAULT_REFRESH_TOKEN }))
+            .send()
+            .unwrap(),
+        200,
+    );
     api.retry_delete(&item, &id);
 }
 
@@ -531,18 +573,36 @@ fn outbox_delete_google_error_keeps_event_and_manual_retry_succeeds() {
     api.google.put_event("primary", standup());
     api.sync();
     let id = api.events().keys().next().unwrap().clone();
-    api.google.fail_calendar_writes(Some((500, "Backend unavailable")));
+    api.google
+        .fail_calendar_writes(Some((500, "Backend unavailable")));
     let item = api.delete_item(&id);
     api.settle();
     assert_eq!(api.fields(&item)["status"], "failed");
-    assert!(api.fields(&item)["error"].as_str().unwrap().contains("Backend unavailable"));
+    assert!(
+        api.fields(&item)["error"]
+            .as_str()
+            .unwrap()
+            .contains("Backend unavailable")
+    );
     assert_eq!(api.fields(&id)["google_ref"], "standup");
-    assert_ne!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
+    assert_ne!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
     api.google.fail_calendar_writes(None);
     api.retry_delete(&item, &id);
-    let deletes: Vec<_> = api.google.requests().into_iter().filter(|r| r.method == "DELETE").collect();
+    let deletes: Vec<_> = api
+        .google
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "DELETE")
+        .collect();
     assert_eq!(deletes.len(), 2);
-    assert!(deletes.iter().all(|r| r.query("sendUpdates").as_deref() == Some("all")));
+    assert!(
+        deletes
+            .iter()
+            .all(|r| r.query("sendUpdates").as_deref() == Some("all"))
+    );
 }
 
 #[test]
@@ -556,14 +616,29 @@ fn outbox_delete_no_network_keeps_event_and_manual_retry_succeeds() {
     drop(listener);
     let mut endpoints = api.google.endpoints();
     endpoints["calendar"] = json!(format!("http://{addr}/calendar/v3"));
-    expect(api.req("PUT", "/api/secrets/google_settings").json(&json!({ "value": json!({ "endpoints": endpoints }).to_string() })).send().unwrap(), 200);
+    expect(
+        api.req("PUT", "/api/secrets/google_settings")
+            .json(&json!({ "value": json!({ "endpoints": endpoints }).to_string() }))
+            .send()
+            .unwrap(),
+        200,
+    );
     let item = api.delete_item(&id);
     api.settle();
     assert_eq!(api.fields(&item)["status"], "failed");
     assert!(!api.fields(&item)["error"].as_str().unwrap().is_empty());
     assert_eq!(api.fields(&id)["google_ref"], "standup");
-    assert_ne!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
-    expect(api.req("PUT", "/api/secrets/google_settings").json(&json!({ "value": json!({ "endpoints": api.google.endpoints() }).to_string() })).send().unwrap(), 200);
+    assert_ne!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
+    expect(
+        api.req("PUT", "/api/secrets/google_settings")
+            .json(&json!({ "value": json!({ "endpoints": api.google.endpoints() }).to_string() }))
+            .send()
+            .unwrap(),
+        200,
+    );
     api.retry_delete(&item, &id);
 }
 
@@ -573,23 +648,38 @@ fn outbox_delete_timeout_keeps_event_and_manual_retry_succeeds() {
     api.google.put_event("primary", standup());
     api.sync();
     let id = api.events().keys().next().unwrap().clone();
-    api.google.set_calendar_delay(Some(std::time::Duration::from_secs(360)));
+    api.google
+        .set_calendar_delay(Some(std::time::Duration::from_secs(360)));
     let item = api.delete_item(&id);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(330);
     loop {
-        if api.fields(&item)["status"] == "failed" { break; }
-        assert!(std::time::Instant::now() < deadline, "delete never failed after its handler deadline");
+        if api.fields(&item)["status"] == "failed" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "delete never failed after its handler deadline"
+        );
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
     assert!(!api.fields(&item)["error"].as_str().unwrap().is_empty());
     assert_eq!(api.fields(&id)["google_ref"], "standup");
-    assert_ne!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
+    assert_ne!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
     api.google.set_calendar_delay(None);
     // The failed handler job remains as diagnostic evidence, not an automatic retry.
     assert!(!api.server.settle_handlers().is_empty());
     let mut note = api.note(&item);
     note["note"]["fields"]["status"] = json!("ready");
-    expect(api.req("PUT", &format!("/api/notes/{item}")).json(&json!({ "note": note["note"], "base_version": note["version"] })).send().unwrap(), 200);
+    expect(
+        api.req("PUT", &format!("/api/notes/{item}"))
+            .json(&json!({ "note": note["note"], "base_version": note["version"] }))
+            .send()
+            .unwrap(),
+        200,
+    );
     api.server.settle_handlers();
     assert!(api.gone(&item));
     api.assert_trashed(&id);
@@ -603,12 +693,20 @@ fn outbox_delete_already_gone_is_success() {
         api.sync();
         let id = api.events().keys().next().unwrap().clone();
         api.google.cancel_event("primary", "standup");
-        api.google.fail_calendar_writes(Some((status, "Already gone")));
+        api.google
+            .fail_calendar_writes(Some((status, "Already gone")));
         let item = api.delete_item(&id);
         api.settle();
         assert!(api.gone(&item));
         api.assert_trashed(&id);
-        assert_eq!(api.google.requests().iter().filter(|r| r.method == "DELETE").count(), 1);
+        assert_eq!(
+            api.google
+                .requests()
+                .iter()
+                .filter(|r| r.method == "DELETE")
+                .count(),
+            1
+        );
     }
 }
 
