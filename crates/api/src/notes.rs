@@ -457,8 +457,10 @@ pub async fn delete(
     let base = q.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
         writable_note(w, &id, &author)?;
-        w.delete(&id, base.as_deref(), &author).map_err(ApiError::from)
-    }).await?;
+        w.delete(&id, base.as_deref(), &author)
+            .map_err(ApiError::from)
+    })
+    .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 
@@ -720,7 +722,8 @@ pub async fn purge_from_trash(
             agent_may_write(&checked_author, &note.note_type)?;
         }
         Ok::<_, ApiError>(())
-    }).await?;
+    })
+    .await?;
     human_only(&author)?;
     Ok(purged_json(
         blocking(w, move |w| w.purge_from_trash(&id)).await?,
