@@ -206,7 +206,7 @@ id=$first_id
 # Overlayfs can reject deep relative mkdir with ENAMETOOLONG. The unit test on
 # the dev filesystem retains the full 4000-level/255-byte-name requirement.
 id="$first_id-memory4000"
-r=$(run_cmd 'unset CDPATH; export LC_ALL=C; limit=$(getconf NAME_MAX .); width=$((limit < 32 ? limit : 32)); [ "$width" -gt 0 ] || exit 1; n=$(printf "%0${width}d" 0 | tr 0 d); i=0; while [ "$i" -lt 4000 ]; do if error=$(mkdir -- "$n" 2>&1); then cd -P -- "$n" || exit 1; i=$((i+1)); else case "$error" in *"File name too long"*) break ;; *) printf "%s\n" "$error" >&2; exit 1 ;; esac; fi; done; printf fixture > Cookies; printf "{\"depth\":%s,\"name_bytes\":%s}\n" "$i" "$width"' 180)
+r=$(run_cmd 'unset CDPATH; export -n PWD OLDPWD; export LC_ALL=C; limit=$(getconf NAME_MAX .); width=$((limit < 32 ? limit : 32)); [ "$width" -gt 0 ] || exit 1; n=$(printf "%0${width}d" 0 | tr 0 d); i=0; while [ "$i" -lt 4000 ]; do if error=$(mkdir -- "$n" 2>&1); then cd -P -- "$n" || exit 1; i=$((i+1)); else case "$error" in *"File name too long"*) break ;; *) printf "%s\n" "$error" >&2; exit 1 ;; esac; fi; done; printf fixture > Cookies; printf "{\"depth\":%s,\"name_bytes\":%s}\n" "$i" "$width"' 180)
 check "prepare filesystem-limited depth, at least 100 levels ($(jq -c .stdout <<< "$r"))" \
   jqe '.exit == 0 and (.stdout | fromjson | .depth >= 100 and .depth <= 4000 and .name_bytes > 0 and .name_bytes <= 32)' <<< "$r"
 if ! jqe '.exit == 0 and (.stdout | fromjson | .depth >= 100)' <<< "$r"; then
