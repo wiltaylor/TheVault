@@ -473,6 +473,31 @@ fn writer_enforces_calendar_author_and_outbox_boundary() {
 }
 
 #[test]
+fn outbox_delete_disconnected_keeps_event_for_retry() {
+    let api = Api::start();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.events().keys().next().unwrap().clone();
+    expect(
+        api.req("DELETE", "/api/secrets/google_refresh_token")
+            .send()
+            .unwrap(),
+        204,
+    );
+    let item = api.create(
+        "outbox",
+        invite(
+            json!({ "title": "Delete standup", "event": id, "event_action": "delete" }),
+            None,
+        ),
+    );
+    api.server.settle_handlers();
+    assert_eq!(api.fields(&item)["status"], "failed");
+    assert_ne!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
+    assert_eq!(api.req("GET", &format!("/api/notes/{id}")).send().unwrap().status(), 200);
+}
+
+#[test]
 fn reviewed_event_rsvp_and_delete_reach_google_through_outbox() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
