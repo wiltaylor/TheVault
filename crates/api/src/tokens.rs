@@ -27,9 +27,12 @@ fn token_json(t: &TokenInfo) -> Value {
 /// Token names appear in history as authors, so keep them short and plain.
 fn check_name(name: &str) -> Result<(), ApiError> {
     let lower = name.to_ascii_lowercase();
+    if lower.starts_with("agent-") || lower.starts_with("device-") {
+        return Err(ApiError::bad_request(
+            "token names must not start with the reserved prefixes agent- or device-",
+        ));
+    }
     let ok = !name.is_empty()
-        && !lower.starts_with("agent-")
-        && !lower.starts_with("device-")
         && name.len() <= 64
         && name
             .chars()
