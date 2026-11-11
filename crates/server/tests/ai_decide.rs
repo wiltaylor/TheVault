@@ -158,7 +158,12 @@ fn agent_decide_uses_fake_and_honours_tools_permission() {
             "{}",
             response.text().unwrap()
         );
-        chat.push(AnthropicMessage::new().tool_use("call-d", "decide", input()));
+        let mut tool_input = input();
+        tool_input["state"] = json!(tool_input["state"].to_string());
+        tool_input["questions"] = json!([{
+            "id": "safe", "type": "noul", "instructions": "\"Safe?\"", "criteria": null
+        }]);
+        chat.push(AnthropicMessage::new().tool_use("call-d", "decide", tool_input));
         chat.push(AnthropicMessage::text("Done."));
         if allowed {
             fake.push(Reply::json(200, &reply()));
