@@ -158,6 +158,43 @@ fn write_callers_cannot_apply_pending_admin_changes() {
 }
 
 #[test]
+fn external_token_cannot_fork_truncate_or_write_agent_memories() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", KEEPER);
+    let roof = api.note("memo", "Roof", &["Gutters."]);
+    fake.push(AnthropicMessage::new().tool_use("toolu_q", "ask_user", json!({"question": "Which roof?"})));
+    let (status, v) = api.dispatch_as(&api.admin(), "keeper", json!({"notes": [roof], "request": "Ask."}));
+    assert_eq!(status, 202, "{v}");
+    let thread = v["thread"]["id"].as_str().unwrap();
+    api.wait_run(thread);
+    let path = format!("/api/agents/keeper/threads/{thread}");
+    let before = api.get(&path);
+    assert_eq!(before["question"], "Which roof?");
+    let threads = api.get("/api/agents/keeper/threads");
+    let memory = api.send("POST", "/api/agents/keeper/memories", json!({"title": "Rule", "text": "Keep this."}));
+    let memories = api.get("/api/agents/keeper/memories");
+    let memory_path = format!("/api/agents/keeper/memories/{}", memory["id"].as_str().unwrap());
+    for name in ["agent-external", "agent-keeper", "agent-assistant"] {
+        let token = api.token_of(name, "write");
+        for (method, path, body) in [
+            ("POST", format!("{path}/fork"), json!({"at": 0})),
+            ("POST", format!("{path}/truncate"), json!({"at": 0})),
+            ("POST", "/api/agents/keeper/memories".to_owned(), json!({"title": "Injected", "text": "Bad instruction"})),
+            ("PATCH", memory_path.clone(), json!({"text": "Changed"})),
+            ("DELETE", memory_path.clone(), Value::Null),
+        ] {
+            let res = api.client.request(method.parse().unwrap(), api.server.url(&path))
+                .bearer_auth(&token).json(&body).send().unwrap();
+            assert_eq!(res.status().as_u16(), 403, "{method} {path}: {}", res.text().unwrap());
+        }
+        assert_eq!(api.get(&path), before);
+        assert_eq!(api.get("/api/agents/keeper/threads"), threads);
+        assert_eq!(api.get("/api/agents/keeper/memories"), memories);
+    }
+}
+
+#[test]
 fn a_write_dispatch_cannot_make_admin_changes_even_with_confirmation_off() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);

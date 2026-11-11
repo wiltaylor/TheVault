@@ -574,12 +574,19 @@ pub async fn apply(
     State(a): State<Arc<Ai>>,
     Caller(author): Caller,
     Extension(GrantedScope(scope)): Extension<GrantedScope>,
-    Json(mut change): Json<Value>,
+    Json(change): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     if !change.is_object() {
         return Err(ApiError::bad_request(
             "send the proposal as the chat sent it",
         ));
+    }
+    if crate::auth::is_agent_token(&author)
+        && ["agent", "proposer", "thread"]
+            .iter()
+            .any(|key| change[*key].as_str().is_some_and(|s| !s.is_empty()))
+    {
+        crate::auth::require_in_app_agent_caller(&author)?;
     }
     // A taxonomy or agent proposal says so in `kind` (ai D31, agents G20), as does a type delete; a
     // type proposal's `after` is the type file's WCL text; a note proposal's is a note.
@@ -614,19 +621,6 @@ pub async fn apply(
             "needs_admin",
             "Agent and skill changes need a session or a non-agent admin token.",
         ));
-    }
-    if crate::auth::is_agent_token(&author)
-        && ["agent", "proposer"]
-            .iter()
-            .any(|key| change[*key].as_str().is_some_and(|s| !s.is_empty()))
-    {
-        change = waiting_in_thread(&a.writer, event, &change).ok_or_else(|| {
-            ApiError::new(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "agent tokens may not impersonate proposing agents",
-            )
-        })?;
     }
     if !scope.allows(Scope::Admin) {
         let message = match event {
@@ -750,18 +744,6 @@ fn apply_as_agent(
 pub struct Discard {
     id: String,
     thread: String,
-}
-
-/// Read the authoritative waiting proposal, never the caller's replacement content.
-fn waiting_in_thread(w: &writer::Writer, event: &str, change: &Value) -> Option<Value> {
-    let thread = change["thread"].as_str().filter(|s| !s.is_empty())?;
-    let id = change["id"].as_str().filter(|s| !s.is_empty())?;
-    let t = agent_threads::Thread::read(w, thread).ok()?;
-    t.transcript
-        .proposals
-        .iter()
-        .find(|p| p.id() == id && p.event == event && p.waits())
-        .map(|p| p.data.clone())
 }
 
 /// `POST /api/ai/discard` (write): the user discarded a proposal of a thread, recorded there so
