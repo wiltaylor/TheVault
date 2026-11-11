@@ -133,6 +133,45 @@ fn incoming_assets_google_upload_is_marked_before_note_creation() {
 }
 
 #[test]
+fn round3_migration_denies_previously_unlinked_incoming_asset() {
+    check_round3_orphan_migration(true);
+}
+
+#[test]
+fn round3_migration_denies_never_linked_import_asset() {
+    check_round3_orphan_migration(false);
+}
+
+fn check_round3_orphan_migration(unlink: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    for kind in ["email", "memo"] {
+        w.put_type(kind, "label = \"Note\"\nfield file { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    }
+    w.activate_agent_safety().unwrap();
+    let orphan = w.put_asset("orphan.txt", b"UNCLASSIFIED".to_vec()).unwrap();
+    let local = w.put_asset("local.txt", b"LOCAL".to_vec()).unwrap();
+    let owner = Author::Session("owner".into());
+    w.create("memo", &Input::Json(serde_json::json!({"fields":{"title":"Local", "file":local.id}})), &owner).unwrap();
+    if unlink {
+        let note = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Incoming", "file":orphan.id}})), &owner).unwrap();
+        w.update(&note.id, &Input::Json(serde_json::json!({"fields":{"title":"Detached"}})), Some(&note.version), &owner).unwrap();
+    }
+    let vault = store::Vault::init(dir.path()).unwrap();
+    let db = vault.server_dir().join("state.db");
+    drop(w);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("DELETE FROM meta WHERE key LIKE 'agent_safety.asset.%' OR key = 'agent_safety.assets_migrated'", []).unwrap();
+    drop(conn);
+    let state = state::State::open(&db, None).unwrap();
+    let w = Writer::open(vault, state).unwrap();
+    assert!(w.asset_usage(&orphan.id).unwrap().notes.is_empty());
+    w.activate_agent_safety().unwrap();
+    assert!(!w.agent_may_read_asset(&orphan.id), "old orphan must fail closed");
+    assert!(w.agent_may_read_asset(&local.id), "referenced local file must remain readable");
+}
+
+#[test]
 fn incoming_assets_upgrade_marks_existing_references() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
