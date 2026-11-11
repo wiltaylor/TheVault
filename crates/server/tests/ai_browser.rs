@@ -42,6 +42,34 @@ fn a_timed_out_profile_does_not_delay_another_agents_reset() {
     independent_reset(true);
 }
 
+#[test]
+fn saturated_cleanup_does_not_spin_on_expired_retries() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    browser.require_signed_profiles();
+    browser.slow_profile_cleanup("*");
+    let api = Api::start(&fake, Some(&browser));
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    let ids: Vec<_> = (0..66).map(|n| format!("retired-{n:02}")).collect();
+    state.set_meta("browser-retired", &serde_json::to_string(&ids).unwrap()).unwrap();
+    fake.push(AnthropicMessage::text("No browser needed."));
+    api.turn(None);
+    eventually(5, || browser.requests().iter().filter(|r| r.method == "DELETE").count() == 64);
+    // At 70s the first retries overlap the two remaining 45s requests. The
+    // next two expired retries must not create a busy timer at capacity.
+    std::thread::sleep(Duration::from_secs(74));
+    fn ticks(pid: u32) -> u64 {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let fields: Vec<_> = stat.rsplit_once(')').unwrap().1.split_whitespace().collect();
+        fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap()
+    }
+    let hz: u64 = String::from_utf8(std::process::Command::new("getconf").arg("CLK_TCK").output().unwrap().stdout).unwrap().trim().parse().unwrap();
+    let before = ticks(api.server.pid());
+    std::thread::sleep(Duration::from_secs(3));
+    let used = ticks(api.server.pid()) - before;
+    assert!(used * 10 < hz * 3, "cleanup consumed {used} CPU ticks over3s at {hz}Hz");
+}
+
 fn independent_reset(slow: bool) {
     let fake = FakeAnthropic::start();
     let browser = FakeBrowser::start();

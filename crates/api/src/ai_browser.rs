@@ -213,6 +213,7 @@ pub fn cleanup_retired(w: Arc<Writer>) {
         let mut retries = std::collections::HashMap::<String, (Instant, Duration)>::new();
         let mut active = std::collections::HashSet::<String>::new();
         let mut deletes = tokio::task::JoinSet::new();
+        let mut task_ids = std::collections::HashMap::new();
         let mut offline_until = Instant::now();
         let mut offline_delay = Duration::from_secs(30);
         loop {
@@ -241,14 +242,18 @@ pub fn cleanup_retired(w: Arc<Writer>) {
                     for id in due {
                         active.insert(id.clone());
                         let profile = b.clone().with_profile(id.clone());
-                        deletes.spawn(async move { (id, profile.remove_profile().await) });
+                        let name = id.clone();
+                        let task = deletes.spawn(async move { (id, profile.remove_profile().await) });
+                        task_ids.insert(task.id(), name);
                     }
                 } else {
                     offline_until = Instant::now() + offline_delay;
                     offline_delay = (offline_delay * 2).min(Duration::from_secs(900));
                 }
             }
-            let next = if offline_until > Instant::now() {
+            let next = if active.len() >= 64 {
+                None
+            } else if offline_until > Instant::now() {
                 Some(offline_until)
             } else {
                 retries
@@ -260,8 +265,13 @@ pub fn cleanup_retired(w: Arc<Writer>) {
             // A new retirement can wake the scheduler while earlier DELETEs are
             // still in flight. Awaiting a whole batch would still delay resets.
             tokio::select! {
-                result = deletes.join_next(), if !deletes.is_empty() => {
-                    if let Some(Ok((id, result))) = result {
+                result = deletes.join_next_with_id(), if !deletes.is_empty() => {
+                    let completion = match result {
+                        Some(Ok((task, (id, result)))) => { task_ids.remove(&task); Some((id, result)) },
+                        Some(Err(error)) => task_ids.remove(&error.id()).map(|id| (id, Err(format!("delete task failed: {error}")))),
+                        None => None,
+                    };
+                    if let Some((id, result)) = completion {
                         active.remove(&id);
                         match result {
                             Ok(()) => { let _ = w.browser_profile_removed(&id); retries.remove(&id); }

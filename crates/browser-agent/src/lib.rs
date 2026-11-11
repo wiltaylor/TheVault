@@ -365,9 +365,19 @@ async fn delete_profile(
     let id = profile_id(&state, &headers)?;
     let lock = profile_lock(&state, id);
     let _exclusive = lock.write().await;
+    {
+        let mut retired = state.retired.lock().unwrap_or_else(|e| e.into_inner());
+        retired.insert(id.to_owned());
+        store_retired(&state.home, &retired)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
     let root = state.home.join("profiles");
     let path = root.join(id);
+    if root.exists() { safe_dir(&root)?; }
     if path.exists() {
+        let owned_path = path.clone();
+        tokio::task::spawn_blocking(move || make_profile_directories_writable(&owned_path))
+            .await.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
         let profile = scoped(&state, &headers, false)?;
         let outcome = run_command(
             &profile,
@@ -385,7 +395,17 @@ async fn delete_profile(
         }
     }
     let owned_path = path.clone();
-    tokio::task::spawn_blocking(move || kill_profile_processes(&owned_path))
+    tokio::task::spawn_blocking(move || {
+        kill_profile_processes(&owned_path)?;
+        if owned_path.exists() {
+            make_profile_directories_writable(&owned_path)?;
+            for _ in 0..2 {
+                if !owned_path.exists() { break; }
+                std::fs::remove_dir_all(&owned_path).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("removing {}: {e}", owned_path.display())))?;
+            }
+        }
+        Ok::<(), ApiError>(())
+    })
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let _guard = state.profiles.lock().unwrap_or_else(|e| e.into_inner());
@@ -394,24 +414,6 @@ async fn delete_profile(
     }
     if std::fs::symlink_metadata(&path).is_ok() {
         safe_dir(&path)?;
-    }
-    let mut retired = state.retired.lock().unwrap_or_else(|e| e.into_inner());
-    retired.insert(id.to_owned());
-    store_retired(&state.home, &retired)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if path.exists() {
-        make_profile_directories_writable(&path)?;
-        // remove_dir_all does not follow symlinks, including children.
-        std::fs::remove_dir_all(&path).map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("removing {}: {e}", path.display()),
-            )
-        })?;
-    }
-    if path.exists() {
-        std::fs::remove_dir_all(&path)
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     state
         .profile_locks
@@ -424,67 +426,50 @@ async fn delete_profile(
 /// Cache tools can leave 0555 directories. Only directories in the managed tree
 /// are changed. Symlinks (including links to another profile) are never followed.
 fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
-    use rustix::fs::{
-        AtFlags, CWD, Dir, FileType, Mode, OFlags, chmodat, fchmod, fstat, open, openat, statat,
-    };
-    fn walk(fd: &rustix::fd::OwnedFd, label: &str) -> io::Result<()> {
-        let stat = fstat(fd)?;
-        fchmod(fd, Mode::from_raw_mode(stat.st_mode) | Mode::RWXU)?;
+    use rustix::fs::{AtFlags, CWD, Dir, FileType, Mode, OFlags, chmodat, fstat, openat, statat};
+    use std::os::fd::AsRawFd;
+    fn prepare(parent: impl rustix::fd::AsFd, name: impl rustix::path::Arg) -> io::Result<rustix::fd::OwnedFd> {
+        let pinned = openat(parent, name, OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?;
+        let mode = Mode::from_raw_mode(fstat(&pinned)?.st_mode) | Mode::RWXU;
+        chmodat(CWD, format!("/proc/self/fd/{}", pinned.as_raw_fd()), mode, AtFlags::empty())
+            .map_err(|e| io::Error::other(format!("pinned-directory chmod requires mounted /proc/self/fd; no path-based fallback: {e}")))?;
+        let fd = openat(&pinned, ".", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?;
+        // The pinned descriptor is dropped here, before descent.
+        Ok(fd)
+    }
+    fn children(fd: &rustix::fd::OwnedFd) -> io::Result<Vec<std::ffi::CString>> {
         let mut entries = Dir::read_from(fd)?;
+        let mut names = Vec::new();
         while let Some(entry) = entries.read() {
             let entry = entry?;
             let name = entry.file_name();
-            if name.to_bytes() == b"." || name.to_bytes() == b".." {
-                continue;
-            }
+            if name.to_bytes() == b"." || name.to_bytes() == b".." { continue; }
             let stat = statat(fd, name, AtFlags::SYMLINK_NOFOLLOW)?;
-            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
-                continue;
+            if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
+                names.push(name.to_owned());
             }
-            let child_label = format!("{label}/{}", name.to_string_lossy());
-            // O_PATH opens even a 0000 directory and pins the inode. The
-            // kernel here lacks fchmodat2(NO_FOLLOW), so chmod the pinned fd
-            // through procfs, never the entry that another process can swap.
-            use std::os::fd::AsRawFd;
-            let pinned = openat(
-                fd,
-                name,
-                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
-            let mode = Mode::from_raw_mode(fstat(&pinned)?.st_mode) | Mode::RWXU;
-            chmodat(
-                CWD,
-                format!("/proc/self/fd/{}", pinned.as_raw_fd()),
-                mode,
-                AtFlags::empty(),
-            )
-            .map_err(|e| io::Error::other(format!("{child_label}: pinned-directory chmod requires mounted /proc/self/fd; no path-based fallback: {e}")))?;
-            let child = openat(
-                &pinned,
-                ".",
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
-            walk(&child, &child_label)?;
+        }
+        // Dir and its duplicate fd are dropped before descent.
+        Ok(names)
+    }
+    let result = (|| -> io::Result<()> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(io::Error::other("profile path is not a real directory"));
+        }
+        let fd = prepare(CWD, path)?;
+        let names = children(&fd)?;
+        let mut stack = vec![(fd, names, path.display().to_string())];
+        while let Some((fd, names, label)) = stack.last_mut() {
+            let Some(name) = names.pop() else { stack.pop(); continue; };
+            let label = format!("{label}/{}", name.to_string_lossy());
+            let child = prepare(&*fd, name.as_c_str()).map_err(|e| io::Error::other(format!("{label}: {e}")))?;
+            let names = children(&child).map_err(|e| io::Error::other(format!("{label}: {e}")))?;
+            stack.push((child, names, label));
         }
         Ok(())
-    }
-    let result = open(
-        path,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(io::Error::from)
-    .and_then(|fd| walk(&fd, &path.display().to_string()));
-    result.map_err(|e| {
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("preparing {} for removal: {e}", path.display()),
-        )
-    })
+    })();
+    result.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("preparing {} for removal: {e}", path.display())))
 }
 
 /// A successful shell can leave detached children behind. Close those too before

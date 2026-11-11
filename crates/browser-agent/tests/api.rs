@@ -11,6 +11,42 @@ use tempfile::TempDir;
 const TOKEN: &str = "test-token-0123456789abcdef";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn deletion_repairs_root_home_and_work_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    for (part, mode) in [("home", 0), ("home", 0o600), ("", 0), ("", 0o600), ("work", 0)] {
+        let b = Agent::start().await;
+        let root = b.home.path().join("profiles/test");
+        std::fs::write(root.join("home/Cookies"), "fixture").unwrap();
+        std::fs::set_permissions(root.join(part), std::fs::Permissions::from_mode(mode)).unwrap();
+        let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+        assert_eq!(response.status(), 200, "{part} {mode:o}: {}", response.text().await.unwrap());
+        assert!(!root.exists());
+        assert_eq!(b.run_status(json!({"command":"true"})).await.0, 410);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deletion_walk_is_iterative_at_thousands_of_levels() {
+    use rustix::fs::{Mode, OFlags, fchmod, mkdirat, open, openat};
+    for depth in [1000, 3000] {
+        let b = Agent::start().await;
+        let root = b.home.path().join("profiles/test");
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+        let mut fd = open(root.join("home"), flags, Mode::empty()).unwrap();
+        for _ in 0..depth {
+            mkdirat(&fd, "d", Mode::RWXU).unwrap();
+            fd = openat(&fd, "d", flags, Mode::empty()).unwrap();
+        }
+        openat(&fd, "Cookies", OFlags::CREATE | OFlags::WRONLY, Mode::RUSR | Mode::WUSR).unwrap();
+        fchmod(&fd, Mode::empty()).unwrap();
+        drop(fd);
+        let response = identity(b.http.delete(b.url("/profile")), "test").send().await.unwrap();
+        assert_eq!(response.status(), 200, "depth{depth}: {}", response.text().await.unwrap());
+        assert!(!root.exists());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn deletion_repairs_nonsearchable_and_long_directory_trees() {
     use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
     use std::os::unix::fs::PermissionsExt;
