@@ -1010,8 +1010,12 @@ fn incoming_assets_allowed_email_rest_denies_html_and_attachment() {
         );
         assert!(!response.text().unwrap().contains("PRIVATE_BYTES"));
         for route in ["/api/assets", "/api/assets/trash"] {
-            let listed = api.client.get(api.server.url(route))
-                .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap();
+            let listed = api
+                .client
+                .get(api.server.url(route))
+                .bearer_auth(token["secret"].as_str().unwrap())
+                .send()
+                .unwrap();
             assert_eq!(listed.status(), 403);
             assert!(!listed.text().unwrap().contains("PRIVATE_FILE"));
         }
