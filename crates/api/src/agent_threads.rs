@@ -1260,6 +1260,7 @@ pub async fn truncate(
             t.transcript = cut.clone();
             t.question.clear();
         })?;
+        drop(_busy);
         client_json(w, &t, &author)
     })
     .await?;
