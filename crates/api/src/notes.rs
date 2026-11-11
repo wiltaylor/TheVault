@@ -43,6 +43,13 @@ pub(crate) fn writable_note(w: &Writer, id: &str, author: &Author) -> Result<(),
     Ok(())
 }
 
+fn agent_may_write_note(w: &Writer, id: &str, author: &Author) -> Result<(), ApiError> {
+    if let Ok(note) = w.read(id) {
+        agent_may_write(author, &note.type_name)?;
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct TypeQuery {
     #[serde(rename = "type")]
@@ -439,7 +446,7 @@ pub async fn update(
         return Ok(saved_response(StatusCode::CREATED, &headers, saved));
     }
     let saved = blocking(w, move |w| {
-        writable_note(w, &id, &author)?;
+        agent_may_write_note(w, &id, &author)?;
         w.update(&id, &sub.input, sub.base.as_deref(), &author)
             .map_err(ApiError::from)
     })
@@ -456,7 +463,7 @@ pub async fn delete(
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
-        writable_note(w, &id, &author)?;
+        agent_may_write_note(w, &id, &author)?;
         w.delete(&id, base.as_deref(), &author)
             .map_err(ApiError::from)
     })
@@ -496,7 +503,7 @@ async fn set_archived(
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
-        writable_note(w, &id, &author)?;
+        agent_may_write_note(w, &id, &author)?;
         w.set_archived(&id, archived, base.as_deref(), &author)
             .map_err(ApiError::from)
     })
@@ -560,7 +567,7 @@ pub async fn restore_version(
 ) -> Result<Response, ApiError> {
     let base = body.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
-        writable_note(w, &id, &author)?;
+        agent_may_write_note(w, &id, &author)?;
         w.restore_version(&id, &body.version, base.as_deref(), &author)
             .map_err(ApiError::from)
     })
