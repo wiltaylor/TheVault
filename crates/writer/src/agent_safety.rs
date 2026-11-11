@@ -460,6 +460,14 @@ impl Writer {
                     self.mark_incoming_note_assets(&entry.note_id, &entry.note_type, &doc)?;
                 }
             }
+            // Old failed imports and pre-upgrade unlinks have no surviving provenance.
+            // Withhold these orphans, without changing files still used by local notes.
+            for asset in self.assets()? {
+                let usage = self.asset_usage(&asset.id)?;
+                if usage.notes.is_empty() && usage.trashed.is_empty() {
+                    self.mark_incoming_asset(&asset.id)?;
+                }
+            }
             self.state().set_meta("agent_safety.assets_migrated", "1")?;
         }
         if self.state().meta("agent_safety.index_ready")?.as_deref() == Some("1") {
