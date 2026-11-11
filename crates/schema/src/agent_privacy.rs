@@ -245,6 +245,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn browser_secrets_private_copy_preserves_visible_doc_values() {
+        let transcript = json!({"messages":[],"proposals":[{"kind":"agent","name":"helper","before":"permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n"}]}).to_string();
+        let source = format!("title = \"Visible café\"\ntranscript = {}\nmetrics = {{ first: 1.25, second: [true, 3] }}\ncontent body {{ paragraph {{ text = \"Visible line\" }} }}\n", json!(transcript));
+        let original = crate::Doc::parse(&source, "thread.wcl").unwrap();
+        let expected = redacted_agent_doc("agent_thread", &original);
+        let text = redact_agent_note("agent_thread", &source).unwrap();
+        assert!(!text.contains("bank"));
+        assert_eq!(crate::Doc::parse(&text, "thread.wcl").unwrap(), expected);
+    }
+
+    #[test]
     fn browser_secrets_get_agent_results_do_not_escape_through_encoded_tool_content() {
         let source = "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n";
         let result = json!({"name":"helper","wcl":source,"agent":{"name":"helper","permissions":{"browser":true,"browser_secrets":["bank"]}},"format":"agent file vocabulary"});
