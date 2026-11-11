@@ -326,9 +326,15 @@ pub(crate) fn route(method: &Method, path: &str) -> Route {
             return Route::Forward;
         }
     }
+    if path == "/api/agent-safety/held" {
+        return Route::NeedsWebApp;
+    }
     if let Some(rest) = path.strip_prefix("/api/notes/") {
         let (id, tail) = rest.split_once('/').unwrap_or((rest, ""));
         if segment(id).is_some() {
+            if tail == "agent-safety/release" {
+                return Route::NeedsWebApp;
+            }
             if get && tail == "history" {
                 return Route::History;
             }
@@ -932,6 +938,18 @@ pub(crate) fn accept_text() -> (HeaderName, HeaderValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_safety_is_home_session_only() {
+        assert_eq!(
+            route(&Method::GET, "/api/agent-safety/held"),
+            Route::NeedsWebApp
+        );
+        assert_eq!(
+            route(&Method::POST, "/api/notes/abc/agent-safety/release"),
+            Route::NeedsWebApp
+        );
+    }
 
     #[test]
     fn routes_home_server_state_to_the_home_server() {

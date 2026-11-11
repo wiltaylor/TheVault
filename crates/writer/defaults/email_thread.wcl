@@ -4,6 +4,12 @@ description = "One Gmail conversation, showing its emails."
 icon        = "mails"
 colour      = "red"
 
+field agent_safety_reason {
+  kind = "string"
+  label = "Agent safety reason"
+  hidden = true
+}
+
 field participants {
   kind   = "list"
   items  = "reference"

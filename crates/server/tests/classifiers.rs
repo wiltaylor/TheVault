@@ -283,6 +283,8 @@ template default { tab Main { slot title } }
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap();
+    // This suite isolates the ordinary one-shot classifier from the security gate provider calls.
+    std::fs::remove_file(server.vault_path().join("classifiers/agent_safety.wcl")).unwrap();
     let result = client
         .post(server.url("/api/integrations/ai/accounts"))
         .bearer_auth(server.admin_token())

@@ -14,6 +14,16 @@ use crate::required_scope;
 /// Every endpoint: method, path and a one-line summary.
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
+        "GET",
+        "/api/agent-safety/held",
+        "List held notes by type, creation date and reason (browser session only)",
+    ),
+    (
+        "POST",
+        "/api/notes/{id}/agent-safety/release",
+        "Release the reviewed note fingerprint to agents (browser session only)",
+    ),
+    (
         "POST",
         "/api/ai/decide",
         "Tool-free typed decisions from {account?, model?, state, questions}; requires write scope",

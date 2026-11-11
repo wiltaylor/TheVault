@@ -134,3 +134,19 @@ agent with a shell in the box may reach it indirectly (assumed, not tested).
 Prompt injection can make an agent sign in and act. No origin restriction means
 a secret could be entered on a look-alike page.
 
+# External agents and held notes
+
+An external agent can use the filtered `/api/query` (GET or POST), `/api/search`,
+and `/api/notes` list. These responses exclude held notes and include the fixed
+notice `some notes may be held`. Current-note reads, note graphs and attachment
+downloads check clearance too. Graphs omit held neighbours. Script tools run
+with the external agent's full token name as their agent execution author.
+
+Agent tokens cannot read history or historical versions, original email HTML,
+canvases, sync changes, event streams, trash, pins, notifications, activity,
+flagged-note lists, asset lists, asset trash or asset usage. Daily/planner aliases
+and aggregate agent-thread, memory, run and dispatch lists are also refused.
+Use filtered queries and current-note reads instead. These historical and
+aggregate representations do not have a content-bound clearance of their own.
+Normal user sessions retain access. Only a user session may release a held note.
+

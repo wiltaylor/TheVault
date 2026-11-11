@@ -21,11 +21,18 @@ export interface NoteDoc {
 }
 
 export interface Note {
+  agent_safety?: AgentSafety;
   id: string;
   type: string;
   version: string;
   wcl: string;
   note: NoteDoc;
+}
+
+export interface AgentSafety {
+  status: string;
+  reason: string;
+  fingerprint: string;
 }
 
 export interface FieldDef {
@@ -1813,6 +1820,7 @@ export const api = {
   logout: () => request<void>("POST", "/api/logout"),
   types: async () => (await request<{ types: TypeDef[] }>("GET", "/api/types")).types,
   note: (id: string) => request<Note>("GET", `/api/notes/${enc(id)}`),
+  releaseAgentSafety: (id: string, fingerprint: string) => request<{ agent_safety: AgentSafety }>("POST", `/api/notes/${enc(id)}/agent-safety/release`, { fingerprint }),
   /** The daily note for a `YYYY-MM-DD` day; a day with no note is a 404 `ApiError`. */
   daily: (date: string) => request<Note>("GET", `/api/daily/${enc(date)}`),
   /** The daily note for a day, created when the day has none. Opening it twice gives one note. */

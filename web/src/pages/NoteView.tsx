@@ -52,6 +52,7 @@ import { ArchiveIcon, TrashIcon, TypeIcon, UnarchiveIcon } from "../components/I
 import { NoteOutboxActions } from "../outbox/NoteActions";
 import { ViewOriginalButton } from "../components/ViewOriginal";
 import { AgentRobots } from "../components/AgentRobot";
+import { AgentSafetyBanner } from "../components/AgentSafetyBanner";
 import { SendToAgentButton } from "../components/SendToAgent";
 import { watchNoteThreads } from "../dispatch";
 import { OutboxChips } from "../outbox/Chips";
@@ -419,6 +420,7 @@ export function NoteView(props: { newType?: string; id?: string; prefill?: { tit
       <Show when={note()} fallback={<p class="muted">Loading…</p>}>
         {(n) => (
           <ThisNote.Provider value={n().id || undefined}>
+            <AgentSafetyBanner id={n().id} safety={n().agent_safety} />
             <Show when={!conflict()} fallback={<p class="muted">Resolve the conflict in the pane first.</p>}>
               <Show when={layoutKey()} keyed>
                 {(_) => (
