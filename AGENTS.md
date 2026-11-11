@@ -119,6 +119,11 @@ terrarium exec thevault-dev -- sh -c 'rm -rf /src/thevault-nightly'
 N3. At 18:00 UTC repeat N1, then prepare the emulator bundle on dev (90 minute
 timeout). This builds host binaries, web, x86_64 debug and two update APKs, the
 fake Messages APK and harness dependencies. No builds happen on android.
+The bundle includes `aapt2`, the harness check titles and app config. Full
+checks use the existing **rootable** Android 35 `google_apis;x86_64` image in
+`/home/agent/sdk` (read only). The device script pins both `ANDROID_HOME` and
+`ANDROID_SDK_ROOT` and the tool PATH there. Never use herdr's `/opt/android-sdk`:
+its `google_apis_playstore` user image cannot remount `/product`.
 
 ```sh
 terrarium run thevault-dev --name nightly-emulator-build --timeout 90m -- sh /src/thevault-heavy.sh sh -c 'cd /src/thevault-nightly && just nightly-emulator'

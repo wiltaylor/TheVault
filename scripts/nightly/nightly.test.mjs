@@ -22,7 +22,10 @@ test('device uses the isolated serial and AVD', () => {
   const script = read('scripts/nightly/device.sh');
   assert.match(script, /EMULATOR_PORT=5584 ANDROID_SERIAL=emulator-5584/);
   assert.match(script, /THEVAULT_AVD=thevault-nightly-5584/);
+  assert.match(script, /THEVAULT_AVD_IMAGE='system-images;android-35;google_apis;x86_64'/);
+  assert.match(script, /ANDROID_HOME=\/home\/agent\/sdk ANDROID_SDK_ROOT=\/home\/agent\/sdk/);
   assert.match(script, /ANDROID_AVD_HOME="\$PWD\/\.scratch\/avd"/);
+  assert.match(script, /test -x \.scratch\/nightly\/tools\/aapt2/);
   assert.doesNotMatch(script, /emu kill|killall|pkill/);
 });
 
@@ -40,6 +43,12 @@ test('publish requires the check job', () => {
   assert.match(workflow, /publish:\n    needs: \[version, check, desktop, android\]/);
   assert.match(workflow, /\.\/dev just check \|\| status=\$\?/);
   assert.match(workflow, /exit "\$status"/);
+});
+
+test('device bundle includes the harness data files and badging tool', () => {
+  const script = read('scripts/nightly/build.sh');
+  assert.match(script, /apps\/android\/src-tauri\/tauri.conf.json docs\/android-manual-checks.md/);
+  assert.match(script, /cp "\$tools\/aapt2"/);
 });
 
 test('schedule runbook takes a nonblocking device lock and forbids silent retries', () => {

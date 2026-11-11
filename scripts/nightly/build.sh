@@ -29,6 +29,9 @@ just android-build x86_64
 npm ci --prefix apps/android/emulator --ignore-scripts --no-audit --no-fund
 apps/android/emulator/fake-messages/build.sh
 mkdir -p .scratch/nightly/apks
+mkdir -p .scratch/nightly/tools
+tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+cp "$tools/aapt2" .scratch/nightly/tools/aapt2
 cp apps/android/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk .scratch/nightly/apks/base.apk
 # Build check 49's updates without stamping tracked files.
 node --input-type=module <<'JS'
@@ -51,6 +54,6 @@ JS
 mkdir -p .scratch/nightly/stage/apps/android/emulator/fake-messages
 cp scripts/nightly/prebuilt-messages.sh .scratch/nightly/stage/apps/android/emulator/fake-messages/build.sh
 chmod +x .scratch/nightly/stage/apps/android/emulator/fake-messages/build.sh
-tar --exclude=apps/android/emulator/fake-messages/build.sh -cf .scratch/nightly/device.tar apps/android/emulator scripts/nightly web/package.json web/node_modules web/dist target/debug/vault target/debug/vault-server target/android-emulator/fake-messages.apk .scratch/nightly/apks .scratch/nightly/updates.env .scratch/nightly/commit
+tar --exclude=apps/android/emulator/fake-messages/build.sh -cf .scratch/nightly/device.tar apps/android/emulator apps/android/src-tauri/tauri.conf.json docs/android-manual-checks.md scripts/nightly web/package.json web/node_modules web/dist target/debug/vault target/debug/vault-server target/android-emulator/fake-messages.apk .scratch/nightly/apks .scratch/nightly/tools .scratch/nightly/updates.env .scratch/nightly/commit
 tar -rf .scratch/nightly/device.tar -C .scratch/nightly/stage apps/android/emulator/fake-messages/build.sh
 gzip -f .scratch/nightly/device.tar
