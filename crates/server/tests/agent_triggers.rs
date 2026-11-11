@@ -979,6 +979,23 @@ fn round2_incoming_attachment_search_is_not_an_agent_oracle() {
     let response: Value = api.client.get(api.server.url("/api/search?q=zebraquartz917"))
         .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap().json().unwrap();
     assert_eq!(response["total"], 0, "attachment-only word leaked via search: {response}");
+    for text in ["body:zebraquartz917", "zebraquartz", "\"zebraquartz917\""] {
+        let response: Value = api.client.get(api.server.url("/api/search"))
+            .query(&[("q", text)]).bearer_auth(token["secret"].as_str().unwrap()).send().unwrap().json().unwrap();
+        assert_eq!(response["total"], 0, "{response}");
+    }
+    api.agent("search_auditor", "label = \"Search auditor\"\npermissions { scripts { run_code = true } }\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Search.\" }\n");
+    chat.push(AnthropicMessage::new()
+        .tool_use("asset_search", "search_notes", json!({"text":"zebraquartz917"}))
+        .tool_use("asset_query", "query_notes", json!({"query":"from * search \"zebraquartz917\" select title"}))
+        .tool_use("asset_script_search", "run_script", json!({"code":"use vault\nfn main() -> Result[Value, string] { Ok(Value::List(vault::search(\"zebraquartz917\", 10)?)) }\n", "function":null,"args":null})));
+    chat.push(AnthropicMessage::text("No matching notes."));
+    api.memo("Search audit", "open");
+    api.advance("PT35S");
+    let requests = chat.message_requests();
+    assert_eq!(requests.len(), 2);
+    let result = requests[1].json().to_string();
+    assert!(!result.contains("Ordinary incoming"), "{result}");
 }
 
 #[test]

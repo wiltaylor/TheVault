@@ -450,6 +450,18 @@ impl Writer {
 
     pub fn activate_agent_safety(&self) -> Result<()> {
         self.state().prepare_agent_safety_parents()?;
+        if self.state().meta("agent_safety.assets_migrated")?.is_none() {
+            for note in self.list_with(None, Archived::Include)? {
+                let note = self.read(&note.id)?;
+                self.mark_incoming_note_assets(&note.id, &note.type_name, &note.doc)?;
+            }
+            for entry in self.state().list_trash()? {
+                if let Ok(doc) = Doc::parse(&entry.content, "trashed.wcl") {
+                    self.mark_incoming_note_assets(&entry.note_id, &entry.note_type, &doc)?;
+                }
+            }
+            self.state().set_meta("agent_safety.assets_migrated", "1")?;
+        }
         if self.state().meta("agent_safety.index_ready")?.as_deref() == Some("1") {
             for (id, _, stored) in self.state().indexed_agent_safety()? {
                 if let Some(mut safety) =
@@ -578,6 +590,7 @@ impl Writer {
 
     /// Called with the commit lock before publishing an updated index row. No vault scan.
     pub(crate) fn refresh_agent_safety_index(&self, id: &str, kind: &str, doc: &Doc) -> Result<()> {
+        self.mark_incoming_note_assets(id, kind, doc)?;
         if self.state().meta("agent_safety.activation_ms")?.is_some() {
             let safety = self.agent_safety_doc(id, kind, doc)?;
             if safety.reason == "unclassified" {
@@ -597,6 +610,10 @@ impl Writer {
     }
 
     pub fn agent_may_read_asset(&self, id: &str) -> bool {
+        if !self.state().meta(&format!("agent_safety.asset.{id}"))
+            .is_ok_and(|v| v.is_none()) {
+            return false;
+        }
         self.asset_usage(id).is_ok_and(|usage| {
             usage.notes.iter().all(|n| {
                 self.agent_may_read(&n.note)
@@ -613,6 +630,31 @@ impl Writer {
                     })
             }) && usage.trashed.is_empty()
         })
+    }
+
+    /// Sticky provenance. Unlinking, deleting or purging a note never releases its files.
+    pub fn mark_incoming_asset(&self, id: &str) -> Result<()> {
+        self.state().set_meta(&format!("agent_safety.asset.{id}"), "1")?;
+        Ok(())
+    }
+
+    fn mark_incoming_note_assets(&self, id: &str, kind: &str, doc: &Doc) -> Result<()> {
+        if self.incoming_agent_note(kind, doc)
+            || self.state().meta(&format!("agent_safety.note.{id}"))?.is_some()
+            || self.state().meta(&format!("agent_safety.legacy.{id}"))?.is_some()
+        {
+            fn walk(w: &Writer, value: &serde_json::Value) -> Result<()> {
+                match value {
+                    serde_json::Value::String(s) if schema::is_ulid(s) => w.mark_incoming_asset(s)?,
+                    serde_json::Value::Array(a) => for v in a { walk(w, v)?; },
+                    serde_json::Value::Object(o) => for v in o.values() { walk(w, v)?; },
+                    _ => {}
+                }
+                Ok(())
+            }
+            walk(self, &crate::doc_to_json(doc))?;
+        }
+        Ok(())
     }
 
     /// Called under the existing commit lock by the after-write hook.

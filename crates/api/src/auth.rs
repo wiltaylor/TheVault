@@ -204,7 +204,7 @@ async fn agent_read_gate(w: Arc<Writer>, req: &mut Request) -> Result<(), ApiErr
             return Err(ApiError::new(
                 StatusCode::FORBIDDEN,
                 "held",
-                "Note is unavailable to agents",
+                if asset { "Attachments of incoming messages are not available to agents." } else { "Note is unavailable to agents" },
             ));
         }
     }

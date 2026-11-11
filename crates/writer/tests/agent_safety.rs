@@ -87,6 +87,16 @@ fn incoming_assets_release_and_shared_local_reference_do_not_clear_files() {
             .unwrap()
             .contains("private.txt")
     );
+    drop(_acting);
+    w.delete(&note.id, Some(&note.version), &owner).unwrap();
+    w.purge_from_trash(&note.id).unwrap();
+    assert!(!w.agent_may_read_asset(&asset.id));
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    assert!(script_core::Vault::asset(&w, &asset.id).is_err());
+    drop(_acting);
+    drop(w);
+    let w = open(dir.path());
+    assert!(!w.agent_may_read_asset(&asset.id));
 }
 
 #[test]

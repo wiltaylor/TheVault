@@ -120,6 +120,8 @@ pub struct AssetHow {
 pub struct Index {
     conn: Connection,
     search: search::Search,
+    // Agent search never indexes extracted asset text, including explicit body: queries.
+    note_search: search::Search,
     assets: asset_text::AssetTexts,
 }
 
@@ -140,7 +142,10 @@ impl Index {
         sql::functions(&conn)?;
         let missing = !search_dir.join("meta.json").is_file();
         let (search, reset) = search::Search::open(search_dir)?;
-        if missing || reset {
+        let note_dir = search_dir.with_file_name("note-search-v1");
+        let note_missing = !note_dir.join("meta.json").is_file();
+        let (note_search, note_reset) = search::Search::open(&note_dir)?;
+        if missing || reset || note_missing || note_reset {
             sql::forget_generation(&conn)?;
         }
         let assets =
@@ -148,6 +153,7 @@ impl Index {
         Ok(Index {
             conn,
             search,
+            note_search,
             assets,
         })
     }
@@ -291,6 +297,7 @@ impl Index {
     /// Apply one commit's note changes, all in one SQLite transaction and one tantivy commit.
     pub fn update(&mut self, schema: &Schema, updates: &[Update]) -> Result<()> {
         let mut docs = Vec::new();
+        let mut own_docs = Vec::new();
         let tx = self.conn.transaction()?;
         for u in updates {
             match u {
@@ -307,6 +314,7 @@ impl Index {
                             type_name: type_name.clone(),
                         })?;
                     let mut note = project::project(ty, id, doc, report);
+                    own_docs.push(search::Change::Put(note.search.clone()));
                     append_text(&mut note.search.body, &self.assets.of_doc(doc));
                     sql::delete_note(&tx, id)?;
                     sql::insert_note(&tx, &note)?;
@@ -315,10 +323,12 @@ impl Index {
                 Update::Delete { id } => {
                     sql::delete_note(&tx, id)?;
                     docs.push(search::Change::Delete(id.clone()));
+                    own_docs.push(search::Change::Delete(id.clone()));
                 }
             }
         }
         self.search.apply(&docs)?;
+        self.note_search.apply(&own_docs)?;
         tx.commit()?;
         Ok(())
     }
@@ -345,6 +355,11 @@ impl Index {
     /// too.
     pub fn search_hits(&self, text: &str, types: Option<&[String]>) -> Result<Vec<Hit>> {
         self.search.hits(text, types)
+    }
+
+    /// Search only note-owned text. No asset text participates in terms, scores or prefixes.
+    pub fn search_note_hits(&self, text: &str, types: Option<&[String]>) -> Result<Vec<Hit>> {
+        self.note_search.hits(text, types)
     }
 
     /// One page of a full-text search: the best `size` hits strictly after `after`, the score
