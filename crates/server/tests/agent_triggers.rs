@@ -962,6 +962,52 @@ fn safety_rest_list_and_post_query_exclude_held_notes() {
 }
 
 #[test]
+fn round2_incoming_attachment_search_is_not_an_agent_oracle() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    api.agent("reader", "label = \"Reader\"\nenabled = false\n");
+    let asset: Value = api.client.post(api.server.url("/api/assets?filename=codes.csv"))
+        .bearer_auth(api.server.admin_token()).body("code\nzebraquartz917\n").send().unwrap().json().unwrap();
+    decisions.push(safety_reply("allow"));
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
+        "title":"Ordinary incoming", "attachments":[asset["id"]], "sent":"2000-01-01T00:00:00Z"
+    }}}));
+    assert_eq!(safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["status"], "allowed");
+    let token = api.external_agent_token();
+    assert!(api.get("/api/search?q=zebraquartz917")["total"].as_u64().unwrap() > 0);
+    let response: Value = api.client.get(api.server.url("/api/search?q=zebraquartz917"))
+        .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap().json().unwrap();
+    assert_eq!(response["total"], 0, "attachment-only word leaked via search: {response}");
+}
+
+#[test]
+fn round2_unlink_does_not_release_incoming_asset() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    api.agent("reader", "label = \"Reader\"\nenabled = false\n");
+    let asset: Value = api.client.post(api.server.url("/api/assets?filename=private.txt"))
+        .bearer_auth(api.server.admin_token()).body("PRIVATE_BYTES").send().unwrap().json().unwrap();
+    decisions.push(safety_reply("allow"));
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
+        "title":"Ordinary incoming", "attachments":[asset["id"]], "sent":"2000-01-01T00:00:00Z"
+    }}}));
+    let id = note["id"].as_str().unwrap();
+    let allowed = safety_wait(&api, id);
+    assert_eq!(allowed["agent_safety"]["status"], "allowed");
+    let token = api.external_agent_token();
+    let edited = api.client.put(api.server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(token["secret"].as_str().unwrap())
+        .json(&json!({"base":allowed["version"], "note":{"fields":{"title":"Detached", "attachments":[]}}}))
+        .send().unwrap();
+    assert!(edited.status().is_success(), "{}", edited.text().unwrap());
+    let response = api.client.get(api.server.url(&format!("/api/assets/{}", asset["id"].as_str().unwrap())))
+        .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap();
+    assert_eq!(response.status(), 403, "unlinked incoming asset exposed");
+}
+
+#[test]
 fn incoming_assets_allowed_email_rest_denies_html_and_attachment() {
     let chat = FakeAnthropic::start();
     let decisions = testkit::FakeDecisions::start();
