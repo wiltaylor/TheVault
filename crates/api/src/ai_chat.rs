@@ -3309,7 +3309,9 @@ fn decision_tool_input(input: &Value) -> Result<ai::decisions::Input, serde_json
     let mut questions = serde_json::Map::new();
     for q in input.questions {
         if questions.contains_key(&q.id) {
-            return Err(<serde_json::Error as serde::de::Error>::custom("Duplicate question id"));
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "Duplicate question id",
+            ));
         }
         let mut question = json!({
             "type": q.kind,
@@ -5356,11 +5358,20 @@ mod tests {
         let decoded = decision_tool_input(&input).unwrap();
         assert_eq!(decoded.state, json!({"text":"untrusted"}));
         assert_eq!(decoded.questions.len(), 3);
-        assert_eq!(serde_json::to_value(&decoded.questions["kind"]).unwrap()["instructions"], json!(["Classify"]));
+        assert_eq!(
+            serde_json::to_value(&decoded.questions["kind"]).unwrap()["instructions"],
+            json!(["Classify"])
+        );
         for (field, value) in [
             ("state", json!("not JSON")),
-            ("questions", json!([input["questions"][0], input["questions"][0]])),
-            ("questions", json!([{"id":"x", "type":"box", "instructions":"\"x\"", "criteria":null}])),
+            (
+                "questions",
+                json!([input["questions"][0], input["questions"][0]]),
+            ),
+            (
+                "questions",
+                json!([{"id":"x", "type":"box", "instructions":"\"x\"", "criteria":null}]),
+            ),
             ("questions", json!({"old":"shape"})),
         ] {
             let mut bad = input.clone();
@@ -5373,7 +5384,9 @@ mod tests {
     fn tools_are_strict_objects() {
         fn check(s: &Value, path: &str) {
             let object = s["type"] == "object"
-                || s["type"].as_array().is_some_and(|ts| ts.contains(&json!("object")));
+                || s["type"]
+                    .as_array()
+                    .is_some_and(|ts| ts.contains(&json!("object")));
             if object {
                 assert_eq!(s["additionalProperties"], false, "{path}: open object");
                 let props = s["properties"].as_object().expect("object properties");
@@ -5406,7 +5419,9 @@ mod tests {
         tools.extend(crate::ai_saved::specs());
         tools.push(crate::brave::tool_spec());
         tools.push(crate::ai_skills::install_spec());
-        tools.push(crate::ai_subagents::spec(&Agent::parse("test", "label = \"Test\"\n").unwrap()));
+        tools.push(crate::ai_subagents::spec(
+            &Agent::parse("test", "label = \"Test\"\n").unwrap(),
+        ));
         // Vault and skill tools share ScriptTool's schema generator. Cover every
         // parameter kind, item kind and nullable form, not just built-in tools.
         for required in [true, false] {
@@ -5414,16 +5429,23 @@ mod tests {
             for kind in schema::TOOL_PARAM_KINDS {
                 for of in schema::TOOL_LIST_ITEM_KINDS {
                     params.push(schema::ToolParam {
-                        name: format!("{kind}_{of}"), kind: kind.into(),
+                        name: format!("{kind}_{of}"),
+                        kind: kind.into(),
                         of: (kind == "list").then(|| of.into()),
-                        description: None, required,
+                        description: None,
+                        required,
                     });
                 }
             }
             let script = schema::ScriptTool {
-                name: "test".into(), description: "Test".into(), params,
-                script: "test".into(), function: "main".into(),
-                allow_domains: vec![], secrets: vec![], timeout: 30,
+                name: "test".into(),
+                description: "Test".into(),
+                params,
+                script: "test".into(),
+                function: "main".into(),
+                allow_domains: vec![],
+                secrets: vec![],
+                timeout: 30,
             };
             check(&script.input_schema(), "script/skill tool");
         }
