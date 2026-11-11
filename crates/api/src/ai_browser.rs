@@ -192,12 +192,21 @@ pub fn cleanup_retired(w: Arc<Writer>) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static RUNNING: AtomicBool = AtomicBool::new(false);
     static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
-    let Some(b) = BrowserBox::from_env() else { return };
+    let Some(b) = BrowserBox::from_env() else {
+        return;
+    };
     WAKE.notify_one();
-    if RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() { return; }
+    if RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
     struct Flight;
     impl Drop for Flight {
-        fn drop(&mut self) { RUNNING.store(false, Ordering::Release); }
+        fn drop(&mut self) {
+            RUNNING.store(false, Ordering::Release);
+        }
     }
     tokio::spawn(async move {
         let _flight = Flight;
@@ -210,10 +219,24 @@ pub fn cleanup_retired(w: Arc<Writer>) {
             let ids = w.retired_browser_profiles().unwrap_or_default();
             retries.retain(|id, _| ids.contains(id));
             let now = Instant::now();
-            let due: Vec<_> = ids.iter().filter(|id| !active.contains(*id) && retries.get(*id).is_none_or(|(next, _)| *next <= now)).take(64_usize.saturating_sub(active.len())).cloned().collect();
-            if offline_until <= now && let Some(first) = due.first() {
+            let due: Vec<_> = ids
+                .iter()
+                .filter(|id| {
+                    !active.contains(*id) && retries.get(*id).is_none_or(|(next, _)| *next <= now)
+                })
+                .take(64_usize.saturating_sub(active.len()))
+                .cloned()
+                .collect();
+            if offline_until <= now
+                && let Some(first) = due.first()
+            {
                 // Only a failed health/protocol check starts global offline backoff.
-                if b.clone().with_profile(first.clone()).check_protocol().await.is_ok() {
+                if b.clone()
+                    .with_profile(first.clone())
+                    .check_protocol()
+                    .await
+                    .is_ok()
+                {
                     offline_delay = Duration::from_secs(30);
                     for id in due {
                         active.insert(id.clone());
@@ -228,7 +251,11 @@ pub fn cleanup_retired(w: Arc<Writer>) {
             let next = if offline_until > Instant::now() {
                 Some(offline_until)
             } else {
-                retries.iter().filter(|(id, _)| !active.contains(*id)).map(|(_, (next, _))| *next).min()
+                retries
+                    .iter()
+                    .filter(|(id, _)| !active.contains(*id))
+                    .map(|(_, (next, _))| *next)
+                    .min()
             };
             // A new retirement can wake the scheduler while earlier DELETEs are
             // still in flight. Awaiting a whole batch would still delay resets.

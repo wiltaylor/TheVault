@@ -326,8 +326,12 @@ fn scoped(state: &AppState, headers: &HeaderMap, admission: bool) -> ApiResult<A
         ));
     }
     safe_dir(&profile)?;
-    let bytes = if admission { disk_usage(&profile) } else { Ok(0) }
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let bytes = if admission {
+        disk_usage(&profile)
+    } else {
+        Ok(0)
+    }
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if admission && bytes > PROFILE_BYTES {
         return Err(ApiError::new(
             StatusCode::INSUFFICIENT_STORAGE,
@@ -420,7 +424,9 @@ async fn delete_profile(
 /// Cache tools can leave 0555 directories. Only directories in the managed tree
 /// are changed. Symlinks (including links to another profile) are never followed.
 fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
-    use rustix::fs::{AtFlags, Dir, FileType, Mode, OFlags, chmodat, fchmod, fstat, open, openat, statat};
+    use rustix::fs::{
+        AtFlags, CWD, Dir, FileType, Mode, OFlags, chmodat, fchmod, fstat, open, openat, statat,
+    };
     fn walk(fd: &rustix::fd::OwnedFd, label: &str) -> io::Result<()> {
         let stat = fstat(fd)?;
         fchmod(fd, Mode::from_raw_mode(stat.st_mode) | Mode::RWXU)?;
@@ -428,22 +434,52 @@ fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
         while let Some(entry) = entries.read() {
             let entry = entry?;
             let name = entry.file_name();
-            if name.to_bytes() == b"." || name.to_bytes() == b".." { continue; }
+            if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                continue;
+            }
             let stat = statat(fd, name, AtFlags::SYMLINK_NOFOLLOW)?;
-            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory { continue; }
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+                continue;
+            }
             let child_label = format!("{label}/{}", name.to_string_lossy());
-            // NOFOLLOW is essential for both chmod and open, including races.
-            chmodat(fd, name, Mode::from_raw_mode(stat.st_mode) | Mode::RWXU, AtFlags::SYMLINK_NOFOLLOW)
+            // O_PATH opens even a 0000 directory and pins the inode. The
+            // kernel here lacks fchmodat2(NO_FOLLOW), so chmod the pinned fd
+            // through procfs, never the entry that another process can swap.
+            use std::os::fd::AsRawFd;
+            let pinned = openat(
+                fd,
+                name,
+                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
+            let mode = Mode::from_raw_mode(fstat(&pinned)?.st_mode) | Mode::RWXU;
+            chmodat(CWD, format!("/proc/self/fd/{}", pinned.as_raw_fd()), mode, AtFlags::empty())
                 .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
-            let child = openat(fd, name, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())
-                .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
+            let child = openat(
+                &pinned,
+                ".",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|e| io::Error::other(format!("{child_label}: {e}")))?;
             walk(&child, &child_label)?;
         }
         Ok(())
     }
-    let result = open(path, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())
-        .map_err(io::Error::from).and_then(|fd| walk(&fd, &path.display().to_string()));
-    result.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("preparing {} for removal: {e}", path.display())))
+    let result = open(
+        path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(io::Error::from)
+    .and_then(|fd| walk(&fd, &path.display().to_string()));
+    result.map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("preparing {} for removal: {e}", path.display()),
+        )
+    })
 }
 
 /// A successful shell can leave detached children behind. Close those too before

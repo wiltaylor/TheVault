@@ -62,8 +62,11 @@ fn independent_reset(slow: bool) {
         .filter(|r| r.route() == "/run")
         .map(|r| r.header("x-vault-agent").unwrap().to_owned())
         .collect();
-    if slow { browser.slow_profile_cleanup(&ids[0]); }
-    else { browser.fail_profile_cleanup(&ids[0]); }
+    if slow {
+        browser.slow_profile_cleanup(&ids[0]);
+    } else {
+        browser.fail_profile_cleanup(&ids[0]);
+    }
     let reset = |name: &str| {
         let response = api
             .client
@@ -104,11 +107,22 @@ fn independent_reset(slow: bool) {
     );
     if slow {
         // The request timeout is 40s, followed by the id's 30s backoff.
-        let attempts = || browser.requests().iter().filter(|r| r.method == "DELETE" && r.header("x-vault-agent") == Some(ids[0].as_str())).count();
+        let attempts = || {
+            browser
+                .requests()
+                .iter()
+                .filter(|r| {
+                    r.method == "DELETE" && r.header("x-vault-agent") == Some(ids[0].as_str())
+                })
+                .count()
+        };
         std::thread::sleep(Duration::from_secs(45));
         assert_eq!(attempts(), 1, "timeout must not immediately retry");
         eventually(35, || attempts() == 2);
-        assert!(start.elapsed() >= Duration::from_secs(69), "retry ignored per-id backoff");
+        assert!(
+            start.elapsed() >= Duration::from_secs(69),
+            "retry ignored per-id backoff"
+        );
     }
 }
 
