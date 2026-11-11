@@ -73,7 +73,16 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
         };
         let mut ctx = query::Context::new(index, schema);
         ctx.excluded_notes = excluded.as_ref();
-        let result = query::run(q, &ctx, &page).map_err(err)?;
+        let mut result = query::run(q, &ctx, &page).map_err(err)?;
+        if agent_reading() {
+            for row in &mut result.rows {
+                let mut fields = Json::Object(std::mem::take(&mut row.fields));
+                crate::redact_agent_content(&mut fields)?;
+                if let Json::Object(fields) = fields { row.fields = fields; }
+                if let Some(group) = &mut row.group { crate::redact_agent_content(group)?; }
+            }
+            for group in &mut result.groups { crate::redact_agent_content(&mut group.value)?; }
+        }
         if excluded.is_some() {
             // Never evaluate the condition against held content, even for a count.
             // This fixed notice signal is independent of the query and its results.
@@ -108,7 +117,13 @@ fn agent_saved(w: &Writer, s: Saved, author: &Author) -> Json {
         // not generated defaults, handler output or other unreviewed note content.
         return json!({"id":s.id,"type":s.type_name,"version":s.version,"held":true});
     }
-    saved(s)
+    let mut value = saved(s);
+    if (agent_reading() || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
+        && crate::redact_agent_content(&mut value).is_err()
+    {
+        return json!({"error":"private_transcript"});
+    }
+    value
 }
 
 fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
@@ -187,12 +202,14 @@ impl Vault for Writer {
             return Err("Note is held from agents".into());
         }
         let n = self.read(id).map_err(err)?;
-        Ok(json!({
+        let mut value = json!({
             "id": n.id,
             "type": n.type_name,
             "version": n.version,
             "note": doc_to_json(&n.doc),
-        }))
+        });
+        if agent_reading() { crate::redact_agent_content(&mut value)?; }
+        Ok(value)
     }
 
     fn query(&self, text: &str, max_rows: usize) -> Result<Vec<Json>, String> {

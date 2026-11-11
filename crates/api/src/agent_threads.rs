@@ -1178,80 +1178,11 @@ fn redaction_error() -> ApiError {
 }
 
 fn redact_note_text(type_name: &str, text: &str) -> Result<String, ApiError> {
-    if type_name != THREAD_TYPE && !text.contains("transcript") {
-        return Ok(text.to_owned());
-    }
-    let mut doc = writer::Input::Wcl(text.to_owned())
-        .parse("private-note.wcl")
-        .map_err(|_| redaction_error())?;
-    let mut changed = false;
-    for (name, field) in &mut doc.fields {
-        if name == "transcript" {
-            let mut value: Value = serde_json::from_str(field.as_str().unwrap_or("{}"))
-                .map_err(|_| redaction_error())?;
-            redact_content(&mut value)?;
-            *field = schema::Value::Str(value.to_string());
-            changed = true;
-        }
-    }
-    Ok(if changed {
-        writer::print_doc(&doc)
-    } else {
-        text.to_owned()
-    })
+    writer::redact_agent_note(type_name, text).map_err(|_| redaction_error())
 }
 
-/// Covers full notes, selected query fields, conflict text and encoded tool results.
-/// The caller boundary decides whether redaction is needed before calling this.
 pub(crate) fn redact_content(value: &mut Value) -> Result<(), ApiError> {
-    if value["kind"] == "agent" || value["name"] == "propose_agent_change" {
-        crate::ai_agents::hide_browser_secrets(value);
-    }
-    match value {
-        Value::Object(fields) => {
-            let type_name = fields
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            for (key, child) in fields {
-                if matches!(key.as_str(), "wcl" | "current")
-                    && let Some(text) = child.as_str()
-                {
-                    *child = Value::String(redact_note_text(&type_name, text)?);
-                } else if key == "transcript"
-                    && let Some(text) = child.as_str()
-                {
-                    let mut transcript: Value =
-                        serde_json::from_str(text).map_err(|_| redaction_error())?;
-                    redact_content(&mut transcript)?;
-                    *child = Value::String(transcript.to_string());
-                } else {
-                    redact_content(child)?;
-                }
-            }
-        }
-        Value::Array(items) => {
-            for child in items {
-                redact_content(child)?;
-            }
-        }
-        Value::String(text)
-            if text.trim_start().starts_with('{')
-                && (text.contains("\"proposals\"")
-                    || text.contains("\"transcript\"")
-                    || text.contains("\"before\"")) =>
-        {
-            if let Ok(mut decoded) = serde_json::from_str::<Value>(text) {
-                redact_content(&mut decoded)?;
-                *text = decoded.to_string();
-            } else {
-                *text = "The private transcript could not be redacted.".to_owned();
-            }
-        }
-        _ => {}
-    }
-    Ok(())
+    writer::redact_agent_content(value).map_err(|_| redaction_error())
 }
 
 /// All tool answers pass here before any provider sees them, including script/query tools.

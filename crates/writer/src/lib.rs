@@ -36,6 +36,7 @@
 mod activity;
 pub mod agent_safety;
 mod agent_threads;
+mod agent_privacy;
 mod asset_use;
 mod assets;
 mod batch;
@@ -77,6 +78,7 @@ use store::{Change, CommitStep, Vault};
 
 pub use activity::{Acting, acting_as};
 pub use agent_threads::AgentThreadRuntime;
+pub use agent_privacy::{hide_browser_secrets, redact_agent_content, redact_agent_note};
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
