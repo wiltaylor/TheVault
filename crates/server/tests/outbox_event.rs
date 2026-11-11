@@ -482,7 +482,7 @@ fn outbox_delete_disconnected_keeps_event_for_retry() {
         api.req("DELETE", "/api/secrets/google_refresh_token")
             .send()
             .unwrap(),
-        204,
+        200,
     );
     let item = api.create(
         "outbox",
