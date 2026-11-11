@@ -962,6 +962,64 @@ fn safety_rest_list_and_post_query_exclude_held_notes() {
 }
 
 #[test]
+fn incoming_assets_allowed_email_rest_denies_html_and_attachment() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    let token = api.external_agent_token();
+    for (field, filename, content) in [
+        ("html", "PRIVATE_FILE.html", "<p hidden>PRIVATE_BYTES</p>"),
+        ("attachments", "PRIVATE_FILE.txt", "PRIVATE_BYTES"),
+    ] {
+        let asset: Value = api.client.post(api.server.url(&format!("/api/assets?filename={filename}")))
+            .bearer_auth(api.server.admin_token()).body(content).send().unwrap().json().unwrap();
+        let asset = asset["id"].as_str().unwrap();
+        decisions.push(safety_reply("allow"));
+        let mut fields = json!({"title":"Allowed incoming", "sent":"2000-01-01T00:00:00Z"});
+        fields[field] = if field == "html" { json!(asset) } else { json!([asset]) };
+        let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":fields}}));
+        assert_eq!(safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["status"], "allowed");
+        let response = api.client.get(api.server.url(&format!("/api/assets/{asset}")))
+            .bearer_auth(token["secret"].as_str().unwrap()).send().unwrap();
+        assert_eq!(response.status(), 403, "unclassified incoming asset exposed");
+        assert!(!response.text().unwrap().contains("PRIVATE_BYTES"));
+        assert_eq!(api.client.get(api.server.url(&format!("/api/assets/{asset}")))
+            .bearer_auth(api.server.admin_token()).send().unwrap().text().unwrap(), content);
+    }
+}
+
+#[test]
+fn incoming_assets_allowed_email_tools_and_script_deny_text() {
+    let decisions = testkit::FakeDecisions::start();
+    let chat = FakeAnthropic::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    let asset: Value = api.client.post(api.server.url("/api/assets?filename=PRIVATE_FILE.txt"))
+        .bearer_auth(api.server.admin_token()).body("PRIVATE_BYTES").send().unwrap().json().unwrap();
+    let asset = asset["id"].as_str().unwrap();
+    decisions.push(safety_reply("allow"));
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
+        "title":"Allowed incoming", "attachments":[asset], "sent":"2000-01-01T00:00:00Z"
+    }}}));
+    let id = note["id"].as_str().unwrap();
+    assert_eq!(safety_wait(&api, id)["agent_safety"]["status"], "allowed");
+    api.agent("asset_auditor", "label = \"Asset auditor\"\npermissions { scripts { run_code = true } }\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Read assets.\" }\n");
+    chat.push(AnthropicMessage::new()
+        .tool_use("asset_get", "get_note", json!({"id":id}))
+        .tool_use("asset_find", "find_assets", json!({"text":"PRIVATE_FILE"}))
+        .tool_use("asset_read", "read_asset", json!({"id":asset}))
+        .tool_use("asset_script", "run_script", json!({"code":format!("use vault\nfn main() -> Result[Value, string] {{ vault::read_asset(\"{asset}\") }}\n"), "function":null,"args":null})));
+    chat.push(AnthropicMessage::text("Done."));
+    api.memo("Asset audit", "open");
+    api.advance("PT35S");
+    let requests = chat.message_requests();
+    assert_eq!(requests.len(), 2);
+    let delivered = requests[1].json().to_string();
+    assert!(!delivered.contains("PRIVATE_BYTES"), "{delivered}");
+    assert!(!delivered.contains("PRIVATE_FILE.txt"), "{delivered}");
+    assert!(delivered.contains("not available to agents"), "{delivered}");
+}
+
+#[test]
 fn safety_rest_asset_download_of_held_attachment_is_refused() {
     let chat = FakeAnthropic::start();
     let decisions = testkit::FakeDecisions::start();
