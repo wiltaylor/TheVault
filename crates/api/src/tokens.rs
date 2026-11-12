@@ -15,10 +15,32 @@ use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_json_exposes_stored_kind_not_name_prefix() {
+        for kind in ["user", "device", "agent"] {
+            let token = TokenInfo {
+                kind: kind.into(),
+                name: "plain-name".into(),
+                scope: Scope::Write,
+                created_ms: 1,
+                last_used_ms: None,
+            };
+            let value = token_json(&token);
+            assert_eq!(value["kind"], kind);
+            assert!(value.get("secret").is_none());
+        }
+    }
+}
+
 fn token_json(t: &TokenInfo) -> Value {
     json!({
         "name": t.name,
         "scope": t.scope.as_str(),
+        "kind": t.kind,
         "created": t.created_ms,
         "last_used": t.last_used_ms,
     })
