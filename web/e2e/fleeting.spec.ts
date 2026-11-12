@@ -129,7 +129,16 @@ test("Ctrl+Shift+K and the sidebar open the capture dialog from any page; there 
 test("a text capture is saved to the inbox, counted in the sidebar, and opens from the toast", async ({ page, admin }) => {
   const t = token();
   const title = `Call the plumber ${t}`;
+  // Another capture source can contain held items while this spec runs. They are not
+  // badge entries, even though an unfiltered admin query includes them in its total.
+  const held = await admin.post("/api/notes?type=email", {
+    data: { note: { fields: { title: `Held mail ${t}`, from_raw: "sender@example.com", labels: ["system/INBOX"] }, blocks: [] } },
+  });
+  expect(held.status(), await held.text()).toBe(201);
+  const heldId = ((await held.json()) as { id: string }).id;
   await logIn(page, "/daily");
+  const heldNote = await (await page.request.get(`/api/notes/${heldId}`)).json();
+  expect(heldNote.agent_safety.status).toBe("held");
   await page.keyboard.press("Control+Shift+K");
   await captureText(page).fill(`  ${title}  \nabout the leak under the sink`);
   await page.keyboard.press("Control+Enter");
