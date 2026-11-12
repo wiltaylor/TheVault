@@ -230,7 +230,8 @@ fn adversarial_import_markup_device_contact_call_and_mms_subject() {
     let text = text_of_import();
     d.send(
         "contact_changed",
-        contact("adversarial", text, json!([]), "2026-10-20T09:30:00Z"),
+        json!({ "contact_id": "adversarial", "name": text, "phones": [],
+            "emails": [], "updated": "2026-10-20T09:30:00Z" }),
     );
     let people = d.query("from person");
     assert_eq!(people.len(), 1);

@@ -1313,7 +1313,15 @@ fn adversarial_import_markup_gmail_reconversion_provider_and_stored_html() {
         google.add_message(message);
     }
     let gmail = Gmail::start(google, json!({ "gmail_labels": ["INBOX"] }));
-    let escaped = html_blocks::escape_text(TEXT);
+    // The old importer escaped a larger character set than the current converter. Seed its
+    // actual persisted format so the migration's edited-body guard permits reconversion.
+    let mut escaped = String::new();
+    for ch in TEXT.chars() {
+        if "\\*+~`={}[]()|".contains(ch) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
     let mut ids = Vec::new();
     for id in ["legacy-plain", "legacy-html"] {
         ids.push(old_email(&gmail, id, &[&escaped], json!({})));
