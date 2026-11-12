@@ -108,6 +108,106 @@ struct Api {
     client: Client,
 }
 
+fn mail_triage_login(api: &Api) -> String {
+    let res = api.client.post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD})).send().unwrap().error_for_status().unwrap();
+    res.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned()
+}
+
+fn mail_triage_fixture(api: &Api, cookie: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for i in 0..21 {
+        let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":format!("Mail {i}"),"sent":"2000-01-01T00:00:00Z"}}}));
+        if i < 20 { ids.push(note["id"].as_str().unwrap().to_owned()); }
+    }
+    let p: Value = safety_session(api, cookie, "/api/agent-safety/release/preview", json!({"ids":ids})).error_for_status().unwrap().json().unwrap();
+    safety_session(api, cookie, "/api/agent-safety/release/approve", json!({"preview":p["preview"],"approve":true})).error_for_status().unwrap();
+    ids
+}
+
+#[test]
+fn mail_triage_preview_auth_bounds_single_summary_and_no_mutation_tools() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", r#"label = "Reader"
+permissions {
+ confirm { notes = false archive = false delete = false }
+ scripts { run_code = true }
+ subagents { allow = true }
+}
+"#);
+    let cookie = mail_triage_login(&api);
+    let ids = mail_triage_fixture(&api, &cookie);
+    let path = "/api/inbox/triage";
+    assert_eq!(api.request("POST", path, Some(json!({"agent":"reader","limit":20}))).status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(api.client.post(api.server.url(path)).json(&json!({"agent":"reader","limit":20})).send().unwrap().status(), reqwest::StatusCode::UNAUTHORIZED);
+    for limit in [0, 19, 51, 1000] {
+        assert_eq!(safety_session(&api, &cookie, path, json!({"agent":"reader","limit":limit})).status(), reqwest::StatusCode::BAD_REQUEST);
+    }
+    let p: Value = safety_session(&api, &cookie, path, json!({"agent":"reader","limit":50})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(p["count"], 20, "held note excluded");
+    assert_eq!(p["selected"], 20);
+    assert!(fake.message_requests().is_empty(), "preview is zero-call");
+    fake.push(AnthropicMessage::new().tool_use("forbidden", "run_script", json!({"code":"use vault"})));
+    fake.push(AnthropicMessage::new().tool_use("forbidden-sub", "start_subagent", json!({"task":"mutate"})));
+    fake.push(AnthropicMessage::new().tool_use("forbidden-write", "propose_fields", json!({"id":ids[0],"fields":{"processed":true}})));
+    fake.push(AnthropicMessage::text("Recommendations only: review these messages. No changes made."));
+    let approval = json!({"agent":"reader","preview":p["preview"]});
+    let confirmed: Value = safety_session(&api, &cookie, path, approval.clone()).error_for_status().unwrap().json().unwrap();
+    assert_eq!(confirmed["queued"], true);
+    api.advance("PT1S");
+    assert_eq!(fake.message_requests().len(), 4);
+    for i in 0..4 { assert_eq!(tool_names(&fake, i), vec!["get_note"]); }
+    let runs = api.runs("reader");
+    let batch = runs["triggers"].as_array().unwrap().iter().find(|t| t["kind"] == "recommendation").unwrap();
+    assert_eq!(batch["runs"].as_array().unwrap().len(), 1);
+    let thread = batch["runs"][0]["thread"].as_str().unwrap();
+    let transcript = api.get(&format!("/api/agents/reader/threads/{thread}"));
+    assert!(!transcript.to_string().contains("\"event\":\"fields_proposal\""));
+    for id in ids { assert_ne!(api.get(&format!("/api/notes/{id}"))["note"]["fields"]["processed"], true); }
+    assert_eq!(safety_session(&api, &cookie, path, approval).status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(safety_session(&api, &cookie, path, json!({"agent":"reader","limit":20})).status(), reqwest::StatusCode::BAD_REQUEST, "successful batches are not selected again");
+}
+
+#[test]
+fn mail_triage_confirmation_rechecks_processed_and_permissions() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", "label = \"Reader\"\n");
+    let cookie = mail_triage_login(&api);
+    mail_triage_fixture(&api, &cookie);
+    let p: Value = safety_session(&api, &cookie, "/api/inbox/triage", json!({"agent":"reader","limit":20})).error_for_status().unwrap().json().unwrap();
+    api.agent("reader", "label = \"Reader\"\npermissions { types = [\"memo\"] }\n");
+    assert_eq!(safety_session(&api, &cookie, "/api/inbox/triage", json!({"agent":"reader","preview":p["preview"]})).status(), reqwest::StatusCode::BAD_REQUEST);
+    api.advance("PT35S");
+    assert!(fake.message_requests().is_empty());
+}
+
+#[test]
+fn mail_triage_mark_old_preview_and_commit_start_zero_model_runs() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", "label = \"Reader\"\ntrigger changed { on = [\"update\"] type = \"email\" prompt = \"Read mail\" }\n");
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"Old sent mail","sent":"2000-01-01T00:00:00Z","labels":["system/SENT"]}}}));
+    let dry = api.send("POST", "/api/inbox/mark-processed", json!({"before":"2001-01-01T00:00:00Z","dry_run":true}));
+    assert_eq!(dry["total"], 1);
+    assert_eq!(dry["changed"], 0);
+    api.advance("PT35S");
+    assert!(fake.message_requests().is_empty());
+    let done = api.send("POST", "/api/inbox/mark-processed", json!({"before":"2001-01-01T00:00:00Z"}));
+    assert_eq!(done["changed"], 1);
+    api.advance("PT35S");
+    assert!(fake.message_requests().is_empty());
+    let id = note["id"].as_str().unwrap();
+    let current = api.get(&format!("/api/notes/{id}"));
+    let mut doc = current["note"].clone();
+    doc["fields"]["title"] = json!("Ordinary edit");
+    fake.push(AnthropicMessage::text("Ordinary update received"));
+    api.send("PUT", &format!("/api/notes/{id}"), json!({"note":doc,"base_version":current["version"]}));
+    api.advance("PT35S");
+    assert_eq!(fake.message_requests().len(), 1, "ordinary updates still trigger");
+}
+
 fn safety_setup(chat: &FakeAnthropic, decisions: &testkit::FakeDecisions, account: &str) -> Api {
     let api = Api::start(chat);
     api.send("POST", "/api/integrations/ai/accounts", json!({

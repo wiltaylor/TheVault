@@ -255,6 +255,14 @@ pub async fn list(
         let agent = w.agent(&name)?;
         let state = w.state();
         let mut triggers = Vec::new();
+        let recommendations = state.agent_runs(&agent.name, scheduler::agents::MAIL_TRIAGE, RUNS_SHOWN)?;
+        if !recommendations.is_empty() {
+            let runs: Vec<Value> = recommendations.iter().map(|r| json!({
+                "id":r.id,"thread":r.thread,"started":r.started_ms,"ended":r.ended_ms,
+                "outcome":r.outcome.as_str(),"message":r.outcome.message(),"log":r.log,
+            })).collect();
+            triggers.push(json!({"name":scheduler::agents::MAIL_TRIAGE,"kind":"recommendation","runs":runs}));
+        }
         for t in &agent.triggers {
             let runs = state.agent_runs(&agent.name, &t.name, RUNS_SHOWN)?;
             let runs: Vec<Value> = runs

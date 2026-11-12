@@ -1065,7 +1065,7 @@ impl Scheduler {
     /// Gate and agent read permissions are checked both at preview and execution.
     pub fn mail_triage_candidates(&self, name: &str) -> Result<Vec<String>, String> {
         let agent = self.writer.agent(name).map_err(|e| e.to_string())?;
-        if !agent.enabled || !agent.permissions.allows_tool("get_note") {
+        if !agent.enabled || !agent.permissions.allows_tool("get_note") || agent.trigger(MAIL_TRIAGE).is_some() {
             return Err("Choose an enabled agent that may read notes".into());
         }
         let covered = self.writer.state().mail_triage_notes(name).map_err(|e| e.to_string())?;
