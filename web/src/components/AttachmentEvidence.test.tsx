@@ -46,3 +46,15 @@ it("shows access errors without exposing evidence", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("Owner access required");
   expect(screen.queryByText(/Envelope v/)).toBeNull();
 });
+
+it("shows unknown legacy failure time and removes recovered failure diagnostics", async () => {
+  const legacy = evidence(true);
+  legacy.extraction_failures = { c: { reason: "old failure", at_ms: null } };
+  const read = vi.spyOn(api, "safetyEvidence").mockResolvedValueOnce(legacy).mockResolvedValueOnce({ ...evidence(true), extraction_failures: {} });
+  render(() => <AttachmentEvidence id="note" />);
+  fireEvent.click(screen.getByText("Review attachment evidence"));
+  expect(await screen.findByText(/Extraction failed: old failure/)).toHaveTextContent("unknown (legacy record)");
+  fireEvent.click(screen.getByText("Review attachment evidence"));
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(screen.queryByText(/Extraction failed:/)).toBeNull());
+});

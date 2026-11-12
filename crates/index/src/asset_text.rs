@@ -76,8 +76,16 @@ pub fn asset_text_failure(vault: &store::Vault, id: &str) -> Option<serde_json::
     if !schema::is_ulid(id) {
         return None;
     }
-    let raw = std::fs::read_to_string(vault.server_dir().join(format!("asset-text/v1/{id}.unreadable"))).ok()?;
-    Some(serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({"reason": raw.trim(), "at_ms": null})))
+    let raw = std::fs::read_to_string(
+        vault
+            .server_dir()
+            .join(format!("asset-text/v1/{id}.unreadable")),
+    )
+    .ok()?;
+    Some(
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|_| serde_json::json!({"reason": raw.trim(), "at_ms": null})),
+    )
 }
 
 /// Read a bound extraction without taking the note index lock. The writer serializes
@@ -506,7 +514,13 @@ impl AssetTexts {
         let unreadable = self.dir.join(format!("{id}.unreadable"));
         if let Ok(reason) = std::fs::read_to_string(&unreadable) {
             let record = serde_json::from_str::<serde_json::Value>(&reason).ok();
-            return StoredText::Unreadable(record.as_ref().and_then(|r| r["reason"].as_str()).unwrap_or(reason.trim()).to_owned());
+            return StoredText::Unreadable(
+                record
+                    .as_ref()
+                    .and_then(|r| r["reason"].as_str())
+                    .unwrap_or(reason.trim())
+                    .to_owned(),
+            );
         }
         match std::fs::read_to_string(self.path(id)) {
             Ok(text) => StoredText::Text(text),
