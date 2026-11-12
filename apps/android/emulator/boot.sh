@@ -104,22 +104,20 @@ else
   fi
 
   # -no-snapshot: a cold boot each time, so no state survives in a snapshot between runs.
-  nohup emulator -avd "$avd" -port "$port" -no-window -no-audio -no-boot-anim -no-snapshot \
-    -gpu swiftshader_indirect -accel on "${modem[@]}" "${wipe[@]}" "$@" > "$out/emulator.log" 2>&1 &
-  emulator_pid=$!
+  ready="$out/owner-ready-$$"
+  EMULATOR_SERIAL="$serial" EMULATOR_AVD="$avd" \
+    EMULATOR_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}" \
+    nohup node apps/android/emulator/owned-process.mjs "$out" "$ready" emulator \
+    -avd "$avd" -port "$port" -no-window -no-audio -no-boot-anim -no-snapshot \
+    -gpu swiftshader_indirect -accel on "${modem[@]}" "${wipe[@]}" "$@" > "$out/supervisor.log" 2>&1 &
+  for _ in $(seq 1 100); do
+    [ -s "$ready" ] && break
+    sleep 0.1
+  done
+  [ -s "$ready" ] || { echo "emulator supervisor failed; see $out/supervisor.log" >&2; exit 1; }
+  emulator_pid=$(cat "$ready")
+  rm "$ready"
   echo "emulator pid $emulator_pid, log $out/emulator.log" >&2
-  # Record only processes started here. adb disappearing does not establish that QEMU exited.
-  EMULATOR_PID="$emulator_pid" EMULATOR_SERIAL="$serial" EMULATOR_AVD="$avd" \
-    EMULATOR_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}" node --input-type=module -e '
-      import { writeFileSync } from "node:fs";
-      import { processState } from "./apps/android/emulator/reboot.mjs";
-      const pid = Number(process.env.EMULATOR_PID);
-      const state = processState(pid);
-      if (!state) throw new Error("emulator exited before ownership could be recorded");
-      writeFileSync(process.argv[1], JSON.stringify({ pid, start: state.start,
-        serial: process.env.EMULATOR_SERIAL, avd: process.env.EMULATOR_AVD,
-        home: process.env.EMULATOR_AVD_HOME }));
-    ' "$out/owner.json"
 fi
 
 export ANDROID_SERIAL=$serial
