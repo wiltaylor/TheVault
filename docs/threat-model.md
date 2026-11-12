@@ -33,42 +33,42 @@ Transport identity and import escaping remain separate tests. A reader must
 not interpret identical normalised fixtures as independent importer coverage.
 Device rows also use a redeemed pairing token. External-token HTTP assertions
 use redeemed install-code credentials, but their content baseline uses the
-owner's foreground chat because TV-185 will prohibit external chat altogether.
-The separate ignored TV-185 entry test covers both synchronous and background
+owner's foreground chat because TV-185 prohibits external chat altogether.
+The separate active TV-185 entry test covers both synchronous and background
 chat and asserts that no provider was called.
 
 ## Matrix
 
 Each entry names a rule card from `security-decisions`. `B` means active
-least-privilege baseline. `P` means pending enforcement, not passing coverage.
+least-privilege baseline. All listed enforcement checks are active.
 Column names match `crates/server/tests/threat_model.rs`. Every row expands to
 individually named libtest cases. The completeness test rejects missing rows,
 columns and duplicate registrations when either axis is extended.
 
 | Source | held_notes | send | calendar | gmail | code_secrets | agent_skills | tokens_pairing | integrations | browser_login | triggers_backfill |
 |---|---|---|---|---|---|---|---|---|---|---|
-| email | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| sms | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| message | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| call | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| calendar_event | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| web_page | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| shared_note | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| peer_git_sync | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| device_sync | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | HTTP TV-140 scope | HTTP TV-140 scope | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| external_agent_token | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*); HTTP TV-142 | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140; P TV-185 | HTTP TV-142 | HTTP TV-142 | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| agent_run_output | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| skill_zip | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
-| shared_attachment | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; P TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| email | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| sms | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| message | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| call | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| calendar_event | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| web_page | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| shared_note | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| peer_git_sync | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| device_sync | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | HTTP TV-140 scope | HTTP TV-140 scope | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| external_agent_token | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*); HTTP TV-142 | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140; active TV-185 | HTTP TV-142 | HTTP TV-142 | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| agent_run_output | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| skill_zip | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
+| shared_attachment | TV-137 (active) | B (allowlist; TV-171 in ai_outbox/outbox_*) | B TV-136 | B (allowlist; TV-138 in gmail_actions) | B TV-135 | B TV-140 | N: no built-in agent tool | N: no built-in agent tool | B TV-160; active TV-161/TV-167 | B TV-140; HTTP TV-170 |
 
 Attachments of incoming email inherit that email's source and gate. The
 shared_attachment row represents files shared independently of email.
 
-There are 132 active cases: 130 source/capability cells, one completeness
-check and one granted-tool schema control. The 27 pending cases are 13
-Login-grant proposal checks for TV-161, 13 signed profile checks for TV-167 and
-one external-token chat-entry check for TV-185. The latter protects every
-external-token capability. Ignore reasons name their implementation cards.
+There are 159 active cases: 130 source/capability cells, one completeness
+check, one granted-tool schema control, 13 Login-grant proposal checks for
+TV-161, 13 signed profile checks for TV-167 and one external-token chat-entry
+check for TV-185. The latter protects every external-token capability.
+No cases remain pending or ignored.
 
 The TV-137 cells read a held target after each source's payload. Email and
 non-note sources target an incoming email. SMS/message and device sources
@@ -93,9 +93,9 @@ Active browser cells configure a FakeBrowser while keeping the agent's browser
 permission off, so refusal exercises that permission rather than box absence.
 They additionally create a Login secret through the owner API,
 check that metadata omits its password, and verify that the ordinary secret
-reader cannot return it. The pending TV-161 test has an owner-valid grant as a
+reader cannot return it. The active TV-161 test has an owner-valid grant as a
 positive control before checking that an agent proposal still waits for Apply.
-The pending TV-167 test compares two agents' server-selected signed browser
+The active TV-167 test compares two agents' server-selected signed browser
 identities using schema-valid browser commands with no client profile selector.
 
 ## Rule-specific assertions and existing suites
@@ -126,7 +126,7 @@ identities using schema-valid browser commands with no client profile selector.
 - R (TV-170): durable deduplicated bounded trigger jobs, conservative retries,
   owner-session-only previewed backfill. `agent_triggers`, `agent_capacity_retry`.
 - TV-185: external agent tokens cannot drive an in-app agent or apply in its
-  name. Those assertions remain pending until its implementation lands.
+  name. The active entry assertion covers synchronous and background chat.
 
 ## Limits and accepted risks
 
