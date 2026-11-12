@@ -24,12 +24,20 @@ fn session(author: &Author) -> Result<(), ApiError> {
     if matches!(author, Author::Session(_)) {
         Ok(())
     } else {
-        Err(ApiError::new(StatusCode::FORBIDDEN, "session_required", "A signed-in owner session is required"))
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "A signed-in owner session is required",
+        ))
     }
 }
 
 fn stale() -> ApiError {
-    ApiError::new(StatusCode::CONFLICT, "stale_preview", "Preview changed or was consumed. Review a new preview before approving.")
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "stale_preview",
+        "Preview changed or was consumed. Review a new preview before approving.",
+    )
 }
 
 fn ai_error(e: ai::AiError) -> ApiError {
@@ -37,24 +45,37 @@ fn ai_error(e: ai::AiError) -> ApiError {
 }
 
 fn config(w: &Writer) -> Result<(String, Classifier, ai::Account), ApiError> {
-    let source = w.vault().read_text("classifiers/agent_safety.wcl").map_err(writer::Error::from)?;
-    let classifier = Classifier::parse("agent_safety", &source).map_err(|_| ApiError::bad_request("Invalid agent_safety classifier"))?;
+    let source = w
+        .vault()
+        .read_text("classifiers/agent_safety.wcl")
+        .map_err(writer::Error::from)?;
+    let classifier = Classifier::parse("agent_safety", &source)
+        .map_err(|_| ApiError::bad_request("Invalid agent_safety classifier"))?;
     let accounts = Accounts::load(w.state()).map_err(ai_error)?;
-    let account = accounts.pick(classifier.account.as_deref(), None).map_err(ai_error)?.clone();
+    let account = accounts
+        .pick(classifier.account.as_deref(), None)
+        .map_err(ai_error)?
+        .clone();
     if account.kind != ai::Kind::OpenAiCompatible {
-        return Err(ApiError::bad_request("An OpenAI-compatible decisions account is required"));
+        return Err(ApiError::bad_request(
+            "An OpenAI-compatible decisions account is required",
+        ));
     }
     Ok((source, classifier, account))
 }
 
 fn account_hash(account: &ai::Account) -> String {
-    format!("{:x}", Sha256::digest(serde_json::to_vec(account).expect("account")))
+    format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(account).expect("account"))
+    )
 }
 
 pub(crate) fn recover(w: &Writer) -> Result<(), state::Error> {
     if let Some(raw) = w.state().meta(RUN)?
         && let Ok(mut summary) = serde_json::from_str::<Value>(&raw)
-        && summary["status"] == "running" {
+        && summary["status"] == "running"
+    {
         summary["status"] = json!("interrupted_no_retry");
         w.state().set_meta(RUN, &summary.to_string())?;
     }
@@ -69,30 +90,63 @@ struct Item {
 
 fn items(w: &Writer, filter: &Filter) -> Result<Vec<Item>, ApiError> {
     let mut notes = Vec::new();
-    for note in w.held_agent_notes(filter.kind.as_deref(), filter.since.as_deref(), filter.until.as_deref(), filter.reason.as_deref())? {
+    for note in w.held_agent_notes(
+        filter.kind.as_deref(),
+        filter.since.as_deref(),
+        filter.until.as_deref(),
+        filter.reason.as_deref(),
+    )? {
         let id = note["id"].as_str().unwrap_or_default();
-        if filter.ids.as_ref().is_some_and(|ids| !ids.iter().any(|v| v == id)) {
+        if filter
+            .ids
+            .as_ref()
+            .is_some_and(|ids| !ids.iter().any(|v| v == id))
+        {
             continue;
         }
-        notes.push(Item { id: id.into(), fingerprint: w.agent_safety(id)?.fingerprint });
+        notes.push(Item {
+            id: id.into(),
+            fingerprint: w.agent_safety(id)?.fingerprint,
+        });
     }
     notes.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(notes)
 }
 
-fn eligible(w: &Writer, since: &str, until: &str, classifier: &Classifier) -> Result<Vec<Item>, ApiError> {
+fn eligible(
+    w: &Writer,
+    since: &str,
+    until: &str,
+    classifier: &Classifier,
+) -> Result<Vec<Item>, ApiError> {
     let mut result = Vec::new();
-    for item in items(w, &Filter { since: Some(since.into()), until: Some(until.into()), ..Default::default() })? {
+    for item in items(
+        w,
+        &Filter {
+            since: Some(since.into()),
+            until: Some(until.into()),
+            ..Default::default()
+        },
+    )? {
         let note = w.read(&item.id)?;
         // Pre-existing notes and their parents already have durable delivered markers.
         // Never classify arrivals through this path or enqueue a clearance trigger.
-        if matches!(note.type_name.as_str(), "email" | "message" | "call" | "event")
-            && classifier.types.contains(&note.type_name)
-            && w.state().meta(&format!("agent_safety.legacy.{}", item.id))?.is_some()
-            && w.state().meta(&format!("agent_safety.delivered.{}", item.id))?.is_some()
+        if matches!(
+            note.type_name.as_str(),
+            "email" | "message" | "call" | "event"
+        ) && classifier.types.contains(&note.type_name)
+            && w.state()
+                .meta(&format!("agent_safety.legacy.{}", item.id))?
+                .is_some()
+            && w.state()
+                .meta(&format!("agent_safety.delivered.{}", item.id))?
+                .is_some()
             && w.incoming_agent_note(&note.type_name, &note.doc)
-            && w.state().meta(&format!("agent_safety.backfill.attempt.{}", item.id))?.is_none()
-            && crate::classifiers::matches(w, &snapshot(w, &item.id)?, classifier).map_err(ai_error)?
+            && w.state()
+                .meta(&format!("agent_safety.backfill.attempt.{}", item.id))?
+                .is_none()
+            && crate::classifiers::matches(w, &snapshot(w, &item.id)?, classifier)
+                .map_err(ai_error)?
         {
             result.push(item);
         }
@@ -102,7 +156,17 @@ fn eligible(w: &Writer, since: &str, until: &str, classifier: &Classifier) -> Re
 
 fn snapshot(w: &Writer, id: &str) -> Result<writer::Saved, ApiError> {
     let note = w.read(id)?;
-    Ok(writer::Saved { id: note.id, type_name: note.type_name, version: note.version, wcl: note.wcl, event: writer::Event::Update, previous: None, restored: false, author: None, also: vec![] })
+    Ok(writer::Saved {
+        id: note.id,
+        type_name: note.type_name,
+        version: note.version,
+        wcl: note.wcl,
+        event: writer::Event::Update,
+        previous: None,
+        restored: false,
+        author: None,
+        also: vec![],
+    })
 }
 
 #[derive(Deserialize)]
@@ -125,7 +189,11 @@ struct Preview {
     estimated_usd: f64,
 }
 
-pub async fn preview(State(w): State<Arc<Writer>>, Caller(author): Caller, Json(input): Json<EstimateInput>) -> Result<Json<Value>, ApiError> {
+pub async fn preview(
+    State(w): State<Arc<Writer>>,
+    Caller(author): Caller,
+    Json(input): Json<EstimateInput>,
+) -> Result<Json<Value>, ApiError> {
     session(&author)?;
     blocking(w, move |w| {
         let _guard = APPROVAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -161,7 +229,11 @@ pub struct Approval {
     approve: bool,
 }
 
-pub async fn start(State(w): State<Arc<Writer>>, Caller(author): Caller, Json(input): Json<Approval>) -> Result<Json<Value>, ApiError> {
+pub async fn start(
+    State(w): State<Arc<Writer>>,
+    Caller(author): Caller,
+    Json(input): Json<Approval>,
+) -> Result<Json<Value>, ApiError> {
     session(&author)?;
     let worker = w.clone();
     blocking(w, move |w| {
@@ -190,16 +262,22 @@ pub async fn start(State(w): State<Arc<Writer>>, Caller(author): Caller, Json(in
 }
 
 fn run(w: &Writer, p: &Preview, classifier: &Classifier) -> Result<(), ApiError> {
-    let mut summary: Value = serde_json::from_str(&w.state().meta(RUN)?.ok_or_else(stale)?).map_err(|_| stale())?;
+    let mut summary: Value =
+        serde_json::from_str(&w.state().meta(RUN)?.ok_or_else(stale)?).map_err(|_| stale())?;
     for item in &p.notes {
         // One sequential request, at most one start per second, never retried.
         let (source, _, account) = config(w)?;
-        if source != p.source || account_hash(&account) != p.account { return Err(stale()); }
-        w.state().set_meta(&format!("agent_safety.backfill.attempt.{}", item.id), "1")?;
+        if source != p.source || account_hash(&account) != p.account {
+            return Err(stale());
+        }
+        w.state()
+            .set_meta(&format!("agent_safety.backfill.attempt.{}", item.id), "1")?;
         let outcome = decide_one(w, item, classifier, &account);
         summary["attempted"] = json!(summary["attempted"].as_u64().unwrap_or(0) + 1);
         match outcome {
-            Ok((true, _)) => summary["allowed"] = json!(summary["allowed"].as_u64().unwrap_or(0) + 1),
+            Ok((true, _)) => {
+                summary["allowed"] = json!(summary["allowed"].as_u64().unwrap_or(0) + 1)
+            }
             Ok((false, reason)) => {
                 let count = summary["held"][&reason].as_u64().unwrap_or(0) + 1;
                 summary["held"][reason] = json!(count);
@@ -211,29 +289,61 @@ fn run(w: &Writer, p: &Preview, classifier: &Classifier) -> Result<(), ApiError>
     }
     summary["status"] = json!("complete");
     w.state().set_meta(RUN, &summary.to_string())?;
-    w.state().record_activity(state::NewActivity::new("agent_safety.backfill.complete", "notes", &Author::Session("owner".into()), summary.to_string()));
+    w.state().record_activity(state::NewActivity::new(
+        "agent_safety.backfill.complete",
+        "notes",
+        &Author::Session("owner".into()),
+        summary.to_string(),
+    ));
     Ok(())
 }
 
-fn decide_one(w: &Writer, item: &Item, classifier: &Classifier, account: &ai::Account) -> Result<(bool, String), ApiError> {
+fn decide_one(
+    w: &Writer,
+    item: &Item,
+    classifier: &Classifier,
+    account: &ai::Account,
+) -> Result<(bool, String), ApiError> {
     let note = w.read(&item.id)?;
     let envelope = w.agent_safety_envelope(&note.type_name, &note.doc);
-    if writer::agent_safety::envelope_fingerprint(&envelope) != item.fingerprint || w.agent_safety(&item.id)?.allowed() { return Err(stale()); }
+    if writer::agent_safety::envelope_fingerprint(&envelope) != item.fingerprint
+        || w.agent_safety(&item.id)?.allowed()
+    {
+        return Err(stale());
+    }
     if envelope.to_string().len() > writer::agent_safety::ENVELOPE_LIMIT {
-        if !w.finish_agent_safety_backfill(&item.id, &item.fingerprint, "held", "too_large")? { return Err(stale()); }
+        if !w.finish_agent_safety_backfill(&item.id, &item.fingerprint, "held", "too_large")? {
+            return Err(stale());
+        }
         return Ok((false, "too_large".into()));
     }
     let saved = snapshot(w, &item.id)?;
-    if !crate::classifiers::matches(w, &saved, classifier).map_err(ai_error)? { return Err(stale()); }
+    if !crate::classifiers::matches(w, &saved, classifier).map_err(ai_error)? {
+        return Err(stale());
+    }
     let mut request = crate::classifiers::request(&saved, classifier).map_err(ai_error)?;
     request.state = envelope;
     let credential = Credentials::resolve(w.state(), account).map_err(ai_error)?;
     let result = decisions::decide(&credential, &request, Duration::from_secs(30));
-    let usage = result.as_ref().map_or_else(|e| e.usage, |r| ai::Usage { input: r.usage.input_tokens, output: r.usage.output_tokens });
-    w.state().record_ai_usage(&account.id, &request.model, "safety_backfill", usage.input, usage.output)?;
+    let usage = result.as_ref().map_or_else(
+        |e| e.usage,
+        |r| ai::Usage {
+            input: r.usage.input_tokens,
+            output: r.usage.output_tokens,
+        },
+    );
+    w.state().record_ai_usage(
+        &account.id,
+        &request.model,
+        "safety_backfill",
+        usage.input,
+        usage.output,
+    )?;
     let (allowed, reason) = match result {
         Ok(response) => match response.answers.get("reason") {
-            Some(decisions::Answer::Choice { choice, .. }) => (!classifier.withhold.contains(choice), choice.clone()),
+            Some(decisions::Answer::Choice { choice, .. }) => {
+                (!classifier.withhold.contains(choice), choice.clone())
+            }
             _ => return Err(ApiError::bad_request("Invalid safety decision")),
         },
         Err(_) => {
@@ -241,16 +351,31 @@ fn decide_one(w: &Writer, item: &Item, classifier: &Classifier, account: &ai::Ac
             return Err(ApiError::bad_request("Decision failed, no retry"));
         }
     };
-    if !w.finish_agent_safety_backfill(&item.id, &item.fingerprint, if allowed { "allowed" } else { "held" }, &reason)? { return Err(stale()); }
+    if !w.finish_agent_safety_backfill(
+        &item.id,
+        &item.fingerprint,
+        if allowed { "allowed" } else { "held" },
+        &reason,
+    )? {
+        return Err(stale());
+    }
     Ok((allowed, reason))
 }
 
-pub async fn progress(State(w): State<Arc<Writer>>, Caller(author): Caller) -> Result<Json<Value>, ApiError> {
+pub async fn progress(
+    State(w): State<Arc<Writer>>,
+    Caller(author): Caller,
+) -> Result<Json<Value>, ApiError> {
     session(&author)?;
     blocking(w, |w| {
-        let value = w.state().meta(RUN)?.and_then(|s| serde_json::from_str::<Value>(&s).ok()).unwrap_or(json!({"status":"not_started"}));
+        let value = w
+            .state()
+            .meta(RUN)?
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or(json!({"status":"not_started"}));
         Ok::<_, ApiError>(Json(value))
-    }).await
+    })
+    .await
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -265,38 +390,67 @@ pub struct Filter {
 }
 
 #[derive(Deserialize, Serialize)]
-struct ReleasePreview { id: String, filter: Filter, notes: Vec<Item> }
+struct ReleasePreview {
+    id: String,
+    filter: Filter,
+    notes: Vec<Item>,
+}
 
-pub async fn release_preview(State(w): State<Arc<Writer>>, Caller(author): Caller, Json(filter): Json<Filter>) -> Result<Json<Value>, ApiError> {
+pub async fn release_preview(
+    State(w): State<Arc<Writer>>,
+    Caller(author): Caller,
+    Json(filter): Json<Filter>,
+) -> Result<Json<Value>, ApiError> {
     session(&author)?;
     blocking(w, move |w| {
         let _guard = APPROVAL.lock().unwrap_or_else(|e| e.into_inner());
         let notes = items(w, &filter)?;
-        let p = ReleasePreview { id: ulid::Ulid::new().to_string(), filter, notes };
-        w.state().set_meta(RELEASE, &serde_json::to_string(&p).expect("preview"))?;
+        let p = ReleasePreview {
+            id: ulid::Ulid::new().to_string(),
+            filter,
+            notes,
+        };
+        w.state()
+            .set_meta(RELEASE, &serde_json::to_string(&p).expect("preview"))?;
         Ok::<_, ApiError>(Json(json!({"preview":p.id,"count":p.notes.len()})))
-    }).await
+    })
+    .await
 }
 
-pub async fn release(State(w): State<Arc<Writer>>, Caller(author): Caller, Json(input): Json<Approval>) -> Result<Json<Value>, ApiError> {
+pub async fn release(
+    State(w): State<Arc<Writer>>,
+    Caller(author): Caller,
+    Json(input): Json<Approval>,
+) -> Result<Json<Value>, ApiError> {
     session(&author)?;
     blocking(w, move |w| {
         let _guard = APPROVAL.lock().unwrap_or_else(|e| e.into_inner());
         let raw = w.state().meta(RELEASE)?.ok_or_else(stale)?;
         let p: ReleasePreview = serde_json::from_str(&raw).map_err(|_| stale())?;
-        if !input.approve || input.preview != p.id || items(w, &p.filter)? != p.notes { return Err(stale()); }
+        if !input.approve || input.preview != p.id || items(w, &p.filter)? != p.notes {
+            return Err(stale());
+        }
         w.state().set_meta(RELEASE, "consumed")?;
         let mut released = 0;
         let mut released_ids = Vec::new();
         let mut failed = 0;
         for item in p.notes {
             match w.release_agent_safety(&item.id, &item.fingerprint, &author) {
-                Ok(true) => { released += 1; released_ids.push(item.id); },
+                Ok(true) => {
+                    released += 1;
+                    released_ids.push(item.id);
+                }
                 _ => failed += 1,
             }
         }
         let summary = json!({"released":released,"failed":failed,"released_ids":released_ids});
-        w.state().record_activity(state::NewActivity::new("agent_safety.bulk_release", "notes", &author, summary.to_string()));
+        w.state().record_activity(state::NewActivity::new(
+            "agent_safety.bulk_release",
+            "notes",
+            &author,
+            summary.to_string(),
+        ));
         Ok(Json(summary))
-    }).await
+    })
+    .await
 }

@@ -33,23 +33,45 @@ fn create(w: &Writer, title: &str) -> writer::Saved {
 fn backfill_clears_parent_and_member_without_trigger_but_ordinary_clearance_delivers() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();
-    std::fs::write(dir.path().join("types/email_thread.wcl"), "label = \"Thread\"\ntemplate default { tab Main { slot title } }\n").unwrap();
+    std::fs::write(
+        dir.path().join("types/email_thread.wcl"),
+        "label = \"Thread\"\ntemplate default { tab Main { slot title } }\n",
+    )
+    .unwrap();
     let w = open(dir.path());
     w.activate_agent_safety().unwrap();
-    let parent = w.create("email_thread", &Input::Json(serde_json::json!({"fields":{"title":"Parent"}})), &Author::Session("owner".into())).unwrap();
-    let member = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Member","thread":parent.id}})), &Author::Session("owner".into())).unwrap();
+    let parent = w
+        .create(
+            "email_thread",
+            &Input::Json(serde_json::json!({"fields":{"title":"Parent"}})),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
+    let member = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Member","thread":parent.id}})),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
     let hash = w.agent_safety(&parent.id).unwrap().fingerprint;
-    w.finish_agent_safety(&parent.id, &hash, "allowed", "allow").unwrap();
+    w.finish_agent_safety(&parent.id, &hash, "allowed", "allow")
+        .unwrap();
     assert!(!w.agent_may_read(&parent.id));
     let hash = w.agent_safety(&member.id).unwrap().fingerprint;
-    w.finish_agent_safety_backfill(&member.id, &hash, "allowed", "allow").unwrap();
+    w.finish_agent_safety_backfill(&member.id, &hash, "allowed", "allow")
+        .unwrap();
     assert!(w.agent_may_read(&member.id));
     assert!(w.agent_may_read(&parent.id));
     assert!(w.state().agent_safety_clearances().unwrap().is_empty());
     let ordinary = create(&w, "Ordinary arrival");
     let hash = w.agent_safety(&ordinary.id).unwrap().fingerprint;
-    w.finish_agent_safety(&ordinary.id, &hash, "allowed", "allow").unwrap();
-    assert_eq!(w.state().agent_safety_clearances().unwrap(), vec![ordinary.id]);
+    w.finish_agent_safety(&ordinary.id, &hash, "allowed", "allow")
+        .unwrap();
+    assert_eq!(
+        w.state().agent_safety_clearances().unwrap(),
+        vec![ordinary.id]
+    );
 }
 
 #[test]

@@ -78,7 +78,13 @@ impl State {
     }
 
     /// Backfill consumes the arrival marker without enqueueing an agent trigger.
-    pub fn set_agent_safety_result_delivery(&self, id: &str, value: &str, cleared: bool, deliver: bool) -> Result<()> {
+    pub fn set_agent_safety_result_delivery(
+        &self,
+        id: &str,
+        value: &str,
+        cleared: bool,
+        deliver: bool,
+    ) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [format!("agent_safety.note.{id}"), value.to_owned()])?;

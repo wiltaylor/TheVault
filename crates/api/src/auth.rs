@@ -349,7 +349,11 @@ pub fn human_only() -> ApiError {
 /// [`human_only`] for `path`.
 fn human_only_for(path: &str) -> ApiError {
     if path.starts_with("/api/agent-safety/") {
-        return ApiError::new(StatusCode::FORBIDDEN, "human_only", "Only a signed-in owner may approve safety actions.");
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "human_only",
+            "Only a signed-in owner may approve safety actions.",
+        );
     }
     if path == "/api/ai/usage" {
         return ApiError::new(

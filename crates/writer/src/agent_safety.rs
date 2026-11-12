@@ -522,7 +522,8 @@ impl Writer {
                 && (safety.status == "released" || self.safety_member_cleared(&parent)?);
             self.state().index_agent_safety(&parent, &hash, !allowed)?;
             if allowed {
-                self.state().set_agent_safety_result_delivery(&parent, &raw, true, deliver)?;
+                self.state()
+                    .set_agent_safety_result_delivery(&parent, &raw, true, deliver)?;
             }
         }
         if self.state().indexed_agent_safety_hash(member)?.is_none() {
@@ -934,11 +935,24 @@ impl Writer {
     }
 
     /// Historical classification clears the gate, including parents, without agent arrivals.
-    pub fn finish_agent_safety_backfill(&self, id: &str, hash: &str, status: &str, reason: &str) -> Result<bool> {
+    pub fn finish_agent_safety_backfill(
+        &self,
+        id: &str,
+        hash: &str,
+        status: &str,
+        reason: &str,
+    ) -> Result<bool> {
         self.finish_agent_safety_delivery(id, hash, status, reason, false)
     }
 
-    fn finish_agent_safety_delivery(&self, id: &str, hash: &str, status: &str, reason: &str, deliver: bool) -> Result<bool> {
+    fn finish_agent_safety_delivery(
+        &self,
+        id: &str,
+        hash: &str,
+        status: &str,
+        reason: &str,
+        deliver: bool,
+    ) -> Result<bool> {
         let _guard = self.write_lock();
         let note = self.read(id)?;
         // The owner may still release a pre-envelope hold using the fingerprint
