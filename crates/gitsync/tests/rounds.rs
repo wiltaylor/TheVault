@@ -14,30 +14,54 @@ fn peer_note_over_thread(legacy_row: bool) {
     let b = Instance::start("B");
     let key = SyncKey::parse(&b.generate_key()).unwrap();
     b.configure(&repo.url(), "from *", "from *", json!({}));
-    let thread = b.call("POST", "/api/agents/assistant/threads", Some(json!({})), 201);
+    let thread = b.call(
+        "POST",
+        "/api/agents/assistant/threads",
+        Some(json!({})),
+        201,
+    );
     let id = s(&thread["id"]);
     let before = b.note(id).unwrap();
     let peer = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
     let layout = Layout::new(&key, peer);
-    let mut manifest = Manifest::new(Named { vault_id: peer.into(), name: "Old peer".into() });
+    let mut manifest = Manifest::new(Named {
+        vault_id: peer.into(),
+        name: "Old peer".into(),
+    });
     let text = memo("Peer memo", "share", "yes");
     let hash = gitsync::pack::sha256_hex(text.as_bytes());
     let mut files = BTreeMap::new();
-    manifest.types.push(gitsync::DefEntry { name: "memo".into(), path: layout.type_def("memo") });
+    manifest.types.push(gitsync::DefEntry {
+        name: "memo".into(),
+        path: layout.type_def("memo"),
+    });
     files.insert(layout.type_def("memo"), key.seal(MEMO.as_bytes()));
     if legacy_row {
-        let state = state::State::open(&b.server.vault_path().join(".vault/state.db"), None).unwrap();
-        state.gitsync_put(&state::GitsyncNote {
-            note_id: id.into(), peer_vault_id: peer.into(), origin: peer.into(),
-            base: s(&before["wcl"]).as_bytes().to_vec(), base_hash: hash,
-            archived_by_sync: false,
-        }).unwrap();
+        let state =
+            state::State::open(&b.server.vault_path().join(".vault/state.db"), None).unwrap();
+        state
+            .gitsync_put(&state::GitsyncNote {
+                note_id: id.into(),
+                peer_vault_id: peer.into(),
+                origin: peer.into(),
+                base: s(&before["wcl"]).as_bytes().to_vec(),
+                base_hash: hash,
+                archived_by_sync: false,
+            })
+            .unwrap();
     } else {
         manifest.notes.push(gitsync::NoteEntry {
-            id: id.into(), note_type: "memo".into(), origin: peer.into(),
-            hash, path: layout.note(id), assets: vec![],
+            id: id.into(),
+            note_type: "memo".into(),
+            origin: peer.into(),
+            hash,
+            path: layout.note(id),
+            assets: vec![],
         });
-        files.insert(layout.note(id), gitsync::pack::seal_note(&key, "memo", text.as_bytes()));
+        files.insert(
+            layout.note(id),
+            gitsync::pack::seal_note(&key, "memo", text.as_bytes()),
+        );
     }
     files.insert(layout.manifest(), manifest.seal(&key));
     let temp = tempfile::tempdir().unwrap();
@@ -48,15 +72,28 @@ fn peer_note_over_thread(legacy_row: bool) {
     git.force_push(&commit, &layout.branch()).unwrap();
     for _ in 0..2 {
         let report = b.sync();
-        assert!(report["skipped_branches"].as_array().unwrap().is_empty(), "{report}");
-        assert!(report["warnings"].as_array().unwrap().is_empty(), "{report}");
+        assert!(
+            report["skipped_branches"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
+        assert!(
+            report["warnings"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
         assert!(ids(&report, "archived").is_empty(), "{report}");
         assert_eq!(b.note(id).unwrap()["version"], before["version"]);
         assert_eq!(b.note(id).unwrap()["wcl"], before["wcl"]);
     }
     if legacy_row {
-        let state = state::State::open(&b.server.vault_path().join(".vault/state.db"), None).unwrap();
-        assert!(!state.gitsync_get(id, peer).unwrap().unwrap().archived_by_sync);
+        let state =
+            state::State::open(&b.server.vault_path().join(".vault/state.db"), None).unwrap();
+        assert!(
+            !state
+                .gitsync_get(id, peer)
+                .unwrap()
+                .unwrap()
+                .archived_by_sync
+        );
     }
 }
 
