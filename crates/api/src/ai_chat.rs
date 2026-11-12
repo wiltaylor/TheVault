@@ -1588,7 +1588,10 @@ fn setup(
             .permissions
             .browser
             .then(crate::ai_browser::BrowserBox::from_env)
-            .flatten(),
+            .flatten()
+            .map(|b| w.browser_profile(&agent.name).map(|id| b.with_profile(id)))
+            .transpose()
+            .map_err(|e| AiError::new(ErrorKind::Unavailable, e.to_string()))?,
     })
 }
 
@@ -1893,6 +1896,28 @@ impl Turn {
                 return;
             }
         };
+        crate::ai_browser::cleanup_retired(self.writer.clone());
+        let temporary_browser = if self.sub.as_ref().is_some_and(|s| s.throwaway) {
+            if let Some(b) = setup.browser.take() {
+                let id = ulid::Ulid::new().to_string();
+                if let Err(e) = self.writer.begin_temporary_browser_profile(&id) {
+                    self.failed(&AiError::new(ErrorKind::Unavailable, e.to_string()), &[])
+                        .await;
+                    return;
+                }
+                Some(crate::ai_browser::TemporaryProfile(
+                    b.with_profile(id),
+                    self.writer.clone(),
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(b) = &temporary_browser {
+            setup.browser = Some(b.0.clone());
+        }
         if crate::auth::is_agent_token(&self.owner) {
             setup.direct.agents = false;
             setup.direct.skills = false;
@@ -2419,6 +2444,9 @@ impl Turn {
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                if c.name == "propose_agent_delete" {
+                    crate::ai_browser::cleanup_retired(self.writer.clone());
+                }
                 if let Some(line) = got.summary["gmail_skipped"].as_str() {
                     self.report(|r| r.log.push(line.to_owned()));
                 }

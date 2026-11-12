@@ -21,7 +21,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use schema::{
     Agent, AgentPermissions, Invalid, Issue, MentionTrigger, NoteEvent, Schedule, Trigger,
@@ -642,6 +642,44 @@ pub async fn put(
     ))
 }
 
+/// `POST /api/agents/{name}/browser-profile/reset`, an owner action, never an agent tool.
+pub async fn reset_browser_profile(
+    State(w): Shared,
+    Caller(by): Caller,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let id = blocking(w.clone(), move |w| {
+        let allowed = match &by {
+            state::Author::Session(_) => true,
+            state::Author::Token(token) => {
+                !crate::auth::is_agent_token(&by)
+                    && !token.starts_with("device-")
+                    && w.state().device_for_token(token)?.is_none()
+                    && w.state()
+                        .list_tokens()?
+                        .iter()
+                        .any(|t| t.name == *token && t.scope == state::Scope::Admin)
+            }
+            _ => false,
+        };
+        if !allowed {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "Reset browser profile requires an owner session or admin user token",
+            ));
+        }
+        Ok::<_, ApiError>(w.reset_browser_profile(&name)?)
+    })
+    .await?;
+    crate::ai_browser::cleanup_retired(w.clone());
+    let pending = id.is_some_and(|id| {
+        w.retired_browser_profiles()
+            .is_ok_and(|ids| ids.contains(&id))
+    });
+    Ok(Json(json!({"reset": true, "cleanup_pending": pending})))
+}
+
 /// `DELETE /api/agents/{name}`.
 pub async fn delete(
     State(w): Shared,
@@ -649,10 +687,11 @@ pub async fn delete(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let n = name.clone();
-    blocking(w, move |w| {
+    blocking(w.clone(), move |w| {
         let _acting = writer::acting_as(&by);
         w.delete_agent(&n)
     })
     .await?;
+    crate::ai_browser::cleanup_retired(w.clone());
     Ok(Json(json!({ "name": name, "deleted": true })))
 }

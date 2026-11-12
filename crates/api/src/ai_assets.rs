@@ -149,7 +149,7 @@ pub fn find_assets(w: &Writer, input: &Value) -> Read {
         if total == 1 { "" } else { "s" }
     );
     Read {
-        content: json!({ "assets": assets, "total": total }).to_string(),
+        content: json!({ "assets": assets, "total": total, "notice": "Attachments and original HTML of incoming messages are not available to agents. Do not retry." }).to_string(),
         is_error: false,
         parts: Vec::new(),
         summary: json!({ "notes": [], "assets": assets, "total": total, "message": message }),
@@ -166,7 +166,9 @@ pub fn read_asset(w: &Writer, input: &Value, may_send_image: bool, images: &Imag
         return Read::error("id must be a non-empty string");
     };
     if !w.agent_may_read_asset(id) {
-        return Read::error("Asset is held from agents.");
+        return Read::error(
+            "Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.",
+        );
     }
     let asset = match w.asset_info(id) {
         Ok(a) => a,
@@ -300,7 +302,7 @@ pub fn extracted_note(kind: TextKind, text: &str) -> String {
 /// Image asset `id` as it is sent, prepared once a turn.
 fn load_image(w: &Writer, id: &str, media: &str, images: &Images) -> Result<ImageData, String> {
     if schema::is_ulid(id) && !w.agent_may_read_asset(id) {
-        return Err("Asset is held from agents.".into());
+        return Err("Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.".into());
     }
     if let Some(got) = images.lock().unwrap_or_else(|e| e.into_inner()).get(id) {
         return got.clone();
@@ -437,6 +439,7 @@ pub fn note_assets(w: &Writer, note: &Value) -> Vec<Value> {
     walk(&note["fields"], &mut ids);
     walk(&note["blocks"], &mut ids);
     ids.iter()
+        .filter(|id| w.agent_may_read_asset(id))
         .filter_map(|id| w.asset_info(id).ok())
         .map(|a| {
             json!({

@@ -31,6 +31,7 @@ const agentMemories = vi.fn();
 const createAgentMemory = vi.fn();
 const updateAgentMemory = vi.fn();
 const deleteAgentMemory = vi.fn();
+const resetBrowserProfile = vi.fn();
 const skillsList = vi.fn();
 const secrets = vi.fn().mockResolvedValue([]);
 vi.mock("../api", async (orig) => {
@@ -56,6 +57,7 @@ vi.mock("../api", async (orig) => {
       createAgentMemory,
       updateAgentMemory,
       deleteAgentMemory,
+      resetBrowserProfile,
       skills: skillsList,
       secrets,
     },
@@ -172,6 +174,7 @@ function status(): AiStatus {
 }
 
 beforeEach(async () => {
+  resetBrowserProfile.mockReset().mockResolvedValue({ reset: true, cleanup_pending: false });
   agent.mockResolvedValue(triage());
   putAgent.mockImplementation(async (name: string, body: Partial<Agent> | { wcl: string }) =>
     "wcl" in body ? triage({ wcl: body.wcl as string }) : { ...triage(), ...body, name, wcl: "saved\n" },
@@ -725,6 +728,33 @@ describe("the Permissions tab", () => {
     fireEvent.click(p.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(putAgent).toHaveBeenCalled());
     expect((sent().permissions as { browser_secrets: string[] }).browser_secrets).toEqual(["bank"]);
+  });
+
+  it("resets only the current agent after confirmation and reports offline cleanup or an error", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      await open("/agents/inbox_triage/settings/permissions");
+      const button = await screen.findByRole("button", { name: "Reset browser profile" });
+      fireEvent.click(button);
+      expect(resetBrowserProfile).not.toHaveBeenCalled();
+      confirm.mockReturnValue(true);
+      fireEvent.click(button);
+      await waitFor(() => expect(resetBrowserProfile).toHaveBeenCalledWith("inbox_triage"));
+      expect(await screen.findByRole("status")).toHaveTextContent("next browser action starts empty");
+      resetBrowserProfile.mockResolvedValueOnce({ reset: true, cleanup_pending: true });
+      fireEvent.click(button);
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("when the browser box is available"));
+      resetBrowserProfile.mockRejectedValueOnce(new Error("box cleanup refused"));
+      fireEvent.click(button);
+      expect(await screen.findByRole("alert")).toHaveTextContent("box cleanup refused");
+    } finally { confirm.mockRestore(); }
+  });
+
+  it("does not offer profile reset in a device app", async () => {
+    appInfo.mockResolvedValue({ platform: "android" });
+    await open("/agents/inbox_triage/settings/permissions");
+    expect(await screen.findByRole("switch", { name: "Browser automation" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reset browser profile" })).toBeNull();
   });
 
   it("shows Browser automation off with its warning line, and saves it on", async () => {

@@ -142,6 +142,7 @@ dependencies = [
  "clients",
  "futures-util",
  "gitsync",
+ "hmac",
  "hyper",
  "hyper-util",
  "image",

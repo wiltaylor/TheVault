@@ -30,6 +30,327 @@ fn create(w: &Writer, title: &str) -> writer::Saved {
 }
 
 #[test]
+fn incoming_assets_release_and_shared_local_reference_do_not_clear_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.put_type(
+        "memo",
+        "label = \"Memo\"\nfield file { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n",
+    )
+    .unwrap();
+    // The test email type needs an asset field just as the shipped incoming type does.
+    w.put_type(
+        "email",
+        "label = \"Email\"\nfield file { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n",
+    )
+    .unwrap();
+    w.activate_agent_safety().unwrap();
+    let asset = w
+        .put_asset("private.csv", b"code\nzebraquartz917\n".to_vec())
+        .unwrap();
+    let local = w.put_asset("local.txt", b"LOCAL".to_vec()).unwrap();
+    let owner = Author::Session("owner".into());
+    let note = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Incoming", "file":asset.id}})),
+            &owner,
+        )
+        .unwrap();
+    w.create(
+        "memo",
+        &Input::Json(serde_json::json!({"fields":{"title":"Shared", "file":asset.id}})),
+        &owner,
+    )
+    .unwrap();
+    w.create(
+        "memo",
+        &Input::Json(serde_json::json!({"fields":{"title":"Local", "file":local.id}})),
+        &owner,
+    )
+    .unwrap();
+    let hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    w.release_agent_safety(&note.id, &hash, &owner).unwrap();
+    assert!(w.agent_may_read(&note.id));
+    assert!(!w.agent_may_read_asset(&asset.id));
+    assert!(w.agent_may_read_asset(&local.id));
+    assert_eq!(
+        script_core::Vault::search(&w, "zebraquartz917", 10, script_core::Archived::Exclude)
+            .unwrap()
+            .len(),
+        2
+    );
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    assert!(
+        script_core::Vault::search(&w, "zebraquartz917", 10, script_core::Archived::Exclude)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        script_core::Vault::asset(&w, &asset.id)
+            .unwrap_err()
+            .contains("not available to agents")
+    );
+    assert!(script_core::Vault::asset(&w, &local.id).is_ok());
+    let listed = script_core::Vault::assets(&w).unwrap();
+    assert!(
+        !serde_json::to_string(&listed)
+            .unwrap()
+            .contains("private.csv")
+    );
+    drop(_acting);
+    w.delete(&note.id, Some(&note.version), &owner).unwrap();
+    w.purge_from_trash(&note.id).unwrap();
+    assert!(!w.agent_may_read_asset(&asset.id));
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    assert!(script_core::Vault::asset(&w, &asset.id).is_err());
+    drop(_acting);
+    drop(w);
+    let w = open(dir.path());
+    assert!(!w.agent_may_read_asset(&asset.id));
+}
+
+#[test]
+fn incoming_assets_google_upload_is_marked_before_note_creation() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    for name in ["google_gmail", "google_calendar", "google_mail"] {
+        script_core::run::start(script_core::run::Run {
+            job: script_core::Job::new(script_core::Kind::Task, name, "", "main"),
+            limits: script_core::Limits::default(),
+            author: Author::Task(name.into()),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(30),
+            log: String::new(),
+            timed_out: false,
+        });
+        let asset = w
+            .put_asset("imported.txt", b"PRIVATE_BYTES".to_vec())
+            .unwrap();
+        script_core::run::finish();
+        assert!(!w.agent_may_read_asset(&asset.id));
+        assert!(w.asset_usage(&asset.id).unwrap().notes.is_empty());
+    }
+}
+
+#[test]
+#[ignore = "manual migration timing fixture"]
+fn round4_migration_timing_5000_assets_and_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(dir.path()).unwrap();
+    std::fs::create_dir_all(dir.path().join("types")).unwrap();
+    std::fs::create_dir_all(dir.path().join("notes/memo")).unwrap();
+    std::fs::write(
+        dir.path().join("types/memo.wcl"),
+        "label = \"Memo\"\ntemplate default { tab Main { slot title } }\n",
+    )
+    .unwrap();
+    for i in 0..5000 {
+        let note = ulid::Ulid::new().to_string();
+        let asset = ulid::Ulid::new().to_string();
+        std::fs::write(
+            dir.path().join(format!("notes/memo/{note}.wcl")),
+            format!("title = \"Local {i}\"\n"),
+        )
+        .unwrap();
+        let path = dir.path().join(format!("assets/{asset}"));
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("orphan.txt"), b"ORPHAN").unwrap();
+    }
+    let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+    let w = Writer::open(vault, state).unwrap();
+    assert_eq!(w.assets().unwrap().len(), 5000);
+    assert_eq!(
+        w.list_with(None, writer::Archived::Include).unwrap().len(),
+        5000
+    );
+    let start = std::time::Instant::now();
+    w.activate_agent_safety().unwrap();
+    println!(
+        "5000 assets / 5000 notes activation: {:.3}s",
+        start.elapsed().as_secs_f64()
+    );
+    for asset in w.assets().unwrap() {
+        assert!(!w.agent_may_read_asset(&asset.id));
+    }
+}
+
+#[test]
+fn round4_upgrade_marks_asset_trash_before_restore() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let asset = w
+        .put_asset("BINNED_SECRET.txt", b"PRIVATE".to_vec())
+        .unwrap();
+    w.cleanup_assets(Some(std::slice::from_ref(&asset.id)), false)
+        .unwrap();
+    assert_eq!(w.asset_trash().len(), 1);
+    let w = round4_upgrade(w, dir.path());
+    w.activate_agent_safety().unwrap();
+    w.restore_asset(&asset.id).unwrap();
+    assert!(!w.agent_may_read_asset(&asset.id));
+}
+
+#[test]
+fn round4_upgrade_preserves_local_and_type_only_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    for kind in ["memo", "email"] {
+        w.put_type(kind, "label = \"Note\"\nfield file { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    }
+    let local = w.put_asset("local.txt", b"LOCAL".to_vec()).unwrap();
+    let incoming = w.put_asset("incoming.txt", b"PRIVATE".to_vec()).unwrap();
+    let template = w.put_asset("template.png", b"image".to_vec()).unwrap();
+    for (kind, asset) in [("memo", &local), ("email", &incoming)] {
+        w.create(
+            kind,
+            &Input::Json(
+                serde_json::json!({"fields":{"title":"Before activation", "file":asset.id}}),
+            ),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
+    }
+    w.put_type("template_note", &format!("label = \"Template\"\nfield desk {{ kind = \"location\" map = \"image\" image = \"{}\" }}\ntemplate default {{ tab Main {{ slot title }} }}\n", template.id)).unwrap();
+    let w = round4_upgrade(w, dir.path());
+    w.activate_agent_safety().unwrap();
+    assert!(
+        w.agent_may_read_asset(&local.id),
+        "pre-activation local file must remain readable"
+    );
+    assert!(!w.agent_may_read_asset(&incoming.id));
+    assert!(
+        w.agent_may_read_asset(&template.id),
+        "type-only file is not an orphan"
+    );
+}
+
+#[test]
+fn round4_in_app_agent_cannot_cleanup_or_restore_assets() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let asset = w.put_asset("SECRET.txt", b"PRIVATE".to_vec()).unwrap();
+    w.cleanup_assets(Some(std::slice::from_ref(&asset.id)), false)
+        .unwrap();
+    let _acting = writer::acting_as(&Author::Agent("reader".into()));
+    assert!(w.cleanup_assets(None, true).is_err());
+    assert!(w.cleanup_assets(None, false).is_err());
+    assert!(w.restore_asset(&asset.id).is_err());
+}
+
+fn round4_upgrade(w: Writer, path: &std::path::Path) -> Writer {
+    let vault = store::Vault::init(path).unwrap();
+    let db = vault.server_dir().join("state.db");
+    drop(w);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("DELETE FROM meta WHERE key LIKE 'agent_safety.%'", [])
+        .unwrap();
+    drop(conn);
+    Writer::open(vault, state::State::open(&db, None).unwrap()).unwrap()
+}
+
+#[test]
+fn round3_migration_denies_previously_unlinked_incoming_asset() {
+    check_round3_orphan_migration(true);
+}
+
+#[test]
+fn round3_migration_denies_never_linked_import_asset() {
+    check_round3_orphan_migration(false);
+}
+
+fn check_round3_orphan_migration(unlink: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    for kind in ["email", "memo"] {
+        w.put_type(kind, "label = \"Note\"\nfield file { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    }
+    w.activate_agent_safety().unwrap();
+    let orphan = w.put_asset("orphan.txt", b"UNCLASSIFIED".to_vec()).unwrap();
+    let local = w.put_asset("local.txt", b"LOCAL".to_vec()).unwrap();
+    let owner = Author::Session("owner".into());
+    w.create(
+        "memo",
+        &Input::Json(serde_json::json!({"fields":{"title":"Local", "file":local.id}})),
+        &owner,
+    )
+    .unwrap();
+    if unlink {
+        let note = w
+            .create(
+                "email",
+                &Input::Json(serde_json::json!({"fields":{"title":"Incoming", "file":orphan.id}})),
+                &owner,
+            )
+            .unwrap();
+        w.update(
+            &note.id,
+            &Input::Json(serde_json::json!({"fields":{"title":"Detached"}})),
+            Some(&note.version),
+            &owner,
+        )
+        .unwrap();
+    }
+    let vault = store::Vault::init(dir.path()).unwrap();
+    let db = vault.server_dir().join("state.db");
+    drop(w);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("DELETE FROM meta WHERE key LIKE 'agent_safety.asset.%' OR key = 'agent_safety.assets_migrated'", []).unwrap();
+    drop(conn);
+    let state = state::State::open(&db, None).unwrap();
+    let w = Writer::open(vault, state).unwrap();
+    assert!(w.asset_usage(&orphan.id).unwrap().notes.is_empty());
+    w.activate_agent_safety().unwrap();
+    assert!(
+        !w.agent_may_read_asset(&orphan.id),
+        "old orphan must fail closed"
+    );
+    assert!(
+        w.agent_may_read_asset(&local.id),
+        "referenced local file must remain readable"
+    );
+}
+
+#[test]
+fn incoming_assets_upgrade_marks_existing_references() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.put_type("email", "label = \"Email\"\nfield file { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    let asset = w.put_asset("old.txt", b"OLD".to_vec()).unwrap();
+    let note = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Old", "file":asset.id}})),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
+    // Simulate the pre-TV-156 state, without sticky provenance or a migration marker.
+    let vault = store::Vault::init(dir.path()).unwrap();
+    let db = vault.server_dir().join("state.db");
+    drop(w);
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("DELETE FROM meta WHERE key LIKE 'agent_safety.asset.%' OR key = 'agent_safety.assets_migrated'", []).unwrap();
+    drop(conn);
+    let state = state::State::open(&db, None).unwrap();
+    let w = Writer::open(vault, state).unwrap();
+    w.activate_agent_safety().unwrap();
+    w.delete(
+        &note.id,
+        Some(&note.version),
+        &Author::Session("owner".into()),
+    )
+    .unwrap();
+    w.purge_from_trash(&note.id).unwrap();
+    assert!(!w.agent_may_read_asset(&asset.id));
+    assert_eq!(
+        w.state()
+            .meta(&format!("agent_safety.asset.{}", asset.id))
+            .unwrap()
+            .as_deref(),
+        Some("1")
+    );
+}
+
+#[test]
 fn round5_own_google_event_is_exempt_independent_of_calendar() {
     let dir = tempfile::tempdir().unwrap();
     let w = open_key(dir.path(), Some(state::SecretKey::generate()));

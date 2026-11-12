@@ -630,13 +630,17 @@ pub async fn apply(
         }
     }
     let w = a.writer.clone();
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let signed_in_admin = scope.allows(Scope::Admin) && matches!(author, Author::Session(_));
         apply_as_agent(&w, author, event, &change, signed_in_admin)
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
-    .map(Json)
+    .map(Json);
+    if event == "agent_proposal" {
+        crate::ai_browser::cleanup_retired(a.writer.clone());
+    }
+    result
 }
 
 /// Apply `change` as the caller, or, when it names the agent that proposed it, as that agent

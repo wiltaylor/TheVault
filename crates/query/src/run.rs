@@ -273,11 +273,14 @@ impl<'a> Runner<'a> {
 
         let scores: Option<HashMap<String, f32>> = match &q.search {
             Some(text) => Some(
-                ctx.index
-                    .search_hits(text, Some(types))?
-                    .into_iter()
-                    .map(|h| (h.id, h.score))
-                    .collect(),
+                (if ctx.excluded_notes.is_some() {
+                    ctx.index.search_note_hits(text, Some(types))
+                } else {
+                    ctx.index.search_hits(text, Some(types))
+                })?
+                .into_iter()
+                .map(|h| (h.id, h.score))
+                .collect(),
             ),
             None => None,
         };

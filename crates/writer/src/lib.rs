@@ -1943,6 +1943,7 @@ impl Writer {
             |doc: Option<&schema::Doc>, name: &str| doc.and_then(|d| d.field(name)).cloned();
         let sender = matches!(author, Author::Handler(name) if name == "outbox_send");
         if matches!(author, Author::Agent(_) | Author::AgentMail(_))
+            && next.is_some()
             && field(next, "send_updates") != field(old.as_ref(), "send_updates")
         {
             return Err(Error::Rejected("agents may not change send_updates".into()));

@@ -1,5 +1,9 @@
 # Connecting an AI agent
 
+Attachments and original HTML of incoming messages are not available to agents, including in-app tools, scripts and external agent tokens. This applies even after the note is allowed or released by the user. A shared file is still unavailable if any incoming note references it. Do not retry the asset read. Signed-in users can still open these files.
+
+This restriction is permanent for a file once it has been referenced by an incoming note, even after unlinking, deleting or purging the note. Files uploaded from the phone or desktop app are also unavailable to agents for now, including manually attached files. Agent searches match only the note's own text, never extracted file text. Signed-in users can still search both.
+
 A coding agent with a shell, such as Claude Code or Codex, drives the vault through the `vault` CLI. One command, run on the agent's machine, installs the CLI, gives it a token, and puts the vault skill where the agent reads it. An agent without a shell cannot use this.
 
 A CLI agent using an `agent-<name>` token drafts Outbox items and the user sends them. It can create and edit only its own drafts, cannot mark them ready or write send results, and cannot use an in-app agent's Send without review permission. Calendar invitations, RSVP changes, cancellations and Google event deletes must go through the Outbox for review. This also applies to existing agent tokens.

@@ -27,6 +27,7 @@ script-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+hmac.workspace = true
 state.workspace = true
 store.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
