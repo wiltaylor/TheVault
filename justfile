@@ -136,7 +136,7 @@ desktop-release: (require-tool "cargo-tauri") (require-tool "jq") (require-tool 
 	#!/usr/bin/env bash
 	set -euo pipefail
 	updater_env="${XDG_CONFIG_HOME:-$HOME/.config}/thevault/updater/updater.env"
-	if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$updater_env" ]; then . "$updater_env"; fi
+	if [ "${THEVAULT_NO_SIGNING_KEYS:-}" != 1 ] && [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$updater_env" ]; then . "$updater_env"; fi
 	rm -rf apps/desktop/src-tauri/target/release/bundle target/desktop-release
 	version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)
 	# The updater signature is made below, bound to the version, so the build makes none itself.

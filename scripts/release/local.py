@@ -18,7 +18,7 @@ import tempfile
 
 STAGES = (
     "preflight", "cut", "build", "unsigned-manifest", "sign",
-    "signed-manifest", "smoke", "images", "draft", "push", "publish", "verify",
+    "signed-manifest", "images", "draft", "push", "smoke", "publish", "verify",
 )
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-alpha\.([1-9][0-9]?))?")
 
@@ -84,6 +84,30 @@ def verify_manifest(directory: Path, recorded: dict, release: dict) -> None:
         raise ReleaseError("manifest release identity mismatch")
     if manifest(directory, release, recorded["signed"]) != recorded:
         raise ReleaseError("release assets changed since manifest creation")
+
+
+def delivery_identity(config: dict) -> dict:
+    """Keep only routing, never secret references or secret values."""
+    delivery = config.get("delivery", config)
+    target = delivery.get("release_target")
+    relay = delivery.get("docker_release") or {}
+    if not isinstance(target, str) or not target:
+        raise ReleaseError("delivery config has no release_target")
+    if not relay.get("destination") or not relay.get("known_hosts"):
+        raise ReleaseError("delivery config has no pinned docker_release destination")
+    return {"release_target": target, "docker_release": {
+        key: relay[key] for key in ("destination", "port", "known_hosts") if key in relay
+    }}
+
+
+def stage_plan(release: dict, delivery: dict) -> list[dict]:
+    routing = delivery_identity(delivery)
+    return [{"stage": stage, "target": (
+        "thevault-android (lead-owned signed smoke)" if stage == "smoke" else
+        "cut evidence from lead-owned target runs" if stage == "cut" else
+        routing["docker_release"]["destination"] if stage in ("build", "images") else
+        routing["release_target"]), "sha": release["sha"], "version": release["version"],
+        "dry_run": True} for stage in STAGES]
 
 
 def atomic_json(path: Path, value: dict) -> None:
