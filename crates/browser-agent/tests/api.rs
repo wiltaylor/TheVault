@@ -20,7 +20,8 @@ async fn long_component_deletion_has_bounded_peak_memory() {
             let _ = self.0.wait();
         }
     }
-    let tmp = tempfile::tempdir().unwrap();
+    // The dev container's /tmp tmpfs rejects this 4000-deep tree with ENAMETOOLONG.
+    let tmp = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let home = tmp.path().join("home");
     let work = tmp.path().join("work");
     std::fs::create_dir(&home).unwrap();
