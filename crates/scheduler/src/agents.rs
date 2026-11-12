@@ -1124,6 +1124,7 @@ impl Scheduler {
             .unwrap_or("")
             .to_owned();
         let mut admits = Vec::new();
+        let history = std::cell::LazyCell::new(|| state.agent_call_history(id));
         for f in found {
             let call = &f.call;
             match state.agent_call(&call.call) {
@@ -1152,7 +1153,7 @@ impl Scheduler {
             }
             if held
                 || matches!(version.author, Author::Agent(_))
-                || !self.call_versions_trusted(id, &call.call, &call.agent)
+                || !self.call_versions_trusted(id, &call.call, &call.agent, &history)
                 || !state
                     .consume_agent_call(&call.call, id, &call.agent, &version.author)
                     .unwrap_or(false)
@@ -1282,30 +1283,21 @@ impl Scheduler {
 
     /// A later issuer save cannot launder an earlier foreign write. Use persisted
     /// history rather than pending scans, which are coalesced and lost on restart.
-    fn call_versions_trusted(&self, note: &str, call: &str, agent: &str) -> bool {
+    fn call_versions_trusted(
+        &self,
+        note: &str,
+        call: &str,
+        agent: &str,
+        versions: &std::cell::LazyCell<
+            state::Result<Vec<state::Version>>,
+            impl FnOnce() -> state::Result<Vec<state::Version>>,
+        >,
+    ) -> bool {
         let state = self.writer.state();
-        let Ok(Some((issued_ms, principal))) = state.agent_call_issuance(call, note, agent) else {
+        let Ok(Some((_, principal))) = state.agent_call_issuance(call, note, agent) else {
             return false;
         };
-        let Ok(versions) = state.history(note) else {
-            return false;
-        };
-        for version in versions.into_iter().filter(|v| v.at_ms >= issued_ms) {
-            let (kind, name) = version.author.parts();
-            if format!("{kind}:{name}") == principal {
-                continue;
-            }
-            let Ok(doc) = schema::Doc::parse(&version.content, note) else {
-                return false;
-            };
-            if mentions::calls(&doc)
-                .iter()
-                .any(|found| found.call.call == call)
-            {
-                return false;
-            }
-        }
-        true
+        trusted_call_history(versions, &principal, call)
     }
 
     /// Run notes sent to `agent` (TV-77 D1): open a thread of origin [`DISPATCH_ORIGIN`] about
@@ -1634,6 +1626,41 @@ impl Scheduler {
                 job.agent
             );
         }
+    }
+}
+
+fn trusted_call_history(
+    history: &std::cell::LazyCell<
+        state::Result<Vec<state::Version>>,
+        impl FnOnce() -> state::Result<Vec<state::Version>>,
+    >,
+    principal: &str,
+    call: &str,
+) -> bool {
+    let Ok(versions) = &**history else {
+        return false;
+    };
+    versions.iter().all(|version| {
+        let (kind, name) = version.author.parts();
+        format!("{kind}:{name}") == principal || !version.content.contains(call)
+    })
+}
+
+#[cfg(test)]
+mod call_history_tests {
+    use super::*;
+
+    #[test]
+    fn multiple_calls_load_scan_history_once() {
+        let reads = std::cell::Cell::new(0);
+        let history = std::cell::LazyCell::new(|| {
+            reads.set(reads.get() + 1);
+            Ok(Vec::new())
+        });
+        assert_eq!(reads.get(), 0);
+        assert!(trusted_call_history(&history, "session:owner", "first"));
+        assert!(trusted_call_history(&history, "session:owner", "second"));
+        assert_eq!(reads.get(), 1);
     }
 }
 
