@@ -424,7 +424,8 @@ mod tests {
                 .contains("origin_mismatch")
         );
         assert_eq!(bodies.lock().unwrap().len(), 1);
-        let seed = "otpauth://totp/fixture?secret=JBSWY3DPEHPK3PXP&algorithm=SHA512&digits=8&period=60";
+        let seed =
+            "otpauth://totp/fixture?secret=JBSWY3DPEHPK3PXP&algorithm=SHA512&digits=8&period=60";
         state
             .set_login_secret(
                 "login",
