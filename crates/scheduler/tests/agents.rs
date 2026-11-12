@@ -1295,6 +1295,19 @@ fn coalesced_token_and_owner_writes_refuse_the_call() {
 }
 
 #[test]
+fn foreign_raw_call_id_cannot_be_laundered_into_a_link() {
+    let r = Rig::new();
+    r.agent("clerk", CLERK);
+    let id = r.note("memo", "Pending", &["Empty"], &user());
+    r.writer.state().issue_agent_call(CALL, &id, "clerk", "session:owner").unwrap();
+    r.save(&id, "Foreign", &[CALL], &Author::Token("writer".into()));
+    r.save(&id, "Owner", &[&call("@Clerk request", "clerk", CALL)], &user());
+    r.advance(1);
+    assert!(r.writer.state().agent_call(CALL).unwrap().unwrap().thread.is_none());
+    assert!(r.fake.turns().is_empty());
+}
+
+#[test]
 fn coalesced_agent_and_owner_writes_refuse_the_call() {
     coalesced_hijack_is_refused(Author::Agent("clerk".into()));
 }
