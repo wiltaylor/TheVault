@@ -44,6 +44,18 @@ it("keeps string-secret writes unchanged", async () => {
   expect(putLoginSecret).not.toHaveBeenCalled();
 });
 
+it("shows a fixed seed validation error from the server without a code preview", async () => {
+  putLoginSecret.mockRejectedValueOnce(new Error("Invalid one-time-code seed: use a base32 key or otpauth://totp URI."));
+  render(() => <Secrets />);
+  fireEvent.change(await screen.findByLabelText("Kind"), { target: { value: "login" } });
+  fireEvent.input(screen.getByLabelText("Name"), { target: { value: "site" } });
+  fireEvent.input(screen.getByLabelText("Password"), { target: { value: "fabricated-password" } });
+  fireEvent.input(screen.getByLabelText("One-time-code seed (optional)"), { target: { value: "invalid-fabricated-seed" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save secret" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("Invalid one-time-code seed");
+  expect(screen.queryByText("invalid-fabricated-seed")).toBeNull();
+});
+
 it("warns on an unrestricted Login in the list and replacement requires the password again", async () => {
   secrets.mockResolvedValue([{ name: "site", kind: "login", username: "test-user", origins: [], has_totp: true, created: 1, updated: 2 }]);
   render(() => <Secrets />);
