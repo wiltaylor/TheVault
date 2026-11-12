@@ -572,6 +572,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Delete an agent; the built-in Assistant cannot be deleted",
     ),
     (
+        "POST",
+        "/api/agents/{name}/browser-profile/reset",
+        "Reset only this agent's browser files and logins; owner session or admin user token only",
+    ),
+    (
         "GET",
         "/api/skills",
         "Every Agent Skill with its frontmatter, file count, size, validity and issues",

@@ -25,7 +25,7 @@
 //! starting with `/` is relative to `/work`. Errors are `{error}`. It binds `127.0.0.1` on a free
 //! port and records every request.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -109,6 +109,12 @@ struct Shared {
     /// What the next command that writes a file (`--filename=` or `curl -o`) leaves there.
     capture: Mutex<Option<(String, Vec<u8>)>>,
     requests: Mutex<Vec<Request>>,
+    signed_profiles: Mutex<bool>,
+    legacy_protocol: Mutex<bool>,
+    cleanup_failure: Mutex<bool>,
+    failed_profile: Mutex<Option<String>>,
+    slow_profile: Mutex<Option<String>>,
+    profiles: Mutex<BTreeSet<String>>,
 }
 
 /// The file a command writes, as `browser_capture` quotes it: `--filename='<path>'` or
@@ -151,6 +157,31 @@ impl FakeBrowser {
     /// The token, for `VAULT_BROWSER_TOKEN`.
     pub fn token(&self) -> &'static str {
         DEFAULT_BROWSER_TOKEN
+    }
+
+    /// Verify the profile MAC as the real box does, for server routing tests.
+    pub fn require_signed_profiles(&self) {
+        *lock(&self.shared.signed_profiles) = true;
+    }
+
+    pub fn legacy_protocol(&self) {
+        *lock(&self.shared.legacy_protocol) = true;
+    }
+
+    pub fn fail_cleanup(&self, fail: bool) {
+        *lock(&self.shared.cleanup_failure) = fail;
+    }
+
+    pub fn fail_profile_cleanup(&self, id: &str) {
+        *lock(&self.shared.failed_profile) = Some(id.to_owned());
+    }
+
+    pub fn slow_profile_cleanup(&self, id: &str) {
+        *lock(&self.shared.slow_profile) = Some(id.to_owned());
+    }
+
+    pub fn profiles(&self) -> Vec<String> {
+        lock(&self.shared.profiles).iter().cloned().collect()
     }
 
     /// Answer the next `/run` with `run`.
@@ -211,15 +242,46 @@ fn answer(s: &Shared, r: &Request) -> Reply {
     if r.route() == "/health" {
         return Reply::json(
             200,
-            &json!({ "ok": true, "version": "0.0.0-fake", "display": ":1", "playwright_cli": "0.1.22" }),
+            &json!({ "ok": true, "version": "0.0.0-fake", "display": ":1", "playwright_cli": "0.1.22", "profile_protocol": if *lock(&s.legacy_protocol) { 0 } else { 1 } }),
         );
     }
     let expected = format!("Bearer {DEFAULT_BROWSER_TOKEN}");
     if r.header("authorization") != Some(expected.as_str()) {
         return error(401, "missing or wrong bearer token");
     }
+    if *lock(&s.signed_profiles) {
+        let id = r.header("x-vault-agent").unwrap_or_default();
+        let signature = r.header("x-vault-agent-signature").unwrap_or_default();
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, DEFAULT_BROWSER_TOKEN.as_bytes());
+        let signed = ring::hmac::sign(&key, format!("thevault-browser-profile-v1:{id}").as_bytes());
+        let expected: String = signed.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        if id.is_empty() || signature != expected {
+            return error(401, "invalid signed profile");
+        }
+    }
     match (r.method.as_str(), r.route()) {
+        ("DELETE", "/profile") if *lock(&s.cleanup_failure) => error(503, "box unavailable"),
+        ("DELETE", "/profile")
+            if lock(&s.failed_profile).as_deref() == r.header("x-vault-agent") =>
+        {
+            error(403, "fixture permanently refused profile")
+        }
+        ("DELETE", "/profile") => {
+            if lock(&s.slow_profile)
+                .as_deref()
+                .is_some_and(|id| id == "*" || Some(id) == r.header("x-vault-agent"))
+            {
+                let mut response = Reply::json(409, &json!({"error":"fixture slow profile"}));
+                response.delay = std::time::Duration::from_secs(45);
+                return response;
+            }
+            lock(&s.profiles).remove(r.header("x-vault-agent").unwrap_or_default());
+            Reply::json(200, &json!({"ok": true}))
+        }
         ("POST", "/run") => {
+            if let Some(id) = r.header("x-vault-agent") {
+                lock(&s.profiles).insert(id.to_owned());
+            }
             let body = r.json();
             let command = body["command"].as_str().unwrap_or_default().to_owned();
             if command.trim().is_empty() {

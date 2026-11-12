@@ -911,6 +911,108 @@ impl Writer {
         Ok(())
     }
 
+    /// Local, per-incarnation browser identity. Not part of a synced agent file.
+    pub fn browser_profile(&self, name: &str) -> Result<String> {
+        let _w = self.write_lock();
+        self.read_agent(name)?;
+        let key = format!("browser-profile:{name}");
+        if let Some(id) = self.state().meta(&key)?.filter(|s| !s.is_empty()) {
+            return Ok(id);
+        }
+        let id = ulid::Ulid::new().to_string();
+        self.state().set_meta(&key, &id)?;
+        Ok(id)
+    }
+
+    pub fn retired_browser_profiles(&self) -> Result<Vec<String>> {
+        Ok(self
+            .state()
+            .meta("browser-retired")?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default())
+    }
+
+    /// Queue an expired throwaway profile for retry if the box is offline.
+    pub fn retire_browser_profile(&self, id: &str) -> Result<()> {
+        let _w = self.write_lock();
+        self.retire_browser_profile_locked(id)
+    }
+
+    /// Write before the throwaway can contact the box, so a crash cannot orphan it.
+    pub fn begin_temporary_browser_profile(&self, id: &str) -> Result<()> {
+        let _w = self.write_lock();
+        let mut ids = self.temporary_browser_profiles()?;
+        ids.push(id.to_owned());
+        self.state().set_meta(
+            "browser-temporary",
+            &serde_json::to_string(&ids).expect("strings serialize"),
+        )?;
+        Ok(())
+    }
+
+    pub fn temporary_browser_profiles(&self) -> Result<Vec<String>> {
+        Ok(self
+            .state()
+            .meta("browser-temporary")?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default())
+    }
+
+    /// Home-server startup only, never on an ordinary writer opened by a CLI or app.
+    pub fn recover_temporary_browser_profiles(&self) -> Result<()> {
+        let _w = self.write_lock();
+        for id in self.temporary_browser_profiles()? {
+            self.retire_browser_profile_locked(&id)?;
+        }
+        Ok(())
+    }
+
+    pub fn reset_browser_profile(&self, name: &str) -> Result<Option<String>> {
+        let _w = self.write_lock();
+        self.read_agent(name)?;
+        self.reset_browser_profile_locked(name)
+    }
+
+    fn reset_browser_profile_locked(&self, name: &str) -> Result<Option<String>> {
+        let key = format!("browser-profile:{name}");
+        let id = self.state().meta(&key)?.filter(|s| !s.is_empty());
+        if let Some(id) = &id {
+            self.retire_browser_profile_locked(id)?;
+            self.state().set_meta(&key, "")?;
+        }
+        Ok(id)
+    }
+
+    fn retire_browser_profile_locked(&self, id: &str) -> Result<()> {
+        let mut ids = self.retired_browser_profiles()?;
+        if !ids.iter().any(|s| s == id) {
+            ids.push(id.to_owned());
+        }
+        self.state().set_meta(
+            "browser-retired",
+            &serde_json::to_string(&ids).expect("strings serialize"),
+        )?;
+        // Retired first, pending second: a crash between writes is safe to retry.
+        let mut pending = self.temporary_browser_profiles()?;
+        pending.retain(|s| s != id);
+        self.state().set_meta(
+            "browser-temporary",
+            &serde_json::to_string(&pending).expect("strings serialize"),
+        )?;
+        Ok(())
+    }
+
+    pub fn browser_profile_removed(&self, id: &str) -> Result<()> {
+        let _w = self.write_lock();
+        let mut ids = self.retired_browser_profiles()?;
+        ids.retain(|s| s != id);
+        self.state().set_meta(
+            "browser-retired",
+            &serde_json::to_string(&ids).expect("strings serialize"),
+        )?;
+        Ok(())
+    }
+
     /// Check `source` as `agents/<name>.wcl` without writing it: the file alone, against the
     /// vault's types, and by `check`, which the caller uses for what only it knows, such as the
     /// tool names the server offers. Returns the canonical text and the agent.
@@ -1011,6 +1113,10 @@ impl Writer {
                 }));
             }
         }
+        // A replacement after a synced or interrupted delete must not inherit old logins.
+        if self.read_agent(name).is_err() {
+            self.reset_browser_profile_locked(name)?;
+        }
         let generation = self.commit(vec![Change::write(agent_path(name), text.as_bytes())])?;
         inner.index.advance(generation)?;
         if agent.permissions.outbox.conditions.is_some()
@@ -1088,6 +1194,12 @@ impl Writer {
         }
         let generation = self.commit(vec![Change::delete(agent_path(name))])?;
         inner.index.advance(generation)?;
+        let key = format!("browser-profile:{name}");
+        if let Some(id) = self.state().meta(&key)?.filter(|s| !s.is_empty()) {
+            // Keep a durable cleanup marker if the browser box is temporarily offline.
+            self.retire_browser_profile_locked(&id)?;
+            self.state().set_meta(&key, "")?;
+        }
         self.state
             .set_meta(&format!("outbox-legacy:{name}"), "false")?;
         Ok(())

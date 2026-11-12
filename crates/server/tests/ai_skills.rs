@@ -708,7 +708,7 @@ fn install_skill_in_browser_copies_the_files_with_the_browser_permission_only() 
     let s = system(&fake, 1);
     assert!(s.contains("install_skill_in_browser"), "{s}");
     let r = result_json(&fake, 2, 0);
-    assert_eq!(r["installed"], "/work/skills/pdf-forms");
+    assert_eq!(r["installed"], "skills/pdf-forms");
     assert_eq!(r["files"].as_array().unwrap().len(), 4);
     let step = events
         .iter()
@@ -717,7 +717,7 @@ fn install_skill_in_browser_copies_the_files_with_the_browser_permission_only() 
     assert_eq!(step.1["is_error"], false, "{}", step.1);
     assert_eq!(step.1["summary"]["skill"]["kind"], "install");
 
-    // The commands rebuild every file under /work/skills/pdf-forms.
+    // The commands rebuild every file inside this profile's working directory.
     let commands: Vec<String> = browser
         .commands()
         .iter()
@@ -725,11 +725,11 @@ fn install_skill_in_browser_copies_the_files_with_the_browser_permission_only() 
         .collect();
     assert_eq!(
         commands[0],
-        "rm -rf '/work/skills/pdf-forms' && mkdir -p '/work/skills/pdf-forms'"
+        "rm -rf 'skills/pdf-forms' && mkdir -p 'skills/pdf-forms'"
     );
     let all = commands.join(" && ");
     let decoded = |path: &str| -> Vec<u8> {
-        let target = format!("'/work/skills/pdf-forms/{path}'");
+        let target = format!("'skills/pdf-forms/{path}'");
         let mut out = Vec::new();
         for part in all
             .split(" && ")
@@ -742,7 +742,7 @@ fn install_skill_in_browser_copies_the_files_with_the_browser_permission_only() 
     };
     assert_eq!(decoded("assets/blank.bin"), vec![0, 1, 2, 3, 255]);
     assert_eq!(decoded("SKILL.md"), PDF.as_bytes());
-    assert!(all.contains("chmod +x '/work/skills/pdf-forms/scripts/fill.py'"));
+    assert!(all.contains("chmod +x 'skills/pdf-forms/scripts/fill.py'"));
 
     // A skill the agent is not offered is refused, with nothing run.
     let before = browser.commands().len();

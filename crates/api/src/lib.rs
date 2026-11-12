@@ -329,6 +329,10 @@ fn build() -> Built {
         .get("/api/agents/{name}", agent_files::read)
         .put("/api/agents/{name}", agent_files::put)
         .delete("/api/agents/{name}", agent_files::delete)
+        .post(
+            "/api/agents/{name}/browser-profile/reset",
+            agent_files::reset_browser_profile,
+        )
         .get("/api/skills", skills::list)
         .post_up_to("/api/skills/import", skills::MAX_IMPORT, skills::import)
         .get("/api/skills/{name}", skills::read)
@@ -534,6 +538,13 @@ pub fn routes() -> Vec<(Method, &'static str)> {
         .chain(ai.seen)
         .chain(browser.seen)
         .collect()
+}
+
+/// Home-server startup: recover identities left pending by a crash, then retry box cleanup.
+pub fn recover_browser_profiles(writer: Arc<Writer>) -> Result<(), writer::Error> {
+    writer.recover_temporary_browser_profiles()?;
+    ai_browser::cleanup_retired(writer);
+    Ok(())
 }
 
 /// Builds the router for every `/api` route. `test_clock` is the clock `scheduler` reads when the

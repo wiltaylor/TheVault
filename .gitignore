@@ -3,6 +3,7 @@
 node_modules/
 /web/dist/
 .scratch/
+.evidence/
 *.vault-test/
 /web/test-results/
 /web/playwright-report/
