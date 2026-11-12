@@ -49,6 +49,15 @@ export interface SafetyEvidence {
   estimated_input_tokens: number;
 }
 
+export interface SafetyBackfillProgress {
+  status: string;
+  count?: number;
+  attempted?: number;
+  allowed?: number;
+  held?: Record<string, number>;
+  failed?: number;
+}
+
 export interface HeldNote {
   id: string;
   type: string;
@@ -1845,6 +1854,11 @@ export const api = {
   types: async () => (await request<{ types: TypeDef[] }>("GET", "/api/types")).types,
   note: (id: string) => request<Note>("GET", `/api/notes/${enc(id)}`),
   heldAgentNotes: (offset = 0) => request<{ notes: HeldNote[]; total: number }>("GET", `/api/agent-safety/held?limit=500&offset=${offset}`),
+  safetyBackfillPreview: (estimated_usd_per_decision?: number) => request<{ preview: string; count: number; account: string; model: string; decisions_per_note: number; unit_price: number; estimated_usd: number; disclaimer: string }>("POST", "/api/agent-safety/backfill/preview", { estimated_usd_per_decision }),
+  safetyBackfillApprove: (preview: string) => request<SafetyBackfillProgress>("POST", "/api/agent-safety/backfill/approve", { preview, approve: true }),
+  safetyBackfillProgress: () => request<SafetyBackfillProgress>("GET", "/api/agent-safety/backfill"),
+  safetyReleasePreview: (filter: { type?: string; since?: string; until?: string; reason?: string; ids?: string[] }) => request<{ preview: string; count: number }>("POST", "/api/agent-safety/release/preview", filter),
+  safetyReleaseApprove: (preview: string) => request<{ released: number; failed: number; released_ids: string[] }>("POST", "/api/agent-safety/release/approve", { preview, approve: true }),
   safetyEvidence: (id: string) => request<SafetyEvidence>("GET", `/api/agent-safety/evidence/${enc(id)}`),
   releaseAgentSafety: (id: string, fingerprint: string) => request<{ agent_safety: AgentSafety }>("POST", `/api/notes/${enc(id)}/agent-safety/release`, { fingerprint }),
   /** The daily note for a `YYYY-MM-DD` day; a day with no note is a 404 `ApiError`. */

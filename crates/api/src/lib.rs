@@ -118,6 +118,7 @@ mod openapi;
 mod original;
 mod pins;
 mod query;
+mod safety_backfill;
 mod script_tools;
 mod skills;
 mod sync;
@@ -250,6 +251,20 @@ fn build() -> Built {
         .get("/api/schema", inspect::schema)
         .get("/api/notes", notes::list)
         .get("/api/agent-safety/held", notes::held_agent_notes)
+        .get("/api/agent-safety/backfill", safety_backfill::progress)
+        .post(
+            "/api/agent-safety/backfill/preview",
+            safety_backfill::preview,
+        )
+        .post("/api/agent-safety/backfill/approve", safety_backfill::start)
+        .post(
+            "/api/agent-safety/release/preview",
+            safety_backfill::release_preview,
+        )
+        .post(
+            "/api/agent-safety/release/approve",
+            safety_backfill::release,
+        )
         .get("/api/agent-safety/evidence/{id}", notes::safety_evidence)
         .post("/api/notes", notes::create)
         .get("/api/notes/{id}", notes::read)

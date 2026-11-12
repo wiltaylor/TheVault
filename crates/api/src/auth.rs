@@ -321,6 +321,9 @@ fn is_definition_write(method: &Method, path: &str) -> bool {
 /// `/browser`, which only the user watches and takes over (browser B4).
 pub fn is_human_only(method: &Method, path: &str) -> bool {
     (*method == Method::POST && path == "/api/trash/empty")
+        || path == "/api/agent-safety/backfill"
+        || path.starts_with("/api/agent-safety/backfill/")
+        || path.starts_with("/api/agent-safety/release/")
         || (*method == Method::GET && path == "/api/ai/usage")
         || (*method == Method::DELETE
             && path
@@ -345,6 +348,13 @@ pub fn human_only() -> ApiError {
 
 /// [`human_only`] for `path`.
 fn human_only_for(path: &str) -> ApiError {
+    if path.starts_with("/api/agent-safety/") {
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "human_only",
+            "Only a signed-in owner may approve safety actions.",
+        );
+    }
     if path == "/api/ai/usage" {
         return ApiError::new(
             StatusCode::FORBIDDEN,

@@ -37,6 +37,7 @@ pub fn wrap(inner: Box<dyn Hooks>) -> (Box<dyn Hooks>, Binding) {
 impl Binding {
     /// Holds only a weak writer while idle, so dropping the server releases the worker.
     pub fn start(self, writer: &Arc<Writer>) -> std::io::Result<()> {
+        crate::safety_backfill::recover(writer).map_err(std::io::Error::other)?;
         writer
             .activate_agent_safety()
             .map_err(std::io::Error::other)?;
@@ -270,7 +271,11 @@ fn classify(
     }
 }
 
-fn matches(writer: &Writer, saved: &Saved, config: &Classifier) -> Result<bool, AiError> {
+pub(crate) fn matches(
+    writer: &Writer,
+    saved: &Saved,
+    config: &Classifier,
+) -> Result<bool, AiError> {
     let Some(condition) = &config.condition else {
         return Ok(true);
     };
@@ -311,7 +316,7 @@ fn matches(writer: &Writer, saved: &Saved, config: &Classifier) -> Result<bool, 
         .map_err(|_| AiError::invalid("Classifier filter failed"))
 }
 
-fn request(saved: &Saved, config: &Classifier) -> Result<decisions::Request, AiError> {
+pub(crate) fn request(saved: &Saved, config: &Classifier) -> Result<decisions::Request, AiError> {
     let doc = Doc::parse(&saved.wcl, "classifier input")
         .map_err(|_| AiError::invalid("Invalid classifier input"))?;
     let note = writer::doc_to_json(&doc);
