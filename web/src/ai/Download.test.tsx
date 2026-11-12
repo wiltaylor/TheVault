@@ -84,7 +84,7 @@ describe("web steps", () => {
     live!.onEvent({ event: "proposal", data: { id: "fill2", op: "browser_secret", secret: "login", field: "password", target: "#password", session: "default", origin: "https://fixture.example", unrestricted_origin: false } });
     const card = await m.findByRole("region", { name: "Proposed secret fill" });
     expect(card).not.toHaveTextContent("no origin restrictions");
-    fireEvent.click(card.querySelectorAll("button")[1]);
+    fireEvent.click(card.querySelectorAll("button")[1]!);
     await waitFor(() => expect(card).toHaveTextContent("Discarded."));
     expect(aiApply).not.toHaveBeenCalled();
   });
