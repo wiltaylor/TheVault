@@ -251,7 +251,17 @@ mod tests {
         denied.permissions.browser_secrets.clear();
         assert!(authorized(&b, &state, &denied, &input).await.is_error);
         let missing = json!({"secret":"missing", "field":"password", "target":"#password", "session":"default"});
-        assert!(authorized(&b, &state, &agent, &missing).await.is_error);
+        let mut named_missing = agent.clone();
+        named_missing
+            .permissions
+            .browser_secrets
+            .push("missing".into());
+        assert!(
+            authorized(&b, &state, &named_missing, &missing)
+                .await
+                .content
+                .contains("unknown_secret")
+        );
         state
             .set_login_secret(
                 "login",
@@ -263,8 +273,64 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(authorized(&b, &state, &agent, &input).await.is_error);
+        assert!(
+            authorized(&b, &state, &agent, &input)
+                .await
+                .content
+                .contains("origin_mismatch")
+        );
         assert_eq!(bodies.lock().unwrap().len(), 1);
+        let seed = "otpauth://totp/fixture?secret=JBSWY3DPEHPK3PXP&digits=8&period=60";
+        state
+            .set_login_secret(
+                "login",
+                &state::LoginSecret {
+                    username: "fabricated-user".into(),
+                    password: password.into(),
+                    totp_seed: Some(seed.into()),
+                    origins: vec![],
+                },
+            )
+            .unwrap();
+        let mut username = input.clone();
+        username["field"] = json!("username");
+        assert_eq!(
+            authorized(&b, &state, &agent, &username).await.content,
+            "filled"
+        );
+        assert_eq!(bodies.lock().unwrap()[1]["value"], "fabricated-user");
+        let mut otp = input.clone();
+        otp["field"] = json!("otp");
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let answer = authorized(&b, &state, &agent, &otp).await;
+        assert_eq!(answer.content, "filled");
+        let code = bodies.lock().unwrap()[2]["value"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!([before, before + 60].iter().any(|time| {
+            crate::browser_redaction::totp(seed, *time, 6, 30).as_deref() == Some(code.as_str())
+        }));
+        assert_eq!(code.len(), 8);
+        assert!(!answer.content.contains(&code));
+        assert!(!answer.summary.to_string().contains(&code));
+        assert!(!answer.trail.unwrap().contains(&code));
+        assert!(
+            authorized(&b, &state.with_key(None), &agent, &input)
+                .await
+                .is_error
+        );
+        state.revoke_browser_secrets("tester").unwrap();
+        assert!(
+            authorized(&b, &state, &agent, &input)
+                .await
+                .content
+                .contains("secret_not_allowed")
+        );
+        assert_eq!(bodies.lock().unwrap().len(), 3);
         server.abort();
     }
 }
