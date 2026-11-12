@@ -1018,6 +1018,29 @@ held_rest_route!(safety_rest_daily, "/api/daily/2026-11-10");
 held_rest_route!(safety_rest_planner, "/api/planner/day/2026-11-10");
 
 #[test]
+fn safety_session_query_count_can_exclude_held_notes() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("scam"));
+    let held = safety_note(&api);
+    assert_eq!(safety_wait(&api, held["id"].as_str().unwrap())["agent_safety"]["status"], "held");
+    decisions.push(safety_reply("allow"));
+    let allowed = safety_note(&api);
+    assert_eq!(safety_wait(&api, allowed["id"].as_str().unwrap())["agent_safety"]["status"], "allowed");
+    for exclude in [false, true] {
+        let result = api.send("POST", "/api/query", json!({
+            "query": "from email", "page_size": 1, "exclude_held": exclude
+        }));
+        assert_eq!(result["total"], if exclude { 1 } else { 2 });
+        if exclude {
+            assert_eq!(result["rows"][0]["id"], allowed["id"]);
+            assert!(result["next"].is_null());
+        }
+    }
+}
+
+#[test]
 fn safety_rest_list_and_post_query_exclude_held_notes() {
     let chat = FakeAnthropic::start();
     let decisions = testkit::FakeDecisions::start();

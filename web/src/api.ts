@@ -1891,7 +1891,7 @@ export const api = {
   /** Delete a taxonomy. One a field uses answers 409 `taxonomy_in_use`, listing the notes. */
   deleteTaxonomy: (name: string) => request<unknown>("DELETE", `/api/taxonomies/${enc(name)}`),
   /** One page of `query`. `thisId` is the note that holds the query, bound to `this`; `signal` cancels it. */
-  query: (query: string, cursor: string | null, pageSize: number, thisId?: string, signal?: AbortSignal) =>
+  query: (query: string, cursor: string | null, pageSize: number, thisId?: string, signal?: AbortSignal, excludeHeld = false) =>
     request<Page>(
       "POST",
       "/api/query",
@@ -1900,6 +1900,7 @@ export const api = {
         ...(thisId ? { this: thisId } : {}),
         ...(cursor ? { cursor } : {}),
         page_size: pageSize,
+        ...(excludeHeld ? { exclude_held: true } : {}),
       },
       signal,
     ),
