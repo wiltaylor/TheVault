@@ -5,7 +5,7 @@ use super::*;
 pub(crate) async fn authorized(
     _b: &BrowserBox,
     _state: &state::State,
-    _agent: &schema::agents::Agent,
+    _agent: &schema::Agent,
     _input: &Value,
 ) -> BrowserOut {
     BrowserOut::error("not_implemented")
@@ -26,7 +26,7 @@ mod tests {
             origins: vec!["https://example.com".into()],
         }).unwrap();
         state.confirm_browser_secrets("tester", &["login".into()]).unwrap();
-        let agent = schema::agents::Agent::parse("tester", "label = \"Tester\"\npermissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n").unwrap();
+        let agent = schema::Agent::parse("tester", "label = \"Tester\"\npermissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n").unwrap();
         let bodies = Arc::new(Mutex::new(Vec::new()));
         let received = bodies.clone();
         let app = axum::Router::new()
