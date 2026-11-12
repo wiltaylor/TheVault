@@ -319,7 +319,6 @@ fn status_of(w: &Writer) -> Result<Value, ApiError> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(json!({
         "secrets_key": keyed,
-        "token_usage_daily": s.ai_usage_daily()?,
         "accounts": accounts,
         "default": all.default_account().map(|a| a.id.clone()),
         "kinds": kinds_json(),
@@ -367,6 +366,13 @@ async fn status_answer(a: &Arc<Ai>) -> Result<Json<Value>, ApiError> {
 /// `GET /api/integrations/ai`.
 pub async fn status(State(a): Shared) -> Result<Json<Value>, ApiError> {
     status_answer(&a).await
+}
+
+/// Owner-only UTC daily token totals. Provider content is never stored here.
+pub async fn token_usage(State(a): Shared) -> Result<Json<Value>, ApiError> {
+    blocking_w(&a, |w| Ok(json!({"items": w.state().ai_usage_daily()?})))
+        .await
+        .map(Json)
 }
 
 /// `GET /api/ai/accounts` (read): the accounts set up with their default models, the default

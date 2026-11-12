@@ -5,6 +5,24 @@ use serde_json::{Value, json};
 use testkit::{FakeDecisions, Reply, TestServer};
 
 #[test]
+fn provider_token_counts_survive_success_and_failure() {
+    let fake = FakeDecisions::start();
+    let (server, client) = setup(&fake, CONFIG);
+    fake.push(Reply::json(200, &response()));
+    let note = create(&server, &client, "incoming");
+    wait_trail(&server, note["id"].as_str().unwrap());
+    fake.push(Reply::json(500, &json!({"error":{"message":"fixture failure"}})));
+    let note = create(&server, &client, "incoming");
+    wait_trail(&server, note["id"].as_str().unwrap());
+    let state = state::State::open(&server.vault_path().join(".vault/state.db"), None).unwrap();
+    let rows = state.ai_usage_daily().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].purpose, "classifier");
+    assert_eq!((rows[0].calls, rows[0].input_tokens, rows[0].output_tokens), (2, 30, 10));
+    assert!(!rows[0].account.is_empty());
+}
+
+#[test]
 fn shipped_scam_fixture_labels_and_encrypted_phone_pushes_follow_threshold() {
     // Synthetic examples and prescribed fake answers prove wiring, not model accuracy.
     let fixtures: Vec<Value> = serde_json::from_str(include_str!("fixtures/scam.json")).unwrap();

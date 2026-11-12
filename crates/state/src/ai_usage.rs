@@ -17,8 +17,25 @@ pub struct AiUsageDaily {
 }
 
 impl State {
-    pub fn record_ai_usage(&self, account: &str, model: &str, purpose: &str, input: u64, output: u64) -> Result<()> {
-        self.conn().execute("INSERT INTO ai_usage VALUES (?1,?2,?3,?4,?5,?6)", params![account, model, purpose, input.min(i64::MAX as u64) as i64, output.min(i64::MAX as u64) as i64, self.now()])?;
+    pub fn record_ai_usage(
+        &self,
+        account: &str,
+        model: &str,
+        purpose: &str,
+        input: u64,
+        output: u64,
+    ) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO ai_usage VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                account,
+                model,
+                purpose,
+                input.min(i64::MAX as u64) as i64,
+                output.min(i64::MAX as u64) as i64,
+                self.now()
+            ],
+        )?;
         Ok(())
     }
 
@@ -26,10 +43,25 @@ impl State {
     pub fn ai_usage_daily(&self) -> Result<Vec<AiUsageDaily>> {
         let conn = self.conn();
         let mut stmt = conn.prepare("SELECT strftime('%Y-%m-%d',at_ms/1000,'unixepoch'),account,model,purpose,count(*),sum(input_tokens),sum(output_tokens) FROM ai_usage GROUP BY 1,2,3,4 ORDER BY 1 DESC,2,3,4")?;
-        Ok(stmt.query_map([], |r| Ok(AiUsageDaily { day:r.get(0)?, account:r.get(1)?, model:r.get(2)?, purpose:r.get(3)?, calls:r.get(4)?, input_tokens:r.get(5)?, output_tokens:r.get(6)? }))?.collect::<std::result::Result<Vec<_>,_>>()?)
+        Ok(stmt
+            .query_map([], |r| {
+                Ok(AiUsageDaily {
+                    day: r.get(0)?,
+                    account: r.get(1)?,
+                    model: r.get(2)?,
+                    purpose: r.get(3)?,
+                    calls: r.get(4)?,
+                    input_tokens: r.get(5)?,
+                    output_tokens: r.get(6)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     pub(crate) fn prune_ai_usage(&self) -> Result<usize> {
-        Ok(self.conn().execute("DELETE FROM ai_usage WHERE at_ms < ?1", [self.now().saturating_sub(AI_USAGE_RETENTION_MS)])?)
+        Ok(self.conn().execute(
+            "DELETE FROM ai_usage WHERE at_ms < ?1",
+            [self.now().saturating_sub(AI_USAGE_RETENTION_MS)],
+        )?)
     }
 }
