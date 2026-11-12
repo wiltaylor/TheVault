@@ -401,6 +401,9 @@ impl Shared {
 
     /// The queue thread: run queued jobs, oldest first, until the writer is gone.
     fn run_queue(&self) {
+        if let Ok(writer) = self.writer() {
+            self.recover_deletes(&writer);
+        }
         loop {
             let Ok(writer) = self.writer() else {
                 return;
@@ -420,6 +423,14 @@ impl Shared {
                                 }
                                 _ => {}
                             }
+                        }
+                        if payload["type"] == "outbox"
+                            && payload["script"] == "outbox_send"
+                            && let Some(id) = payload["id"].as_str()
+                            && let Ok(note) = writer.read(id)
+                            && doc_to_json(&note.doc)["fields"]["status"] == "ready"
+                        {
+                            self.recover_deletes(&writer);
                         }
                         let (outcome, log) = self.run_job(&writer, &job.payload);
                         if let Err(message) = &outcome {
@@ -483,6 +494,42 @@ impl Shared {
     }
 
     /// Run one queued `after_*` job.
+    // Runs before replay and before a new claim, on the single queue thread. Recovery
+    // reads Google but never repeats DELETE without a user's ready transition.
+    fn recover_deletes(&self, writer: &Writer) {
+        let Ok(notes) = writer.list(Some("outbox")) else { return };
+        let handlers = writer.read_index(|_, schema| handlers_of(schema, "outbox", "after_update"));
+        let Some(handler) = handlers.iter().find(|h| h.script == "outbox_send") else { return };
+        for summary in notes {
+            let Ok(note) = writer.read(&summary.id) else { continue };
+            let body = doc_to_json(&note.doc);
+            let fields = &body["fields"];
+            if fields["status"] != "sending" || fields["kind"] != "event" || fields["event_action"] != "delete" {
+                continue;
+            }
+            let payload = json!({
+                "type": "outbox", "id": note.id, "version": note.version,
+                "wcl": note.wcl, "event": "after_update", "script": "outbox_send",
+                "function": "reconcile_delete", "allow_domains": handler.allow_domains,
+                "secrets": handler.secrets,
+            }).to_string();
+            let (result, _) = self.run_job(writer, &payload);
+            if let Err(error) = result {
+                // A host deadline bypasses script Result handling.
+                if let Ok(current) = writer.read(&note.id) {
+                    let mut body = doc_to_json(&current.doc);
+                    if body["fields"]["status"] == "sending" {
+                        body["fields"]["status"] = json!("failed");
+                        body["fields"]["error"] = json!(format!("The delete was interrupted; retry. {error}"));
+                        if let Err(e) = writer.update(&note.id, &Input::Json(body), Some(&current.version), &Author::Handler("outbox_send".into())) {
+                            eprintln!("recording interrupted Outbox deletion: {e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn run_job(&self, writer: &Writer, payload: &str) -> (Result<(), String>, String) {
         let job = (|| {
             let p: Json = serde_json::from_str(payload).map_err(|e| e.to_string())?;
@@ -517,6 +564,15 @@ impl Shared {
             };
             let script = text("script");
             let source = script_source(writer, &script)?;
+            let target_trashed = if type_name == "outbox" && script == "outbox_send" {
+                writer.read(&id).ok().is_some_and(|current| {
+                    let body = doc_to_json(&current.doc);
+                    let fields = &body["fields"];
+                    let target = ["sent_ref", "event", "result"].iter()
+                        .filter_map(|key| fields[*key].as_str()).find(|id| !id.is_empty());
+                    target.is_some_and(|id| writer.state().trash_entry(id).ok().flatten().is_some())
+                })
+            } else { false };
             let mut job = Job::new(Kind::After, &script, &source, &text("function"));
             job.args = vec![json!({
                 "id": id,
@@ -527,6 +583,7 @@ impl Shared {
                 "previous": previous,
                 "restored": p.get("restored").cloned().unwrap_or(Json::Bool(false)),
                 "author": p.get("author").cloned().unwrap_or(Json::Null),
+                "target_trashed": target_trashed,
             })];
             job.allow_domains = list("allow_domains");
             job.secrets = list("secrets");
