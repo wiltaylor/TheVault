@@ -130,10 +130,12 @@ fn interrupted_outbox_restart(kind: &str, action: &str) {
     let dir = tempfile::tempdir().unwrap();
     let (writer, handlers) = open(dir.path(), false);
     writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
-    let item = writer.create("outbox", &json_note(json!({
+    let mut fields = json!({
         "title": "Check this send", "kind": kind, "status": "ready",
-        "to": ["ann@example.com"], "event_action": if action.is_empty() { None } else { Some(action) },
-    })), &user()).unwrap();
+        "to": ["ann@example.com"],
+    });
+    if !action.is_empty() { fields["event_action"] = json!(action); }
+    let item = writer.create("outbox", &json_note(fields), &user()).unwrap();
     let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
     body["fields"]["status"] = json!("sending");
     writer.update(&item.id, &Input::Json(body), Some(&item.version),
