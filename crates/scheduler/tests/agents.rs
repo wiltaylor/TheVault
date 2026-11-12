@@ -551,7 +551,11 @@ fn edits_during_a_run_wait_for_that_agent_note_before_running_once() {
     for _ in 0..4 {
         r.advance(0);
     }
-    assert_eq!(r.fake.turns().len(), 61, "same-note waits use no hourly starts");
+    assert_eq!(
+        r.fake.turns().len(),
+        61,
+        "same-note waits use no hourly starts"
+    );
     assert_eq!(r.fake.most.load(Ordering::SeqCst), 1);
 }
 

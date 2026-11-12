@@ -171,14 +171,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
         let now = s.now();
-        let first = s.enqueue_trigger("clerk", "opened", Some("a"), "{}", now).unwrap().unwrap();
+        let first = s
+            .enqueue_trigger("clerk", "opened", Some("a"), "{}", now)
+            .unwrap()
+            .unwrap();
         s.claim_trigger_job(first).unwrap();
         assert!(s.begin_trigger_job(first, now).unwrap());
-        let second = s.enqueue_trigger("clerk", "changed", Some("a"), "{}", now).unwrap().unwrap();
+        let second = s
+            .enqueue_trigger("clerk", "changed", Some("a"), "{}", now)
+            .unwrap()
+            .unwrap();
         s.claim_trigger_job(second).unwrap();
-        assert!(!s.begin_trigger_job(second, now + 7_199_999).unwrap(), "fresh running row blocks");
+        assert!(
+            !s.begin_trigger_job(second, now + 7_199_999).unwrap(),
+            "fresh running row blocks"
+        );
         s.claim_trigger_job(second).unwrap();
-        assert!(s.begin_trigger_job(second, now + 7_200_000).unwrap(), "stale running row must not block");
+        assert!(
+            s.begin_trigger_job(second, now + 7_200_000).unwrap(),
+            "stale running row must not block"
+        );
     }
 
     #[test]
