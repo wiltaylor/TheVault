@@ -13,6 +13,11 @@ use crate::required_scope;
 
 /// Every endpoint: method, path and a one-line summary.
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
+    ("GET", "/api/agent-safety/backfill", "Session-only one-time backfill progress and summary"),
+    ("POST", "/api/agent-safety/backfill/preview", "Session-only count and owner-entered estimated cost, no provider calls"),
+    ("POST", "/api/agent-safety/backfill/approve", "Session-only approval of unchanged backfill preview, no agent triggers"),
+    ("POST", "/api/agent-safety/release/preview", "Session-only held-note release preview by filter or selection"),
+    ("POST", "/api/agent-safety/release/approve", "Session-only bulk release of unchanged preview with activity trail"),
     (
         "GET",
         "/api/agent-safety/evidence/{id}",

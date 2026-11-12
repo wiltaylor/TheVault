@@ -203,6 +203,8 @@ fn safety_rest_read_route_inventory() {
     let expected = [
         "/agent/install.sh",
         "/api/activity",
+        // TV-151: session-only summary, never held content to tokens or agents.
+        "/api/agent-safety/backfill",
         "/api/agent-safety/evidence/{id}",
         "/api/agent-safety/held",
         "/api/agents",
