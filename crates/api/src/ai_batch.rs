@@ -3,7 +3,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::{Extension, Json, extract::State, http::{HeaderMap, StatusCode}};
+use axum::{
+    Extension, Json,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use state::Author;
@@ -156,7 +160,11 @@ pub async fn confirm(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&b.preview)
-        .filter(|p| p.owner == author && p.session == session_key(&headers) && p.created.elapsed() < Duration::from_secs(600))
+        .filter(|p| {
+            p.owner == author
+                && p.session == session_key(&headers)
+                && p.created.elapsed() < Duration::from_secs(600)
+        })
         .cloned()
         .ok_or_else(|| ApiError::bad_request("Preview expired. Preview again."))?;
     let mut results = Vec::new();
