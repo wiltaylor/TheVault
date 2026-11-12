@@ -6,6 +6,76 @@ use index::{Extracted, MAX_UNZIPPED_BYTES, TextKind, extract_text};
 use crate::support::{office, when_free};
 
 #[test]
+fn extraction_failure_records_reason_time_and_success_clears_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(dir.path()).unwrap();
+    let mut idx = index::Index::open(&vault).unwrap();
+    let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    assert!(!index::asset_text_failed(&vault, id));
+    assert_eq!(idx.asset_text(id), index::StoredText::NotExtracted);
+    assert!(index::asset_text_failure(&vault, id).is_none());
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let failed = extract_text(TextKind::Document, b"broken".to_vec());
+    assert!(matches!(failed, Extracted::Failed(_)));
+    idx.set_asset_text(id, &failed).unwrap();
+    let path = vault
+        .server_dir()
+        .join(format!("asset-text/v1/{id}.unreadable"));
+    let record: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(record["reason"], "not a Word document: no zip header");
+    let after = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert!((before..=after).contains(&record["at_ms"].as_u64().unwrap()));
+    assert!(index::asset_text_failed(&vault, id));
+    assert_eq!(index::asset_text_failure(&vault, id).unwrap(), record);
+    assert!(index::bound_asset_text(&vault, id).is_none());
+    idx.set_bound_asset_text(
+        id,
+        &index::text_digest(b"source"),
+        &Extracted::Text("recovered".into()),
+    )
+    .unwrap();
+    assert!(!path.exists());
+    assert!(!index::asset_text_failed(&vault, id));
+    assert!(index::asset_text_failure(&vault, id).is_none());
+    assert_eq!(
+        idx.asset_text(id),
+        index::StoredText::Text("recovered".into())
+    );
+}
+
+#[test]
+fn legacy_extraction_failure_keeps_reason_without_inventing_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(dir.path()).unwrap();
+    let mut idx = index::Index::open(&vault).unwrap();
+    let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    idx.set_asset_text(id, &Extracted::Failed("old failure".into()))
+        .unwrap();
+    std::fs::write(
+        vault
+            .server_dir()
+            .join(format!("asset-text/v1/{id}.unreadable")),
+        "old failure\n",
+    )
+    .unwrap();
+    assert_eq!(
+        index::asset_text_failure(&vault, id).unwrap(),
+        serde_json::json!({"reason":"old failure", "at_ms":null})
+    );
+    assert_eq!(
+        idx.asset_text(id),
+        index::StoredText::Unreadable("old failure".into())
+    );
+    assert!(index::bound_asset_text(&vault, id).is_none());
+}
+
+#[test]
 fn bound_extraction_revision_failure_and_replacement_are_fail_closed() {
     let dir = tempfile::tempdir().unwrap();
     let vault = store::Vault::init(dir.path()).unwrap();

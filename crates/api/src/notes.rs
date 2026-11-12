@@ -364,11 +364,15 @@ pub async fn safety_evidence(
         let current = stored.as_ref().is_some_and(|s| s["fingerprint"] == fingerprint);
         let bytes = envelope.to_string().len();
         let mut omissions = Vec::new();
+        let mut extraction_failures = serde_json::Map::new();
         if let Some(html) = note.doc.field("html").and_then(schema::Value::as_str) {
             omissions.push(json!({"id":html,"reason":"HTML stays withheld"}));
         }
         for entry in envelope["attachments"].as_array().into_iter().flatten() {
             let asset_id = entry["id"].as_str().unwrap_or_default();
+            if let Some(failure) = w.asset_extraction_failure(asset_id) {
+                extraction_failures.insert(asset_id.to_owned(), failure);
+            }
             let html = w.state().meta(&format!("agent_safety.asset_html.{asset_id}"))?.is_some();
             if html || entry["status"] != "ready" || bytes > writer::agent_safety::ENVELOPE_LIMIT {
                 omissions.push(json!({"id":asset_id,"reason":if html {"HTML stays withheld"} else if bytes > writer::agent_safety::ENVELOPE_LIMIT {"over cap"} else {entry["status"].as_str().unwrap_or("unsupported")}}));
@@ -378,6 +382,7 @@ pub async fn safety_evidence(
             "envelope": envelope, "fingerprint": fingerprint,
             "decision_status": stored.as_ref().map(|s| &s["status"]),
             "omissions": omissions,
+            "extraction_failures": extraction_failures,
             "decision_current": current, "bytes": bytes,
             "limit": writer::agent_safety::ENVELOPE_LIMIT,
             "estimated_input_tokens": bytes.div_ceil(4)
