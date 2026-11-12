@@ -2,7 +2,7 @@
 
 Settings > Secrets supports String secrets and Login secrets. Existing String
 secrets still work as before. A Login stores a user name, password, optional
-base32 one-time-code seed and optional HTTP(S) site origins. Login credentials
+one-time-code seed (base32 key or `otpauth://totp` URI) and optional HTTP(S) site origins. Login credentials
 are encrypted in state.db with the existing key outside the vault. User name,
 origins and has_totp are clear metadata, so listing never decrypts credentials.
 A missing or wrong key prevents credential reads and replacement, not metadata
@@ -14,6 +14,14 @@ Only an owner session or an admin user token can create, replace or delete a
 Login. Replacing it always requires the password again, including changes to
 origins or the seed. The API returns metadata, never the password or seed.
 Login values cannot be read by ordinary script-secret bindings or agent tools.
+
+One-time codes use RFC 6238 on the server, only when filling `field: "otp"`.
+Base32 keys default to SHA1, six digits and 30 seconds. URI parameters retain
+their `algorithm` (SHA1, SHA256 or SHA512), `digits` (6-8) and positive `period`
+in seconds, including 60 seconds. Spaces, hyphens and letter case in keys are
+normalized. Invalid keys or parameters are refused at save without echoing
+the seed. Settings never displays a code preview. The seed stays on the server,
+and only the computed code is sent to the browser field, never to the model.
 
 Origins use exact scheme, host and effective port matching, not subdomains or
 suffixes. Hosts are lowercased and IDNA encoded, and default ports and one
@@ -106,12 +114,13 @@ three characters match only whole tokens, bounded by characters other than
 Unicode letters, digits or underscore. This avoids blanking ordinary words.
 HTTP chunks are assembled before scanning. Stdout and stderr are separate.
 
-For each seed, the server computes RFC 6238 SHA-1 codes for the current step
+For each seed, the server computes RFC 6238 codes for the current step
 and two steps either side at redaction time. These exact codes match whole
 tokens. Raw seeds use six digits and a 30-second period. Whitespace and hyphens
 are removed and letters uppercased for computing codes. An `otpauth://totp`
-URI supplies its `secret`, `digits` and `period` (defaults six and 30).
-Only SHA-1 is supported. Invalid seed/configuration skips that Login's computed
+URI supplies its `secret`, `digits`, `period` and `algorithm` (defaults six,
+30 and SHA1). SHA1, SHA256 and SHA512 use the same helper as fill and save
+validation. Invalid legacy seed/configuration skips that Login's computed
 codes and logs its name, never its value. Its raw seed, user name and password
 are still masked. State read errors still fail closed.
 Codes older than about two periods (normally 60 seconds) at redaction time are

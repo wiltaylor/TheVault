@@ -110,6 +110,7 @@ function SecretsPage() {
           <Show when={kind() === "login"}>
             <label for="secret-seed">One-time-code seed (optional)</label>
             <input id="secret-seed" type="password" autocomplete="new-password" value={seed()} onInput={(e) => setSeed(e.currentTarget.value)} />
+            <p class="muted">Use a base32 key or otpauth://totp address (SHA1, SHA256 or SHA512, 6-8 digits, positive period in seconds). Codes are computed on the server and never previewed here.</p>
             <label for="secret-origins">Site origins (optional, one per line)</label>
             <textarea id="secret-origins" value={origins()} placeholder="https://example.com" onInput={(e) => setOrigins(e.currentTarget.value)} />
             <p class="muted">Replacing a Login, including its origins or seed, requires its password again. Leave the seed empty to remove it.</p>
