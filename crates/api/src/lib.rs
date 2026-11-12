@@ -252,6 +252,7 @@ fn build() -> Built {
         .get("/api/schema", inspect::schema)
         .get("/api/notes", notes::list)
         .get("/api/agent-safety/held", notes::held_agent_notes)
+        .post("/api/inbox/triage", inbox::triage)
         .get("/api/agent-safety/backfill", safety_backfill::progress)
         .post(
             "/api/agent-safety/backfill/preview",

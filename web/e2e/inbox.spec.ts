@@ -32,6 +32,26 @@ function unique(prefix: string): string {
   return `${prefix} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+test("mail backlog recommendations show counts and require explicit queue confirmation", async ({ page }) => {
+  await logIn(page, "/inbox");
+  let queued = 0;
+  await page.route("**/api/inbox/triage", async route => {
+    const body = route.request().postDataJSON();
+    if (body.preview) { queued++; await route.fulfill({ json: { queued: true } }); }
+    else { expect(body).toEqual({ agent: "assistant", limit: 20 }); await route.fulfill({ json: { count: 42, selected: 20, preview: "fixture" } }); }
+  });
+  await page.getByText("Mail backlog recommendations", { exact: true }).click();
+  await page.getByLabel("Agent name", { exact: true }).fill("assistant");
+  await page.getByRole("button", { name: "Preview recommendation batch" }).click();
+  await expect(page.getByText(/20 selected from 42 eligible messages/)).toBeVisible();
+  expect(queued).toBe(0);
+  await expect(page.getByText(/No Apply action, changes, scripts or subagents/)).toBeVisible();
+  await page.getByRole("button", { name: "Queue 20 recommendations as one summary" }).click();
+  await expect(page.getByText(/Queued. Read the recommendation/)).toBeVisible();
+  expect(queued).toBe(1);
+  await expect(page.getByRole("button", { name: "Queue 20 recommendations as one summary" })).toHaveCount(0);
+});
+
 test("historical safety controls require counted confirmation for selected held notes", async ({ page, admin }) => {
   const title = unique("TV151 selection");
   await create(admin, "email", { title, from_raw: "sender@example.test", labels: ["system/INBOX"] });
