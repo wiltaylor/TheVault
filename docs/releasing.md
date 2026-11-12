@@ -1,114 +1,321 @@
-# Releasing TheVault
+# Releasing TheVault locally
 
-A release is cut by a commit trailer on `main`. When the commit at the head of a push to `main` carries `pre-release: true`, GitHub Actions builds and publishes a pre-release such as `0.1.13-alpha.1`. When it carries `release: true`, it publishes a release such as `0.1.13`. A push without either trailer publishes nothing.
+GitHub hosts source, tags, release downloads and ghcr packages. It runs no
+TheVault build or test jobs. The nine former workflows are deleted.
+One operator-approved exception, sign-only.yml, is workflow_dispatch
+only and uses existing repository signing secrets until the operator provides
+keys to the local custodian. It never builds or publishes anything.
 
-The workflow that does this is `.github/workflows/release-train.yml`. It builds the desktop packages, the static `vault` CLI, the Android APK, the server image and the browser box image from one commit, under one version, and publishes them together.
+The release recipe runs only on the project's dedicated `release_target`.
+Terrarium supplies the configured `docker_release` relay as `DOCKER_HOST`
+(`TERRARIUM_DOCKER_HOST` is also accepted). The recipe never reads an SSH key.
+Builds run in secret-free containers on that relay. Registry/GitHub publication
+and verification of signed files run on the release client. Never run card
+tests on that client.
 
-## Cut a release
+## Release identity and cut gate
 
-1. Make sure everything you want in the release is merged into `main`.
-2. Run the checks in [docs/android-manual-checks.md](android-manual-checks.md) on a phone. The train runs the Android smoke test itself and publishes nothing when it fails, so `./dev just android-release-smoke` beforehand is optional. It only finds a problem sooner.
-3. Check which version the train will cut. Run `git fetch --tags`, then `scripts/release/version.sh pre-release` prints the next pre-release and `scripts/release/version.sh release` the next release. The script needs only git, so it runs on the host. `./dev just release-version pre-release` does the same in a main checkout, though not in a git worktree, whose repository the dev container cannot see.
-4. Push an empty commit with the trailer to `main`. For a pre-release:
+Freeze `release/<X.Y.Z>` and run the full cut checks on its SHA, not on a moving
+`next`. These are lead-owned runs, not per-card validation:
 
-   ```sh
-   git commit --allow-empty -m "Pre-release 0.1.13-alpha.1" -m "pre-release: true"
-   git push origin main
-   ```
-
-   For a release, use `release: true` instead. Add a `version: X.Y.Z` trailer to set the version, as [Version rules](#version-rules) describes:
-
-   ```sh
-   git commit --allow-empty -m "Release 0.2.0" -m "release: true
-   version: 0.2.0"
-   ```
-
-   Git reads trailers from the last paragraph of the message, so put them together after a blank line.
-5. Watch the `release-train` run in the Actions tab. When it has finished, check that the GitHub Release lists the APK, the AppImage, the deb, the rpm, `thevault-bin-aur.tar.gz`, both `vault-<version>-linux-<arch>` builds, the `SHA256SUMS` files, `compose.yaml`, `Caddyfile` and `env.example`, and that `docker pull ghcr.io/wiltaylor/thevault:<version>` and `docker pull ghcr.io/wiltaylor/thevault-browser:<version>` work.
-
-The trailer can sit on any commit, not only an empty one. The train only reads the commit at the head of the push, so a trailer on an earlier commit of the same push does nothing.
-
-To cut a release without a trailer commit, start `release-train` by hand from the Actions tab. Choose `pre-release` or `release` as `kind`, and fill in `version` only to set it. The run cuts the release from the head of `main`.
-
-## What the train does
-
-The train runs seven jobs:
-
-1. `version` reads the trailers of the head commit with `git log -1 --format='%(trailers:key=release,valueonly)'`, and the same for `pre-release` and `version`. It computes the version with `scripts/release/version.sh` and fails when that version's tag already exists, or when the commit carries both `release: true` and `pre-release: true`.
-2. `dev-image` calls `.github/workflows/dev-image.yml`. It pushes the dev container image to `ghcr.io/wiltaylor/thevault-dev:<hash>`, where `<hash>` is the one `./dev` tags its image with, unless the registry already has it. `desktop`, `android` and the smoke test then pull that image rather than spend about nine minutes building it. A job that cannot pull it builds it, as before. Run `dev-image` by hand from the Actions tab to publish the image after editing `docker/dev.Dockerfile`.
-3. `desktop` calls `.github/workflows/release.yml`, which builds the AppImage with its updater signature, the deb, the rpm, the AUR package and the static `vault` CLI builds.
-4. `android` calls `.github/workflows/android-release.yml` at the same time as `desktop`. It builds the signed aarch64 APK and checks its `versionName` and `versionCode`. Beside it, `android-smoke-reusable.yml` runs the [release smoke test](android-release.md#the-release-smoke-test) on an x86_64 build of the same commit and version.
-5. `publish` runs only when `desktop` and `android`, the smoke test included, have passed. It creates the tag `v<version>` on the train's commit and the GitHub Release with every file. A pre-release is marked as a pre-release.
-6. `image` calls `.github/workflows/image.yml`, which builds the server image with the release's APK, AppImage and CLI builds baked in, checks that it serves them, pushes it to `ghcr.io/wiltaylor/thevault`, and attaches the compose files to the release.
-7. `browser-image` calls `.github/workflows/browser-image.yml` at the same time as `image`. `docker/release-browser-image.sh` builds the browser box image (`docker/browser.Dockerfile`, the desktop with `playwright-cli` that the compose file's `browser` profile runs), checks it with `docker/test-browser-image.sh`, and pushes it to `ghcr.io/wiltaylor/thevault-browser` with the same tags as the server image. `just browser-image-release` builds and checks it on your machine without pushing it.
-
-Each job writes the version into its own checkout before it builds, with `scripts/release/stamp.sh`. That sets `version` in `[workspace.package]` of `Cargo.toml` and in both app crates, the versions of those crates in the three `Cargo.lock` files, `version` in both `tauri.conf.json` files, and the Android `bundle.android.versionCode`. Nothing is committed, so `main` keeps the version it has. `./dev just release-stamp <version>` does the same to your checkout, and `git checkout .` undoes it.
-
-GitHub Actions does not start workflows for a tag that a workflow pushes, so the train calls the build workflows itself rather than relying on the tag. Pushing a `v*` tag by hand starts nothing.
-
-Trains run one at a time, so two never pick the same alpha number. A push without a trailer does not wait for a train in progress.
-
-## Version rules
-
-The base is the highest release tag, `vX.Y.Z` without a pre-release part. Pre-release tags never count as the base.
-
-| Head commit carries | Version |
-|---|---|
-| `release: true` | The patch after the base: `0.1.13` after `v0.1.12` |
-| `pre-release: true` | The patch after the base with the next alpha: `0.1.13-alpha.1`, then `0.1.13-alpha.2` |
-| `release: true` and `version: 0.2.0` | `0.2.0` |
-| `pre-release: true` and `version: 0.2.0` | `0.2.0-alpha.N`, N one more than the highest `v0.2.0-alpha.*` tag |
-
-The alpha number counts from 1 to 98. A `version` trailer must be newer than the base. The train fails when the version's tag already exists, and it never moves a tag.
-
-After `v0.1.13` is released, the next pre-release is `0.1.14-alpha.1`. A release always follows its own alphas, so `0.1.13-alpha.2` sorts before `0.1.13`.
-
-## How each format writes a pre-release
-
-Each package manager has its own rule for sorting a pre-release before its release. `scripts/release/package-version.sh` maps the version for each one:
-
-| Where | `0.1.13-alpha.1` is written | `0.1.13` is written |
+| Recipe | Target | Evidence |
 |---|---|---|
-| Git tag, GitHub Release, file names, the app's own version | `0.1.13-alpha.1` | `0.1.13` |
-| deb `Version` | `0.1.13~alpha.1` | `0.1.13` |
-| rpm `Version` | `0.1.13~alpha.1` | `0.1.13` |
-| AUR `pkgver` | `0.1.13alpha1` | `0.1.13` |
-| Android `versionCode` | `101301` | `101399` |
-| Server and browser box image tags | `0.1.13-alpha.1`, `edge` | `0.1.13`, `0.1`, `latest`, `edge` |
+| `just release::gate-dev` | thevault-dev, under /src/thevault-heavy.sh | just check and full web e2e |
+| `just release::gate-android` | thevault-dev, under the heavy wrapper | validate-android and device fixture bundle |
+| `bash scripts/nightly/device.sh` | thevault-android | full emulator checks from the transferred bundle |
+| `just release::gate-box` | thevault-docker-vm | complete browser box image test |
 
-Tauri writes the semver into the deb, where dpkg reads `-alpha.1` as a Debian revision and sorts `0.1.13-alpha.1` after `0.1.13`. It cannot write the semver into an rpm at all, because an rpm version holds no `-`. For a pre-release, `just desktop-release` bundles the rpm as `0.1.13`, and `scripts/release/linux-packages.sh` rebuilds the deb and the rpm with the `~` version and names them by the semver. A release's packages are left as Tauri builds them.
+Use one checkout per release. For example, after the lead prepares the checkout:
 
-The Android `versionCode` is `((major * 1000 + minor) * 1000 + patch) * 100 + N` for `alpha.N`, and `+ 99` for the release (`scripts/release/version-code.sh`). An alpha sorts after the release before it and before its own release. Every code is far above `1012`, the code Tauri gave `0.1.12`, the last release before this rule. `apps/android/src-tauri/tauri.conf.json` carries the code of its own version, so a local build follows the same rule.
+```sh
+terrarium run thevault-dev --name release-dev --timeout 90m -- sh /src/thevault-heavy.sh sh -c 'cd /src/thevault-release && just release::gate-dev'
+terrarium run thevault-dev --name release-android-build --timeout 90m -- sh /src/thevault-heavy.sh sh -c 'cd /src/thevault-release && just release::gate-android'
+```
 
-`latest` and `<major>.<minor>` only ever name a release, so a server that runs `latest` never moves to a pre-release. `edge` names the newest build of either kind. Set `THEVAULT_VERSION=edge` in `.env` to follow the pre-releases. The GitHub Release of a pre-release is marked as one, so `releases/latest/download` in [docs/install.md](install.md) keeps naming the last release.
+Do not start both commands concurrently against one writable checkout. Transfer
+`.scratch/nightly/device.tar.gz` using `terrarium cp`. Follow the Android
+bundle runbook in AGENTS.md, except a busy emulator lock at the cut must exit
+75 (unfinished), never 0. The Android target has neither just nor pnpm.
+The lead must obtain a real passing device report before recording the cut.
+Upload the original reports with `terrarium test push --label version:<version>`.
 
-## Pre-releases and installed apps
+For a red web e2e run, `scripts/release/web_gate.py` runs exactly one
+`playwright test --last-failed --retries=0`. Both original JUnit reports remain
+under .scratch/release-gate. A recovered failure is listed as a flake in
+summary.json and does not block. A persistent failure blocks. Missing reports,
+infrastructure failures, skipped rerun tests and changed/empty selections fail
+without a broad suite retry. Upload both reports, including the red first run.
 
-An app updates to a pre-release only from a server that runs a pre-release. A server on `0.1.13` never moves its apps to a `0.1.14-alpha.1` it happens to publish. A server on `0.1.13-alpha.1` updates its apps to `0.1.13-alpha.1`, because the version gate pauses sync until the app matches the server ([The app updates before it syncs](desktop.md#the-app-updates-before-it-syncs)).
+Merge the frozen release into main with trailers in the final paragraph:
 
-The rule holds in each place an app decides on an update:
+```text
+pre-release: true
+version: 0.1.14
+tested-at-cut: <frozen-release-sha> <check-run-id> <e2e-run-id> <android-run-id> <device-run-id> <box-run-id>
+```
 
-- The version gate, `crates/sync/src/gate.rs`, which both apps run before each sync round (`may_take`).
-- The Android update check, `AppUpdate.decide` in the device plugin, which reads `server_version` from `GET /api/clients`.
-- The desktop updater's endpoint, `GET /api/clients/update/{target}/{arch}/{current_version}`, which offers a pre-release AppImage only when the server runs a pre-release, and the desktop's download offer in `apps/desktop/src-tauri/src/update.rs`.
+The main merge commit cannot contain its own hash. The coordinator requires
+its tree to equal the frozen commit's tree. The tag points to the main merge
+commit, and the manifests record both SHAs and the shared tree. The lead attests
+that the listed original test runs passed on that frozen tree. The script
+does not query Terrarium to revalidate run IDs or rerun the cut suites.
 
-A server before `0.1.13` sends no `server_version`, and the apps treat it as a release.
+`pre-release: true` selects the next alpha from the existing tags.
+`release: true` selects the stable version and requires the operator's prior
+approval. Never use both. `version: X.Y.Z` selects the base version. Without it,
+the base is the patch after the highest stable tag. Alpha N runs from 1 to 98.
+The coordinator fetches public tag history when a job's bundle has no tags.
+An explicitly supplied version must match the trailer/tag calculation on the
+first attempt. Resume keeps the selected version without recalculating alpha N.
 
-## Re-run a failed train
+## Delivery configuration and tools
 
-A failed train publishes nothing until `publish` runs, and `publish` only runs when every build has passed.
+META configures `release_recipe` as `just release::publish`. There is one recipe
+and one run per release job. The lead starts it with:
 
-- When a build or the smoke test fails, fix the cause on `main` and cut a new release with a new trailer commit. If the failure was not in the code, such as a runner that ran out of disk, open the failed run and choose **Re-run failed jobs**. A re-run keeps the run's commit and version, because the `version` job does not run again.
-- When `publish` fails, re-run the failed jobs. `publish` drafts the release before it publishes it, and a draft makes no tag, so a re-run finishes the draft an earlier run left.
-- When `image` fails after `publish`, the release and its tag exist without the image and the compose files. Re-run the failed jobs, or start `image` by hand from the Actions tab with the tag, such as `v0.1.13`. A run by hand checks out the tag and writes the version from it.
-- When `browser-image` fails, re-run the failed jobs, or start `browser-image` by hand with the tag. The server image does not wait for it, but the compose file's `browser` profile pulls `thevault-browser` at the same version, so publish it before you announce the release.
+```sh
+terrarium job release <version-card> --commit <main-commit>
+```
 
-Don't choose **Re-run all jobs** after `publish` has succeeded. The `version` job then finds the tag and fails.
+The daemon reads `release_target` and `docker_release` from project delivery
+configuration. It enforces the relay pin, holds the SSH key and supplies a
+per-job Unix socket in DOCKER_HOST. The script has no delivery-config argument,
+relay address, pin or SSH key. The daemon serializes TheVault release jobs in
+its per-project release lane. Keep that requirement, the script's flock and
+the unfinished-draft check together. META restores the client to its base only
+when running rebuild.sh, not before every job. Nothing required for recovery
+may depend on surviving that rebuild: private draft checkpoints are the
+cross-job recovery store, not the client's filesystem.
 
-## Secrets
+Every job, including a resume, checks the META-159 client tool contract before
+token checks or remote operations. Missing or different versions fail with the
+tool name and required version. `scripts/release/preflight.py` pins:
 
-The train uses the secrets the build workflows always used: `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for the AppImage's updater signature ([docs/desktop.md](desktop.md#releasing)), and `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` for the APK ([docs/android-release.md](android-release.md#publish-a-release)). It pushes both images with the run's own `GITHUB_TOKEN`.
+| Tool | Version |
+|---|---|
+| cargo-tauri (standalone CLI) | 2.12.3 |
+| Android build-tools | 36.0.0, apksigner 0.9, aapt2 2.20 |
+| OpenJDK | 21.0.13 |
+| jq / minisign | 1.7.1 / 0.12 |
+| Docker CLI | 29.0.3, with usable buildx |
+| crane / cosign | 0.22.1 / 3.1.4 |
+| gh / just | 2.100.0 / 1.59.0 |
+| uv / git / Python | 0.13.0 / 2.47.3 / 3.13.5 |
 
-## Test the scripts
+Set `ANDROID_HOME=/opt/android-sdk`. The script checks the SDK package metadata,
+apksigner and aapt2 versions and zipalign's help banner, then uses that SDK's
+build-tools path. META supplied no buildx version pin, so it checks availability.
+The client also needs bash and writable tmpfs at /dev/shm. Standalone cargo-tauri
+does not require cargo or a Rust compiler. Application builds use the dev
+Dockerfile on the relay. The client only needs HTTPS egress on port 443 and the
+daemon's Unix Docker socket. TCP Docker endpoints are rejected, and the script
+does not open SSH or other outbound ports from the client.
 
-`./dev just ci::release-test` runs `scripts/release/test.sh`, which `just check` runs too. It checks the version calculation against throwaway git repositories, the Android codes against the shipped `1012`, the order dpkg, rpm and pacman give the mapped package versions, the image tags, and stamping a copy of the checkout.
+| Runtime environment | Purpose |
+|---|---|
+| DOCKER_HOST or TERRARIUM_DOCKER_HOST | daemon-provisioned Docker relay |
+| GH_TOKEN | release-github, release access plus workflow dispatch/rerun and artifact read access |
+| GHCR_TOKEN | release-github, existing ghcr package write access |
+| GHCR_USER | optional registry username, default wiltaylor |
+| THEVAULT_SIGNING_MODE | github (default), or custodian after local keys are provisioned |
+| ANDROID_KEYSTORE_BASE64 | existing keystore, not a new key |
+| ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS | existing Android signing identity |
+| ANDROID_KEY_PASSWORD | optional, defaults to keystore password |
+| TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD | existing updater signing key and password |
+
+GH_TOKEN and GHCR_TOKEN must be classic tokens with `repo` and `write:packages`.
+The script checks the classic `X-OAuth-Scopes` header for both before any
+release work. `repo` covers workflow dispatch/rerun, run listing, artifact
+downloads and releases. The separate `workflow` scope is not needed.
+Fine-grained token permissions are not accepted for this ghcr publishing path.
+
+PATH, LANG, LC_ALL, TZ, RUSTUP_HOME and CARGO_HOME are allowed through to client
+tools. HOME and tool configuration paths are replaced by private runtime paths.
+Signing secrets never reach build containers. Registry auth and decoded
+keystore material live in mode-0700 tmpfs directories removed on exit.
+Passwords are environment references, not command-line values. Do not enable
+shell tracing or dump the environment.
+
+The key variables above are used only in custodian mode. Default github mode
+receives no signing keys on the release client. It uploads three unsigned
+inputs and their manifest as a private draft asset, dispatches sign-only.yml
+with the bundle SHA256 and original main SHA, waits for the exact request ID,
+and downloads its signed artifact. A retry finds the same request. The workflow
+checks input hashes and requires the source SHA to be on reviewed main history.
+Its sign job needs `contents: write` because GitHub draft downloads require
+push access. Workflow defaults remain `contents: read`, checkout does not
+persist credentials, and no step edits a release or publishes packages. The
+job installs signing tools, signs and returns artifacts. The broader job token
+is the temporary cost of fetching private draft assets, not a publication step.
+The client verifies returned manifest hashes, APK signatures, unchanged APK
+payloads, versions, unchanged AppImage bytes and the updater signature before
+accepting returned files. Card tests never dispatch this workflow.
+
+With THEVAULT_SIGNING_MODE=custodian, missing keys stop before signing and
+preserve the preceding private checkpoint. A follow-up card removes the
+temporary workflow after the operator supplies keys. Do not generate
+replacement signing keys. The Android fingerprint must
+match `scripts/release/android-signer.sha256`, extracted from a shipped APK.
+That public value is reviewed in git, never configured as a secret. AppImage
+signatures are verified with the updater public key embedded in the frozen source.
+The pin was extracted with build-tools 36.0.0 apksigner from the public
+v0.1.14-alpha.37 arm64 APK after checking its SHA256
+`c234806dfe5f950f6af387d6e33f7adb24d94a410146868a5ec699cd54b551c3`.
+
+## Phase 1: prepare
+
+`just release::publish` enters `scripts/release/release.py publish`. With no
+release-phase trailer (or `release-phase: prepare`) it prepares the release.
+
+1. Freeze identity under the release lock. Check cut evidence and create the
+   private GitHub draft that will hold cross-job checkpoints.
+2. Build the dev image from the frozen source and create an isolated build
+   container. Build unsigned arm64 and x86_64 release APKs, desktop bundles
+   and startup smoke, AUR archive, both static CLIs and device fixtures.
+3. Save the unsigned manifest and immutable signing inputs. Dispatch the
+   sign-only workflow by default (or sign at the custodian with the explicit
+   switch). APKs are zipaligned first. Verify existing signer identity,
+   versionName/versionCode and version-bound AppImage updater signatures.
+4. Recompute checksums. Build server and browser images on the relay from
+   the same stamped source. Test served client hashes and the complete
+   browser image behavior before exporting local image archives.
+5. Fill the draft targeting the exact main SHA with all signed assets,
+   and push only immutable version image tags. No edge, latest or
+   major.minor channel moves yet.
+
+The server and browser Dockerfiles still compile their own Rust/web components
+inside relay containers. The unsigned build also uses the relay dev image.
+No application binary executes on the key custodian.
+
+Relay container names and local image tags all start
+`thevault-release-<version>-<run-id>-`. Containers use their own writable
+layers and explicit Docker copies, not host bind paths or named builders.
+Cleanup removes only exact owned names. No prune or filter deletion is used.
+
+The public asset manifest preserves alpha.37's 14 filenames: arm64 APK,
+AppImage and signature, deb, rpm, AUR tarball, two CLIs, three checksum files,
+compose.yaml, Caddyfile and env.example. The draft additionally carries the
+x86_64 smoke APK, smoke-fixtures.tar.gz and release-manifest.json. The later
+release-state.json and signed-smoke.json record the handoff. These extra assets
+remain attached when published. Private checkpoints and unsigned signing-input
+bundles are removed before publication.
+
+The signed-manifest stage compares actual asset sizes against alpha.37 at
+0.5x..2x and saves asset-comparison.json. A size outside that broad range stops
+the release for review rather than publishing a likely stub or bloated package.
+
+## Signed smoke handoff
+
+Download the draft's signed x86_64 APK and smoke-fixtures.tar.gz with the lead's
+authorized release access. Transfer them with `terrarium cp` into an owned
+run directory on thevault-android. Never transfer credentials.
+
+Extract the fixture archive into an empty owned directory, then run:
+
+```sh
+THEVAULT_APK=<absolute-signed-x86_64-apk> THEVAULT_RELEASE_SHA=<frozen-sha> bash scripts/release/device.sh
+```
+
+The script holds /home/agent/.thevault-emulator.lock from before boot until
+cleanup. A busy lock exits 75. It uses port 5584, a private AVD/home and
+PID/start-time ownership checks for cleanup. It records adb devices and
+qemu PID, start time and command before and after. Emulator-5554 and the
+`-avd thevault` process belong to someone else and must never be touched.
+No process is killed by name or by a stale fixed PID.
+
+The harness runs the release startup smoke and checks 1, 2, 3, 7, 8, 11, 17, 29.
+Upload its original TAP report. Preserve
+`.scratch/release-smoke/signed-smoke.json`, which binds the passing result to
+the frozen SHA and signed x86_64 APK hash. This tests x86_64, not arm64 hardware.
+A timeout requires inspecting the owned owner.json record and process start
+time before PID-only cleanup.
+
+## Phase 2: finish
+
+After uploading the original smoke report with `terrarium test push`, the lead
+uploads the unchanged hash-bound sidecar to the draft as `signed-smoke.json`.
+Use authorized lead release access, never copy a publishing token to android.
+Add an empty main commit with these trailers:
+
+```text
+release-phase: finish
+release-version: 0.1.14-alpha.38
+signed-smoke: <original-test-run-id>
+```
+
+Start the same recipe with
+`terrarium job release <version-card> --commit <finish-main-commit>`.
+The finish tree must equal the prepared tree, and the original prepared main
+SHA must be an ancestor. The release tag still names the original phase-1
+main SHA, not the empty finish commit. The exact release-version prevents
+alpha renumbering. The signed-smoke trailer is the lead's attestation linking
+the original run ID to the uploaded sidecar, which the job checks against
+the signed APK hash and frozen SHA.
+
+Finish restores the private draft state on the fresh client and verifies the
+manifest, draft inventory and hashes, tag target,
+signed APK hash and tested image digests. It then advances image channels and
+publishes the draft. Pre-releases get version and edge only. Stable releases
+also get major.minor and latest. The final step checks GitHub asset hashes,
+tag SHA, release kind and registry channel digests.
+
+Publication is not transactional across GitHub and ghcr. A failure partway
+through finish can leave advanced image channels or a published draft.
+Resume with the same trailers and version, never recut from a later next.
+Existing mismatched assets or version tags are errors, not overwrite requests.
+
+## Recovery and evidence
+
+The default release-out directory is job-local scratch. Stages advance only
+after success. Each completed stage after the cut uploads a hash-named private
+draft checkpoint. Only after that upload succeeds is the preceding checkpoint
+removed. Checkpoints include the journal, run identity, source, manifests,
+unsigned inputs and signed assets/fixtures. An explicit allowlist excludes
+keys, tmpfs state, transient signing files and large image tar exports. A
+checkpoint above GitHub's 2 GiB limit fails rather than dropping state.
+sign-request.json preserves the signing request ID and input digest. No
+workflow artifact or checkpoint contains a private key.
+
+The next job downloads the highest completed checkpoint, verifies its hash
+and release identity, and resumes. A failed stage is retried; completed stages
+are not silently rerun. Signing restores immutable unsigned inputs before a
+partial-signing retry. Tested image IDs and manifest digests identify the exact
+owned relay images for re-export after a client reset. A missing or changed
+relay image stops an unfinished push; it never silently rebuilds a replacement.
+
+After version-only pushes, a small release-state.json also records the
+handoff. Finish saves the verified smoke identity there before removing all
+private checkpoints and publishing. Recovery after that point uses this
+state capsule plus hash-verified public/draft assets. Published recovery
+metadata is not silently changed.
+
+Never edit a manifest to bless changed bytes. Resolve the cause or cut a new
+authorized version. After verified publication, owned relay tags are removed.
+The job-local build logs must be collected by the release job before the client
+is reset. Public release manifests and the final handoff remain on GitHub.
+SIGKILL may leave exact run-owned containers; use the recorded run prefix to
+inspect and remove those specific names only.
+
+No step deploys production. Production upgrades remain META-owned with backup,
+rollback and live checks. AUR output is a tarball, not an automated AUR push.
+
+## Targeted development checks and rehearsals
+
+Run on thevault-dev under the heavy wrapper:
+
+```sh
+node --test --test-reporter=tap scripts/release/local.test.mjs scripts/release/cache.test.mjs scripts/nightly/update-versions.test.mjs scripts/nightly/nightly.test.mjs
+```
+
+The local tests use Python's built-in unittest; no pytest install is needed.
+Run actionlint against the sole remaining manual sign-only workflow.
+Upload original TAP/XML output
+with `terrarium test push --card TV-209`.
+
+`just release::dry-run --plan-sha <40-hex-sha> --version 0.1.14-alpha.38`
+prints every stage, target and expected public asset. It never builds, signs,
+publishes or marks real stages complete. Unit command rehearsals use fake
+tool responses, not real keys or registries. The alpha.37 fixture records
+public asset metadata; comparison of that fixture is not a measurement of new
+compiled artifact sizes. The lead's first real local pre-release is the
+end-to-end proof, including actual builds, signing, smoke and publication.

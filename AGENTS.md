@@ -10,7 +10,10 @@ Before review, push the card branch and run only targeted checks for the changed
 
 Use one clean checkout per card: `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<card>`. Confirm the checkout identifies the pushed commit. Reuse that path and its cache for every round, keeping logs, reports and generated output inside it. Do not create `/src/<card>-<round>` directories. All git commands run in the sandbox, never on a target. Branch from `origin/next` as `<card-id-lowercase>` and push only the card branch.
 
-GitHub CI runs only on pushes to `main` (the release train: desktop build, Android APK and smoke, images). It runs no tests on branches. So the recipes below cover more than CI.
+GitHub build/test CI is removed. The nine former workflows are deleted.
+One manual sign-only workflow temporarily uses the existing repository
+keys, as the operator requested. Releases use the local two-phase release job
+documented in `docs/releasing.md`.
 
 thevault-dev is the dev container itself. Run without `./dev`. Every build, test and lint there must use `/src/thevault-heavy.sh`, which holds one of two heavy slots and sets `CARGO_BUILD_JOBS=8`, `RUST_TEST_THREADS=8`, `nice -n10` and `ionice -c2 -n7` (MEM-160). For example:
 
@@ -66,6 +69,44 @@ After a card is merged or released, the lead may remove only that finished agent
 A machine can run emulators that are not yours, such as `emulator-5554` on thevault-android. For cut and nightly device checks use console port 5584, your own AVD (`THEVAULT_AVD`, `ANDROID_AVD_HOME`) and `ANDROID_SERIAL=emulator-5584`. A port conflict fails without touching its occupant. `boot.sh --wipe` refuses a port that already has an emulator. Stop only your emulator's recorded `owner.json` PID after verifying its start time.
 
 ## Release checks
+
+Release jobs run only on delivery `release_target`, with `docker_release`
+provided as a daemon-owned Docker socket relay. Agents never test or exec on
+the release client. The job builds in secret-free relay containers, obtains
+signatures through the manual sign-only workflow by default, verifies them on
+the client, uploads a draft and pushes version-only images. Custodian signing
+requires THEVAULT_SIGNING_MODE=custodian. After the
+lead runs signed x86_64 smoke on thevault-android, a second job publishes the
+draft and advances image channels. The single recipe `just release::publish`
+reads `release-phase: finish`, `release-version: <exact version>` and
+`signed-smoke: <test run ID>` trailers for phase 2. The lead starts either job
+with `terrarium job release <version-card> --commit <main-commit>`. No delivery
+snapshot is passed to the script. The daemon serializes releases per project.
+META can rebuild the client from its base, so private draft checkpoints, not
+local files, preserve the unsigned build and journal across a rebuild.
+Missing local keys do not stop default GitHub signing. The Android certificate fingerprint is
+committed in `scripts/release/android-signer.sha256`.
+
+The cut gate is lead-owned: `just release::gate-dev` and
+`just release::gate-android` on thevault-dev under `/src/thevault-heavy.sh`,
+the full transferred emulator bundle on thevault-android, and
+`just release::gate-box` on thevault-docker-vm. The main merge's
+`tested-at-cut: <frozen-sha> <run IDs>` trailer attests to the original passing
+reports. The job requires the main and frozen release trees to match and tags
+the main merge SHA. A busy emulator lock at a cut is unfinished (exit 75),
+never a passing skip. Card checks remain targeted; do not run full cut gates
+per card.
+
+At the release cut only, a red full web e2e run receives one rerun of only its
+failed tests (`playwright test --last-failed`). Passing reruns are reported as
+flakes and do not block. A repeated failure blocks. Keep and upload both
+original reports. `scripts/release/web_gate.py` enforces this, without retries
+for missing results or infrastructure failures.
+
+Signed smoke uses `bash scripts/release/device.sh`, port 5584, an owned AVD and
+the shared emulator lock. Preserve emulator-5554 by identifying its qemu
+command `-avd thevault`, recording PID and start time before and after, not by
+assuming PID 19 or any other fixed PID. Cleanup is by owned PID/start identity.
 
 For slow contact check 35, set `THEVAULT_CONTACT_DIAGNOSTIC=1` to save capture/job state at 30 s and wait without a foreground nudge (diagnosis only, normal timing checks stay unchanged).
 

@@ -37,11 +37,11 @@ cp apps/android/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-
 node --input-type=module <<'JS'
 import {readFileSync, copyFileSync, writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
+import {updateVersions} from './scripts/nightly/update-versions.mjs';
 const conf = JSON.parse(readFileSync('apps/android/src-tauri/tauri.conf.json'));
-const [major,minor,patch] = conf.version.split('.').map(Number);
 let env = '';
-for (const bump of [1,2]) {
-  const version = `${major}.${minor}.${patch+bump}`;
+for (const [index, version] of updateVersions(conf.version).entries()) {
+  const bump = index + 1;
   const code = Number(execFileSync('scripts/release/version-code.sh',[version],{encoding:'utf8'}).trim());
   const childEnv = {...process.env, CARGO_PROFILE_DEV_DEBUG:'0', CARGO_PROFILE_DEV_STRIP:'symbols', GRADLE_OPTS:'-Dorg.gradle.daemon=false'};
   delete childEnv.CARGO_TARGET_DIR;

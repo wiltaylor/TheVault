@@ -1,0 +1,20 @@
+{
+  "source": "https://api.github.com/repos/wiltaylor/TheVault/releases/tags/v0.1.14-alpha.37",
+  "version": "0.1.14-alpha.37",
+  "assets": [
+    {"name": "Caddyfile", "size": 343},
+    {"name": "compose.yaml", "size": 4270},
+    {"name": "env.example", "size": 2109},
+    {"name": "SHA256SUMS", "size": 421},
+    {"name": "SHA256SUMS-android", "size": 103},
+    {"name": "SHA256SUMS-cli", "size": 203},
+    {"name": "TheVault-0.1.14-alpha.37-1.x86_64.rpm", "size": 32852128},
+    {"name": "thevault-bin-aur.tar.gz", "size": 1132},
+    {"name": "TheVault_0.1.14-alpha.37_aarch64.apk", "size": 94026639},
+    {"name": "TheVault_0.1.14-alpha.37_amd64.AppImage", "size": 126900728},
+    {"name": "TheVault_0.1.14-alpha.37_amd64.AppImage.sig", "size": 464},
+    {"name": "TheVault_0.1.14-alpha.37_amd64.deb", "size": 32845780},
+    {"name": "vault-0.1.14-alpha.37-linux-aarch64", "size": 19667656},
+    {"name": "vault-0.1.14-alpha.37-linux-x86_64", "size": 21878176}
+  ]
+}
