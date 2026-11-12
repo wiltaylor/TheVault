@@ -709,7 +709,13 @@ fn outbox_rule(
                     "{label} may not create Outbox items: the user or an agent drafts them"
                 ));
             };
-            if was != status && !SEND_TRANSITIONS.contains(&(was, status)) {
+            let late_confirmation = name == "outbox_send" || name == "google_event";
+            let late_confirmation = late_confirmation
+                && was == "failed"
+                && status == "sending"
+                && text(old, "error").is_some_and(|e| e.contains("check before retrying"))
+                && text(doc, "sent_at").is_some_and(|s| !s.is_empty());
+            if was != status && !SEND_TRANSITIONS.contains(&(was, status)) && !late_confirmation {
                 return Err(format!(
                     "{label} may move an Outbox item only from ready to sending, and from \
                      sending to failed, not from {was} to {status}"

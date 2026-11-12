@@ -50,10 +50,12 @@ test('device bundle includes the harness data files and badging tool', () => {
   assert.match(script, /cp "\$tools\/aapt2"/);
 });
 
-test('schedule runbook takes a nonblocking device lock and forbids silent retries', () => {
+test('cut runbook preserves the device lock and disables nightly schedules', () => {
   const docs = read('AGENTS.md');
-  assert.match(docs, /flock -n 9/);
+  assert.match(docs, /The nightly schedules are off/);
+  assert.match(docs, /\/home\/agent\/\.thevault-emulator.lock/);
   assert.match(docs, /skipped: emulator busy/);
-  assert.match(docs, /Never silently retry/);
+  assert.match(docs, /A skipped release check is not a passed cut/);
   assert.match(docs, /diagnosis comment/);
+  assert.doesNotMatch(docs, /Nightly schedule runbook/);
 });

@@ -80,6 +80,7 @@ pub use agent_threads::AgentThreadRuntime;
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
+pub use schema::{hide_browser_secrets, redact_agent_content, redact_agent_note};
 
 /// A single note write whose authorization must be checked under the write lock.
 pub enum CheckedNoteWrite<'a> {
@@ -569,6 +570,8 @@ impl Writer {
     /// files edited outside the server are not watched (D28), so `vault reindex` is how to pick
     /// them up. The change feed is brought up to the synced files on disk either way (D20).
     pub fn open(vault: Vault, state: State) -> Result<Writer> {
+        state
+            .revoke_missing_browser_secrets(|name| vault.root().join(agent_path(name)).is_file())?;
         let mut index = Index::open(&vault)?;
         if !index.is_current(&vault)? {
             recover(&vault, &state)?;

@@ -144,6 +144,7 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         "web": web,
         "outbox": outbox,
         "browser": p.browser,
+        "browser_secrets": p.browser_secrets,
         "gmail_actions": p.gmail_actions,
         "skills": p.skills,
         "scripts": scripts,
@@ -281,8 +282,10 @@ fn agent_response(
     wcl: String,
     account: Option<String>,
     conditions_hidden: bool,
+    inactive: Vec<String>,
 ) -> Response {
     let mut out = agent_json(agent);
+    out["browser_secrets_inactive"] = json!(inactive);
     out["account"] = json!(account);
     out["wcl"] = json!(wcl);
     let warnings: Vec<Value> = agent
@@ -307,9 +310,10 @@ pub async fn read(
 ) -> Result<Response, ApiError> {
     // A file that does not parse is a 400 `invalid` with its issues and its text, so the File
     // tab can show it to be fixed.
-    let (wcl, agent, account, hidden) = blocking(w, move |w| {
+    let (wcl, agent, account, hidden, inactive) = blocking(w, move |w| {
         let full = matches!(by, state::Author::Session(_))
             || (scope.allows(state::Scope::Admin) && !crate::auth::is_agent_token(&by));
+        let login_full = crate::tasks::may_manage_login_secrets(w, &by)?;
         let mut wcl = w.read_agent(&name)?;
         let mut agent = w.agent(&name).map_err(|e| {
             let mut err = ApiError::from(e);
@@ -319,14 +323,36 @@ pub async fn read(
             err
         })?;
         let hidden = !full && agent.permissions.outbox.conditions.take().is_some();
-        if hidden {
+        let inactive = agent
+            .permissions
+            .browser_secrets
+            .iter()
+            .filter_map(|n| match w.state().browser_secret_active(&name, n) {
+                Ok(false) => Some(Ok(n.clone())),
+                Ok(true) => None,
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let login_hidden = !login_full && !agent.permissions.browser_secrets.is_empty();
+        if login_hidden {
+            agent.permissions.browser_secrets.clear();
+        }
+        if hidden || login_hidden {
             wcl = agent.to_wcl();
         }
         let account = crate::ai_settings::agent_account_name(w, &agent);
-        Ok::<_, ApiError>((wcl, agent, account, hidden))
+        Ok::<_, ApiError>((
+            wcl,
+            agent,
+            account,
+            hidden,
+            if login_full { inactive } else { vec![] },
+        ))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl, account, hidden))
+    Ok(agent_response(
+        &headers, &agent, wcl, account, hidden, inactive,
+    ))
 }
 
 /// The JSON body of `PUT /api/agents/{name}`: `wcl`, or the form `GET` answers. `name`, `kind`,
@@ -342,6 +368,8 @@ pub struct AgentBody {
     /// What GET answers (the warnings of the saved file); ignored.
     #[serde(default, rename = "warnings")]
     _warnings: Option<Value>,
+    #[serde(default, rename = "browser_secrets_inactive")]
+    _browser_secrets_inactive: Option<Value>,
     label: Option<String>,
     description: Option<String>,
     icon: Option<String>,
@@ -375,6 +403,8 @@ pub struct PermissionsForm {
     /// Browser automation (browser B6); absent is off.
     #[serde(default)]
     browser: bool,
+    #[serde(default)]
+    browser_secrets: Vec<String>,
     #[serde(default)]
     gmail_actions: bool,
     /// The skills offered (skills S6); absent is every valid skill.
@@ -450,6 +480,7 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
     p.change_types = f.permissions.change_types;
     p.change_fields = f.permissions.change_fields;
     p.browser = f.permissions.browser;
+    p.browser_secrets = f.permissions.browser_secrets;
     p.gmail_actions = f.permissions.gmail_actions;
     p.skills = f.permissions.skills;
     for (k, on) in f.permissions.confirm {
@@ -579,15 +610,36 @@ pub async fn put(
                 .to_wcl()
         }
     };
-    let (wcl, agent, account) = blocking(w, move |w| {
+    let (wcl, agent, account, inactive) = blocking(w, move |w| {
+        if !crate::tasks::may_manage_login_secrets(w, &by)? {
+            return Err(ApiError::new(
+                axum::http::StatusCode::FORBIDDEN,
+                "forbidden",
+                "only an owner session or ordinary admin user token may confirm Login grants",
+            ));
+        }
         let _acting = writer::acting_as(&by);
         let check = tool_check(w);
         let (wcl, agent) = w.put_agent(&name, &source, check)?;
+        w.state()
+            .confirm_browser_secrets(&name, &agent.permissions.browser_secrets)?;
+        let inactive = agent
+            .permissions
+            .browser_secrets
+            .iter()
+            .filter_map(|n| match w.state().browser_secret_active(&name, n) {
+                Ok(false) => Some(Ok(n.clone())),
+                Ok(true) => None,
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let account = crate::ai_settings::agent_account_name(w, &agent);
-        Ok::<_, ApiError>((wcl, agent, account))
+        Ok::<_, ApiError>((wcl, agent, account, inactive))
     })
     .await?;
-    Ok(agent_response(&headers, &agent, wcl, account, false))
+    Ok(agent_response(
+        &headers, &agent, wcl, account, false, inactive,
+    ))
 }
 
 /// `POST /api/agents/{name}/browser-profile/reset`, an owner action, never an agent tool.

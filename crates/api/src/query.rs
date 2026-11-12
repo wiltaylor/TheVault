@@ -19,6 +19,34 @@ type Shared = State<Arc<Writer>>;
 
 /// Rows per page when the request names no size.
 pub const DEFAULT_PAGE: usize = 100;
+pub(crate) const PAGE_BYTE_BUDGET: usize = 16 * 1024 * 1024;
+
+fn budgeted_query(
+    q: &query::Query,
+    ctx: &query::Context<'_>,
+    page: &query::PageRequest,
+    manager: bool,
+) -> Result<query::Page, ApiError> {
+    let mut page = query::PageRequest {
+        cursor: page.cursor.clone(),
+        size: page.size,
+    };
+    loop {
+        let result = query::run(q, ctx, &page)?;
+        if manager || result.rows.len() <= 1 {
+            return Ok(result);
+        }
+        let bytes = serde_json::to_vec(&result)
+            .map_err(|_| ApiError::bad_request("query result could not be serialized"))?
+            .len();
+        if bytes <= PAGE_BYTE_BUDGET {
+            return Ok(result);
+        }
+        // Re-run against the same locked index so the engine returns the correct cursor.
+        page.size = (result.rows.len().saturating_mul(PAGE_BYTE_BUDGET) / bytes)
+            .clamp(1, result.rows.len() - 1);
+    }
+}
 
 /// A query to run, from a JSON body or URL parameters.
 #[derive(Deserialize)]
@@ -104,17 +132,19 @@ fn params<T>(q: Result<Query<T>, QueryRejection>) -> Result<T, ApiError> {
 /// Run one page of `q` off the async runtime.
 async fn run_page(
     w: Arc<Writer>,
-    agent: bool,
+    author: state::Author,
     q: query::Query,
     this: Option<String>,
     cursor: Option<String>,
     page_size: Option<usize>,
 ) -> Result<Json<Value>, ApiError> {
+    let agent = crate::auth::is_agent_token(&author);
     let page = query::PageRequest {
         cursor,
         size: page_size.unwrap_or(DEFAULT_PAGE).min(query::MAX_PAGE),
     };
     let result = tokio::task::spawn_blocking(move || {
+        let manager = crate::tasks::may_manage_login_secrets(&w, &author)?;
         w.read_index(|index, schema| {
             let excluded = if agent {
                 Some(
@@ -127,7 +157,7 @@ async fn run_page(
             let mut ctx = query::Context::new(index, schema);
             ctx.excluded_notes = excluded.as_ref();
             ctx.this = this;
-            query::run(&q, &ctx, &page).map_err(ApiError::from)
+            budgeted_query(&q, &ctx, &page, manager)
         })
     })
     .await
@@ -151,15 +181,7 @@ pub async fn run_post(
 ) -> Result<Json<Value>, ApiError> {
     let b = json_body(body)?;
     let q = with_archived(parse(&b.query)?, b.archived.as_deref())?;
-    run_page(
-        w,
-        crate::auth::is_agent_token(&author),
-        q,
-        b.this,
-        b.cursor,
-        b.page_size,
-    )
-    .await
+    run_page(w, author, q, b.this, b.cursor, b.page_size).await
 }
 
 pub async fn run_get(
@@ -169,15 +191,7 @@ pub async fn run_get(
 ) -> Result<Json<Value>, ApiError> {
     let p = params(p)?;
     let q = with_archived(parse(&p.q)?, p.archived.as_deref())?;
-    run_page(
-        w,
-        crate::auth::is_agent_token(&author),
-        q,
-        p.this,
-        p.cursor,
-        p.page_size,
-    )
-    .await
+    run_page(w, author, q, p.this, p.cursor, p.page_size).await
 }
 
 /// Full-text search over every note's fields and content, best match first.
@@ -192,15 +206,7 @@ pub async fn search(
     }
     let archived = archived_param(p.archived.as_deref())?;
     let q = query::search_all(p.q, archived);
-    run_page(
-        w,
-        crate::auth::is_agent_token(&author),
-        q,
-        None,
-        p.cursor,
-        p.page_size,
-    )
-    .await
+    run_page(w, author, q, None, p.cursor, p.page_size).await
 }
 
 /// `q` with an `archived` parameter applied: `include` adds `include archived`, `only` adds

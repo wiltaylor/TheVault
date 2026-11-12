@@ -33,6 +33,7 @@ const updateAgentMemory = vi.fn();
 const deleteAgentMemory = vi.fn();
 const resetBrowserProfile = vi.fn();
 const skillsList = vi.fn();
+const secrets = vi.fn().mockResolvedValue([]);
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
   return {
@@ -58,6 +59,7 @@ vi.mock("../api", async (orig) => {
       deleteAgentMemory,
       resetBrowserProfile,
       skills: skillsList,
+      secrets,
     },
   };
 });
@@ -504,7 +506,7 @@ describe("the Permissions tab", () => {
     const p = await tab("Permissions");
     expect(p.getByText(/they replace Settings > AI for this agent/)).toBeTruthy();
     const groups = p.getAllByRole("group").map((g) => g.querySelector(":scope > legend")?.textContent).filter(Boolean);
-    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Skills", "Types", "Taxonomies", "Agents", "Skill management", "Outbox", "Assets", "Internet"]);
+    expect(groups).toEqual(["Notes (read)", "Notes (changes)", "Memory", "Skills", "Types", "Taxonomies", "Agents", "Skill management", "Outbox", "Assets", "Internet", "Login secrets"]);
     const web = p.getByRole("checkbox", { name: /Search the web/ });
     expect(web).toBeChecked();
     fireEvent.click(web);
@@ -711,6 +713,21 @@ describe("the Permissions tab", () => {
     await open();
     p = await tab("Permissions");
     expect(p.queryByText(SKILLS_WITHOUT_USE_SKILL_WARNING)).toBeNull();
+  });
+
+  it("shows Login metadata and inactive names, and saves only selected names", async () => {
+    secrets.mockResolvedValueOnce([{ name: "bank", kind: "login", username: "test-user", origins: ["https://example.com"] }, { name: "script_key", kind: "string" }]);
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, browser: true, browser_secrets: ["bank", "gone"] }, browser_secrets_inactive: ["bank", "gone"] }));
+    await open();
+    const p = await tab("Permissions");
+    await waitFor(() => expect(p.getByText(/test-user/)).toBeTruthy());
+    expect(p.queryByText("script_key")).toBeNull();
+    expect(p.getAllByText(/missing - re-confirm/)).toHaveLength(2);
+    const box = p.getByRole("checkbox", { name: /gone/ });
+    fireEvent.click(box);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { browser_secrets: string[] }).browser_secrets).toEqual(["bank"]);
   });
 
   it("resets only the current agent after confirmation and reports offline cleanup or an error", async () => {

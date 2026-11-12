@@ -19,6 +19,7 @@ import { watchListThreads } from "../dispatch";
 import { knowTitle } from "../editor/titles";
 import { appInfo } from "../inApp";
 import { CatchUpDialog } from "../inbox/CatchUpDialog";
+import { HeldInbox, loadHeld } from "../inbox/HeldInbox";
 import { loadInbox } from "../inbox/load";
 import { FILTERS, type Filter, type Item } from "../inbox/sources";
 import { applyEdits } from "../notes";
@@ -43,6 +44,15 @@ async function setProcessed(id: string, value: boolean): Promise<Note> {
 
 export function Inbox() {
   const navigate = useNavigate();
+  const [view, setView] = createSignal<"inbox" | "scam" | "other">("inbox");
+  const [heldError, setHeldError] = createSignal("");
+  const [held, { mutate: mutateHeld, refetch: refreshHeld }] = createResource(changes, async () => {
+    setHeldError("");
+    try { return await loadHeld(); }
+    catch (e) { setHeldError(errorText(e)); return []; }
+  });
+  const scams = () => (held() ?? []).filter((n) => n.agent_safety.reason === "scam");
+  const otherHeld = () => (held() ?? []).filter((n) => n.agent_safety.reason !== "scam");
   const [showProcessed, setShowProcessed] = createSignal(false);
   const [filter, setFilter] = createSignal<Filter>("all");
   // The one-time catch-up runs on the home server only, so the apps do not offer it (TV-30).
@@ -66,9 +76,11 @@ export function Inbox() {
       return p;
     },
   );
-  const items = createMemo(() => (page.latest?.items ?? []).filter((i) => !gone().has(i.row.id)));
+  const heldIds = createMemo(() => new Set((held() ?? []).map((n) => n.id)));
+  const items = createMemo(() => (page.latest?.items ?? []).filter((i) => !gone().has(i.row.id) && !heldIds().has(i.row.id)));
   const hide = (id: string) => setGone((s) => new Set(s).add(id));
   const ids = createMemo(() => items().map((i) => i.row.id));
+  const itemsById = createMemo(() => new Map(items().map((i) => [i.row.id, i])));
   const selection = createSelection(ids);
   const threads = watchListThreads(ids);
   const [bulkBusy, setBulkBusy] = createSignal(false);
@@ -214,6 +226,20 @@ export function Inbox() {
           </button>
         </div>
       </header>
+      <nav aria-label="Inbox views">
+        <button type="button" aria-pressed={view() === "inbox"} onClick={() => { setView("inbox"); setReload((n) => n + 1); }}>Inbox</button>
+        <button type="button" aria-pressed={view() === "scam"} onClick={() => setView("scam")}>Possible scams ({scams().length})</button>
+        <button type="button" aria-pressed={view() === "other"} onClick={() => setView("other")}>Other held ({otherHeld().length})</button>
+      </nav>
+      <Show when={heldError()}><p role="alert" class="error">Could not load held items: {heldError()} <button type="button" onClick={() => void refreshHeld()}>Retry</button></p></Show>
+      <Show when={view() !== "inbox"}>
+        <HeldInbox notes={view() === "scam" ? scams() : otherHeld()} onReleased={(id) => {
+          mutateHeld((notes) => notes?.filter((n) => n.id !== id));
+          setReload((n) => n + 1);
+          void refreshInboxCount();
+        }} />
+      </Show>
+      <Show when={view() === "inbox"}>
       <Show when={catchingUp()}>
         <CatchUpDialog
           onCancel={() => setCatchingUp(false)}
@@ -251,17 +277,21 @@ export function Inbox() {
             <button type="button" class="danger" disabled={bulkBusy() || selectedItems().some((i) => i.source.key === "mail")} title={selectedItems().some((i) => i.source.key === "mail") ? "Mail cannot be deleted from the Inbox" : undefined} onClick={() => void bulk("delete")}>Delete selected</button>
           </>} />
           <ul class="inbox-list" aria-label="Inbox">
-            <For each={items()}>
-              {(i) => (
+            {/* For keys by identity: use note IDs, not fresh objects from each reload. */}
+            <For each={ids()}>
+              {(id) => {
+                const item = () => itemsById().get(id)!;
+                return (
                 <InboxItem
-                  item={i}
+                  item={item()}
                   selection={selection}
-                  threads={threads().get(i.row.id) ?? []}
-                  onDone={(v) => void done(i.row, v)}
-                  onDelete={() => void remove(i.row)}
-                  onConvert={(t) => void convert(i.row, t)}
+                  threads={threads().get(id) ?? []}
+                  onDone={(v) => void done(item().row, v)}
+                  onDelete={() => void remove(item().row)}
+                  onConvert={(t) => void convert(item().row, t)}
                 />
-              )}
+                );
+              }}
             </For>
           </ul>
           <Show when={(page.latest?.total ?? 0) > limit()}>
@@ -270,6 +300,7 @@ export function Inbox() {
             </button>
           </Show>
         </Show>
+      </Show>
       </Show>
     </section>
   );

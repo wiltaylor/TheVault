@@ -80,6 +80,14 @@ impl Api {
                 .unwrap(),
             200,
         );
+        let outbox_type = api.file("types/outbox.wcl");
+        expect(
+            api.req("PUT", "/api/types/outbox")
+                .body(outbox_type.replace("allow_domains = [", &allow))
+                .send()
+                .unwrap(),
+            200,
+        );
         api
     }
 
@@ -168,6 +176,45 @@ impl Api {
         status == 404 && !trashed
     }
 
+    fn assert_trashed(&self, id: &str) {
+        assert_eq!(
+            self.req("GET", &format!("/api/notes/{id}"))
+                .send()
+                .unwrap()
+                .status(),
+            404
+        );
+        let trash = expect(self.req("GET", "/api/trash").send().unwrap(), 200);
+        assert!(
+            trash["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["id"] == id),
+            "{trash}"
+        );
+    }
+
+    fn delete_item(&self, id: &str) -> String {
+        self.create(
+            "outbox",
+            invite(
+                json!({ "title": "Delete standup", "event": id, "event_action": "delete" }),
+                None,
+            ),
+        )
+    }
+
+    fn retry_delete(&self, item: &str, id: &str) {
+        self.edit(item, json!({ "status": "ready" }));
+        assert!(self.gone(item));
+        self.assert_trashed(id);
+        assert_eq!(
+            self.google.event("primary", "standup").unwrap()["status"],
+            "cancelled"
+        );
+    }
+
     /// Change fields of note `id` as the user would, then let its handlers finish.
     fn edit(&self, id: &str, changes: Value) {
         let mut note = self.note(id);
@@ -228,6 +275,225 @@ impl Api {
         assert_eq!(writes.len(), before + 1, "{writes:#?}");
         writes.into_iter().last().unwrap()
     }
+}
+
+#[test]
+fn restart_during_event_create_never_repeats_provider_write() {
+    restart_during_event_write(false, false);
+}
+
+#[test]
+fn restart_during_event_update_never_repeats_provider_write() {
+    restart_during_event_write(true, false);
+}
+
+#[test]
+fn restart_before_event_result_link_never_repeats_provider_write() {
+    restart_during_event_write(false, true);
+}
+
+fn restart_during_event_write(update: bool, unlinked: bool) {
+    let mut api = Api::start();
+    if unlinked {
+        let script = api.file("scripts/outbox_send.ws");
+        let needle = "return Ok(Sent { done: false, sent_ref: \"\", result: id })";
+        assert!(script.contains(needle));
+        expect(
+            api.req("PUT", "/api/scripts/outbox_send")
+                .body(script.replace(
+                    needle,
+                    "return Ok(Sent { done: false, sent_ref: \"\", result: \"\" })",
+                ))
+                .send()
+                .unwrap(),
+            200,
+        );
+    }
+    let mut fields = json!({
+        "title": "Check interrupted event",
+        "when": {"start": "2026-04-02T09:00:00Z", "end": "2026-04-02T10:00:00Z"},
+        "attendees_raw": ["ann@example.com"],
+    });
+    if update {
+        api.google.put_event("primary", standup());
+        api.sync();
+        fields["event"] = json!(api.events().keys().next().unwrap());
+        fields["event_action"] = json!("update");
+    }
+    api.google
+        .set_calendar_delay(Some(std::time::Duration::from_secs(60)));
+    let item = api.create("outbox", invite(fields, None));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !api
+        .google
+        .requests()
+        .iter()
+        .any(|r| r.route().starts_with("/calendar/") && (r.method == "POST" || r.method == "PATCH"))
+    {
+        assert!(
+            std::time::Instant::now() < until,
+            "event write never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(api.fields(&item)["status"], "sending");
+    api.server.restart();
+    api.google.set_calendar_delay(None);
+    api.settle();
+    let fields = api.fields(&item);
+    assert_eq!(fields["status"], "failed", "{fields}");
+    assert!(
+        fields["error"]
+            .as_str()
+            .unwrap()
+            .contains("Check interrupted event")
+    );
+    assert_eq!(
+        api.google
+            .requests()
+            .iter()
+            .filter(|r| r.route().starts_with("/calendar/")
+                && (r.method == "POST" || r.method == "PATCH"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn review_restart_during_delete_keeps_manual_retry_available() {
+    let mut api = Api::start();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.events().keys().next().unwrap().clone();
+    api.google
+        .fail_calendar_writes(Some((500, "Interrupted request")));
+    api.google
+        .set_calendar_delay(Some(std::time::Duration::from_secs(60)));
+    let item = api.delete_item(&id);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !api.google.requests().iter().any(|r| r.method == "DELETE") {
+        assert!(std::time::Instant::now() < until, "DELETE never started");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(api.fields(&item)["status"], "sending");
+    assert_eq!(api.fields(&id)["google_ref"], "standup");
+    api.server.restart();
+    api.google.set_calendar_delay(None);
+    api.server.settle_handlers();
+    assert_eq!(
+        api.fields(&item)["status"],
+        "failed",
+        "interrupted delete must expose manual retry, not remain sending"
+    );
+    api.google.fail_calendar_writes(None);
+    api.retry_delete(&item, &id);
+}
+
+#[test]
+fn review_restart_after_local_trash_finishes_outbox_without_second_delete() {
+    restart_confirmed_delete(2);
+}
+
+#[test]
+fn restart_after_persisted_confirmation_finishes_without_second_delete() {
+    restart_confirmed_delete(1);
+}
+
+#[test]
+fn restart_after_google_success_before_confirmation_checks_google_without_delete() {
+    restart_confirmed_delete(0);
+}
+
+fn restart_confirmed_delete(phase: u8) {
+    let mut api = Api::start();
+    let pause = testkit::StandIn::start();
+    pause.route(
+        "/pause",
+        testkit::Reply::text(200, "ok").delay(std::time::Duration::from_secs(60)),
+    );
+    let outbox_type = api.file("types/outbox.wcl");
+    expect(
+        api.req("PUT", "/api/types/outbox")
+            .body(outbox_type.replace(
+                "allow_domains = [",
+                &format!("allow_domains = [\"{}\", ", pause.host()),
+            ))
+            .send()
+            .unwrap(),
+        200,
+    );
+    // Test-only crash barriers add no writes around the shipped confirmation and trash.
+    let source = api.file("scripts/outbox_send.ws");
+    let line = if phase == 0 {
+        "        vault::patch(text_of(item, \"id\"), Value::Map(#{ \"sent_at\": Value::String(rfc3339(vault::now())) }), \"\")?"
+    } else {
+        "        vault::delete(target, text_of(event, \"version\"))?"
+    };
+    assert!(source.contains(line));
+    let barrier = format!(
+        "        http::request(\"GET\", \"{}\", #{{}}, \"\")?",
+        pause.url("/pause")
+    );
+    let instrumented = source.replace(
+        line,
+        &if phase == 2 {
+            format!("{line}\n{barrier}")
+        } else {
+            format!("{barrier}\n{line}")
+        },
+    );
+    std::fs::write(
+        api.server.vault_path().join("scripts/outbox_send.ws"),
+        instrumented,
+    )
+    .unwrap();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.events().keys().next().unwrap().clone();
+    let item = api.delete_item(&id);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while pause.requests().is_empty() {
+        assert!(
+            std::time::Instant::now() < until,
+            "crash barrier never reached"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if phase == 2 {
+        api.assert_trashed(&id);
+    } else {
+        assert_eq!(api.fields(&id)["google_ref"], "standup");
+    }
+    assert_eq!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
+    assert_eq!(api.fields(&item)["status"], "sending");
+    assert_eq!(api.fields(&item)["sent_ref"], id);
+    let confirmed = api.fields(&item)["sent_at"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty());
+    assert_eq!(confirmed, phase != 0);
+    std::fs::write(
+        api.server.vault_path().join("scripts/outbox_send.ws"),
+        source,
+    )
+    .unwrap();
+    api.server.restart();
+    api.server.settle_handlers();
+    assert!(
+        api.gone(&item),
+        "Google confirmed and note trashed, but restart lost Outbox completion"
+    );
+    api.assert_trashed(&id);
+    assert_eq!(
+        api.google
+            .requests()
+            .iter()
+            .filter(|r| r.method == "DELETE")
+            .count(),
+        1
+    );
 }
 
 fn paragraph(text: &str) -> Value {
@@ -481,6 +747,197 @@ fn writer_enforces_calendar_author_and_outbox_boundary() {
 }
 
 #[test]
+fn outbox_delete_disconnected_keeps_event_for_retry() {
+    let api = Api::start();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.events().keys().next().unwrap().clone();
+    expect(
+        api.req("DELETE", "/api/secrets/google_refresh_token")
+            .send()
+            .unwrap(),
+        200,
+    );
+    let item = api.create(
+        "outbox",
+        invite(
+            json!({ "title": "Delete standup", "event": id, "event_action": "delete" }),
+            None,
+        ),
+    );
+    api.server.settle_handlers();
+    assert_eq!(api.fields(&item)["status"], "failed");
+    assert_ne!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
+    assert_eq!(
+        api.req("GET", &format!("/api/notes/{id}"))
+            .send()
+            .unwrap()
+            .status(),
+        200
+    );
+    assert!(
+        api.fields(&item)["error"]
+            .as_str()
+            .unwrap()
+            .contains("not connected")
+    );
+    expect(
+        api.req("PUT", "/api/secrets/google_refresh_token")
+            .json(&json!({ "value": DEFAULT_REFRESH_TOKEN }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    api.retry_delete(&item, &id);
+}
+
+#[test]
+fn outbox_delete_google_error_keeps_event_and_manual_retry_succeeds() {
+    let api = Api::start();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.events().keys().next().unwrap().clone();
+    api.google
+        .fail_calendar_writes(Some((500, "Backend unavailable")));
+    let item = api.delete_item(&id);
+    api.settle();
+    assert_eq!(api.fields(&item)["status"], "failed");
+    assert!(
+        api.fields(&item)["error"]
+            .as_str()
+            .unwrap()
+            .contains("Backend unavailable")
+    );
+    assert_eq!(api.fields(&id)["google_ref"], "standup");
+    assert_ne!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
+    api.google.fail_calendar_writes(None);
+    api.retry_delete(&item, &id);
+    let deletes: Vec<_> = api
+        .google
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "DELETE")
+        .collect();
+    assert_eq!(deletes.len(), 2);
+    assert!(
+        deletes
+            .iter()
+            .all(|r| r.query("sendUpdates").as_deref() == Some("all"))
+    );
+}
+
+#[test]
+fn outbox_delete_no_network_keeps_event_and_manual_retry_succeeds() {
+    let api = Api::start();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.events().keys().next().unwrap().clone();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let mut endpoints = api.google.endpoints();
+    endpoints["calendar"] = json!(format!("http://{addr}/calendar/v3"));
+    expect(
+        api.req("PUT", "/api/secrets/google_settings")
+            .json(&json!({ "value": json!({ "endpoints": endpoints }).to_string() }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    let item = api.delete_item(&id);
+    api.settle();
+    assert_eq!(api.fields(&item)["status"], "failed");
+    assert!(!api.fields(&item)["error"].as_str().unwrap().is_empty());
+    assert_eq!(api.fields(&id)["google_ref"], "standup");
+    assert_ne!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
+    expect(
+        api.req("PUT", "/api/secrets/google_settings")
+            .json(&json!({ "value": json!({ "endpoints": api.google.endpoints() }).to_string() }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    api.retry_delete(&item, &id);
+}
+
+#[test]
+fn outbox_delete_timeout_keeps_event_and_manual_retry_succeeds() {
+    let api = Api::start();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.events().keys().next().unwrap().clone();
+    api.google
+        .set_calendar_delay(Some(std::time::Duration::from_secs(360)));
+    let item = api.delete_item(&id);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(330);
+    loop {
+        if api.fields(&item)["status"] == "failed" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "delete never failed after its handler deadline"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    assert!(!api.fields(&item)["error"].as_str().unwrap().is_empty());
+    assert_eq!(api.fields(&id)["google_ref"], "standup");
+    assert_ne!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
+    api.google.set_calendar_delay(None);
+    // The failed handler job remains as diagnostic evidence, not an automatic retry.
+    assert!(!api.server.settle_handlers().is_empty());
+    let mut note = api.note(&item);
+    note["note"]["fields"]["status"] = json!("ready");
+    expect(
+        api.req("PUT", &format!("/api/notes/{item}"))
+            .json(&json!({ "note": note["note"], "base_version": note["version"] }))
+            .send()
+            .unwrap(),
+        200,
+    );
+    api.server.settle_handlers();
+    assert!(api.gone(&item));
+    api.assert_trashed(&id);
+}
+
+#[test]
+fn outbox_delete_already_gone_is_success() {
+    for status in [404, 410] {
+        let api = Api::start();
+        api.google.put_event("primary", standup());
+        api.sync();
+        let id = api.events().keys().next().unwrap().clone();
+        api.google.cancel_event("primary", "standup");
+        api.google
+            .fail_calendar_writes(Some((status, "Already gone")));
+        let item = api.delete_item(&id);
+        api.settle();
+        assert!(api.gone(&item));
+        api.assert_trashed(&id);
+        assert_eq!(
+            api.google
+                .requests()
+                .iter()
+                .filter(|r| r.method == "DELETE")
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
 fn reviewed_event_rsvp_and_delete_reach_google_through_outbox() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
@@ -520,6 +977,7 @@ fn reviewed_event_rsvp_and_delete_reach_google_through_outbox() {
         "cancelled"
     );
     assert!(api.gone(&deletion));
+    api.assert_trashed(id);
 }
 
 #[test]
