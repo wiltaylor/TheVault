@@ -71,7 +71,9 @@ async fn long_component_deletion_has_bounded_peak_memory() {
         match mkdirat(&fd, name.as_str(), Mode::RWXU) {
             Ok(()) => {}
             Err(rustix::io::Errno::NAMETOOLONG) if name.len() == 255 => {
-                eprintln!("ENAMETOOLONG at depth {depth} with 255-byte components; rebuilding with 1-byte components");
+                eprintln!(
+                    "ENAMETOOLONG at depth {depth} with 255-byte components; rebuilding with 1-byte components"
+                );
                 // AppArmor mediates the full path even for fd-relative calls.
                 // Remove the probe from the bottom up before restarting at home.
                 while depth > 0 {
