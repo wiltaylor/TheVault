@@ -539,4 +539,3 @@ also changed the database, follow [Roll back an upgrade](#roll-back-an-upgrade).
 An older local Compose file without the proxy network or `VAULT_TRUSTED_PROXIES`
 trusts no proxy: tunnel clients then share the proxy's attempt-limit bucket.
 Update that file and recreate the server and proxies, not just the image.
-
