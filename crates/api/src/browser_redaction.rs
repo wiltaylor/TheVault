@@ -1,6 +1,25 @@
 //! Server-only credentials. Never derive Debug or expose the pattern list.
 use hmac::{Hmac, Mac};
 
+#[cfg(test)]
+mod h7_tests {
+    use super::totp;
+
+    #[test]
+    fn rfc_hashes_and_strict_parameters() {
+        for (algorithm, seed, expected) in [
+            ("SHA256", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA", "46119246"),
+            ("SHA512", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA", "90693936"),
+        ] {
+            let uri = format!("otpauth://totp/test?secret={seed}&algorithm={algorithm}&digits=8&period=30");
+            assert_eq!(totp(&uri, 59, 6, 30).as_deref(), Some(expected));
+        }
+        for seed in ["MZ", "MY=", "MY======junk", "ABC", "otpauth://totp/test?secret=MY&digits=6&digits=8", "otpauth://totp/test?secret=MY&period=30&period=60"] {
+            assert!(totp(seed, 59, 6, 30).is_none(), "invalid configuration accepted");
+        }
+    }
+}
+
 pub(crate) struct Redactor(Vec<(String, bool)>);
 
 fn seed_parameters(input: &str, mut digits: u32, mut period: u64) -> Option<(String, u32, u64)> {
