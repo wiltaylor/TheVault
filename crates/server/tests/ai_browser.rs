@@ -155,7 +155,7 @@ fn browser_secret_unattended_run_audits_refusal_without_value() {
             std::fs::create_dir_all(vault.join("types")).unwrap();
             std::fs::write(
                 vault.join("types/fillfixture.wcl"),
-                "label = \"Fill fixture\"\n",
+                "label = \"Fill fixture\"\ntemplate default {\n tab \"Main\" {\n slot \"title\"\n }\n}\n",
             )
             .unwrap();
         },

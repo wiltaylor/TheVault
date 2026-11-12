@@ -318,11 +318,8 @@ mod tests {
         assert!(!answer.content.contains(&code));
         assert!(!answer.summary.to_string().contains(&code));
         assert!(!answer.trail.unwrap().contains(&code));
-        assert!(
-            authorized(&b, &state.with_key(None), &agent, &input)
-                .await
-                .is_error
-        );
+        let locked = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        assert!(authorized(&b, &locked, &agent, &input).await.is_error);
         state.revoke_browser_secrets("tester").unwrap();
         assert!(
             authorized(&b, &state, &agent, &input)
