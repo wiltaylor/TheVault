@@ -579,6 +579,7 @@ pub async fn create_route(
     Path(name): Path<String>,
     Json(b): Json<NewMemory>,
 ) -> Result<(StatusCode, Json<Memory>), ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     let m = blocking(w, move |w| create(w, &name, &b.title, &b.text, &author)).await?;
     Ok((StatusCode::CREATED, Json(m)))
 }
@@ -612,6 +613,7 @@ pub async fn update_route(
     Path((name, id)): Path<(String, String)>,
     Json(b): Json<MemoryChange>,
 ) -> Result<Json<Memory>, ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     blocking(w, move |w| {
         let m = read_of(w, &name, &id)?;
         update(
@@ -633,6 +635,7 @@ pub async fn delete_route(
     Caller(author): Caller,
     Path((name, id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     blocking(w, move |w| {
         let m = read_of(w, &name, &id)?;
         forget(w, &m.id, Some(&m.version), &author)?;

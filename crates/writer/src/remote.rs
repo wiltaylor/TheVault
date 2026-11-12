@@ -104,6 +104,7 @@ impl Writer {
         wcl: &str,
         author: &Author,
     ) -> Result<Saved> {
+        Self::check_memory_author(type_name, author)?;
         let _w = self.write_lock();
         let mut inner = self.lock();
         let wcl = self.remote_text(&inner, id, type_name, wcl)?;
@@ -122,6 +123,10 @@ impl Writer {
         base: &str,
         author: &Author,
     ) -> Result<Saved> {
+        Self::check_memory_author(type_name, author)?;
+        if let Some(old_type) = self.locate(id)? {
+            Self::check_memory_author(&old_type, author)?;
+        }
         let _w = self.write_lock();
         let mut inner = self.lock();
         if self.locate(id)?.as_deref() == Some(AGENT_THREAD_TYPE) {

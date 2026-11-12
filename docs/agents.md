@@ -6,7 +6,7 @@ A CLI agent using an `agent-<name>` token drafts Outbox items and the user sends
 
 Token kind is stored as user, device or agent. On upgrade, existing `agent-*` tokens become agent tokens and `device-*` tokens become device tokens, without regard to letter case. This includes user-created tokens with those names. New user tokens cannot use either prefix. Agent tokens are at most write scope, including existing admin-scoped agent tokens, which are downgraded at upgrade and capped whenever they authenticate. They cannot create credentials, change agent definitions or impersonate in-app agents when applying proposals. Their drafts are attributed to the full token name, such as `agent-cli`, separate from the in-app agent `cli`. Agents may delete or restore only their own Outbox drafts.
 
-Agent tokens use proposals through threads, not caller-built `/api/ai/apply` requests, even for their own drafts. They cannot change any integration settings, accounts, keys or connections. New token names cannot use the reserved prefixes in any letter case.
+Agent tokens cannot run in-app agents or use caller-built `/api/ai/apply` requests, even for their own drafts. They cannot change any integration settings, accounts, keys or connections. New token names cannot use the reserved prefixes in any letter case.
 
 To ask about your notes without an agent, use the AI panel in the web app or the desktop and Android apps, which calls your own AI provider with read-only note tools and shows each edit for you to apply. See [Chat panel](ai.md#chat-panel).
 
@@ -19,7 +19,7 @@ To ask about your notes without an agent, use the AI panel in the web app or the
 | `read` token | Read only, no new turns or threads | Read only |
 | `write` token, including a paired device | Start turns and threads, direct changes capped at write | No create, edit, delete, import or Apply |
 | Non-agent `admin` API token | Direct changes capped by the agent's permissions | Manage definitions and Apply, subject to proposal guards |
-| `agent-<name>` token, even admin | Direct changes capped by caller and agent scope | No agent/skill definition writes or Apply, credential creation, Assistant settings changes or git-sync mutations |
+| `agent-<name>` token, even admin | No turns, thread creation or fork, answers, truncate, discard, dispatch, Apply or memory writes | No agent/skill definition writes, credential creation, Assistant settings changes or git-sync mutations |
 | Signed-in session | Direct changes capped by the agent's permissions | Manage definitions and Apply |
 
 Chat mutations, including stopping a turn and discarding proposals, require write. Query POSTs and authorized event reads still require only read. Autonomous triggers use the agent's scope. Explicit dispatch runs retain their caller's scope ceiling.
@@ -149,6 +149,11 @@ the clear metadata origins. A password must reach the page to work, so a misled
 agent with a shell in the box may reach it indirectly (assumed, not tested).
 Prompt injection can make an agent sign in and act. No origin restriction means
 a secret could be entered on a look-alike page.
+
+## External CLI agents
+
+Agent tokens cannot run even an in-app agent with a matching name. In-app agents
+use the agent tool for sub-agents, not the chat API.
 
 # External agents and held notes
 

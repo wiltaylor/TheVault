@@ -216,6 +216,7 @@ pub async fn dispatch(
     crate::auth::Caller(caller): crate::auth::Caller,
     Json(b): Json<Dispatch>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    crate::auth::require_in_app_agent_caller(&caller)?;
     let request = b.request.trim().to_owned();
     let t = blocking(w, move |w| {
         let agent = w.agent(&name)?;

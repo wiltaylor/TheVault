@@ -370,6 +370,7 @@ pub async fn start(
     Json(body): Json<ChatBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = state::random_hex(16);
+    crate::auth::require_in_app_agent_caller(&author)?;
     let agent = body.agent().unwrap_or(schema::ASSISTANT_AGENT).to_owned();
     let thread = body.thread().map(str::to_owned);
     {
@@ -573,8 +574,9 @@ pub async fn apply(
     State(a): State<Arc<Ai>>,
     Caller(author): Caller,
     Extension(GrantedScope(scope)): Extension<GrantedScope>,
-    Json(mut change): Json<Value>,
+    Json(change): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     if !change.is_object() {
         return Err(ApiError::bad_request(
             "send the proposal as the chat sent it",
@@ -613,19 +615,6 @@ pub async fn apply(
             "needs_admin",
             "Agent and skill changes need a session or a non-agent admin token.",
         ));
-    }
-    if crate::auth::is_agent_token(&author)
-        && ["agent", "proposer"]
-            .iter()
-            .any(|key| change[*key].as_str().is_some_and(|s| !s.is_empty()))
-    {
-        change = waiting_in_thread(&a.writer, event, &change).ok_or_else(|| {
-            ApiError::new(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "agent tokens may not impersonate proposing agents",
-            )
-        })?;
     }
     if !scope.allows(Scope::Admin) {
         let message = match event {
@@ -751,18 +740,6 @@ pub struct Discard {
     thread: String,
 }
 
-/// Read the authoritative waiting proposal, never the caller's replacement content.
-fn waiting_in_thread(w: &writer::Writer, event: &str, change: &Value) -> Option<Value> {
-    let thread = change["thread"].as_str().filter(|s| !s.is_empty())?;
-    let id = change["id"].as_str().filter(|s| !s.is_empty())?;
-    let t = agent_threads::Thread::read(w, thread).ok()?;
-    t.transcript
-        .proposals
-        .iter()
-        .find(|p| p.id() == id && p.event == event && p.waits())
-        .map(|p| p.data.clone())
-}
-
 /// `POST /api/ai/discard` (write): the user discarded a proposal of a thread, recorded there so
 /// the reopened thread shows it and the next turn tells the model (agents G8, ai D29). It
 /// changes nothing else.
@@ -771,6 +748,7 @@ pub async fn discard(
     Caller(author): Caller,
     Json(b): Json<Discard>,
 ) -> Result<Json<Value>, ApiError> {
+    crate::auth::require_in_app_agent_caller(&author)?;
     let w = a.writer.clone();
     let t = crate::blocking(w, move |w| {
         let t = agent_threads::record_outcome(w, &b.thread, &b.id, Status::Discarded, None, None)?;
