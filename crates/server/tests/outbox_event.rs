@@ -279,16 +279,29 @@ impl Api {
 
 #[test]
 fn restart_during_event_create_never_repeats_provider_write() {
-    restart_during_event_write(false);
+    restart_during_event_write(false, false);
 }
 
 #[test]
 fn restart_during_event_update_never_repeats_provider_write() {
-    restart_during_event_write(true);
+    restart_during_event_write(true, false);
 }
 
-fn restart_during_event_write(update: bool) {
+#[test]
+fn restart_before_event_result_link_never_repeats_provider_write() {
+    restart_during_event_write(false, true);
+}
+
+fn restart_during_event_write(update: bool, unlinked: bool) {
     let mut api = Api::start();
+    if unlinked {
+        let script = api.file("scripts/outbox_send.ws");
+        let needle = "return Ok(Sent { done: false, sent_ref: \"\", result: id })";
+        assert!(script.contains(needle));
+        expect(api.req("PUT", "/api/scripts/outbox_send")
+            .body(script.replace(needle, "return Ok(Sent { done: false, sent_ref: \"\", result: \"\" })"))
+            .send().unwrap(), 200);
+    }
     let mut fields = json!({
         "title": "Check interrupted event",
         "when": {"start": "2026-04-02T09:00:00Z", "end": "2026-04-02T10:00:00Z"},

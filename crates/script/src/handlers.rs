@@ -628,6 +628,20 @@ impl Shared {
     fn run_job(&self, writer: &Writer, payload: &str) -> (Result<(), String>, String) {
         let job = (|| {
             let p: Json = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            // A crash can happen after creating the event but before linking `result` on
+            // its Outbox item. The durable chain still identifies that interrupted send.
+            if p["script"] == "google_event"
+                && p["chain"].as_array().is_some_and(|chain| chain.iter().any(|link| {
+                    link["type"] == "outbox"
+                        && link["id"].as_str().and_then(|id| writer.read(id).ok()).is_some_and(|note| {
+                            let body = doc_to_json(&note.doc);
+                            body["fields"]["status"] == "failed"
+                                && body["fields"]["error"].as_str().is_some_and(|e| e.contains("check before retrying"))
+                        })
+                }))
+            {
+                return Ok(());
+            }
             let text = |n: &str| {
                 p.get(n)
                     .and_then(Json::as_str)
