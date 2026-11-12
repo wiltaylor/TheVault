@@ -7,11 +7,18 @@ fn seed_parameters(input: &str, mut digits: u32, mut period: u64) -> Option<(Str
     let mut seed = input.to_owned();
     if input.trim().to_ascii_lowercase().starts_with("otpauth://") {
         let uri = reqwest::Url::parse(input.trim()).ok()?;
-        if uri.scheme() != "otpauth" || uri.host_str() != Some("totp") { return None; }
+        if uri.scheme() != "otpauth" || uri.host_str() != Some("totp") {
+            return None;
+        }
         let mut secret = None;
         for (key, value) in uri.query_pairs() {
             match key.as_ref() {
-                "secret" => { if secret.is_some() { return None; } secret = Some(value.into_owned()); }
+                "secret" => {
+                    if secret.is_some() {
+                        return None;
+                    }
+                    secret = Some(value.into_owned());
+                }
                 "digits" => digits = value.parse().ok()?,
                 "period" => period = value.parse().ok()?,
                 "algorithm" if !value.eq_ignore_ascii_case("SHA1") => return None,
@@ -20,8 +27,14 @@ fn seed_parameters(input: &str, mut digits: u32, mut period: u64) -> Option<(Str
         }
         seed = secret?;
     }
-    let seed = seed.chars().filter(|c| !c.is_whitespace() && *c != '-').collect::<String>().to_ascii_uppercase();
-    if !(6..=8).contains(&digits) || period == 0 || period > i64::MAX as u64 / 2 { return None; }
+    let seed = seed
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if !(6..=8).contains(&digits) || period == 0 || period > i64::MAX as u64 / 2 {
+        return None;
+    }
     Some((seed, digits, period))
 }
 
@@ -73,12 +86,24 @@ impl Redactor {
                 .ok_or(())?;
             if let Some(seed) = &login.totp_seed {
                 let codes = seed_parameters(seed, 6, 30).and_then(|(seed, digits, period)| {
-                    (-2i64..=2).map(|step| totp(&seed, now.saturating_add_signed(step * period as i64), digits, period)).collect::<Option<Vec<_>>>()
+                    (-2i64..=2)
+                        .map(|step| {
+                            totp(
+                                &seed,
+                                now.saturating_add_signed(step * period as i64),
+                                digits,
+                                period,
+                            )
+                        })
+                        .collect::<Option<Vec<_>>>()
                 });
                 if let Some(codes) = codes {
                     patterns.extend(codes.into_iter().map(|code| (code, true)));
                 } else {
-                    eprintln!("browser: computed-code redaction skipped for Login {:?}: invalid TOTP configuration", info.name);
+                    eprintln!(
+                        "browser: computed-code redaction skipped for Login {:?}: invalid TOTP configuration",
+                        info.name
+                    );
                 }
             }
             for value in [Some(login.username), Some(login.password), login.totp_seed]
@@ -128,16 +153,47 @@ mod tests {
     #[test]
     fn normalized_seed_and_uri_parameters() {
         let seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
-        assert_eq!(totp("gezd gnbv-gy3tqojq gezdgnbvgy3tqojq", 59, 8, 30), totp(seed, 59, 8, 30));
-        assert_eq!(totp(&format!("otpauth://totp/test?secret={seed}&digits=8&period=60"), 119, 6, 30).as_deref(), Some("94287082"));
+        assert_eq!(
+            totp("gezd gnbv-gy3tqojq gezdgnbvgy3tqojq", 59, 8, 30),
+            totp(seed, 59, 8, 30)
+        );
+        assert_eq!(
+            totp(
+                &format!("otpauth://totp/test?secret={seed}&digits=8&period=60"),
+                119,
+                6,
+                30
+            )
+            .as_deref(),
+            Some("94287082")
+        );
     }
     #[test]
     fn invalid_seed_keeps_raw_redaction_available() {
         let dir = tempfile::tempdir().unwrap();
-        let state = state::State::open(&dir.path().join("state.db"), Some(state::SecretKey::generate())).unwrap();
-        state.set_login_secret("broken", &state::LoginSecret { username:"fake-user".into(), password:"fake-password".into(), totp_seed:Some("not a valid seed!".into()), origins:vec![] }).unwrap();
-        let r = Redactor::load(&state).ok().expect("invalid seed must not block browser output");
-        assert_eq!(r.text("fake-user fake-password not a valid seed!"), "[REDACTED] [REDACTED] [REDACTED]");
+        let state = state::State::open(
+            &dir.path().join("state.db"),
+            Some(state::SecretKey::generate()),
+        )
+        .unwrap();
+        state
+            .set_login_secret(
+                "broken",
+                &state::LoginSecret {
+                    username: "fake-user".into(),
+                    password: "fake-password".into(),
+                    totp_seed: Some("not a valid seed!".into()),
+                    origins: vec![],
+                },
+            )
+            .unwrap();
+        let r = Redactor::load(&state)
+            .ok()
+            .expect("invalid seed must not block browser output");
+        assert_eq!(
+            r.text("fake-user fake-password not a valid seed!"),
+            "[REDACTED] [REDACTED] [REDACTED]"
+        );
     }
     #[test]
     fn rfc6238_vectors() {
