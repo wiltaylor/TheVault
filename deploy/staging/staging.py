@@ -83,11 +83,12 @@ def seed(api, fakes):
         ids[name] = account(api, "Staging " + name, kind, info["base_url"] + suffix,
                             info["api_key"], model)
     api.send("PUT", "/api/integrations/ai/default", {"id": ids["anthropic"]})
-    api.secret("google_settings", json.dumps({"endpoints": fakes["google"].info["endpoints"]}))
+    api.secret("google_settings", json.dumps({"endpoints": fakes["google"].info["endpoints"],
+                                              "gmail_labels": ["INBOX"]}))
     fakes["google"].tell("add-message " + json.dumps({
         "from": "Alex Synthetic <alex@example.invalid>", "to": ["staging@example.invalid"],
         "subject": "Synthetic meeting", "text": "Fabricated mail. Meeting at 10 tomorrow.",
-        "labels": ["INBOX"],
+        "labels": ["INBOX"], "at": int(time.time() * 1000),
     }))
     for name, value in (("google_client_id", "fake-client-id.apps.googleusercontent.com"),
                         ("google_client_secret", "fake-client-secret"),
@@ -100,11 +101,18 @@ timeout = "PT1M"
 retries = 0
 paused = true
 allow_domains = ["''' + fakes["google"].info["host"] + '''"]
-secrets = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_state"]
+secrets = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_state", "google_gmail_trashed"]
 ''')
-    api.send("POST", "/api/tasks/google_gmail/run?wait=true")
+    imported = api.send("POST", "/api/tasks/google_gmail/run?wait=true")
+    assert imported["outcome"] == "succeeded", imported
     # Notes are explicitly session-created fixtures, not device-ingestion evidence.
-    api.send("PUT", "/api/types/staging_sms", {"wcl": 'label = "Synthetic SMS"\n'})
+    api.send("PUT", "/api/types/staging_sms", {"wcl": '''label = "Synthetic SMS"
+template default {
+  tab "Main" {
+    slot "title"
+  }
+}
+'''})
     api.send("POST", "/api/notes?type=staging_sms", {"note": {"fields": {
         "title": "Synthetic SMS from +15550100001: meeting at 10 tomorrow"}}})
     api.send("PUT", "/api/agents/staging_reader", '''label = "Synthetic staging reader"
@@ -129,6 +137,12 @@ def smoke(api, fakes):
         with socket.socket() as conn:
             conn.settimeout(1)
             assert conn.connect_ex((host, 443)) != 0, "real outbound connection possible"
+    emails = api.send("POST", "/api/query", {
+        "query": 'from email include archived where title == "Synthetic meeting"', "page_size": 10})
+    assert emails["rows"], "fabricated Gmail was not imported"
+    previous = api.send("GET", "/api/agents/staging_reader/runs")
+    assert previous["tools"] == ["get_note"], previous["tools"]
+    old_runs = {r["id"] for r in previous["triggers"][0]["runs"]}
     before = fakes["anthropic"].tell("requests")["count"]
     fakes["anthropic"].tell('push {"text":"Synthetic SMS read. No actions taken."}')
     api.send("POST", "/api/notes?type=staging_sms", {"note": {"fields": {
@@ -137,9 +151,10 @@ def smoke(api, fakes):
     while time.monotonic() < until:
         runs = api.send("GET", "/api/agents/staging_reader/runs")
         recent = runs["triggers"][0]["runs"]
-        if recent and recent[0]["outcome"] == "succeeded":
+        if any(r["id"] not in old_runs and r["outcome"] == "succeeded" for r in recent):
             assert fakes["anthropic"].tell("requests")["count"] > before
-            return {"passed": 3, "checks": ["loopback only", "real outbound blocked", "fake trigger succeeded"]}
+            return {"passed": 5, "checks": ["loopback only", "real outbound blocked", "Gmail imported",
+                                            "read-only tools", "fake trigger succeeded"]}
         time.sleep(1)
     raise RuntimeError("trigger did not succeed: " + json.dumps(runs))
 
@@ -167,7 +182,7 @@ def serve():
         if not password_path.exists():
             password_path.write_text(secrets.token_urlsafe(32))
         password = password_path.read_text()
-        if not Path("/data/state.db").exists():
+        if not Path("/data/.vault/state.db").exists():
             subprocess.run(["vault", "init", "/data", "--password-stdin"],
                            input=password + "\n", text=True, check=True, stdout=subprocess.DEVNULL)
         fakes = {}

@@ -127,8 +127,8 @@ without taking its lock itself and samples `MemTotal - MemAvailable` every
 second. Record the peak and exit code. Above approximately 7 GiB, tell the lead.
 The measurement includes guest cache pressure, not just staging's cgroup usage.
 
-Targeted supervisor tests: `STAGING_DECISIONS_BIN=<built binary> python3 -m
-pytest deploy/staging/test_staging.py --junitxml=<report>`. Also run `sh -n
+Targeted supervisor tests: `STAGING_DECISIONS_BIN=<built binary> node --test
+--test-reporter=tap deploy/staging/test_staging.test.mjs > <report.tap>`. Also run `sh -n
 deploy/staging/recreate.sh`, package-scoped formatting/clippy for the new Rust
 binary and the relevant testkit tests. Upload original reports with
 `terrarium test push --card TV-145`.
