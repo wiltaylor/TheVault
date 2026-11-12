@@ -80,7 +80,7 @@ async fn proposal(
     if !login.origins.is_empty() && !login.origins.contains(&origin) {
         return Err("origin_mismatch");
     }
-    let p = json!({"id":call_id,"op":"browser_secret","secret":name,"field":field,"target":target,"session":session,"origin":origin,"browser_profile":b.profile,"unrestricted_origin":login.origins.is_empty()});
+    let p = json!({"id":call_id,"agent":agent.name,"op":"browser_secret","secret":name,"field":field,"target":target,"session":session,"origin":origin,"browser_profile":b.profile,"unrestricted_origin":login.origins.is_empty()});
     let redactor =
         crate::browser_redaction::Redactor::load(state).map_err(|_| "secret_unavailable")?;
     // Do not publish a credential even when it coincides with request metadata. Do not

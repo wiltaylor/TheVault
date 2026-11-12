@@ -195,6 +195,22 @@ fn browser_secret_unattended_run_audits_refusal_without_value() {
 }
 
 #[test]
+fn browser_secret_implicit_assistant_proposal_can_be_applied() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    let api = Api::start(&fake, Some(&browser));
+    api.client.put(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token())
+        .json(&json!({"kind":"login","username":"fixture-user","password":"fabricated-TV164-assistant","origins":[]}))
+        .send().unwrap().error_for_status().unwrap();
+    api.agent("assistant", "permissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n");
+    let events = api.call(&fake, None, "browser_fill_secret", json!({"secret":"login","field":"password","target":"#password","session":"default"}));
+    let proposal = last(&events, "proposal");
+    assert_eq!(proposal["agent"], "assistant");
+    assert_eq!(api.apply(proposal).0, StatusCode::OK);
+}
+
+#[test]
 fn browser_secret_unattended_off_fills_without_value() {
     unattended_secret(false);
 }
@@ -1154,6 +1170,7 @@ fn the_tools_need_a_browser_box_and_the_permission() {
                     [
                         "browser_capture",
                         "browser_file",
+                        "browser_fill_secret",
                         "browser_run",
                         "browser_save",
                         "get_note"
