@@ -529,7 +529,9 @@ fn edits_during_a_run_wait_for_that_agent_note_before_running_once() {
         let (tx, rx) = mpsc::channel();
         let tick = &r;
         s.spawn(move || {
-            tick.advance(31);
+            for _ in 0..116 {
+                tick.advance(31);
+            }
             tx.send(()).unwrap();
         });
         let returned = rx.recv_timeout(Duration::from_secs(2)).is_ok();
@@ -541,8 +543,20 @@ fn edits_during_a_run_wait_for_that_agent_note_before_running_once() {
         "same-note job must defer instead of entering the held runner"
     );
     assert_eq!(r.fake.most.load(Ordering::SeqCst), 1);
+    // The first start has aged out. Deferrals must not consume the new hour's budget.
+    for i in 0..59 {
+        r.create("memo", &format!("Other {i}"), "open", &user());
+    }
     r.advance(31);
-    assert_eq!(r.fake.turns().len(), 2);
+    // Drain disk overflow and the same-note capacity backoff (at most 15 minutes).
+    for _ in 0..30 {
+        r.advance(31);
+    }
+    assert_eq!(
+        r.fake.turns().len(),
+        61,
+        "same-note waits use no hourly starts"
+    );
     assert_eq!(r.fake.most.load(Ordering::SeqCst), 1);
 }
 
