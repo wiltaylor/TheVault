@@ -12,7 +12,7 @@ const TOKEN: &str = "test-token-0123456789abcdef";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn long_component_deletion_has_bounded_peak_memory() {
-    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+    use rustix::fs::{AtFlags, Mode, OFlags, mkdirat, open, openat, unlinkat};
     struct Child(std::process::Child);
     impl Drop for Child {
         fn drop(&mut self) {
@@ -20,7 +20,7 @@ async fn long_component_deletion_has_bounded_peak_memory() {
             let _ = self.0.wait();
         }
     }
-    // The dev container's /tmp tmpfs rejects this 4000-deep tree with ENAMETOOLONG.
+    // Keep the fixture on the checkout's filesystem rather than the /tmp tmpfs.
     let tmp = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let home = tmp.path().join("home");
     let work = tmp.path().join("work");
@@ -62,11 +62,54 @@ async fn long_component_deletion_has_bounded_peak_memory() {
     let profile = home.join("profiles/test");
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
     let mut fd = open(profile.join("home"), flags, Mode::empty()).unwrap();
-    let name = "d".repeat(255);
-    for _ in 0..4000 {
-        mkdirat(&fd, name.as_str(), Mode::RWXU).unwrap();
+    let mut name = "d".repeat(255);
+    let mut depth = 0;
+    let mut long_components = 0;
+    let mut stop_reason = "reached 4000 levels";
+    let mut target_depth = 4000;
+    while depth < target_depth {
+        match mkdirat(&fd, name.as_str(), Mode::RWXU) {
+            Ok(()) => {}
+            Err(rustix::io::Errno::NAMETOOLONG) if name.len() == 255 => {
+                eprintln!(
+                    "ENAMETOOLONG at depth {depth} with 255-byte components; rebuilding with 1-byte components"
+                );
+                // AppArmor mediates the full path even for fd-relative calls.
+                // Remove the probe from the bottom up before restarting at home.
+                while depth > 0 {
+                    let parent = openat(&fd, "..", flags, Mode::empty()).unwrap();
+                    unlinkat(&parent, name.as_str(), AtFlags::REMOVEDIR).unwrap();
+                    fd = parent;
+                    depth -= 1;
+                }
+                long_components = 0;
+                name.truncate(1);
+                let base_bytes = std::fs::canonicalize(profile.join("home"))
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .len();
+                target_depth = 4000.min(7600usize.saturating_sub(base_bytes) / 2);
+                stop_reason = "reached 1-byte depth budget below 7600 path bytes";
+                continue;
+            }
+            Err(rustix::io::Errno::NAMETOOLONG) => {
+                stop_reason = "ENAMETOOLONG with 1-byte components";
+                break;
+            }
+            Err(error) => panic!("mkdirat at depth {depth}: {error}"),
+        }
         fd = openat(&fd, name.as_str(), flags, Mode::empty()).unwrap();
+        depth += 1;
+        if name.len() == 255 {
+            long_components += 1;
+        }
     }
+    eprintln!(
+        "deep deletion fixture: depth {depth}, {long_components} x 255-byte and {} x 1-byte components; stopped: {stop_reason}",
+        depth - long_components
+    );
+    assert!(depth >= 1000, "only {depth} levels: {stop_reason}");
     openat(
         &fd,
         "Cookies",
@@ -97,7 +140,7 @@ async fn long_component_deletion_has_bounded_peak_memory() {
     let growth = peak().saturating_sub(before);
     assert!(
         growth < 64 * 1024,
-        "4000x255 walk grew peak RSS by {growth}KiB"
+        "{depth}-level walk ({long_components} x 255-byte components) grew peak RSS by {growth}KiB"
     );
 }
 
