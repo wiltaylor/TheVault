@@ -138,6 +138,7 @@ fn browser_secrets_device_sync_accepts_one_forty_megabyte_note() {
 }
 
 fn reviewed_routes() -> Vec<String> {
+    // TV-217 /api/ai/usage review: owner-only counts and account/model IDs, no Login metadata.
     include_str!("browser_secrets_routes.txt")
         .lines()
         .map(str::to_owned)
