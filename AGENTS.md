@@ -98,4 +98,3 @@ Every project emulator run, **including releases**, must hold the fixed lock
 PID-only cleanup has completed. Do not wait for it in a nightly. Exit 0 with
 `skipped: emulator busy`. A skipped release check is not a passed cut and must be rescheduled. Nightlies use console port 5584 only,
 `ANDROID_SERIAL=emulator-5584`, and their own AVD/home, not the release AVD.
-
