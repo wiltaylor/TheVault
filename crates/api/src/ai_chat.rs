@@ -85,9 +85,9 @@
 //! with no client reading until it ends or is stopped (agents G17), and `POST /api/ai/apply` applies a proposal with [`apply_change`]. An agent
 //! trigger's run (`crate::agent_runs`, agents G12) is a turn with no client, [`run_unattended`].
 //! What it does with a change tool whose confirmation switch is on is its [`Held`] mode, from
-//! its thread's origin (TV-77 D2): a trigger's run is offered none, nor any tool of
-//! [`ALWAYS_PROPOSE`]; a call from a note or a dispatch keeps them, and their proposals wait in
-//! the thread for the user's Apply.
+//! its thread's origin: a trigger's run, a call from a note or a dispatch keeps these tools,
+//! including [`ALWAYS_PROPOSE`], and their proposals wait in the durable thread for the user's
+//! Apply (TV-240). Unknown unattended origins drop held proposals.
 
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -237,9 +237,9 @@ pub async fn chat(
 /// Run one unattended turn of agent `agent` on its thread `thread`, whose user message is
 /// `prompt`, and wait for it to end (agents G12). Explicit dispatch retains the caller identity
 /// and scope ceiling. Autonomous runs use the agent's unattended scope. The thread's origin sets
-/// its [`Held`] mode: a trigger's run is offered no change tool whose confirmation switch is on,
-/// so nothing waits for a user, while a call from a note or a dispatch keeps those changes as
-/// proposals in the thread (TV-77 D2). A model call that fails with a transient error is made
+/// its [`Held`] mode: a trigger's run, a call from a note or a dispatch keeps changes whose
+/// confirmation switch is on, and [`ALWAYS_PROPOSE`] changes, as proposals in the durable thread
+/// for the user's Apply (TV-240). Unknown unattended origins drop held proposals. A model call that fails with a transient error is made
 /// again after each of `waits` (`crate::ai_retry`).
 pub(crate) async fn run_unattended(
     w: Arc<Writer>,
@@ -3740,10 +3740,11 @@ fn rows_out(rows: Vec<Value>, extra: Value) -> ToolOut {
 }
 
 /// Run one tool call. A call the model got wrong is answered as an error, not run (ai D5).
-/// A proposal whose confirmation is off is applied here, in place of being sent (ai D22). The
+/// A proposal whose confirmation is off and whose change [`Direct::covers`] is applied here,
+/// in place of being sent (ai D22). The
 /// Outbox tools draft at once, as the agent, with a caller that has `write` (outbox X9). A
-/// proposal that is not made here is refused in a trigger's run ([`Held::Drop`]): no one would
-/// apply it, so it must not wait (TV-84).
+/// proposal that is not applied here waits for the user's Apply in supported origins, including
+/// trigger threads (TV-240). Unknown unattended origins refuse held proposals ([`Held::Drop`]).
 #[allow(clippy::too_many_arguments)]
 fn run_tool(
     w: &Writer,
