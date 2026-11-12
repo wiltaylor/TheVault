@@ -86,6 +86,24 @@ def verify_manifest(directory: Path, recorded: dict, release: dict) -> None:
         raise ReleaseError("release assets changed since manifest creation")
 
 
+def compare_baseline(recorded: dict, baseline: dict) -> list[dict]:
+    """Gross size regression gate, not a substitute for format/signature checks."""
+    version = recorded["release"]["version"]
+    expected = {row["name"].replace(baseline["version"], version): row for row in baseline["assets"]}
+    actual = {row["name"]: row for row in recorded["assets"]}
+    if set(actual) != set(expected):
+        raise ReleaseError("asset inventory differs from alpha.37 versioned names")
+    comparisons = []
+    for name, asset in actual.items():
+        reference = expected[name]["size"]
+        # Packaging/compression and evolving apps change sizes, but a tiny
+        # stub or unexpectedly huge binary must stop before publication.
+        if not reference / 2 <= asset["size"] <= reference * 2:
+            raise ReleaseError("asset size outside 0.5x..2x alpha.37 baseline: " + name)
+        comparisons.append({"name": name, "size": asset["size"], "baseline_size": reference})
+    return comparisons
+
+
 def delivery_identity(config: dict) -> dict:
     """Keep only routing, never secret references or secret values."""
     delivery = config.get("delivery", config)

@@ -38,18 +38,21 @@ JS
   exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 if adb devices | grep -q '^emulator-5584[[:space:]]'; then
   echo 'port 5584 occupied, refusing to boot' >&2
   exit 1
 fi
 apps/android/emulator/boot.sh --wipe -writable-system
 node apps/android/emulator/checks.mjs
-python3 - <<'PY'
-import hashlib,json,os,pathlib
-apk=pathlib.Path(os.environ['THEVAULT_APK'])
-out=pathlib.Path(os.environ['THEVAULT_EMULATOR_OUT'])
-report=json.loads((out/'smoke.json').read_text())
-if report.get('status') != 'pass': raise SystemExit('signed smoke did not pass')
-with apk.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
-(out/'signed-smoke.json').write_text(json.dumps({'sha':os.environ['THEVAULT_RELEASE_SHA'],'apk_sha256':digest,'status':'pass'},indent=2)+'\n')
-PY
+node --input-type=module <<'JS'
+import {readFileSync, writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+const out=process.env.THEVAULT_EMULATOR_OUT;
+const report=JSON.parse(readFileSync(`${out}/smoke.json`));
+if(report.status !== 'pass') throw Error('signed smoke did not pass');
+const apk_sha256=createHash('sha256').update(readFileSync(process.env.THEVAULT_APK)).digest('hex');
+writeFileSync(`${out}/signed-smoke.json`, JSON.stringify({sha:process.env.THEVAULT_RELEASE_SHA,apk_sha256,status:'pass'},null,2)+'\n');
+JS

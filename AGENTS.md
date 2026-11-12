@@ -10,7 +10,8 @@ Before you move a card to review, push the branch and run the recipes below your
 
 Run them on a clean checkout of the pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then check out the branch at the pushed commit. Do not run `git -C /src/<agent> checkout <commit>` after the repo checkout: the target does not allow it.
 
-GitHub CI runs only on pushes to `main` (the release train: desktop build, Android APK and smoke, images). It runs no tests on branches. So the recipes below cover more than CI.
+GitHub CI is disabled. All nine workflows are inert manual notices. Releases use
+the local two-phase release job documented in `docs/releasing.md`.
 
 thevault-dev is the dev container itself. Run the recipes there without `./dev`, with `CARGO_BUILD_JOBS` at 8 or less.
 
@@ -51,6 +52,31 @@ A machine can run emulators that are not yours, such as `emulator-5554` on theva
 
 ## Release and nightly checks
 
+Release jobs run only on delivery `release_target`, with `docker_release`
+provided as a daemon-owned Docker socket relay. Agents never test or exec on
+the release client. The job builds in secret-free relay containers, signs only
+at the custodian, uploads a draft and pushes version-only images. After the
+lead runs signed x86_64 smoke on thevault-android, a second job publishes the
+draft and advances image channels. See `just release::publish` and
+`just release::finish`; both take a sanitized delivery snapshot and durable
+state root as arguments. Missing keys stop before signing without discarding
+the unsigned build.
+
+The cut gate is lead-owned: `just release::gate-dev` and
+`just release::gate-android` on thevault-dev under `/src/thevault-heavy.sh`,
+the full transferred emulator bundle on thevault-android, and
+`just release::gate-box` on thevault-docker-vm. The main merge's
+`tested-at-cut: <frozen-sha> <run IDs>` trailer attests to the original passing
+reports. The job requires the main and frozen release trees to match and tags
+the main merge SHA. A busy emulator lock at a cut is unfinished (exit 75),
+never a passing skip. Card checks remain targeted; do not run full cut gates
+per card.
+
+Signed smoke uses `bash scripts/release/device.sh`, port 5584, an owned AVD and
+the shared emulator lock. Preserve emulator-5554 by identifying its qemu
+command `-avd thevault`, recording PID and start time before and after, not by
+assuming PID 19 or any other fixed PID. Cleanup is by owned PID/start identity.
+
 For slow contact check 35, set `THEVAULT_CONTACT_DIAGNOSTIC=1` to save capture/job state at 30 s and wait without a foreground nudge (diagnosis only, normal timing checks stay unchanged).
 
 These do not run per card. They run on `release/<X.Y.Z>` and nightly on `next`:
@@ -68,7 +94,7 @@ thevault-android has no `just` and no `pnpm`, and takes no `terrarium repo check
 Every project emulator run, **including releases**, must hold the fixed lock
 `/home/agent/.thevault-emulator.lock` on thevault-android from before boot until
 PID-only cleanup has completed. Do not wait for it in a nightly. Exit 0 with
-`skipped: emulator busy`. Never touch PID 19. Nightlies use console port 5584 only,
+`skipped: emulator busy`. Identify the protected emulator by its command, not a fixed PID. Nightlies use console port 5584 only,
 `ANDROID_SERIAL=emulator-5584`, and their own AVD/home, not the release AVD.
 
 ### Nightly schedule runbook (lead side)
@@ -167,9 +193,7 @@ Never silently retry. Before **any** rerun, add one diagnosis comment to that
 card, consulting the state wiki flaky list (P6). Build/boot/upload failures also
 need a card. A skip due to the emulator lock is not a test pass.
 
-N5. The release train runs `just check` after dev-image, alongside desktop and
-Android builds. `publish` depends on all three gates. The check job records its
-elapsed seconds and exit code in the GitHub summary, with a 60 minute timeout.
-TV-144 measured `just check` on thevault-dev at 539 seconds (8m59s), excluding
-the heavy-lock wait. GitHub cold-run time can differ. The job runs alongside
-builds, so added train wall time depends on which job finishes last.
+N5. There is no GitHub check job. The local release requires the lead's cut
+evidence and the later hash-bound signed smoke report. Upload original reports
+with `terrarium test push` and retain their run IDs. The release does not deploy
+production. META still owns upgrades with backup and rollback.

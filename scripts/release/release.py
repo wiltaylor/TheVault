@@ -11,18 +11,20 @@ import argparse
 import base64
 import contextlib
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
 import uuid
 
-from local import (Journal, ReleaseError, STAGES, assets, atomic_json,
+from local import (Journal, ReleaseError, STAGES, assets, atomic_json, compare_baseline,
                    delivery_identity, digest, identity, manifest, release_lock,
                    stage_plan, verify_manifest)
 
@@ -35,6 +37,8 @@ SIGN_ENV = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY
 
 
 def command(argv, *, cwd=ROOT, env=None, input=None, check=True):
+    if env is None:
+        env = {key: os.environ[key] for key in BASE_ENV if key in os.environ}
     result = subprocess.run(argv, cwd=cwd, env=env, input=input, capture_output=True)
     if check and result.returncode:
         # Child output may contain credentials. Never echo it from custodial tools.
@@ -46,7 +50,17 @@ def git(*args):
     return command(["git", *args], env={k: os.environ[k] for k in BASE_ENV if k in os.environ}).stdout.decode().strip()
 
 
-def freeze(version: str | None, branch: str | None) -> dict:
+def source_digest(source):
+    rows = []
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink():
+            rows.append((str(path.relative_to(source)), "link", os.readlink(path)))
+        elif path.is_file():
+            rows.append((str(path.relative_to(source)), path.stat().st_mode & 0o777, digest(path)))
+    return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+
+
+def freeze(version: str | None, branch: str | None, *, resume=False) -> dict:
     head = git("rev-parse", "HEAD")
     trailer = lambda key: git("log", "-1", f"--format=%(trailers:key={key},valueonly)")
     pre, stable = trailer("pre-release"), trailer("release")
@@ -60,13 +74,19 @@ def freeze(version: str | None, branch: str | None) -> dict:
     if tree != git("rev-parse", frozen + "^{tree}"):
         raise ReleaseError("tagged main commit tree differs from tested frozen release tree")
     kind = "pre-release" if pre == "true" else "release"
-    if not version:
+    wanted = trailer("version")
+    if version and wanted and version.split("-")[0] != wanted:
+        raise ReleaseError("selected version differs from the version trailer")
+    if not resume or not version:
         # The job may be cloned from a tagless bundle. Refuse numbering from zero.
         if not git("tag", "--list", "v*"):
             command(["git", "fetch", "--no-recurse-submodules", f"https://github.com/{REPO}.git", "refs/tags/v*:refs/tags/v*"])
         if not git("tag", "--list", "v*"):
             raise ReleaseError("cannot calculate version without release tag history")
-        version = command(["bash", "scripts/release/version.sh", kind, trailer("version")]).stdout.decode().strip()
+        calculated = command(["bash", "scripts/release/version.sh", kind, wanted]).stdout.decode().strip()
+        if version and version != calculated:
+            raise ReleaseError("requested version differs from trailer/tag calculation")
+        version = calculated
     release = identity(frozen, version, branch or "release/" + version.split("-")[0], kind)
     release.update(tagged_sha=head, tree=tree, cut_runs=gate[1:])
     return release
@@ -154,7 +174,11 @@ class Release:
     def build(self):
         # git archive excludes untracked state and secret files. Never copy HOME.
         archive = self.run(["git", "archive", self.release["tagged_sha"]]).stdout
-        self.source.mkdir(exist_ok=True)
+        # A failed build can leave a stamped source copy. Recreate only this
+        # run's owned source directory before extracting the immutable archive.
+        if self.source.exists():
+            shutil.rmtree(self.source)
+        self.source.mkdir()
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
             tar.extractall(self.source, filter="data")
         dev = self.prefix + "-dev:build"
@@ -163,6 +187,7 @@ class Release:
         # No host bind mounts, Docker socket, SSH keys or publisher env enter it.
         self.container("unsigned", dev, ["bash", "-c",
             "mkdir -p /src /cargo /gradle /pnpm-store /tmp/release-home; "
+            "getent passwd 1000 >/dev/null || useradd --uid 1000 --home-dir /tmp/release-home release-build; "
             "chown -R 1000:1000 /src /cargo /gradle /pnpm-store /tmp/release-home; "
             "exec setpriv --reuid=1000 --regid=1000 --clear-groups bash scripts/release/build-unsigned.sh \"$1\"", "_", self.release["version"]],
             copies=[(str(self.source) + "/.", "/src")], outputs=[("/src/out/.", self.out)],
@@ -170,6 +195,7 @@ class Release:
         # Stamp only the owned source copy for the image builds, never job HEAD.
         self.run(["bash", str(self.source / "scripts/release/stamp.sh"), self.release["version"]], cwd=self.source)
         return {"dev_image": dev, "smoke_sha256": digest(self.smoke_apk()),
+                "source_sha256": source_digest(self.source),
                 "fixtures_sha256": digest(self.out / "device/smoke-fixtures.tar.gz")}
 
     def smoke_apk(self):
@@ -177,6 +203,11 @@ class Release:
 
     def unsigned_manifest(self):
         value = manifest(self.dist, self.release, False)
+        original = self.out / "unsigned"
+        if original.exists():
+            shutil.rmtree(original)
+        shutil.copytree(self.dist, original / "assets")
+        shutil.copy2(self.smoke_apk(), original / self.smoke_apk().name)
         atomic_json(self.out / "unsigned-manifest.json", value)
         return {"manifest_sha256": digest(self.out / "unsigned-manifest.json")}
 
@@ -186,7 +217,17 @@ class Release:
             missing.append("ANDROID_SIGNER_SHA256 (existing shipped certificate fingerprint)")
         if missing:
             raise ReleaseError("waiting for operator signing prerequisites: " + ", ".join(missing))
-        verify_manifest(self.dist, json.loads((self.out / "unsigned-manifest.json").read_text()), self.release)
+        original = self.out / "unsigned"
+        if digest(self.out / "unsigned-manifest.json") != self.journal.data["outputs"]["unsigned-manifest"]["manifest_sha256"]:
+            raise ReleaseError("unsigned manifest changed")
+        verify_manifest(original / "assets", json.loads((self.out / "unsigned-manifest.json").read_text()), self.release)
+        # Recover a partial signing commit from immutable unsigned inputs.
+        for name in assets(self.release["version"]):
+            if (original / "assets" / name).exists():
+                shutil.copy2(original / "assets" / name, self.dist / name)
+        shutil.copy2(original / self.smoke_apk().name, self.smoke_apk())
+        if digest(self.smoke_apk()) != self.journal.data["outputs"]["build"]["smoke_sha256"]:
+            raise ReleaseError("unsigned smoke APK changed")
         key = self.runtime / "android.jks"
         key.write_bytes(base64.b64decode(os.environ["ANDROID_KEYSTORE_BASE64"], validate=True))
         key.chmod(0o600)
@@ -238,6 +279,8 @@ class Release:
 
     def signed_manifest(self):
         value = manifest(self.dist, self.release, True)
+        comparison = compare_baseline(value, json.loads((ROOT / "scripts/release/alpha37-assets.json").read_text()))
+        atomic_json(self.out / "asset-comparison.json", {"comparisons": comparison})
         atomic_json(self.out / "release-manifest.json", value)
         return {"manifest_sha256": digest(self.out / "release-manifest.json"), "smoke_sha256": digest(self.smoke_apk())}
 
@@ -247,10 +290,14 @@ class Release:
         expected = self.journal.data["outputs"]["signed-manifest"]
         if digest(self.out / "release-manifest.json") != expected["manifest_sha256"] or digest(self.smoke_apk()) != expected["smoke_sha256"]:
             raise ReleaseError("signed release manifest or smoke APK changed")
+        if digest(self.out / "device/smoke-fixtures.tar.gz") != self.journal.data["outputs"]["build"]["fixtures_sha256"]:
+            raise ReleaseError("signed smoke fixtures changed")
         return recorded
 
     def images(self):
         self.check_assets()
+        if source_digest(self.source) != self.journal.data["outputs"]["build"]["source_sha256"]:
+            raise ReleaseError("image source changed since unsigned builds")
         plain, server, browser = [self.prefix + f"-{name}:build" for name in ("plain", "server", "browser")]
         version, sha = self.release["version"], self.release["tagged_sha"]
         labels = ["--label", "org.opencontainers.image.source=https://github.com/" + REPO,
@@ -303,8 +350,7 @@ class Release:
         # Network/auth errors are not evidence of absence. Only a 404 is absence.
         ref = self.gh("api", f"repos/{REPO}/git/ref/tags/{tag}", check=False)
         if ref.returncode == 0:
-            if json.loads(ref.stdout)["object"]["sha"] != self.release["tagged_sha"]:
-                raise ReleaseError("existing release tag points at another commit")
+            raise ReleaseError("tag already exists before draft preparation")
         elif b"404" not in ref.stderr:
             raise ReleaseError("cannot establish release tag absence")
         existing = self.gh("api", f"repos/{REPO}/releases/tags/{tag}", check=False)
@@ -320,6 +366,8 @@ class Release:
                     "--prerelease=" + str(self.release["kind"] == "pre-release").lower())
             value = {"assets": []}
         remote = {asset["name"]: asset for asset in value["assets"]}
+        if set(remote) - {path.name for path in self.upload_files()}:
+            raise ReleaseError("draft contains unexpected assets")
         for path in self.upload_files():
             if path.name in remote:
                 item = remote[path.name]
@@ -378,6 +426,23 @@ class Release:
     def publish(self):
         self.check_assets()
         tag = "v" + self.release["version"]
+        # Recheck every uploaded byte before making the draft visible. A remote
+        # draft edited between phases must not be published by this run.
+        value = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
+        if value["target_commitish"] != self.release["tagged_sha"]:
+            raise ReleaseError("draft target changed after prepare")
+        by_name = {asset["name"]: asset for asset in value["assets"]}
+        if set(by_name) != {path.name for path in self.upload_files()}:
+            raise ReleaseError("draft asset inventory changed after prepare")
+        for path in self.upload_files():
+            if by_name.get(path.name, {}).get("digest") != "sha256:" + digest(path):
+                raise ReleaseError("draft asset changed after prepare: " + path.name)
+        ref = self.gh("api", f"repos/{REPO}/git/ref/tags/{tag}", check=False)
+        if ref.returncode == 0:
+            if json.loads(ref.stdout)["object"]["sha"] != self.release["tagged_sha"]:
+                raise ReleaseError("tag changed after prepare")
+        elif b"404" not in ref.stderr:
+            raise ReleaseError("cannot verify tag before publishing")
         # Mutable tags only advance after the signed smoke stage has been recorded.
         for name, image in self.journal.data["outputs"]["push"].items():
             if self.crane("digest", image["ref"]).stdout.decode().strip() != image["digest"]:
@@ -404,9 +469,23 @@ class Release:
         for path in self.upload_files():
             if by_name.get(path.name, {}).get("digest") != "sha256:" + digest(path):
                 raise ReleaseError("published asset digest mismatch: " + path.name)
+        for name, image in self.journal.data["outputs"]["push"].items():
+            channels = [self.release["version"], "edge"]
+            if self.release["kind"] == "release":
+                channels += ["latest", ".".join(self.release["version"].split(".")[:2])]
+            for channel in channels:
+                if self.crane("digest", REGISTRY + name + ":" + channel).stdout.decode().strip() != image["digest"]:
+                    raise ReleaseError("published image channel digest mismatch")
         return {"url": value["html_url"]}
 
+    def cleanup_images(self):
+        # Exact owned tags only. Base layers and other releases are untouched.
+        for suffix in ("dev", "plain", "server", "browser"):
+            self.docker("image", "rm", self.prefix + "-" + suffix + ":build", check=False)
+
     def execute(self, finish=False, evidence=None, run_id=None):
+        if "signed-manifest" in self.journal.data["completed"]:
+            self.check_assets()
         for stage in STAGES:
             if stage in self.journal.data["completed"]:
                 continue
@@ -416,6 +495,7 @@ class Release:
             method = getattr(self, stage.replace("-", "_"))
             result = method(evidence, run_id) if stage == "smoke" else method()
             self.journal.complete(stage, result)
+        self.cleanup_images()
         return "published and verified"
 
 
@@ -430,6 +510,10 @@ def main(argv=None):
     parser.add_argument("--smoke-run-id")
     parser.add_argument("--plan-sha", help="plan only: test frozen SHA without release trailers")
     args = parser.parse_args(argv)
+    def stop(signum, _frame):
+        raise ReleaseError(f"interrupted by signal {signum}; resume the same release")
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, stop)
     config = json.loads(args.delivery_config.read_text())
     try:
         delivery_identity(config)
@@ -445,9 +529,15 @@ def main(argv=None):
                 selected = args.state / "selected.json"
                 if selected.exists():
                     saved = json.loads(selected.read_text())
+                    previous = args.state / saved["version"] / "journal.json"
+                    if previous.exists() and json.loads(previous.read_text())["completed"] == list(STAGES) and git("rev-parse", "HEAD") != saved["tagged_sha"]:
+                        release = freeze(args.version, args.branch)
+                        if args.mode != "plan":
+                            atomic_json(selected, release)
+                        saved = release
                     if args.version and args.version != saved["version"]:
                         raise ReleaseError("requested version differs from selected release")
-                    release = freeze(saved["version"], args.branch)
+                    release = freeze(saved["version"], args.branch, resume=True)
                     if release != saved:
                         raise ReleaseError("release identity changed since selection")
                 else:

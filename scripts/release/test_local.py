@@ -1,6 +1,10 @@
 import contextlib
 import json
 import tempfile
+import subprocess
+import io
+import tarfile
+import base64
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -183,6 +187,162 @@ class LocalReleaseTests(unittest.TestCase):
         with patch.object(job, "check_assets"):
             with self.assertRaisesRegex(local.ReleaseError, "waiting for signed APK smoke"):
                 job.smoke(None, None)
+
+    def test_baseline_comparison_accepts_versioned_names_and_sizes(self):
+        baseline = json.loads((Path(__file__).parent / "alpha37-assets.json").read_text())
+        recorded = {"release": self.release, "assets": [dict(row, name=row["name"].replace(baseline["version"], self.release["version"])) for row in baseline["assets"]]}
+        self.assertEqual(len(local.compare_baseline(recorded, baseline)), 14)
+        recorded["assets"][0]["size"] = 1
+        with self.assertRaisesRegex(local.ReleaseError, "asset size outside"):
+            local.compare_baseline(recorded, baseline)
+
+    def test_baseline_comparison_rejects_missing_asset(self):
+        baseline = json.loads((Path(__file__).parent / "alpha37-assets.json").read_text())
+        with self.assertRaisesRegex(local.ReleaseError, "asset inventory differs"):
+            local.compare_baseline({"release": self.release, "assets": []}, baseline)
+
+    def test_main_and_frozen_commit_tree_must_match(self):
+        def fake_git(*args):
+            if args == ("rev-parse", "HEAD"):
+                return "b" * 40
+            if args[0] == "rev-parse":
+                return "tree-main" if args[1].startswith("b") else "tree-frozen"
+            key = args[-1]
+            if "key=pre-release," in key:
+                return "true"
+            if "key=tested-at-cut," in key:
+                return "a" * 40 + " TEST-1"
+            return ""
+        with patch.object(coordinator, "git", side_effect=fake_git):
+            with self.assertRaisesRegex(local.ReleaseError, "tree differs"):
+                coordinator.freeze("0.1.14-alpha.38", None, resume=True)
+
+    def test_record_frozen_sha_and_main_tag_sha_separately(self):
+        def fake_git(*args):
+            if args == ("rev-parse", "HEAD"):
+                return "b" * 40
+            if args[0] == "rev-parse":
+                return "c" * 40
+            key = args[-1]
+            if "key=pre-release," in key:
+                return "true"
+            if "key=tested-at-cut," in key:
+                return "a" * 40 + " TEST-1 TEST-2"
+            return ""
+        with patch.object(coordinator, "git", side_effect=fake_git):
+            recorded = coordinator.freeze("0.1.14-alpha.38", None, resume=True)
+        self.assertEqual(recorded["sha"], "a" * 40)
+        self.assertEqual(recorded["tagged_sha"], "b" * 40)
+        self.assertEqual(recorded["tree"], "c" * 40)
+
+    def test_failed_custodial_command_does_not_print_output_or_environment(self):
+        failed = subprocess.CompletedProcess(["signer"], 1, b"secret-output", b"private-key")
+        with patch.object(coordinator.subprocess, "run", return_value=failed):
+            with self.assertRaises(local.ReleaseError) as caught:
+                coordinator.command(["signer"], env={"PASSWORD": "secret"})
+        self.assertEqual(str(caught.exception), "signer failed (exit 1)")
+
+    def test_source_fingerprint_detects_changed_contents_and_modes(self):
+        source = self.root / "source"
+        source.mkdir()
+        path = source / "file"
+        path.write_text("original")
+        first = coordinator.source_digest(source)
+        path.chmod(0o700)
+        second = coordinator.source_digest(source)
+        self.assertNotEqual(first, second)
+        path.write_text("changed")
+        self.assertNotEqual(second, coordinator.source_digest(source))
+
+    def test_mocked_unsigned_build_uses_owned_container_and_no_host_bind(self):
+        job = self.job()
+        job.release["tagged_sha"] = "b" * 40
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as archive:
+            item = tarfile.TarInfo("docker/dev.Dockerfile")
+            item.size = 12
+            archive.addfile(item, io.BytesIO(b"FROM scratch"))
+        success = subprocess.CompletedProcess([], 0, stream.getvalue(), b"")
+        def populate_outputs(*args, **kwargs):
+            job.smoke_apk().parent.mkdir(parents=True)
+            job.smoke_apk().write_bytes(b"unsigned-smoke")
+            (job.out / "device").mkdir()
+            (job.out / "device/smoke-fixtures.tar.gz").write_bytes(b"fixtures")
+        with patch.object(job, "run", return_value=success), patch.object(job, "docker") as docker, patch.object(job, "container", side_effect=populate_outputs) as container:
+            result = job.build()
+        self.assertTrue(result["dev_image"].startswith(job.prefix))
+        self.assertEqual(result["source_sha256"], coordinator.source_digest(job.source))
+        self.assertIn("--workdir", container.call_args.kwargs["extra"])
+        self.assertNotIn("--volume", container.call_args.kwargs["extra"])
+        self.assertEqual(docker.call_args.args[0], "build")
+
+    def signing_job(self):
+        job = self.job()
+        job.runtime.mkdir()
+        job.dist.mkdir()
+        for name in local.assets(job.release["version"]):
+            (job.dist / name).write_bytes(name.encode())
+        job.smoke_apk().parent.mkdir()
+        job.smoke_apk().write_bytes(b"unsigned-smoke")
+        job.journal.data["outputs"]["build"] = {"smoke_sha256": local.digest(job.smoke_apk())}
+        job.journal.data["outputs"]["unsigned-manifest"] = job.unsigned_manifest()
+        return job
+
+    def test_mocked_signing_aligns_then_signs_checks_versions_and_commits(self):
+        job = self.signing_job()
+        env = {name: "dummy-test-value" for name in coordinator.SIGN_ENV}
+        env["ANDROID_KEYSTORE_BASE64"] = base64.b64encode(b"dummy-keystore").decode()
+        env["ANDROID_SIGNER_SHA256"] = "ab" * 32
+        env["ANDROID_KEY_ALIAS"] = "test-key-alias"
+        calls = []
+        def fake_command(argv, **kwargs):
+            calls.append(argv)
+            stdout = b""
+            if argv[0] == "zipalign":
+                Path(argv[-1]).write_bytes(b"aligned")
+            elif argv[:2] == ["apksigner", "sign"]:
+                Path(argv[argv.index("--out") + 1]).write_bytes(b"signed-apk")
+                self.assertIn("env:ANDROID_KEYSTORE_PASSWORD", argv)
+            elif argv[:2] == ["apksigner", "verify"]:
+                stdout = ("Signer #1 certificate SHA-256 digest: " + "ab" * 32).encode()
+            elif argv[0] == "aapt2":
+                stdout = b"package: versionCode='101438' versionName='0.1.14-alpha.38'"
+            elif argv[0] == "bash":
+                stdout = b"101438\n"
+            elif argv[0] == "cargo":
+                Path(argv[-1] + ".sig").write_bytes(base64.b64encode(b"trusted comment: app-version:0.1.14-alpha.38\n"))
+            return subprocess.CompletedProcess(argv, 0, stdout, b"")
+        with patch.dict("os.environ", env, clear=True), patch.object(coordinator, "command", side_effect=fake_command):
+            result = job.sign()
+        operations = [argv[0] + (" " + argv[1] if argv[0] == "apksigner" else "") for argv in calls]
+        self.assertLess(operations.index("zipalign"), operations.index("apksigner sign"))
+        self.assertIn("minisign", operations)
+        self.assertEqual(job.smoke_apk().read_bytes(), b"signed-apk")
+        self.assertEqual(result["smoke_sha256"], local.digest(job.smoke_apk()))
+        self.assertFalse((job.runtime / "android.jks").exists())
+        self.assertNotIn("dummy-test-value", json.dumps(calls))
+
+    def test_mocked_failed_signing_keeps_unsigned_inputs_and_removes_key(self):
+        job = self.signing_job()
+        env = {name: "dummy" for name in coordinator.SIGN_ENV}
+        env.update(ANDROID_KEYSTORE_BASE64=base64.b64encode(b"dummy").decode(), ANDROID_SIGNER_SHA256="ab" * 32)
+        with patch.dict("os.environ", env, clear=True), patch.object(job, "run", side_effect=local.ReleaseError("zipalign failed")):
+            with self.assertRaises(local.ReleaseError):
+                job.sign()
+        self.assertEqual(job.smoke_apk().read_bytes(), b"unsigned-smoke")
+        self.assertFalse((job.runtime / "android.jks").exists())
+
+    def test_mocked_phase_two_runs_smoke_before_publish_and_never_rebuilds(self):
+        job = self.job()
+        job.journal.data["completed"] = list(local.STAGES[:local.STAGES.index("smoke")])
+        calls = []
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(job, "check_assets"))
+            stack.enter_context(patch.object(job, "cleanup_images"))
+            for stage in local.STAGES:
+                stack.enter_context(patch.object(job, stage.replace("-", "_"), side_effect=lambda *a, stage=stage: calls.append(stage) or {}))
+            job.execute(True, self.root / "evidence", "TEST-1")
+        self.assertEqual(calls, ["smoke", "publish", "verify"])
 
 
 if __name__ == "__main__":

@@ -33,4 +33,9 @@ cargo build -p server -p cli --bins
 npm ci --prefix apps/android/emulator --ignore-scripts --no-audit --no-fund
 apps/android/emulator/fake-messages/build.sh
 mkdir -p /src/out/device
-tar -czf /src/out/device/smoke-fixtures.tar.gz apps/android/emulator apps/android/src-tauri/tauri.conf.json docs/android-manual-checks.md scripts/release/device.sh web/package.json web/node_modules web/dist target/debug/vault target/debug/vault-server target/android-emulator/fake-messages.apk
+mkdir -p .scratch/release-device/apps/android/emulator/fake-messages
+cp scripts/nightly/prebuilt-messages.sh .scratch/release-device/apps/android/emulator/fake-messages/build.sh
+chmod +x .scratch/release-device/apps/android/emulator/fake-messages/build.sh
+tar --exclude=apps/android/emulator/fake-messages/build.sh -cf /src/out/device/smoke-fixtures.tar apps/android/emulator apps/android/src-tauri/tauri.conf.json docs/android-manual-checks.md scripts/release/device.sh web/package.json web/node_modules web/dist target/debug/vault target/debug/vault-server target/android-emulator/fake-messages.apk
+tar -rf /src/out/device/smoke-fixtures.tar -C .scratch/release-device apps/android/emulator/fake-messages/build.sh
+gzip -f /src/out/device/smoke-fixtures.tar

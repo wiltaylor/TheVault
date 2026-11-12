@@ -38,11 +38,12 @@ test('cleanup requires recorded PID identity, start time, home and serial', () =
   assert.match(script, /trap cleanup EXIT/);
 });
 
-test('publish requires the check job', () => {
+test('GitHub train is inert and local release requires the cut evidence', () => {
   const workflow = read('.github/workflows/release-train.yml');
-  assert.match(workflow, /publish:\n    needs: \[version, check, desktop, android\]/);
-  assert.match(workflow, /\.\/dev just check \|\| status=\$\?/);
-  assert.match(workflow, /exit "\$status"/);
+  assert.match(workflow, /GitHub CI is disabled/);
+  assert.doesNotMatch(workflow, /workflow_call:|push:|secrets:/);
+  assert.match(read('scripts/release/release.py'), /tested-at-cut must name the frozen SHA/);
+  assert.match(read('.just/release/mod.just'), /gate-dev:\n\tjust check/);
 });
 
 test('device bundle includes the harness data files and badging tool', () => {
