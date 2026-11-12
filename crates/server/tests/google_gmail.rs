@@ -1298,6 +1298,46 @@ fn images_the_time_budget_leaves_out_wait_for_the_next_run() {
 }
 
 /// An email note as the older import wrote it: paragraphs, no `converter`.
+#[test]
+fn adversarial_import_markup_gmail_reconversion_provider_and_stored_html() {
+    use crate::import_markup::{TEXT, assert_literal};
+    let google = FakeGoogle::start();
+    let other = google.add_label("Other");
+    for (id, key, body) in [
+        ("legacy-plain", "text", TEXT.to_owned()),
+        ("legacy-html", "html", format!("<p>{TEXT}</p>")),
+    ] {
+        let mut message = json!({ "id": id, "labels": [other], "at": ago(1),
+            "from": "alex@example.com", "subject": id });
+        message[key] = json!(body);
+        google.add_message(message);
+    }
+    let gmail = Gmail::start(google, json!({ "gmail_labels": ["INBOX"] }));
+    let escaped = html_blocks::escape_text(TEXT);
+    let mut ids = Vec::new();
+    for id in ["legacy-plain", "legacy-html"] {
+        ids.push(old_email(&gmail, id, &[&escaped], json!({})));
+    }
+    let stored = gmail.upload("gone.html", format!("<p>{TEXT}</p>").as_bytes());
+    ids.push(old_email(
+        &gmail,
+        "legacy-gone",
+        &[&escaped],
+        json!({ "html": stored }),
+    ));
+    let run = gmail.run_ok();
+    assert!(
+        Gmail::log_of(&run).contains("reconverted 3 email bodies"),
+        "{run}"
+    );
+    for id in ids {
+        let note = gmail.note(&id);
+        assert_eq!(note["note"]["fields"]["converter"], 2);
+        assert_literal(&note, "body");
+    }
+}
+
+/// An email note as the older import wrote it: paragraphs, no `converter`.
 fn old_email(gmail: &Gmail, gmail_ref: &str, texts: &[&str], extra: Value) -> String {
     let mut fields = json!({ "title": format!("Old {gmail_ref}"), "gmail_ref": gmail_ref, "from_raw": "alex@example.com" });
     for (k, v) in extra.as_object().into_iter().flatten() {
