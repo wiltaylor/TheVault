@@ -236,6 +236,8 @@ release record. Never accept hashes supplied only alongside unverified files.
    its existing authorized access, checks all three hashes against the tail,
    and stages only those files in an agreed, owned target directory accessible
    to the lead through Terrarium. META replies with the exact target paths.
+   The agreed alpha.39 directory on thevault-android is `/home/agent/rel39`.
+   Use a separate `/home/agent/rel<version>` directory for each later version.
    No token, signing key, credential file or private checkpoint is transferred.
 3. Lead retrieves them with `terrarium cp <target>:<path> <local-path>`, runs
    `sha256sum` on all three, compares with the job tail and capsule fields above,
