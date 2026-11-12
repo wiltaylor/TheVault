@@ -35,6 +35,13 @@ export interface AgentSafety {
   fingerprint: string;
 }
 
+export interface HeldNote {
+  id: string;
+  type: string;
+  created: string | null;
+  agent_safety: AgentSafety;
+}
+
 export interface FieldDef {
   name: string;
   label: string;
@@ -1820,6 +1827,7 @@ export const api = {
   logout: () => request<void>("POST", "/api/logout"),
   types: async () => (await request<{ types: TypeDef[] }>("GET", "/api/types")).types,
   note: (id: string) => request<Note>("GET", `/api/notes/${enc(id)}`),
+  heldAgentNotes: (offset = 0) => request<{ notes: HeldNote[]; total: number }>("GET", `/api/agent-safety/held?limit=500&offset=${offset}`),
   releaseAgentSafety: (id: string, fingerprint: string) => request<{ agent_safety: AgentSafety }>("POST", `/api/notes/${enc(id)}/agent-safety/release`, { fingerprint }),
   /** The daily note for a `YYYY-MM-DD` day; a day with no note is a 404 `ApiError`. */
   daily: (date: string) => request<Note>("GET", `/api/daily/${enc(date)}`),
