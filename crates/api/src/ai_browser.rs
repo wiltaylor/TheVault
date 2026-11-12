@@ -82,6 +82,8 @@ pub struct BrowserBox {
     profile: Option<String>,
 }
 
+pub(crate) mod secret_fill;
+
 impl BrowserBox {
     /// The box `VAULT_BROWSER_URL` names, as [`crate::browser::Config`] reads it (unset, empty
     /// or not a URL is none), with [`TOKEN_VAR`] as its token.
