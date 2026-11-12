@@ -40,7 +40,7 @@ export function ApplyKind(props: { agent: string; thread: string }) {
         <details><summary>Proposed change</summary><pre>{JSON.stringify(item.data, null, 2)}</pre></details>
       </li>}</For></ul>
       <button type="button" disabled={busy() || (results().length > 0 && results().every((r) => r.ok))}
-        onClick={() => void act(async () => setResults((await api.aiApplyKindConfirm(p().preview)).results))}>
+        onClick={() => void act(async () => { setResults((await api.aiApplyKindConfirm(p().preview)).results); })}>
         {results().length ? "Retry unsuccessful proposals" : `Confirm Apply ${p().count} proposals`}
       </button>
       <button type="button" disabled={busy()} onClick={() => { setPreview(undefined); setProposals([]); setResults([]); }}>Close preview</button>

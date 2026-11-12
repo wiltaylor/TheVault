@@ -577,8 +577,6 @@ pub async fn apply(
     Json(change): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     crate::auth::require_in_app_agent_caller(&author)?;
-    // Serialize individual and batch Apply, including the durable outcome reservation.
-    let _approval = a.approval_lock.lock().await;
     if !change.is_object() {
         return Err(ApiError::bad_request(
             "send the proposal as the chat sent it",
@@ -640,8 +638,7 @@ pub async fn apply(
             return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message));
         }
     }
-    let w = a.writer.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = serialized_apply(a.clone(), move |w| {
         let mut _thread_busy = None;
         let stored = if let (Some(thread), Some(id)) =
             (change["thread"].as_str(), change["id"].as_str())
@@ -649,9 +646,9 @@ pub async fn apply(
             if agent_threads::running(thread).is_some() {
                 return Err(ApiError::bad_request("Wait for the thread to finish."));
             }
-            let t = agent_threads::Thread::read(&w, thread)?;
+            let t = agent_threads::Thread::read(w, thread)?;
             _thread_busy = Some(agent_threads::Busy::take(thread, &t.agent)?);
-            let t = agent_threads::Thread::read(&w, thread)?;
+            let t = agent_threads::Thread::read(w, thread)?;
             let p = t.transcript.proposals.iter().find(|p| p.id() == id)
                 .ok_or_else(|| ApiError::bad_request("Proposal no longer exists."))?;
             if p.data != change || p.event != event {
@@ -665,29 +662,39 @@ pub async fn apply(
             }
             // Fail closed if the process stops after a write but before its outcome is saved.
             // Stale is terminal, so neither a new preview nor individual Apply repeats it.
-            agent_threads::record_outcome(&w, thread, id, Status::Stale, None,
+            agent_threads::record_outcome(w, thread, id, Status::Stale, None,
                 Some("Apply interrupted or outcome uncertain. Check the target before proposing again.".into()))?;
             Some((thread.to_owned(), id.to_owned()))
         } else { None };
         let signed_in_admin = scope.allows(Scope::Admin) && matches!(author, Author::Session(_));
-        let result = apply_as_agent(&w, author, event, &change, signed_in_admin);
+        let result = apply_as_agent(w, author, event, &change, signed_in_admin);
         if let (Some((thread, id)), Err(e)) = (stored, &result) {
             // Includes early authorization errors before apply_as_agent records an outcome.
-            let t = agent_threads::Thread::read(&w, &thread)?;
+            let t = agent_threads::Thread::read(w, &thread)?;
             if t.transcript.proposals.iter().any(|p| p.id() == id && p.error.as_deref()
                 == Some("Apply interrupted or outcome uncertain. Check the target before proposing again.")) {
-                agent_threads::record_outcome(&w, &thread, &id, Status::Failed, None, Some(e.body.to_string()))?;
+                agent_threads::record_outcome(w, &thread, &id, Status::Failed, None, Some(e.body.to_string()))?;
             }
         }
         result
     })
     .await
-    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
     .map(Json);
     if event == "agent_proposal" {
         crate::ai_browser::cleanup_retired(a.writer.clone());
     }
     result
+}
+
+/// The blocking worker owns serialization, not the cancellable HTTP future.
+async fn serialized_apply(
+    a: Arc<Ai>,
+    f: impl FnOnce(&writer::Writer) -> Result<Value, ApiError> + Send + 'static,
+) -> Result<Value, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let _approval = a.approval_lock.lock().unwrap_or_else(|e| e.into_inner());
+        f(&a.writer)
+    }).await.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
 }
 
 /// Apply `change` as the caller, or, when it names the agent that proposed it, as that agent
@@ -815,6 +822,39 @@ pub async fn discard(
 #[cfg(test)]
 mod timeout_tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_apply_keeps_serialization_until_worker_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let a = Arc::new(Ai::new(Arc::new(writer::Writer::open(vault, state).unwrap())));
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = writes.clone();
+        let first = tokio::spawn(serialized_apply(a.clone(), move |_| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            count.fetch_add(1, Ordering::SeqCst);
+            done_tx.send(()).unwrap();
+            Ok(Value::Null)
+        }));
+        entered_rx.await.unwrap();
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        assert!(a.approval_lock.try_lock().is_err(), "cancel must not release the worker's lock");
+        let count = writes.clone();
+        let second = tokio::spawn(serialized_apply(a.clone(), move |_| {
+            assert_eq!(count.load(Ordering::SeqCst), 1, "retry cannot enter before the mutation completes");
+            Ok(json!({"done":true}))
+        }));
+        release_tx.send(()).unwrap();
+        done_rx.await.unwrap();
+        assert_eq!(second.await.unwrap().unwrap(), json!({"done":true}));
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+    }
 
     #[tokio::test(start_paused = true)]
     async fn an_unread_turn_expires_at_the_production_30_second_deadline() {

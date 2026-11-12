@@ -3489,7 +3489,11 @@ fn apply_kind_snapshot_session_confirmation_and_retry_never_repeat_creates() {
     let other_session = approval_cookie(&api);
     assert_eq!(safety_session(&api, &other_session, "/api/ai/apply-kind/confirm", body.clone()).status(), 400);
     let apply = || -> Value { safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body.clone()).error_for_status().unwrap().json().unwrap() };
-    let first = apply();
+    let (first, concurrent) = std::thread::scope(|s| {
+        let retry = s.spawn(&apply);
+        (apply(), retry.join().unwrap())
+    });
+    assert_eq!(concurrent, first, "concurrent retry returns the same created IDs");
     assert!(first["results"].as_array().unwrap().iter().all(|r| r["ok"] == true), "{first}");
     assert_eq!(apply(), first, "same stable result IDs, no second create");
     let path = format!("/api/agents/reader/threads/{thread}");
