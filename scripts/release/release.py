@@ -29,8 +29,8 @@ import urllib.request
 
 from local import (Journal, ReleaseError, STAGES, assets, atomic_json, compare_baseline,
                    digest, identity, manifest, release_lock,
-                   stage_plan, verify_manifest, safe_extract)
-from preflight import check_tools
+                   stage_plan, stages, verify_manifest, safe_extract)
+from preflight import check_tools, check_workflow
 
 ROOT = Path(__file__).resolve().parents[2]
 REPO = "wiltaylor/TheVault"
@@ -40,6 +40,17 @@ SIGN_ENV = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY
             "ANDROID_KEY_PASSWORD", "TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
 CHECKPOINT = re.compile(r"thevault-release-checkpoint-([0-9]{2})-([0-9a-f]{64})\.tar\.gz")
 SIGN_INPUT = re.compile(r"thevault-sign-input-([0-9a-f]{32})\.tar\.gz")
+NO_APPS_NOTES = "The desktop and Android apps are not in this pre-release. A later release will bring the apps back. Server and browser images and CLI binaries with checksums are included."
+
+
+def signing_mode(trailer=None):
+    mode = os.environ.get("THEVAULT_SIGNING_MODE")
+    if mode is None:
+        mode = trailer if trailer is not None else git("log", "-1", "--format=%(trailers:key=signing,valueonly)")
+        mode = mode or "github"
+    if mode not in ("github", "custodian", "none"):
+        raise ReleaseError("signing mode must be github, custodian or none")
+    return mode
 
 
 def android_signer():
@@ -144,11 +155,12 @@ def restore_remote(state, version, runtime):
         atomic_json(out / "journal.json", journal)
         atomic_json(out / "run.json", capsule["run"])
         release = journal["release"]
-        for name in assets(version):
+        for name in assets(version, release.get("signing_mode", "github")):
             download(name, out / "assets")
         download("release-manifest.json", out)
-        download(f"TheVault_{version}_x86_64.apk", out / "smoke")
-        download("smoke-fixtures.tar.gz", out / "device")
+        if release.get("signing_mode") != "none":
+            download(f"TheVault_{version}_x86_64.apk", out / "smoke")
+            download("smoke-fixtures.tar.gz", out / "device")
     else:
         # An interrupted create/checkpoint upload can leave an empty draft.
         return None
@@ -190,6 +202,9 @@ def freeze(version: str | None, branch: str | None, *, resume=False) -> dict:
         version = calculated
     release = identity(frozen, version, branch or "release/" + version.split("-")[0], kind)
     release.update(tagged_sha=head, tree=tree, cut_runs=gate[1:])
+    mode = signing_mode()
+    if mode != "github":
+        release["signing_mode"] = mode
     return release
 
 
@@ -207,6 +222,7 @@ def private_runtime():
 class Release:
     def __init__(self, state: Path, release: dict, runtime: Path):
         self.state, self.release, self.runtime = state, release, runtime
+        self.mode = release.get("signing_mode", "github")
         self.out = state / release["version"]
         self.out.mkdir(parents=True, exist_ok=True)
         self.journal = Journal(self.out / "journal.json", release)
@@ -294,9 +310,12 @@ class Release:
             "exec setpriv --reuid=1000 --regid=1000 --clear-groups bash scripts/release/build-unsigned.sh \"$1\"", "_", self.release["version"]],
             copies=[(str(self.source) + "/.", "/src")], outputs=[("/src/out/.", self.out)],
             extra=["--workdir", "/src", "--env", "HOME=/tmp/release-home", "--env", "CARGO_BUILD_JOBS=8", "--env", "RUST_TEST_THREADS=8",
+                   "--env", "THEVAULT_SIGNING_MODE=" + self.mode,
                    "--env", "THEVAULT_WEB_COMMIT=" + self.release["tagged_sha"][:7]])
         # Stamp only the owned source copy for the image builds, never job HEAD.
         self.run(["bash", str(self.source / "scripts/release/stamp.sh"), self.release["version"]], cwd=self.source)
+        if self.mode == "none":
+            return {"dev_image": dev, "source_sha256": source_digest(self.source)}
         return {"dev_image": dev, "smoke_sha256": digest(self.smoke_apk()),
                 "source_sha256": source_digest(self.source),
                 "fixtures_sha256": digest(self.out / "device/smoke-fixtures.tar.gz")}
@@ -315,7 +334,7 @@ class Release:
         return {"manifest_sha256": digest(self.out / "unsigned-manifest.json")}
 
     def sign(self):
-        mode = os.environ.get("THEVAULT_SIGNING_MODE", "github")
+        mode = self.mode
         if mode == "github":
             return self.sign_github()
         if mode == "custodian":
@@ -471,9 +490,20 @@ class Release:
         atomic_json(self.out / "release-manifest.json", value)
         return {"manifest_sha256": digest(self.out / "release-manifest.json"), "smoke_sha256": digest(self.smoke_apk())}
 
+    def manifest(self):
+        value = manifest(self.dist, self.release, False)
+        comparison = compare_baseline(value, json.loads((ROOT / "scripts/release/alpha37-assets.json").read_text()))
+        atomic_json(self.out / "asset-comparison.json", {"comparisons": comparison})
+        atomic_json(self.out / "release-manifest.json", value)
+        return {"manifest_sha256": digest(self.out / "release-manifest.json")}
+
     def check_assets(self):
         recorded = json.loads((self.out / "release-manifest.json").read_text())
         verify_manifest(self.dist, recorded, self.release)
+        if self.mode == "none":
+            if digest(self.out / "release-manifest.json") != self.journal.data["outputs"]["manifest"]["manifest_sha256"]:
+                raise ReleaseError("release manifest changed")
+            return recorded
         expected = self.journal.data["outputs"]["signed-manifest"]
         if digest(self.out / "release-manifest.json") != expected["manifest_sha256"] or digest(self.smoke_apk()) != expected["smoke_sha256"]:
             raise ReleaseError("signed release manifest or smoke APK changed")
@@ -493,7 +523,7 @@ class Release:
         server_args = ["build", "--platform", "linux/amd64", "--build-arg", "THEVAULT_WEB_COMMIT=" + sha[:7],
                        "-f", str(self.source / "docker/Dockerfile")]
         self.docker(*server_args, "-t", plain, str(self.source))
-        filenames = [name for name, role in assets(version).items() if role in ("android", "desktop", "cli")]
+        filenames = [name for name, role in assets(version, self.mode).items() if role in ("android", "desktop", "cli")]
         clients = self.out / "clients"
         self.container("clients", plain, ["-c", 'mkdir -p /clients; exec vault clients publish --dir /clients --build release "$@"', "_",
                        *["/assets/" + name for name in filenames]],
@@ -530,6 +560,8 @@ class Release:
         return output
 
     def upload_files(self):
+        if self.mode == "none":
+            return [*(self.dist / name for name in assets(self.release["version"], self.mode)), self.out / "release-manifest.json"]
         return [*(self.dist / name for name in assets(self.release["version"])),
                 self.out / "release-manifest.json", self.smoke_apk(), self.out / "device/smoke-fixtures.tar.gz"]
 
@@ -551,8 +583,11 @@ class Release:
                 raise ReleaseError("cannot establish draft absence")
             self.gh("release", "create", tag, "--repo", REPO, "--draft", "--target", self.release["tagged_sha"],
                     "--title", "TheVault " + tag, "--generate-notes", "--latest=false",
-                    "--prerelease=" + str(self.release["kind"] == "pre-release").lower())
-            value = {"assets": []}
+                    "--prerelease=" + str(self.release["kind"] == "pre-release").lower(),
+                    *(["--notes", NO_APPS_NOTES] if self.mode == "none" else []))
+            value = {"assets": [], "body": NO_APPS_NOTES if self.mode == "none" else ""}
+        if self.mode == "none" and NO_APPS_NOTES not in value.get("body", ""):
+            self.gh("release", "edit", tag, "--repo", REPO, "--notes", NO_APPS_NOTES + "\n\n" + value.get("body", ""))
         return value
 
     def draft(self):
@@ -636,12 +671,15 @@ class Release:
         if value["target_commitish"] != self.release["tagged_sha"]:
             raise ReleaseError("draft target changed after prepare")
         by_name = {asset["name"]: asset for asset in value["assets"] if not CHECKPOINT.fullmatch(asset["name"]) and not SIGN_INPUT.fullmatch(asset["name"])}
-        if set(by_name) != {path.name for path in self.upload_files()} | {"release-state.json", "signed-smoke.json"}:
+        handoff = {"release-state.json"} if self.mode == "none" else {"release-state.json", "signed-smoke.json"}
+        if set(by_name) != {path.name for path in self.upload_files()} | handoff:
             raise ReleaseError("draft asset inventory changed after prepare")
         for path in self.upload_files():
             if by_name.get(path.name, {}).get("digest") != "sha256:" + digest(path):
                 raise ReleaseError("draft asset changed after prepare: " + path.name)
-        if by_name["signed-smoke.json"].get("digest") != "sha256:" + self.journal.data["outputs"]["smoke"]["sha256"]:
+        if self.mode == "none" and NO_APPS_NOTES not in value.get("body", ""):
+            raise ReleaseError("unsigned-apps release notice missing from notes")
+        if self.mode != "none" and by_name["signed-smoke.json"].get("digest") != "sha256:" + self.journal.data["outputs"]["smoke"]["sha256"]:
             raise ReleaseError("remote signed smoke evidence changed")
         ref = self.gh("api", f"repos/{REPO}/git/ref/tags/{tag}", check=False)
         if ref.returncode == 0:
@@ -740,9 +778,9 @@ class Release:
         named.unlink()
 
     def execute(self, finish=False, evidence=None, run_id=None):
-        if "signed-manifest" in self.journal.data["completed"]:
+        if "signed-manifest" in self.journal.data["completed"] or "manifest" in self.journal.data["completed"]:
             self.check_assets()
-        for stage in STAGES:
+        for stage in stages(self.release):
             if stage in self.journal.data["completed"]:
                 continue
             if stage == "smoke" and not finish:
@@ -779,7 +817,11 @@ def main(argv=None):
                                        "pre-release" if "-" in version else "release")
                 else:
                     release = freeze(args.version, args.branch)
-                print(json.dumps({"stages": stage_plan(release), "assets": assets(release["version"])}, indent=2))
+                mode = signing_mode()
+                if mode != "github":
+                    release["signing_mode"] = mode
+                print(json.dumps({"stages": stage_plan(release), "assets": assets(release["version"], mode),
+                                  "notes": NO_APPS_NOTES if mode == "none" else ""}, indent=2))
                 return 0
             if args.plan_sha:
                 raise ReleaseError("--plan-sha cannot authorize execution")
@@ -788,16 +830,19 @@ def main(argv=None):
                 raise ReleaseError("release-phase must be prepare or finish")
             state = args.state.resolve()
             with private_runtime() as runtime:
-                versions = check_tools(lambda argv, **kw: command(argv, env=client_env(runtime), **kw), os.environ.get("ANDROID_HOME"))
+                mode = signing_mode()
+                versions = check_tools(lambda argv, **kw: command(argv, env=client_env(runtime), **kw), os.environ.get("ANDROID_HOME"), mode)
                 for name in ("GH_TOKEN", "GHCR_TOKEN"):
                     check_token_scopes(name, os.environ.get(name))
+                if mode == "github":
+                    check_workflow(lambda *args, **kw: github(runtime, *args, **kw))
                 run_id = None
                 if phase == "finish":
                     version = git("log", "-1", "--format=%(trailers:key=release-version,valueonly)")
                     if not version or (args.version and args.version != version):
                         raise ReleaseError("finish needs the exact release-version trailer")
                     run_id = git("log", "-1", "--format=%(trailers:key=signed-smoke,valueonly)")
-                    if not re.fullmatch(r"[A-Za-z0-9_-]+", run_id):
+                    if mode != "none" and not re.fullmatch(r"[A-Za-z0-9_-]+", run_id):
                         raise ReleaseError("finish needs signed-smoke: <original test run ID>")
                     release = restore_remote(state, version, runtime)
                     if not release:
@@ -827,6 +872,8 @@ def main(argv=None):
                             raise ReleaseError("remote checkpoint SHA/tree/version mismatch")
                     else:
                         release = freeze(args.version, args.branch)
+                if release.get("signing_mode", "github") != mode:
+                    raise ReleaseError("signing mode differs from prepared release; resume with the original mode")
                 job = Release(state, release, runtime)
                 job.tool_versions = versions
                 evidence = job.out / "signed-smoke.json" if phase == "finish" else None

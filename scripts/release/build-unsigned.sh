@@ -7,6 +7,14 @@ unset THEVAULT_ANDROID_KEYSTORE THEVAULT_ANDROID_KEYSTORE_PASSWORD THEVAULT_ANDR
 unset THEVAULT_ANDROID_KEY_PASSWORD TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 mkdir -p "$HOME" /src/out/assets /src/out/smoke
 bash scripts/release/stamp.sh "$version"
+if [ "${THEVAULT_SIGNING_MODE:-github}" = none ]; then
+  just cli-release
+  cp target/cli-release/vault-*-linux-* /src/out/assets/
+  cp target/cli-release/SHA256SUMS /src/out/assets/SHA256SUMS-cli
+  cp deploy/compose.yaml deploy/Caddyfile /src/out/assets/
+  cp deploy/.env.example /src/out/assets/env.example
+  exit 0
+fi
 python3 scripts/release/gradle-wrapper.py apps/android/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties .scratch/gradle-wrapper
 just desktop-release-test
 just aur-release

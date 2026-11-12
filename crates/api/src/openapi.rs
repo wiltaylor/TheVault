@@ -15,6 +15,11 @@ use crate::required_scope;
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
+        "/api/agent-safety/evidence/{id}",
+        "Review current attachment evidence: {envelope, fingerprint, decision_status, decision_current, omissions, bytes, limit, estimated_input_tokens}; owner session or admin user token only",
+    ),
+    (
+        "GET",
         "/api/agent-safety/held",
         "List held notes by type, creation date and reason (browser session only)",
     ),
