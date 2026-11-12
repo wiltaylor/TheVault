@@ -12,12 +12,12 @@ A single-user, self-hosted note app: Rust server, SolidJS 1.9 web client, `vault
 
 ## Run every command through the dev container
 
-The host has no Rust or Node toolchain for this project. Run every build, test, lint, format and run command through `./dev` from the root of your checkout or worktree:
+The host has no Rust or Node toolchain for this project. For local development use `./dev` from the root of your checkout or worktree. Terrarium agents instead run on thevault-dev without `./dev`, always through `/src/thevault-heavy.sh`, as specified in `AGENTS.md`. Run git only in the sandbox, never on targets.
 
 ```bash
 ./dev cargo test -p store
 ./dev pnpm -C web test
-./dev just check
+./dev pnpm -C web exec vitest run <test-file>
 ```
 
 `./dev` mounts the current directory at the same path, runs as your user, and shares cargo and pnpm caches between containers. It pulls the image for the current `docker/dev.Dockerfile` from `ghcr.io/wiltaylor/thevault-dev` before building it, passes stdin through, so `printf pw | ./dev vault init --password-stdin` works, and stops its container when it is stopped. Its `/tmp` is a RAM-backed tmpfs, so test vaults never wait on the shared disk; anything a test keeps must not rely on surviving the container. It uses host networking, and several workers run tests at the same time, so:
@@ -25,17 +25,19 @@ The host has no Rust or Node toolchain for this project. Run every build, test, 
 - Every test server, fixture HTTP server and Playwright target binds port 0 and reads back the port it got. Never hard-code a port.
 - Every test vault lives in a fresh temporary directory. Never write into the repository or `$HOME` from a test.
 
-`./dev just check` is the full gate: formatting, clippy with warnings denied, every Rust test, and the web typecheck and tests. Run it before every commit.
+`just check` is the full gate: formatting, clippy with warnings denied, every Rust test, web typecheck and tests, and script/harness tests. It runs at the release cut, not before every commit or review.
 
-Card validation is not run through `./dev`: it runs on thevault-dev without `./dev`, and AGENTS.md says how.
+Card checks are targeted only, on a clean checkout of the pushed card commit. `AGENTS.md` names commands per area and the evidence required before review. Review (including the security second reader) reads the diff and evidence without tests. Merge only integrates onto `next`, without tests. Full checks and end-to-end tests run on `release/<X.Y.Z>` at the cut (D1-D4, 2026-11-12).
 
 Builds share one disk, and a workspace test build is heavy, so:
 
 - While working, run only the tests you are changing: `./dev cargo test -p <crate> --test main <file>::`, one vitest file, one e2e spec.
 - Each crate links its integration tests as one binary, `tests/main.rs`, which declares every other file in `tests/` as a module (`autotests = false`). Add a new test file as a `mod` line there, or `just ci::rust-tests-declared` fails. All of a crate's integration tests share one process, so a test must not set environment variables or other process-wide state; pass them to the child server instead.
-- Run `./dev just check` once before a commit, and never while another gate or build runs.
+- Reuse one target checkout per card, `/src/<card>`, including its cache and evidence. Every dev build/test/lint takes the heavy lock. Never share writable Cargo output or run two builds against one cache.
 - Run the full e2e suite (`./dev pnpm -C web e2e`) only before cutting a release. For other changes run the affected specs.
-- Remove a git worktree and its branch once its work is merged.
+- Follow the leftover ownership and approval rules in `AGENTS.md` after merge. Never delete shared or active files or branches without the required approval.
+
+Never touch production. Upgrades require backup and rollback through meta/lead. Follow `AGENTS.md` for the shared emulator lock, the protected `emulator-5554` identified by its `-avd thevault` command, and owner-PID-only cleanup.
 
 ## Pinned upstreams
 
