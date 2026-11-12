@@ -249,6 +249,22 @@ impl State {
         rows.map(|r| finish_version(r?)).collect()
     }
 
+    /// History needed by a call scan. Keep raw-id matches even if the wall clock
+    /// stepped backwards after issuance. The timestamp bound only saves work.
+    pub fn agent_call_history(&self, note_id: &str) -> Result<Vec<Version>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {VERSION_COLUMNS} FROM versions WHERE note_id = ?1 AND (
+                at_ms >= (SELECT MIN(expires_ms - 86400000) FROM agent_call_ids
+                          WHERE note = ?1 AND used = 0)
+                OR EXISTS (SELECT 1 FROM agent_call_ids
+                           WHERE note = ?1 AND used = 0 AND instr(content, call) > 0)
+             ) ORDER BY seq"
+        ))?;
+        let rows = stmt.query_map([note_id], version_row)?;
+        rows.map(|r| finish_version(r?)).collect()
+    }
+
     /// One version of the note by its token.
     pub fn version(&self, note_id: &str, token: &str) -> Result<Option<Version>> {
         let conn = self.conn();

@@ -13,6 +13,34 @@ const NOTE_B: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[test]
+fn agent_call_history_filters_old_rows_but_keeps_raw_ids_after_clock_rollback() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(1_000);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let foreign = Author::Token("writer".into());
+    state
+        .record_version(NOTE_A, "memo", &foreign, "unrelated old text")
+        .unwrap();
+    clock.advance(100);
+    state
+        .issue_agent_call("first", NOTE_A, "clerk", "session:owner")
+        .unwrap();
+    state
+        .issue_agent_call("second", NOTE_A, "clerk", "session:owner")
+        .unwrap();
+    clock.advance(-200);
+    let raw = state
+        .record_version(NOTE_A, "memo", &foreign, "first second")
+        .unwrap();
+    clock.advance(300);
+    let recent = state
+        .record_version(NOTE_A, "memo", &Author::Session("owner".into()), "recent")
+        .unwrap();
+    assert_eq!(state.agent_call_history(NOTE_A).unwrap(), vec![raw, recent]);
+    assert!(state.agent_call_history(NOTE_B).unwrap().is_empty());
+}
+
+#[test]
 fn token_kinds_migrate_from_19_20_22_and_23_without_losing_credentials() {
     for version in [19, 20, 22, 23] {
         let dir = TempDir::new().unwrap();
