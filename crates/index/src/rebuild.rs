@@ -43,6 +43,7 @@ pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<Rebuild
     extract_missing(index, vault)?;
 
     let mut notes = Vec::new();
+    let mut own_docs = Vec::new();
     for f in &files {
         let checked = vault
             .read_text(&f.path)
@@ -65,6 +66,7 @@ pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<Rebuild
                 // validate_note refused any note whose type is missing, so this always holds.
                 if let Some(ty) = schema.type_def(&f.type_name) {
                     let mut note = project::project(ty, &f.id, &doc, &report);
+                    own_docs.push(note.search.clone());
                     crate::append_text(&mut note.search.body, &index.assets.of_doc(&doc));
                     notes.push(note);
                 }
@@ -88,6 +90,7 @@ pub(crate) fn rebuild(index: &mut Index, vault: &store::Vault) -> Result<Rebuild
     }
     sql::set_generation(&tx, generation)?;
     let indexed = notes.len();
+    index.note_search.replace_all(own_docs)?;
     index
         .search
         .replace_all(notes.into_iter().map(|n| n.search).collect())?;

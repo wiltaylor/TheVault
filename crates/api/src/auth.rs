@@ -180,6 +180,16 @@ async fn agent_read_gate(w: Arc<Writer>, req: &mut Request) -> Result<(), ApiErr
         .map(|p| p.as_str())
         .unwrap_or("")
         .to_owned();
+    if matches!(
+        route.as_str(),
+        "/api/assets/cleanup" | "/api/assets/trash/restore"
+    ) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "held",
+            "Attachments of incoming messages are not available to agents.",
+        ));
+    }
     if (matches!(*req.method(), Method::GET | Method::HEAD) && agent_unfiltered_route(&route))
         || matches!(
             route.as_str(),
@@ -216,7 +226,11 @@ async fn agent_read_gate(w: Arc<Writer>, req: &mut Request) -> Result<(), ApiErr
             return Err(ApiError::new(
                 StatusCode::FORBIDDEN,
                 "held",
-                "Note is unavailable to agents",
+                if asset {
+                    "Attachments of incoming messages are not available to agents."
+                } else {
+                    "Note is unavailable to agents"
+                },
             ));
         }
     }

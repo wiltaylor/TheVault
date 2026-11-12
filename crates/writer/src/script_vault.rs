@@ -83,7 +83,7 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
     })
 }
 
-fn agent_reading() -> bool {
+pub(crate) fn agent_reading() -> bool {
     matches!(
         crate::activity::acting(),
         Some(Author::Agent(_) | Author::AgentMail(_))
@@ -340,7 +340,7 @@ impl Vault for Writer {
 
     fn asset(&self, id: &str) -> Result<(Json, Vec<u8>), String> {
         if agent_reading() && !self.agent_may_read_asset(id) {
-            return Err("Asset is held from agents".into());
+            return Err("Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.".into());
         }
         let (a, bytes) = Writer::asset(self, id).map_err(err)?;
         Ok((asset_json(&a), bytes))

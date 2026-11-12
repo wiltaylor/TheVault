@@ -373,7 +373,11 @@ fn search(
     let hits = if types.is_empty() {
         Vec::new()
     } else {
-        r.ctx.index.search_hits(text, Some(types))?
+        if r.ctx.excluded_notes.is_some() {
+            r.ctx.index.search_note_hits(text, Some(types))?
+        } else {
+            r.ctx.index.search_hits(text, Some(types))?
+        }
     };
     let scores: HashMap<&str, f32> = hits.iter().map(|h| (h.id.as_str(), h.score)).collect();
     // Reading the hits by id costs a lookup each. With many hits, reading the notes the driving

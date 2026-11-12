@@ -60,6 +60,7 @@ pub(crate) struct Link {
     pub via: &'static str,
 }
 
+#[derive(Clone)]
 pub(crate) struct SearchDoc {
     pub id: String,
     pub type_name: String,

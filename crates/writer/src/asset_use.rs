@@ -192,6 +192,9 @@ impl Writer {
     /// even one the index does not hold. With `dry_run` nothing changes. Returns the assets
     /// deleted, or that would be.
     pub fn cleanup_assets(&self, only: Option<&[String]>, dry_run: bool) -> Result<Vec<Asset>> {
+        if crate::script_vault::agent_reading() {
+            return Err(Error::AgentHeld);
+        }
         let _w = self.write_lock();
         self.cleanup_assets_locked(only, dry_run)
     }
@@ -321,6 +324,9 @@ impl Writer {
     /// Bring asset `id` back from the asset trash, under its id and file name. Notes a delete
     /// took it out of do not get it back: their history has the versions that named it.
     pub fn restore_asset(&self, id: &str) -> Result<Asset> {
+        if crate::script_vault::agent_reading() {
+            return Err(Error::AgentHeld);
+        }
         let trashed = self
             .asset_trash()
             .into_iter()
