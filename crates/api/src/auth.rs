@@ -528,7 +528,7 @@ async fn identify(sessions: &Arc<Sessions>, headers: &HeaderMap) -> Result<Grant
 }
 
 /// The session id in the request's cookies.
-fn session_id(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn session_id(headers: &HeaderMap) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()

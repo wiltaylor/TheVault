@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::{Extension, Json, extract::State, http::StatusCode};
+use axum::{Extension, Json, extract::State, http::{HeaderMap, StatusCode}};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use state::Author;
@@ -18,6 +18,7 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct Preview {
     owner: Author,
+    session: String,
     created: Instant,
     items: Vec<Stored>,
 }
@@ -51,7 +52,13 @@ fn kind(w: &writer::Writer, p: &Stored) -> Option<(String, String, String)> {
     if p.event == "applied" || !crate::ai_chat::PROPOSAL_EVENTS.contains(&p.event.as_str()) {
         return None;
     }
-    let op = p.data["op"].as_str().unwrap_or("update").to_owned();
+    // Type changes predate the explicit op field. Absence is not always an update.
+    let implicit = if p.event == "type_proposal" && p.data["before"].is_null() {
+        "create"
+    } else {
+        "update"
+    };
+    let op = p.data["op"].as_str().unwrap_or(implicit).to_owned();
     let ty = if p.event == "proposal" {
         if op == "create" {
             p.data["type"].as_str()?.to_owned()
@@ -67,6 +74,7 @@ fn kind(w: &writer::Writer, p: &Stored) -> Option<(String, String, String)> {
 pub async fn preview(
     State(a): State<Arc<Ai>>,
     Caller(author): Caller,
+    headers: HeaderMap,
     Json(b): Json<Selection>,
 ) -> Result<Json<Value>, ApiError> {
     session(&author)?;
@@ -124,6 +132,7 @@ pub async fn preview(
         token,
         Preview {
             owner: author,
+            session: session_key(&headers),
             created: Instant::now(),
             items,
         },
@@ -135,6 +144,7 @@ pub async fn confirm(
     State(a): State<Arc<Ai>>,
     Caller(author): Caller,
     Extension(scope): Extension<GrantedScope>,
+    headers: HeaderMap,
     Json(b): Json<Confirmation>,
 ) -> Result<Json<Value>, ApiError> {
     session(&author)?;
@@ -146,7 +156,7 @@ pub async fn confirm(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&b.preview)
-        .filter(|p| p.owner == author && p.created.elapsed() < Duration::from_secs(600))
+        .filter(|p| p.owner == author && p.session == session_key(&headers) && p.created.elapsed() < Duration::from_secs(600))
         .cloned()
         .ok_or_else(|| ApiError::bad_request("Preview expired. Preview again."))?;
     let mut results = Vec::new();
@@ -164,4 +174,39 @@ pub async fn confirm(
         });
     }
     Ok(Json(json!({"results":results})))
+}
+
+fn session_key(headers: &HeaderMap) -> String {
+    // HTTP session callers were authenticated before this handler. The embedded owner
+    // router has no cookie and is one local owner session, not a remote API credential.
+    crate::auth::session_id(headers).unwrap_or_else(|| "embedded-owner".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_type_create_and_update_are_different_kinds() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = writer::Writer::open(vault, state).unwrap();
+        let mut p = Stored {
+            event: "type_proposal".into(),
+            data: json!({"id":"type", "before":null, "after":"label = \"New\""}),
+            status: agent_threads::Status::Pending,
+            result: None,
+            error: None,
+            reported: false,
+        };
+        let create = kind(&w, &p).unwrap();
+        assert_eq!(create.1, "create");
+        p.data["before"] = json!("label = \"Old\"");
+        let update = kind(&w, &p).unwrap();
+        assert_eq!(update.1, "update");
+        assert_ne!(create, update);
+        p.event = "applied".into();
+        assert!(kind(&w, &p).is_none());
+    }
 }

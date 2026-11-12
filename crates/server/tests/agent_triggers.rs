@@ -3551,7 +3551,7 @@ fn apply_kind_snapshot_session_confirmation_and_retry_never_repeat_creates() {
             .unwrap()
     };
     let (first, concurrent) = std::thread::scope(|s| {
-        let retry = s.spawn(&apply);
+        let retry = s.spawn(apply);
         (apply(), retry.join().unwrap())
     });
     assert_eq!(
