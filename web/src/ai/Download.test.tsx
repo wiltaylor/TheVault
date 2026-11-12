@@ -63,6 +63,32 @@ afterEach(() => {
 });
 
 describe("web steps", () => {
+  it("shows a value-free secret proposal and sends owner Apply", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    const proposal = { id: "fill1", op: "browser_secret", secret: "login", field: "password", target: "#password", session: "default", origin: "https://fixture.example", unrestricted_origin: true };
+    live!.onEvent({ event: "proposal", data: proposal });
+    const card = await m.findByRole("region", { name: "Proposed secret fill" });
+    expect(card).toHaveTextContent("https://fixture.example");
+    expect(card).toHaveTextContent("#password");
+    expect(card).toHaveTextContent("no origin restrictions");
+    aiApply.mockResolvedValue({ status: "filled" });
+    fireEvent.click(card.querySelector("button")!);
+    await waitFor(() => expect(aiApply).toHaveBeenCalledWith(proposal));
+    await waitFor(() => expect(card).toHaveTextContent("Filled."));
+  });
+
+  it("discards a secret proposal without filling", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    live!.onEvent({ event: "proposal", data: { id: "fill2", op: "browser_secret", secret: "login", field: "password", target: "#password", session: "default", origin: "https://fixture.example", unrestricted_origin: false } });
+    const card = await m.findByRole("region", { name: "Proposed secret fill" });
+    expect(card).not.toHaveTextContent("no origin restrictions");
+    fireEvent.click(card.querySelectorAll("button")[1]!);
+    await waitFor(() => expect(card).toHaveTextContent("Discarded."));
+    expect(aiApply).not.toHaveBeenCalled();
+  });
+
   it("labels the read and download steps by host", () => {
     expect(stepLabel("fetch_url", { url: "https://example.com/a/b?c=1" })).toBe("Read example.com");
     expect(stepLabel("download_asset", { url: "https://files.example.org/x.pdf", filename: null })).toBe("Download from files.example.org");

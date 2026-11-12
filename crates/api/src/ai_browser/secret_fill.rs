@@ -1,13 +1,129 @@
-//! Server-owned fill authorization. TV-164 will call this after confirmation.
+//! Server-owned confirmation and fill authorization. No model confirmation flag.
 use super::*;
 
-/// Deliberately unconditional until TV-164 supplies an owner Apply route.
-pub(crate) fn confirmation_required(
+pub(crate) async fn call(
+    b: &BrowserBox,
     state: &state::State,
     agent: &schema::Agent,
+    call_id: &str,
     input: &Value,
+    unattended: bool,
+    write: bool,
 ) -> BrowserOut {
-    outcome(state, agent, input, "", "confirmation_required")
+    if !write {
+        return outcome(state, agent, input, "", "insufficient_scope");
+    }
+    if !agent.permissions.confirm.secrets {
+        return authorized(b, state, agent, input).await;
+    }
+    if unattended {
+        return outcome(state, agent, input, "", "confirmation_required");
+    }
+    match proposal(b, state, agent, call_id, input).await {
+        Ok(p) => {
+            let mut out = BrowserOut::done(
+                json!({"proposed":true,"status":"confirmation_required"}).to_string(),
+                json!({"notes":[],"message":"Awaiting owner Apply"}),
+            );
+            out.event = Some(("proposal", p));
+            out
+        }
+        Err(reason) => outcome(state, agent, input, "", reason),
+    }
+}
+
+async fn proposal(
+    b: &BrowserBox,
+    state: &state::State,
+    agent: &schema::Agent,
+    call_id: &str,
+    input: &Value,
+) -> Result<Value, &'static str> {
+    let name = input["secret"].as_str().ok_or("invalid_request")?;
+    if !agent.permissions.browser
+        || !agent.permissions.browser_secrets.iter().any(|s| s == name)
+        || !state
+            .browser_secret_active(&agent.name, name)
+            .map_err(|_| "secret_unavailable")?
+    {
+        return Err("secret_not_allowed");
+    }
+    let field = input["field"].as_str().ok_or("invalid_request")?;
+    if !matches!(field, "username" | "password" | "otp") {
+        return Err("invalid_field");
+    }
+    let target = input["target"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 1024)
+        .ok_or("invalid_request")?;
+    let session = input["session"]
+        .as_str()
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 80
+                && s.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        })
+        .ok_or("invalid_request")?;
+    let page = request(
+        b,
+        "/secret/origin",
+        json!({"session":session,"target":target}),
+    )
+    .await?;
+    let origin = state::canonical_origin(page["origin"].as_str().ok_or("invalid_origin")?)
+        .ok_or("invalid_origin")?;
+    let login = state
+        .get_login_secret(name)
+        .map_err(|_| "secret_unavailable")?
+        .ok_or("unknown_secret")?;
+    if !login.origins.is_empty() && !login.origins.contains(&origin) {
+        return Err("origin_mismatch");
+    }
+    let p = json!({"id":call_id,"agent":agent.name,"op":"browser_secret","secret":name,"field":field,"target":target,"session":session,"origin":origin,"browser_profile":b.profile,"unrestricted_origin":login.origins.is_empty()});
+    let redactor =
+        crate::browser_redaction::Redactor::load(state).map_err(|_| "secret_unavailable")?;
+    // Do not publish a credential even when it coincides with request metadata. Do not
+    // silently change the selector/origin the owner is being asked to authorize either.
+    if p.as_object()
+        .expect("object")
+        .values()
+        .filter_map(Value::as_str)
+        .any(|s| redactor.text(s) != s)
+    {
+        return Err("unsafe_metadata");
+    }
+    Ok(p)
+}
+
+/// Called only after the owner guard on POST /api/ai/apply, from its blocking task.
+pub(crate) fn apply(w: &Writer, author: &Author, p: &Value) -> Result<Value, ApplyError> {
+    let name = match author {
+        Author::Agent(name) => name,
+        _ => return Err(ApplyError::Refused("invalid_agent".into())),
+    };
+    let agent = w.agent(name)?;
+    let b = BrowserBox::from_env()
+        .ok_or_else(|| ApplyError::Refused("browser_unavailable".into()))?
+        .with_profile(w.browser_profile(name)?);
+    if p["browser_profile"].as_str() != b.profile.as_deref() || p["origin"].as_str().is_none() {
+        return Err(ApplyError::Refused("stale_browser_proposal".into()));
+    }
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|_| ApplyError::Refused("browser_unavailable".into()))?;
+    let out = handle.block_on(authorized(&b, w.state(), &agent, p));
+    if let Some(trail) = out.trail {
+        eprintln!("{trail}");
+    }
+    if out.is_error {
+        return Err(ApplyError::Refused(
+            out.summary["message"]
+                .as_str()
+                .unwrap_or("fill_refused")
+                .into(),
+        ));
+    }
+    Ok(json!({"op":"browser_secret","status":"filled"}))
 }
 
 fn outcome(
@@ -40,7 +156,6 @@ fn outcome(
     out
 }
 
-#[allow(dead_code)] // Wired to the confirmation Apply path by TV-164, never a model flag.
 pub(crate) async fn authorized(
     b: &BrowserBox,
     state: &state::State,
@@ -124,6 +239,9 @@ async fn fill(
     .await?;
     *origin = state::canonical_origin(page["origin"].as_str().ok_or("invalid_origin")?)
         .ok_or("invalid_origin")?;
+    if input.get("origin").is_some() && input["origin"].as_str() != Some(origin.as_str()) {
+        return Err("origin_changed");
+    }
     let login = state
         .get_login_secret(name)
         .map_err(|_| "secret_unavailable")?
@@ -246,6 +364,32 @@ mod tests {
             assert!(!output.contains(password));
         }
         assert_eq!(out.trail.as_ref().unwrap().lines().count(), 1);
+
+        let held = call(&b, &state, &agent, "held", &input, false, true).await;
+        assert!(!held.is_error);
+        let proposal = held.event.unwrap().1;
+        assert!(!proposal.to_string().contains(password));
+        let refused = call(&b, &state, &agent, "mention", &input, true, true).await;
+        assert!(refused.content.contains("confirmation_required"));
+        let mut off = agent.clone();
+        off.permissions.confirm.secrets = false;
+        let capped = call(&b, &state, &off, "mention", &input, true, false).await;
+        assert!(capped.content.contains("insufficient_scope"));
+        assert_eq!(bodies.lock().unwrap().len(), 1);
+        let mut moved = proposal;
+        moved["origin"] = json!("https://old.example");
+        assert!(
+            authorized(&b, &state, &agent, &moved)
+                .await
+                .content
+                .contains("origin_changed")
+        );
+        let mut unsafe_input = input.clone();
+        unsafe_input["target"] = json!(format!("#{password}"));
+        let unsafe_out = call(&b, &state, &agent, "unsafe", &unsafe_input, false, true).await;
+        assert!(unsafe_out.event.is_none());
+        assert!(unsafe_out.content.contains("unsafe_metadata"));
+        assert!(!unsafe_out.trail.unwrap().contains(password));
 
         let mut denied = agent.clone();
         denied.permissions.browser_secrets.clear();

@@ -24,10 +24,28 @@ No origins means any site, with a warning.
 ## Browser fill service
 
 `browser_fill_secret {secret, field, target, session}` requests `username`,
-`password` or `otp`. **Fills still need TV-164:** until its confirmation switch
-and owner Apply path are implemented, every foreground and unattended tool call
-returns `confirmation_required`. A model-supplied confirmation flag has no effect.
-The internal authorized service is not an HTTP API available to agents.
+`password` or `otp`. On the agent's Permissions tab, **Ask before entering a
+secret** (`permissions.confirm.secrets`) defaults to on for both existing and
+new agents. Only a signed-in owner session or ordinary admin user token can
+change it. Agent proposals changing this switch always wait for owner Apply.
+Sub-agents cannot weaken their parent's confirmation requirement.
+
+With the switch on, a foreground call creates a held proposal in the thread.
+It names the secret, field, target selector, browser session and canonical page
+origin, never the value. A secret with no origin list shows an any-site warning.
+Apply needs an owner session or ordinary admin user token. It reloads current
+permissions and profile and rechecks the grant, revocation and origin. Navigation
+to another origin since the proposal refuses the fill, even for an unrestricted
+secret. Discard fills nothing. Metadata that matches a credential is refused
+rather than published or silently changed.
+
+Unattended and mention runs with the switch on refuse with
+`confirmation_required`. With it off, calls fill directly through the same
+authorized service, within the run's write-scope ceiling, including the scope
+issued to a mention call. A model-supplied confirmation flag has no effect.
+The internal authorized service is not an HTTP API available to agents. Install
+updated apps before saving `secrets = false`: older apps refuse this new agent
+file field. Leaving it on needs no migration or file rewrite.
 
 That service checks the agent's Login grants and their current validity, reads
 the page origin from the signed-profile box channel, and compares exact canonical

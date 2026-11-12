@@ -315,7 +315,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
         tool(
             "browser_fill_secret",
-            "Request a Login field fill without seeing its value. Currently returns confirmation_required until owner confirmation support is available. target is a CSS selector in the selected top-level tab, session is the playwright-cli session name (default for the default session). Never supply a secret value.",
+            "Request a Login field fill without seeing its value. With Ask before entering a secret on, foreground calls propose a fill for owner Apply and unattended calls refuse. With it off, an authorized fill runs directly. target is a CSS selector in the selected top-level tab, session is the playwright-cli session name (default for the default session). Never supply a secret value.",
             json!({
                 "secret": {"type":"string"},
                 "field": {"type":"string", "enum":["username","password","otp"]},

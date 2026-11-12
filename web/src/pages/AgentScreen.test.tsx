@@ -501,6 +501,16 @@ describe("the General tab", () => {
 });
 
 describe("the Permissions tab", () => {
+  it("asks before entering secrets by default and saves an explicit opt-out", async () => {
+    await open();
+    const p = await tab("Permissions");
+    const toggle = p.getByRole("switch", { name: "Ask before entering a secret" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect((sent().permissions as { confirm: { secrets: boolean } }).confirm.secrets).toBe(false);
+  });
   it("groups the tools, all allowed by default, and saves a narrowed list", async () => {
     await open();
     const p = await tab("Permissions");

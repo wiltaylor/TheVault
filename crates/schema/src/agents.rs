@@ -42,12 +42,13 @@ pub const AGENT_PROVIDERS: [&str; 3] = ["anthropic", "openai", "chatgpt"];
 pub const AGENT_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// The confirmation switches of `permissions.confirm` (ai D22).
-pub const CONFIRM_SWITCHES: [&str; 9] = [
+pub const CONFIRM_SWITCHES: [&str; 10] = [
     "notes",
     "archive",
     "delete",
     "types",
     "downloads",
+    "secrets",
     "taxonomies",
     "agents",
     "skills",
@@ -188,6 +189,8 @@ pub struct Confirm {
     pub delete: bool,
     pub types: bool,
     pub downloads: bool,
+    /// Entering a Login field in the browser. Absent means ask first.
+    pub secrets: bool,
     pub taxonomies: bool,
     /// Agent creates, changes and deletes (agents G20).
     pub agents: bool,
@@ -206,6 +209,7 @@ impl Default for Confirm {
             delete: true,
             types: true,
             downloads: true,
+            secrets: true,
             taxonomies: true,
             agents: true,
             skills: true,
@@ -216,13 +220,14 @@ impl Default for Confirm {
 
 impl Confirm {
     /// The switches in [`CONFIRM_SWITCHES`] order.
-    pub fn switches(&self) -> [(&'static str, bool); 9] {
+    pub fn switches(&self) -> [(&'static str, bool); 10] {
         [
             ("notes", self.notes),
             ("archive", self.archive),
             ("delete", self.delete),
             ("types", self.types),
             ("downloads", self.downloads),
+            ("secrets", self.secrets),
             ("taxonomies", self.taxonomies),
             ("agents", self.agents),
             ("skills", self.skills),
@@ -238,6 +243,7 @@ impl Confirm {
             "delete" => &mut self.delete,
             "types" => &mut self.types,
             "downloads" => &mut self.downloads,
+            "secrets" => &mut self.secrets,
             "taxonomies" => &mut self.taxonomies,
             "agents" => &mut self.agents,
             "skills" => &mut self.skills,

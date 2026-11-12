@@ -90,6 +90,10 @@ impl Api {
             },
             &[OsStr::new("--test-clock"), OsStr::new(START)],
         );
+        Self::from_server(fake, server)
+    }
+
+    fn from_server(fake: &FakeAnthropic, server: TestServer) -> Api {
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -245,6 +249,73 @@ impl Api {
     /// Move the test clock on, which runs whatever is due and waits for it.
     fn advance(&self, by: &str) {
         self.send("POST", "/api/test/clock", json!({ "advance": by }));
+    }
+}
+
+#[test]
+fn browser_secret_mentions_refuse_when_on_and_fill_when_off() {
+    for confirm in [true, false] {
+        let fake = FakeAnthropic::start();
+        let browser = testkit::FakeBrowser::start();
+        let url = browser.base_url();
+        let server = TestServer::start_with_env(
+            |vault| {
+                std::fs::create_dir_all(vault.join("types")).unwrap();
+                std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
+            },
+            &[
+                ("VAULT_BROWSER_URL", url.as_str()),
+                ("VAULT_BROWSER_TOKEN", testkit::DEFAULT_BROWSER_TOKEN),
+            ],
+        );
+        let api = Api::from_server(&fake, server);
+        let password = "fabricated-TV164-mention-password";
+        api.send(
+            "PUT",
+            "/api/secrets/login",
+            json!({"kind":"login","username":"fixture-user","password":password,"origins":[]}),
+        );
+        api.agent("driver", &format!("permissions {{\n browser = true\n browser_secrets = [\"login\"]\n confirm {{ secrets = {confirm}\n }}\n}}\n"));
+        fake.push(AnthropicMessage::new().tool_use(
+            "fill",
+            "browser_fill_secret",
+            json!({"secret":"login","field":"password","target":"#password","session":"default"}),
+        ));
+        fake.push(AnthropicMessage::text("Done."));
+        api.called_note("Fixture", "@Driver fill", "driver", &[]);
+        let started = std::time::Instant::now();
+        let stored = loop {
+            let threads = api.threads("driver");
+            if let Some(thread) = threads.first() {
+                let stored = api.get(&format!(
+                    "/api/agents/driver/threads/{}",
+                    thread["id"].as_str().unwrap()
+                ));
+                if stored.to_string().contains(if confirm {
+                    "confirmation_required"
+                } else {
+                    "filled"
+                }) {
+                    break stored;
+                }
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(45),
+                "mention did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        assert!(!stored.to_string().contains(password));
+        assert!(stored["proposals"].as_array().unwrap().is_empty());
+        assert_eq!(
+            browser
+                .requests()
+                .iter()
+                .filter(|r| r.route() == "/secret/fill")
+                .count(),
+            if confirm { 0 } else { 1 }
+        );
+        assert!(!api.server.stderr_lines().join("\n").contains(password));
     }
 }
 
