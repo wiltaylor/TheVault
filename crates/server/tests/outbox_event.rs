@@ -300,11 +300,20 @@ fn restart_during_event_write(update: bool) {
         fields["event"] = json!(api.events().keys().next().unwrap());
         fields["event_action"] = json!("update");
     }
-    api.google.set_calendar_delay(Some(std::time::Duration::from_secs(60)));
+    api.google
+        .set_calendar_delay(Some(std::time::Duration::from_secs(60)));
     let item = api.create("outbox", invite(fields, None));
     let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !api.google.requests().iter().any(|r| r.route().starts_with("/calendar/") && (r.method == "POST" || r.method == "PATCH")) {
-        assert!(std::time::Instant::now() < until, "event write never started");
+    while !api
+        .google
+        .requests()
+        .iter()
+        .any(|r| r.route().starts_with("/calendar/") && (r.method == "POST" || r.method == "PATCH"))
+    {
+        assert!(
+            std::time::Instant::now() < until,
+            "event write never started"
+        );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert_eq!(api.fields(&item)["status"], "sending");
@@ -313,8 +322,21 @@ fn restart_during_event_write(update: bool) {
     api.settle();
     let fields = api.fields(&item);
     assert_eq!(fields["status"], "failed", "{fields}");
-    assert!(fields["error"].as_str().unwrap().contains("Check interrupted event"));
-    assert_eq!(api.google.requests().iter().filter(|r| r.route().starts_with("/calendar/") && (r.method == "POST" || r.method == "PATCH")).count(), 1);
+    assert!(
+        fields["error"]
+            .as_str()
+            .unwrap()
+            .contains("Check interrupted event")
+    );
+    assert_eq!(
+        api.google
+            .requests()
+            .iter()
+            .filter(|r| r.route().starts_with("/calendar/")
+                && (r.method == "POST" || r.method == "PATCH"))
+            .count(),
+        1
+    );
 }
 
 #[test]

@@ -274,7 +274,10 @@ fn restart_unconfirmed_sms_accepts_late_receipt_without_second_command() {
     api.server.restart();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while api.fields(&id)["status"] == "sending" {
-        assert!(std::time::Instant::now() < deadline, "startup recovery did not finish");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "startup recovery did not finish"
+        );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     api.settle();

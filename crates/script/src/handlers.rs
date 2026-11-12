@@ -521,7 +521,12 @@ impl Shared {
             if text("kind") == "sms" && text("sent_at").is_empty() {
                 // The handler may auto-select the phone without storing it in `device`.
                 let command = writer.state().list_devices().ok().and_then(|devices| {
-                    devices.iter().find_map(|device| writer.state().device_command(&device.id, text("sent_ref")).ok())
+                    devices.iter().find_map(|device| {
+                        writer
+                            .state()
+                            .device_command(&device.id, text("sent_ref"))
+                            .ok()
+                    })
                 });
                 if let Some(command) = command {
                     match command.status {
