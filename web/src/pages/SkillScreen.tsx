@@ -8,7 +8,8 @@
 // the home server, which takes the device's token for a skill's writes.
 
 import { useNavigate, useParams } from "@solidjs/router";
-import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createResource, createSignal, createUniqueId, on, onCleanup } from "solid-js";
+import { appInfo } from "../inApp";
 import { ApiError, type Skill, type SkillFile, type SkillIssue, api, skillExportUrl, skillFileUrl } from "../api";
 import { Markdown } from "../ai/markdown";
 import { MenuBox } from "../components/AgentsNav";
@@ -41,6 +42,7 @@ const TABS = [
 
 /** What the tabs are given: the skill as last read, and a way to read it again. */
 interface TabProps {
+  readOnly?: boolean;
   skill: Skill;
   /** `SKILL.md` as stored, for the frontmatter keys the form does not edit. */
   raw: string;
@@ -335,7 +337,7 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
         skills/{name()}/, {p.skill.files.length} file{p.skill.files.length === 1 ? "" : "s"}, {sizeText(p.skill.files.reduce((n, f) => n + f.size, 0))}.
         Scripts, references and assets the instructions name sit beside SKILL.md.
       </p>
-      <div class="skill-files-bar">
+      <Show when={!p.readOnly}><div class="skill-files-bar">
         <label for={`${p.id}-folder`}>Folder</label>
         <select id={`${p.id}-folder`} value={target()} onChange={(e) => setTarget(e.currentTarget.value)}>
           <option value="">The skill's folder</option>
@@ -363,7 +365,7 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
             if (files.length) uploaded(files);
           }}
         />
-      </div>
+      </div></Show>
       <Show when={error()}>
         <p class="error" role="alert">
           {error()}
@@ -387,7 +389,7 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
                   </button>
                   <span class="muted skill-tree-size">{sizeText(r.file!.size)}</span>
                 </Show>
-                <Show when={r.path !== "SKILL.md"}>
+                <Show when={!p.readOnly && r.path !== "SKILL.md"}>
                   <button type="button" class="skill-tree-action" aria-label={`Rename ${r.path}`} title="Rename" disabled={busy()} onClick={() => rename(r.path, r.folder)}>
                     <TypeIcon name="pencil" size={14} />
                   </button>
@@ -400,7 +402,7 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
           </For>
         </ul>
         <Show when={opened()} keyed>
-          {(f) => <FileView skill={p.skill} file={f} reload={p.reload} />}
+          {(f) => <FileView skill={p.skill} file={f} reload={p.reload} readOnly={p.readOnly} />}
         </Show>
       </div>
     </section>
@@ -408,7 +410,7 @@ function FilesTab(p: TabProps & { open: string | null; setOpen: (path: string | 
 }
 
 /** An opened file: a text file in an editor with Save, anything else as its size and type. */
-function FileView(props: { skill: Skill; file: SkillFile; reload: () => Promise<void> }) {
+function FileView(props: { skill: Skill; file: SkillFile; reload: () => Promise<void>; readOnly?: boolean }) {
   const text = isTextFile(props.file);
   const [saved, setSaved] = createSignal<string | null>(null);
   const [value, setValue] = createSignal("");
@@ -457,6 +459,7 @@ function FileView(props: { skill: Skill; file: SkillFile; reload: () => Promise<
             <p class="muted">Saving SKILL.md here checks it as the Instructions tab does.</p>
           </Show>
           <textarea
+            readOnly={props.readOnly}
             class="ai-system-prompt skill-body"
             aria-label={`Contents of ${props.file.path}`}
             rows={22}
@@ -464,7 +467,7 @@ function FileView(props: { skill: Skill; file: SkillFile; reload: () => Promise<
             value={value()}
             onInput={(e) => setValue(e.currentTarget.value)}
           />
-          <SaveBar dirty={value() !== saved()} save={save} />
+          <SaveBar readOnly={props.readOnly} dirty={value() !== saved()} save={save} />
         </Show>
       </Show>
     </div>
@@ -473,6 +476,8 @@ function FileView(props: { skill: Skill; file: SkillFile; reload: () => Promise<
 
 /** The skill screen. */
 export function SkillScreen() {
+  const [app] = createResource(appInfo);
+  const readOnly = () => app.state !== "ready" || app() !== null;
   const params = useParams();
   const navigate = useNavigate();
   const pane = usePane();
@@ -575,9 +580,9 @@ export function SkillScreen() {
                     <a role="menuitem" href={skillExportUrl(s().name)} download={`${s().name}.zip`} onClick={() => setMenu(false)}>
                       Export
                     </a>
-                    <button type="button" role="menuitem" class="danger" onClick={() => void remove()}>
+                    <Show when={!readOnly()}><button type="button" role="menuitem" class="danger" onClick={() => void remove()}>
                       Delete skill
-                    </button>
+                    </button></Show>
                   </MenuBox>
                 </Show>
               </div>
@@ -608,11 +613,13 @@ export function SkillScreen() {
               </For>
             </div>
             <div id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-tab-${tab().id}`}>
+              <Show when={readOnly()}><p class="muted">Edit agents and skills in the web app</p></Show>
               <Show
                 when={tab().id === "files"}
-                fallback={<InstructionsTab skill={s()} raw={raw()} reload={() => load(s().name)} id={uid} />}
+                fallback={<Show when={!readOnly()} fallback={<pre aria-label="Skill instructions">{raw()}</pre>}><InstructionsTab skill={s()} raw={raw()} reload={() => load(s().name)} id={uid} /></Show>}
               >
                 <FilesTab
+                  readOnly={readOnly()}
                   skill={s()}
                   raw={raw()}
                   reload={() => load(s().name)}

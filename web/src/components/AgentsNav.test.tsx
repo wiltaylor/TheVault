@@ -192,12 +192,12 @@ describe("the sidebar's Agents section", () => {
     expect(menu.getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Open"]);
   });
 
-  it("creates, disables and deletes agents in the apps as in the web app", async () => {
-    appInfo.mockResolvedValue({ app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" });
+  it.each(["desktop", "android"])("hides agent mutation actions in %s", async (platform) => {
+    appInfo.mockResolvedValue({ platform });
     await shown();
-    expect(nav().getByRole("button", { name: "New agent" })).toBeTruthy();
+    expect(nav().queryByRole("button", { name: "New agent" })).toBeNull();
     fireEvent.click(nav().getByRole("button", { name: "Actions for Inbox triage" }));
-    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Open", "Disable", "Delete"]);
+    expect(within(screen.getByRole("menu")).getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Open"]);
   });
 });
 

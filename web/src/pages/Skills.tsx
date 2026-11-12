@@ -84,9 +84,11 @@ export function Skills() {
           Skills
         </h1>
         <div class="actions skills-actions">
+          <Show when={!noImport()}>
           <button type="button" class="button primary" onClick={() => setCreatingSkill(true)}>
             New skill
           </button>
+          </Show>
           <Show when={!noImport()}>
             <div class="skill-more">
               <button
@@ -151,7 +153,8 @@ export function Skills() {
         </div>
       </header>
 
-      <Show when={creatingSkill()}>
+      <Show when={app() === true}><p class="muted">Edit agents and skills in the web app</p></Show>
+      <Show when={!noImport() && creatingSkill()}>
         <div class="skills-new">
           <TypeIcon name={SKILL_ICON} size={16} />
           <NameInput label="New skill name" onDone={create} />
@@ -175,7 +178,7 @@ export function Skills() {
               </p>
               <p class="muted">
                 {noImport()
-                  ? "Use New skill to write one. Import one from a zip or a folder in the web app."
+                  ? "Add skills in the web app."
                   : "Use New skill to write one, or Import to add one from a zip or a folder."}
               </p>
               <p>
