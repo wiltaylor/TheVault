@@ -237,6 +237,7 @@ fn safety_rest_read_route_inventory() {
         "/api/flagged",
         "/api/health",
         "/api/integrations/ai",
+        "/api/integrations/attempt-limits",
         "/api/integrations/brave",
         "/api/integrations/browser",
         "/api/integrations/gitsync",

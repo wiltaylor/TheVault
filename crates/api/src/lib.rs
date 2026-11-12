@@ -506,7 +506,12 @@ fn build() -> Built {
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
         .post("/api/ai/apply", ai_turns::apply)
         .post("/api/ai/discard", ai_turns::discard);
-    let browser = Routes::new().get("/api/integrations/browser", browser::status);
+    let browser = Routes::new()
+        .get("/api/integrations/browser", browser::status)
+        .get(
+            "/api/integrations/attempt-limits",
+            attempt_limits::diagnostic,
+        );
     Built {
         api,
         login,
