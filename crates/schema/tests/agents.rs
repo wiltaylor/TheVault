@@ -851,3 +851,17 @@ fn sub_agent_permissions_read_and_write_back() {
         ["permissions.subagents.max", "permissions.subagents.agents"]
     );
 }
+#[test]
+fn approval_rules_roundtrip_and_fail_closed() {
+    let source = "permissions {\n approval_rule {\n operation = \"update\"\n type = \"email\"\n fields = [\"processed\"]\n daily_cap = 200\n }\n}\n";
+    let a = schema::Agent::parse("triage", source).unwrap();
+    assert_eq!(a.permissions.approval_rules[0].daily_cap, 200);
+    assert_eq!(schema::Agent::parse("triage", &a.to_wcl()).unwrap(), a);
+    assert!(schema::Agent::parse("triage", &source.replace("200", "-1")).is_err());
+    assert!(schema::Agent::parse("triage", &source.replace("[\"processed\"]", "[]")).is_err());
+    assert!(schema::Agent::parse("triage", &source.replace("\"update\"", "\"send\"")).is_err());
+    let no_cap = schema::Agent::parse("triage", &source.replace("daily_cap = 200", "")).unwrap();
+    assert_eq!(no_cap.permissions.approval_rules[0].daily_cap, 0);
+    assert!(schema::Agent::parse("triage", "").unwrap().permissions.approval_rules.is_empty());
+}
+

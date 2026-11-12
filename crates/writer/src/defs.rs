@@ -1079,6 +1079,15 @@ impl Writer {
             self.revoke_outbox_legacy(name)?;
         }
         let (mut text, mut agent) = self.plan_agent(&inner, name, source, check)?;
+        let previous_rules = self.agent(name).map(|a| a.permissions.approval_rules).unwrap_or_default();
+        if previous_rules != agent.permissions.approval_rules
+            && crate::activity::acting().is_some_and(|a| !matches!(a, Author::Session(_)))
+        {
+            return Err(Error::Invalid(Invalid {
+                file: agent_path(name),
+                issues: vec![Issue::new("permissions.approval_rules", "only an owner session may change automatic approval rules")],
+            }));
+        }
         if agent.permissions.outbox.send_without_review
             && agent.permissions.outbox.conditions.is_none()
             && self

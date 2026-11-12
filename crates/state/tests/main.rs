@@ -4,6 +4,7 @@
 
 mod activity;
 mod ai_usage;
+mod approval_quota;
 mod changes;
 mod classifiers;
 mod commands;

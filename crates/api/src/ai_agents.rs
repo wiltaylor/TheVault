@@ -136,6 +136,10 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
 pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
     let (bp, tp) = (&by.permissions, &target.permissions);
     let mut problems = Vec::new();
+    // Rule creation/expansion is owner-only, never delegated by another agent's rules.
+    if !tp.approval_rules.is_empty() {
+        problems.push("automatic approval rules require a session owner".to_owned());
+    }
     if tp
         .browser_secrets
         .iter()

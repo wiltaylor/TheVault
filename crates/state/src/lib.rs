@@ -8,6 +8,8 @@
 
 mod activity;
 mod ai_usage;
+mod approval_quota;
+pub use approval_quota::{ApprovalBudget, ApprovalReservation};
 pub use ai_usage::{AI_USAGE_RETENTION_MS, AiUsageDaily};
 mod agent_calls;
 mod agent_queue;
@@ -170,7 +172,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 27;
+const SCHEMA_VERSION: i64 = 28;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -689,7 +691,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=26 => {
+        0..=27 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -814,6 +816,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                 )?;
             }
             tx.execute_batch(ai_usage::SCHEMA)?;
+            tx.execute_batch(approval_quota::SCHEMA)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

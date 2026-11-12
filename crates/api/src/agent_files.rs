@@ -140,6 +140,7 @@ fn permissions_json(p: &AgentPermissions) -> Value {
         "types": p.types,
         "change_types": p.change_types,
         "change_fields": p.change_fields,
+        "approval_rules": p.approval_rules,
         "confirm": confirm,
         "web": web,
         "outbox": outbox,
@@ -389,6 +390,8 @@ pub struct AgentBody {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionsForm {
+    #[serde(default)]
+    approval_rules: Vec<schema::ApprovalRule>,
     tools: Option<Vec<String>>,
     types: Option<Vec<String>>,
     change_types: Option<Vec<String>>,
@@ -479,6 +482,7 @@ fn from_form(name: &str, f: AgentBody) -> Result<Agent, Vec<Issue>> {
     p.types = f.permissions.types;
     p.change_types = f.permissions.change_types;
     p.change_fields = f.permissions.change_fields;
+    p.approval_rules = f.permissions.approval_rules;
     p.browser = f.permissions.browser;
     p.browser_secrets = f.permissions.browser_secrets;
     p.gmail_actions = f.permissions.gmail_actions;
