@@ -2645,11 +2645,10 @@ impl Turn {
         images_sent: usize,
     ) -> crate::ai_browser::BrowserOut {
         match call.name.as_str() {
-            "browser_fill_secret" => crate::ai_browser::secret_fill::confirmation_required(
-                self.writer.state(),
-                &setup.agent,
-                &call.input,
-            ),
+            "browser_fill_secret" => crate::ai_browser::secret_fill::call(
+                b, self.writer.state(), &setup.agent, &call.id, &call.input,
+                self.unattended, self.scope.allows(Scope::Write),
+            ).await,
             "browser_run" => crate::ai_browser::run(b, &call.input, self.writer.state()).await,
             "browser_capture" => {
                 let direct = setup.direct.downloads;
@@ -4105,6 +4104,9 @@ pub(crate) fn apply_change_with_admin(
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
     let op = p["op"].as_str().unwrap_or("update");
+    if op == "browser_secret" {
+        return crate::ai_browser::secret_fill::apply(w, author, p);
+    }
     if op == "download" && p["source"] == "browser" {
         return crate::ai_browser::apply_save(w, author, p);
     }

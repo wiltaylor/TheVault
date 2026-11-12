@@ -527,7 +527,20 @@ export interface DownloadedAsset {
   size?: number;
 }
 
+export interface SecretProposal {
+  id: string;
+  op: "browser_secret";
+  secret: string;
+  field: string;
+  target: string;
+  session: string;
+  origin: string;
+  unrestricted_origin: boolean;
+  thread?: string;
+}
+
 export type Part =
+  | { kind: "browser_secret"; proposal: SecretProposal; state: ProposalState; error?: string }
   | { kind: "text"; text: string }
   /** A download (ai D27): proposed and waiting, or stored, by Apply or by the AI itself (`auto`). */
   | { kind: "download"; proposal: DownloadProposal; state: ProposalState; error?: string; asset?: DownloadedAsset; auto?: boolean }
@@ -964,6 +977,7 @@ export const NOTE_GONE = "This note is no longer there, so nothing was applied."
 
 /** Whether a part is a proposal still waiting for the user: open, or failed and retryable. */
 export function pending(p: Part): boolean {
+  if (p.kind === "browser_secret") return p.state === "open" || p.state === "failed";
   return (
     (p.kind === "proposal" || p.kind === "type_proposal" || p.kind === "taxonomy_proposal" || p.kind === "agent_proposal" || p.kind === "memory_proposal" || p.kind === "skill_proposal" || p.kind === "tool_proposal" || p.kind === "device_file_proposal" || p.kind === "script_proposal" || p.kind === "task_proposal" || p.kind === "download") &&
     (p.state === "open" || p.state === "failed")
@@ -1045,6 +1059,7 @@ function fillStep(p: Extract<Part, { kind: "tool" }>, raw: unknown, isError: boo
 function eventPart(event: string, d: Record<string, unknown>): Part | null {
   switch (event) {
     case "proposal":
+      if (d.op === "browser_secret") return { kind: "browser_secret", proposal: d as unknown as SecretProposal, state: "open" };
       if (d.op === "download") return { kind: "download", proposal: d as unknown as DownloadProposal, state: "open" };
       return { kind: "proposal", proposal: { ...d, op: typeof d.op === "string" ? d.op : "update" } as unknown as Proposal, state: "open" };
     case "type_proposal":
@@ -1847,6 +1862,33 @@ function createConversation(agent: string, id: string | null) {
     }
   }
 
+  function setSecret(turn: number, part: number, state: ProposalState, error?: string) {
+    setChat("turns", turn, "parts", part, produce((p) => {
+      if (p.kind === "browser_secret") { p.state = state; p.error = error; }
+    }));
+  }
+
+  async function applySecret(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "browser_secret" || !pending(p)) return;
+    setSecret(turn, part, "applying");
+    try {
+      await api.aiApply(p.proposal);
+      setSecret(turn, part, "applied");
+      record(p.proposal.id, `[Applied by the user: browser secret fill]`);
+    } catch (e) {
+      setSecret(turn, part, "failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function discardSecret(turn: number, part: number) {
+    const p = chat.turns[turn]?.parts[part];
+    if (p?.kind !== "browser_secret" || !pending(p)) return;
+    setSecret(turn, part, "discarded");
+    record(p.proposal.id, `[Discarded by the user: browser secret fill]`);
+    discarded(p.proposal);
+  }
+
   function setDownload(turn: number, part: number, patch: { state: ProposalState; error?: string; asset?: DownloadedAsset }) {
     setChat(
       "turns",
@@ -1904,6 +1946,7 @@ function createConversation(agent: string, id: string | null) {
       const p = chat.turns[turn]?.parts[i];
       if (!p || !pending(p)) continue;
       if (p.kind === "proposal") await applyProposal(turn, i);
+      else if (p.kind === "browser_secret") await applySecret(turn, i);
       else if (p.kind === "download") await applyDownload(turn, i);
       else if (p.kind === "taxonomy_proposal") await applyTaxonomyProposal(turn, i);
       else if (p.kind === "agent_proposal") await applyAgentProposal(turn, i);
@@ -2419,6 +2462,8 @@ function createConversation(agent: string, id: string | null) {
       discardProposal,
       applyDownload,
       discardDownload,
+      applySecret,
+      discardSecret,
       applyAll,
       applyTypeProposal,
       discardTypeProposal,
@@ -2650,6 +2695,8 @@ export function createChatSession(options: ChatOptions = {}) {
       discardProposal: (turn: number, part: number) => current().discardProposal(turn, part),
       applyDownload: (turn: number, part: number) => current().applyDownload(turn, part),
       discardDownload: (turn: number, part: number) => current().discardDownload(turn, part),
+      applySecret: (turn: number, part: number) => current().applySecret(turn, part),
+      discardSecret: (turn: number, part: number) => current().discardSecret(turn, part),
       applyAll: (turn: number) => current().applyAll(turn),
       applyTypeProposal: (turn: number, part: number) => current().applyTypeProposal(turn, part),
       discardTypeProposal: (turn: number, part: number) => current().discardTypeProposal(turn, part),

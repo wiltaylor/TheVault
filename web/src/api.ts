@@ -964,6 +964,8 @@ export interface AiWeb {
 
 /** Settings > AI's confirmation switches (ai D22), every key filled. */
 export interface AiConfirm {
+  /** Entering a Login field in the browser. Absent means ask first. */
+  secrets?: boolean;
   /** Creating and editing notes. */
   notes: boolean;
   /** Archiving and unarchiving notes. */

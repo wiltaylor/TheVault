@@ -378,6 +378,7 @@ export function toolGroups(tools: readonly string[]): { group: string; tools: { 
 
 /** The confirmation switches, in order, with their labels (ai D22). */
 export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
+  { key: "secrets", label: "Ask before entering a secret" },
   { key: "notes", label: "Ask before creating and editing notes" },
   { key: "archive", label: "Ask before archiving notes" },
   { key: "delete", label: "Ask before moving notes to the trash" },

@@ -398,6 +398,12 @@ pub(crate) fn propose_change(
 
 /// Whether writing `agent` as agent `name` turns on `run_code`, which it does not have now.
 fn grants(w: &Writer, name: &str, agent: &Agent) -> bool {
+    if agent.permissions.confirm.secrets
+        != agent_named(w, name).ok().flatten()
+            .map(|a| a.permissions.confirm.secrets).unwrap_or(true)
+    {
+        return true;
+    }
     if agent.permissions.browser_secrets
         != agent_named(w, name)
             .ok()
