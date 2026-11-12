@@ -694,7 +694,9 @@ async fn serialized_apply(
     tokio::task::spawn_blocking(move || {
         let _approval = a.approval_lock.lock().unwrap_or_else(|e| e.into_inner());
         f(&a.writer)
-    }).await.map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
 }
 
 /// Apply `change` as the caller, or, when it names the agent that proposed it, as that agent
@@ -828,7 +830,9 @@ mod timeout_tests {
         let root = tempfile::tempdir().unwrap();
         let vault = store::Vault::init(root.path()).unwrap();
         let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
-        let a = Arc::new(Ai::new(Arc::new(writer::Writer::open(vault, state).unwrap())));
+        let a = Arc::new(Ai::new(Arc::new(
+            writer::Writer::open(vault, state).unwrap(),
+        )));
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
@@ -844,10 +848,17 @@ mod timeout_tests {
         entered_rx.await.unwrap();
         first.abort();
         assert!(first.await.unwrap_err().is_cancelled());
-        assert!(a.approval_lock.try_lock().is_err(), "cancel must not release the worker's lock");
+        assert!(
+            a.approval_lock.try_lock().is_err(),
+            "cancel must not release the worker's lock"
+        );
         let count = writes.clone();
         let second = tokio::spawn(serialized_apply(a.clone(), move |_| {
-            assert_eq!(count.load(Ordering::SeqCst), 1, "retry cannot enter before the mutation completes");
+            assert_eq!(
+                count.load(Ordering::SeqCst),
+                1,
+                "retry cannot enter before the mutation completes"
+            );
             Ok(json!({"done":true}))
         }));
         release_tx.send(()).unwrap();
