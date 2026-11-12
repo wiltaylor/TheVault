@@ -1,5 +1,6 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { api, type AgentSafety } from "../api";
+import { AttachmentEvidence } from "./AttachmentEvidence";
 
 const reasons: Record<string, string> = {
   awaiting_decision: "Waiting for the safety decision.",
@@ -41,7 +42,9 @@ export function AgentSafetyBanner(props: { id: string; safety?: AgentSafety }) {
     catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }
-  return <Show when={held()}>
+  return <>
+    <Show when={props.safety}><AttachmentEvidence id={props.id} fingerprint={safety()?.fingerprint} /></Show>
+    <Show when={held()}>
     <aside role="status" class="agent-safety-banner">
       <strong>Held from agents</strong>
       <p>{reasons[safety()?.reason ?? ""] ?? "This note has no valid safety clearance."} You can still read and edit it.</p>
@@ -52,5 +55,5 @@ export function AgentSafetyBanner(props: { id: string; safety?: AgentSafety }) {
       <button type="button" disabled={busy()} onClick={() => void refresh()}>Refresh safety status</button>
       <Show when={error()}><p role="alert">{error()}</p></Show>
     </aside>
-  </Show>;
+  </Show></>;
 }

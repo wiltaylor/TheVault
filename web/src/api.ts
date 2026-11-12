@@ -35,6 +35,17 @@ export interface AgentSafety {
   fingerprint: string;
 }
 
+export interface SafetyEvidence {
+  envelope: { envelope_version: number; attachments: Array<{ id: string; filename?: string; status: string; text?: string }> };
+  fingerprint: string;
+  decision_current: boolean;
+  decision_status?: string | null;
+  omissions: Array<{ id: string; reason: string }>;
+  bytes: number;
+  limit: number;
+  estimated_input_tokens: number;
+}
+
 export interface HeldNote {
   id: string;
   type: string;
@@ -1830,6 +1841,7 @@ export const api = {
   types: async () => (await request<{ types: TypeDef[] }>("GET", "/api/types")).types,
   note: (id: string) => request<Note>("GET", `/api/notes/${enc(id)}`),
   heldAgentNotes: (offset = 0) => request<{ notes: HeldNote[]; total: number }>("GET", `/api/agent-safety/held?limit=500&offset=${offset}`),
+  safetyEvidence: (id: string) => request<SafetyEvidence>("GET", `/api/agent-safety/evidence/${enc(id)}`),
   releaseAgentSafety: (id: string, fingerprint: string) => request<{ agent_safety: AgentSafety }>("POST", `/api/notes/${enc(id)}/agent-safety/release`, { fingerprint }),
   /** The daily note for a `YYYY-MM-DD` day; a day with no note is a 404 `ApiError`. */
   daily: (date: string) => request<Note>("GET", `/api/daily/${enc(date)}`),

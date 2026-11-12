@@ -1268,6 +1268,21 @@ fn attachment_envelope_provider_receives_text_and_aggregate_cap_skips_call() {
         );
         let visible = safety_wait(&api, note["id"].as_str().unwrap());
         assert_eq!(visible["agent_safety"]["status"], expected);
+        let evidence = api.get(&format!(
+            "/api/agent-safety/evidence/{}",
+            note["id"].as_str().unwrap()
+        ));
+        assert_eq!(evidence["bytes"], evidence["envelope"].to_string().len());
+        assert_eq!(evidence["limit"], 131072);
+        assert_eq!(
+            evidence["estimated_input_tokens"],
+            evidence["envelope"].to_string().len().div_ceil(4)
+        );
+        assert_eq!(evidence["decision_current"], true);
+        assert_eq!(evidence["envelope"]["attachments"][0]["text"], text);
+        if expected == "held" {
+            assert_eq!(evidence["omissions"][0]["reason"], "over cap");
+        }
         assert_eq!(decisions.requests().len(), 1);
         let request: Value = serde_json::from_slice(&decisions.requests()[0].body).unwrap();
         assert_eq!(request["state"]["envelope_version"], 1);
@@ -1337,6 +1352,50 @@ fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
         .split(';')
         .next()
         .unwrap();
+    let evidence_url = api.server.url(&format!(
+        "/api/agent-safety/evidence/{}",
+        note["id"].as_str().unwrap()
+    ));
+    let owner_evidence: Value = api
+        .client
+        .get(&evidence_url)
+        .header("cookie", cookie)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(owner_evidence["decision_current"], true);
+    assert_eq!(
+        owner_evidence["omissions"][0]["reason"],
+        "HTML stays withheld"
+    );
+    assert!(owner_evidence.to_string().contains("CLEARED_INVOICE_17"));
+    assert!(!owner_evidence.to_string().contains("WITHHELD_RAW_HTML_17"));
+    assert_eq!(
+        api.client
+            .get(&evidence_url)
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
+    for scope in ["read", "write"] {
+        let limited = api.send(
+            "POST",
+            "/api/tokens",
+            json!({"name":format!("evidence-{scope}"),"scope":scope}),
+        );
+        assert_eq!(
+            api.client
+                .get(&evidence_url)
+                .bearer_auth(limited["secret"].as_str().unwrap())
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+    }
     for id in &ids {
         let url = api.server.url(&format!("/api/assets/{id}"));
         assert_eq!(
