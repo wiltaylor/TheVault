@@ -227,6 +227,34 @@ fn handle(note: Value) -> Result[(), string] {
 
 // Remove item `id` once it was sent and its copy is linked (outbox X14). An item already gone,
 // or changed since it was read, is left: a later run, or the sweep, removes it.
+// Recovery never calls a provider write. A Gmail id confirms a completed send, but an SMS
+// command id only confirms handoff to the phone. Event confirmation is written by write-back.
+fn reconcile_send(payload: Value) -> Result[(), string] {
+    let id = text_of(payload, "id")
+    let item = match vault::get(id) {
+        Ok(n) => n,
+        Err(_) => return Ok(()),
+    }
+    let f = fields_of(item)
+    if text_of(f, "status") != "sending" { return Ok(()) }
+    let kind = text_of(f, "kind")
+    if text_of(f, "sent_at") != "" {
+        return settle(id)
+    }
+    if kind == "email" && text_of(f, "sent_ref") != "" {
+        vault::patch(id, Value::Map(#{ "sent_at": Value::String(rfc3339(vault::now())) }), text_of(item, "version"))?
+        return settle(id)
+    }
+    let target = text_of(f, "title")
+    if kind == "sms" { target = text_of(f, "phone") }
+    if kind == "email" {
+        target = fmt("{}", f.get("to").unwrap_or(Value::Null))
+    }
+    let error = "The " + kind + " send to " + target + " was interrupted; check before retrying."
+    vault::patch(id, Value::Map(#{ "status": Value::String("failed"), "error": Value::String(error) }), text_of(item, "version"))?
+    Ok(())
+}
+
 fn settle(id: string) -> Result[(), string] {
     let item = match vault::get(id) {
         Ok(n) => n,

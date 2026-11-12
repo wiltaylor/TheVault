@@ -261,6 +261,42 @@ fn sms(extra: Value, body: &[&str]) -> Value {
 }
 
 #[test]
+fn restart_unconfirmed_sms_accepts_late_receipt_without_second_command() {
+    let mut api = Api::start();
+    let phone = api.phone();
+    let id = api.create(&api.admin, "outbox", sms(json!({}), &["Check once"]));
+    api.settle();
+    let cid = api.commands(&phone, "?status=pending")[0]["id"].as_str().unwrap().to_owned();
+    api.report(&phone, &cid, json!({"status": "delivered"}));
+    api.server.restart();
+    api.settle();
+    let fields = api.fields(&id);
+    assert_eq!(fields["status"], "failed", "{fields}");
+    let error = fields["error"].as_str().unwrap();
+    assert!(error.contains("sms") && error.contains(NUMBER) && error.contains("check before retrying"), "{error}");
+    assert_eq!(api.commands(&phone, "").len(), 1);
+    let copy = api.copy(&phone, "sms:late", NUMBER, "Check once", NOW);
+    api.report(&phone, &cid, json!({"status": "done", "result": {"device_ref": "sms:late"}}));
+    api.settle();
+    assert!(api.gone(&id));
+    assert_eq!(api.fields(&copy)["device_ref"], "sms:late");
+    assert_eq!(api.commands(&phone, "").len(), 1);
+}
+
+#[test]
+fn new_claim_preserves_sms_waiting_for_phone() {
+    let api = Api::start();
+    let phone = api.phone();
+    let first = api.create(&api.admin, "outbox", sms(json!({}), &["First"]));
+    api.settle();
+    let second = api.create(&api.admin, "outbox", sms(json!({}), &["Second"]));
+    api.settle();
+    assert_eq!(api.fields(&first)["status"], "sending");
+    assert_eq!(api.fields(&second)["status"], "sending");
+    assert_eq!(api.commands(&phone, "").len(), 2);
+}
+
+#[test]
 fn a_ready_sms_waits_for_the_phone_and_leaves_the_outbox_once_sent_with_its_copy() {
     let api = Api::start();
     let phone = api.phone();
