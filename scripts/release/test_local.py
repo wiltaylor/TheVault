@@ -144,6 +144,7 @@ class LocalReleaseTests(unittest.TestCase):
         self.assertNotIn("GH_TOKEN", job.base)
 
     def test_missing_keys_stops_before_signer_or_asset_mutation(self):
+        self.release["signing_mode"] = "custodian"
         job = self.job()
         with patch.dict("os.environ", {"THEVAULT_SIGNING_MODE": "custodian"}, clear=True), patch.object(job, "run") as run:
             with self.assertRaisesRegex(local.ReleaseError, "waiting for operator signing prerequisites"):
@@ -292,6 +293,7 @@ class LocalReleaseTests(unittest.TestCase):
         return job
 
     def test_mocked_signing_aligns_then_signs_checks_versions_and_commits(self):
+        self.release["signing_mode"] = "custodian"
         job = self.signing_job()
         env = {name: "dummy-test-value" for name in coordinator.SIGN_ENV}
         env["THEVAULT_SIGNING_MODE"] = "custodian"
@@ -326,6 +328,7 @@ class LocalReleaseTests(unittest.TestCase):
         self.assertNotIn("dummy-test-value", json.dumps(calls))
 
     def test_mocked_failed_signing_keeps_unsigned_inputs_and_removes_key(self):
+        self.release["signing_mode"] = "custodian"
         job = self.signing_job()
         env = {name: "dummy" for name in coordinator.SIGN_ENV}
         env["THEVAULT_SIGNING_MODE"] = "custodian"
@@ -589,6 +592,131 @@ class LocalReleaseTests(unittest.TestCase):
     def test_release_rejects_tcp_docker_endpoints(self):
         with patch.dict("os.environ", {"DOCKER_HOST": "tcp://relay:2375"}, clear=True), self.assertRaisesRegex(local.ReleaseError, "Unix Docker relay"):
             coordinator.Release(self.root / "state", self.release, self.root / "runtime")
+
+    def test_signing_trailer_default_environment_precedence_and_invalid(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(coordinator.signing_mode("none"), "none")
+            self.assertEqual(coordinator.signing_mode(""), "github")
+            with patch.object(coordinator, "git", return_value="none") as git:
+                self.assertEqual(coordinator.signing_mode(), "none")
+                git.assert_called_once_with("log", "-1", "--format=%(trailers:key=signing,valueonly)")
+            for invalid in ("invalid", "none\ngithub", "NONE"):
+                with self.assertRaises(local.ReleaseError):
+                    coordinator.signing_mode(invalid)
+        with patch.dict("os.environ", {"THEVAULT_SIGNING_MODE": "custodian"}, clear=True):
+            self.assertEqual(coordinator.signing_mode("none"), "custodian")
+
+    def test_none_completes_one_phase_without_sign_or_smoke(self):
+        self.release["signing_mode"] = "none"
+        job = self.job()
+        calls = []
+        with contextlib.ExitStack() as stack:
+            for stage in local.stages(self.release):
+                stack.enter_context(patch.object(job, stage.replace("-", "_"), side_effect=lambda s=stage: calls.append(s) or {}))
+            sign = stack.enter_context(patch.object(job, "sign"))
+            smoke = stack.enter_context(patch.object(job, "smoke"))
+            gh = stack.enter_context(patch.object(job, "gh"))
+            stack.enter_context(patch.object(job, "checkpoint"))
+            stack.enter_context(patch.object(job, "cleanup_images"))
+            self.assertEqual(job.execute(), "published and verified")
+        self.assertEqual(calls, list(local.stages(self.release)))
+        sign.assert_not_called()
+        smoke.assert_not_called()
+        gh.assert_not_called()
+        self.assertIn("images", calls)
+        self.assertIn("push", calls)
+        self.assertIn("publish", calls)
+        with self.assertRaisesRegex(local.ReleaseError, "identity mismatch"):
+            local.Journal(job.journal.path, self.release | {"signing_mode": "github"})
+
+    def test_none_manifest_uploads_only_cli_checksums_and_compose(self):
+        self.release["signing_mode"] = "none"
+        job = self.job()
+        job.dist.mkdir()
+        for name in local.assets(self.release["version"], "none"):
+            (job.dist / name).write_bytes(name.encode())
+        value = local.manifest(job.dist, self.release, False)
+        self.assertFalse(value["signed"])
+        self.assertEqual(len(value["assets"]), 6)
+        names = [p.name for p in job.upload_files()]
+        self.assertIn("SHA256SUMS-cli", names)
+        self.assertEqual(sum(n.startswith("vault-") for n in names), 2)
+        self.assertFalse(any(n.endswith((".apk", ".AppImage", ".deb", ".rpm")) for n in names))
+        local.verify_manifest(job.dist, value, self.release)
+
+    def test_none_draft_notes_disclose_omitted_apps(self):
+        self.release.update(signing_mode="none", tagged_sha="b" * 40)
+        job = self.job()
+        def gh(*args, **kwargs):
+            return subprocess.CompletedProcess(args, 1 if args[0] == "api" else 0, b"", b"404")
+        with patch.object(job, "gh", side_effect=gh) as remote:
+            job.ensure_draft()
+        create = next(c.args for c in remote.call_args_list if c.args[:2] == ("release", "create"))
+        self.assertIn(coordinator.NO_APPS_NOTES, create)
+        self.assertIn("desktop and Android apps are not in this pre-release", coordinator.NO_APPS_NOTES)
+        self.assertFalse(any(c.args[:2] == ("workflow", "run") for c in remote.call_args_list))
+
+    def test_github_preflight_rejects_disabled_missing_and_unavailable_workflow(self):
+        for code, stdout, stderr, message in (
+            (0, b'{"state":"disabled_manually"}', b"", "disabled"),
+            (1, b"", b"HTTP 404", "missing"),
+            (1, b"", b"HTTP 403", "unavailable"),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(local.ReleaseError, message):
+                preflight.check_workflow(lambda *a, **kw: subprocess.CompletedProcess(a, code, stdout, stderr))
+        preflight.check_workflow(lambda *a, **kw: subprocess.CompletedProcess(a, 0, b'{"state":"active"}', b""))
+
+    def test_none_preflight_needs_no_android_or_signing_tools(self):
+        _, runner = self.preflight_fixture()
+        checked = preflight.check_tools(runner, None, "none")
+        self.assertIn("Docker CLI", checked)
+        self.assertNotIn("tauri-cli", checked)
+        self.assertNotIn("Java", checked)
+        self.assertNotIn("minisign", checked)
+
+    def test_none_build_passes_mode_and_needs_no_apk_or_fixtures(self):
+        self.release.update(signing_mode="none", tagged_sha="b" * 40)
+        job = self.job()
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as archive:
+            item = tarfile.TarInfo("docker/dev.Dockerfile")
+            item.size = 12
+            archive.addfile(item, io.BytesIO(b"FROM scratch"))
+        success = subprocess.CompletedProcess([], 0, stream.getvalue(), b"")
+        with patch.object(job, "run", return_value=success), patch.object(job, "docker"), patch.object(job, "container") as container:
+            result = job.build()
+        self.assertIn("THEVAULT_SIGNING_MODE=none", container.call_args.kwargs["extra"])
+        self.assertNotIn("smoke_sha256", result)
+        self.assertNotIn("fixtures_sha256", result)
+
+    def test_none_publish_checks_inventory_notes_and_advances_both_images_without_smoke(self):
+        self.release.update(signing_mode="none", tagged_sha="b" * 40)
+        job = self.job()
+        job.dist.mkdir()
+        for path in job.upload_files():
+            path.write_bytes(b"fixture")
+        rows = [{"name": p.name, "digest": "sha256:" + local.digest(p)} for p in job.upload_files()]
+        rows.append({"name": "release-state.json"})
+        remote = {"target_commitish": "b" * 40, "assets": rows, "body": coordinator.NO_APPS_NOTES}
+        job.journal.data["outputs"]["push"] = {name: {"ref": "registry/" + name, "digest": "sha256:test"} for name in ("thevault", "thevault-browser")}
+        def gh(*args, **kwargs):
+            if args[0] == "api" and "/git/ref/" in args[1]:
+                return subprocess.CompletedProcess(args, 1, b"", b"404")
+            return subprocess.CompletedProcess(args, 0, json.dumps(remote).encode(), b"")
+        with patch.object(job, "check_assets"), patch.object(job, "save_capsule"), patch.object(job, "gh", side_effect=gh) as api, patch.object(job, "crane", return_value=subprocess.CompletedProcess([], 0, b"sha256:test", b"")) as crane:
+            job.publish()
+            edits = [c.args for c in api.call_args_list if c.args[:2] == ("release", "edit")]
+            self.assertIn("--draft=false", edits[0])
+            tags = [c.args for c in crane.call_args_list if c.args[0] == "tag"]
+            self.assertEqual(len(tags), 2)
+            self.assertTrue(all(c[-1] == "edge" for c in tags))
+            remote["body"] = "notice removed"
+            with self.assertRaisesRegex(local.ReleaseError, "notice missing"):
+                job.publish()
+            remote["body"] = coordinator.NO_APPS_NOTES
+            rows.append({"name": "unexpected.apk"})
+            with self.assertRaisesRegex(local.ReleaseError, "inventory changed"):
+                job.publish()
 
 
 if __name__ == "__main__":
