@@ -391,6 +391,7 @@ function TokensPage() {
                 <tr>
                   <th>Name</th>
                   <th>Scope</th>
+                  <th>Kind</th>
                   <th>Created</th>
                   <th>Last used</th>
                   <th />
@@ -404,6 +405,11 @@ function TokensPage() {
                         <code>{t.name}</code>
                       </td>
                       <td>{t.scope}</td>
+                      <td>
+                        <Show when={t.kind === "agent"} fallback={t.kind}>
+                          <span class="agent-badge">agent</span>
+                        </Show>
+                      </td>
                       <td>{when(t.created)}</td>
                       <td>{t.last_used === null ? "Never" : when(t.last_used)}</td>
                       <td>

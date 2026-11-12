@@ -40,6 +40,7 @@ fn token_json(t: &TokenInfo) -> Value {
     json!({
         "name": t.name,
         "scope": t.scope.as_str(),
+        "kind": t.kind,
         "created": t.created_ms,
         "last_used": t.last_used_ms,
     })

@@ -1202,6 +1202,7 @@ export interface AgentCode {
 /** An API token. Only the response that creates it carries `secret` (D11). */
 export interface Token {
   name: string;
+  kind: "user" | "device" | "agent";
   scope: Scope;
   created: number;
   last_used: number | null;
