@@ -86,6 +86,23 @@ impl Redactor {
                 .ok_or(())?;
             if let Some(seed) = &login.totp_seed {
                 let codes = seed_parameters(seed, 6, 30).and_then(|(seed, digits, period)| {
+                    let grouped = seed
+                        .as_bytes()
+                        .chunks(4)
+                        .map(String::from_utf8_lossy)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    for value in [
+                        seed.clone(),
+                        seed.to_ascii_lowercase(),
+                        grouped.clone(),
+                        grouped.to_ascii_lowercase(),
+                    ] {
+                        if !value.is_empty() {
+                            let short = value.chars().count() <= 3;
+                            patterns.push((value, short));
+                        }
+                    }
                     (-2i64..=2)
                         .map(|step| {
                             totp(
