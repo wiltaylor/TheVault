@@ -187,9 +187,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let r = Redactor::load(&state)
-            .ok()
-            .expect("invalid seed must not block browser output");
+        let r = Redactor::load(&state).expect("invalid seed must not block browser output");
         assert_eq!(
             r.text("fake-user fake-password not a valid seed!"),
             "[REDACTED] [REDACTED] [REDACTED]"
