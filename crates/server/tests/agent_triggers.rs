@@ -2865,15 +2865,25 @@ fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
     let mut api = Api::start(&fake);
     api.agent("reader", "label = \"Reader\"\ntrigger any {\n on = [\"create\"]\n type = \"memo\"\n prompt = \"Review it.\"\n}\n");
     let (id, version) = api.memo("Unchanged", "open");
-    fake.push(AnthropicMessage::new()
-        .tool_use("toolu_edit", "propose_edit", json!({
-            "id": id, "base_version": version,
-            "note": json!({"fields":{"title":"Proposed", "status":"open"}}).to_string()
-        }))
-        .tool_use("toolu_delete", "propose_delete", json!({"id":id}))
-        .tool_use("toolu_script", "propose_script_change", json!({
-            "name":"pending_trigger_script", "source":"fn run() { }\n"
-        })));
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use(
+                "toolu_edit",
+                "propose_edit",
+                json!({
+                    "id": id, "base_version": version,
+                    "note": json!({"fields":{"title":"Proposed", "status":"open"}}).to_string()
+                }),
+            )
+            .tool_use("toolu_delete", "propose_delete", json!({"id":id}))
+            .tool_use(
+                "toolu_script",
+                "propose_script_change",
+                json!({
+                    "name":"pending_trigger_script", "source":"fn run() { }\n"
+                }),
+            ),
+    );
     fake.push(AnthropicMessage::text("Waiting for review."));
     api.advance("PT31S");
     assert_eq!(fake.message_requests().len(), 2);
@@ -2883,11 +2893,22 @@ fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
     let before = api.get(&path);
     assert_eq!(before["pending"], 3, "{before}");
     for event in ["proposal", "script_proposal"] {
-        assert!(before["proposals"].as_array().unwrap().iter().any(|p|
-            p["event"] == event && p["status"] == "pending"), "{before}");
+        assert!(
+            before["proposals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["event"] == event && p["status"] == "pending"),
+            "{before}"
+        );
     }
     assert_eq!(api.get(&format!("/api/notes/{id}"))["version"], version);
-    assert!(!api.server.vault_path().join("scripts/pending_trigger_script.ws").exists());
+    assert!(
+        !api.server
+            .vault_path()
+            .join("scripts/pending_trigger_script.ws")
+            .exists()
+    );
     api.server.restart();
     let reopened = api.get(&path);
     assert_eq!(reopened["proposals"], before["proposals"]);
