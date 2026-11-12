@@ -70,6 +70,12 @@ fn attachment_envelope_replacement_invalidates_note_clearance() {
             .unwrap()
     );
     assert!(!w.release_agent_safety(&note.id, &hash, &owner).unwrap());
+    allow_attachment_note(&w, &note.id);
+    let second_hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    w.evict_asset(&asset.id).unwrap();
+    w.put_asset_with_id(&asset.id, "invoice.csv", b"amount\n999\n".to_vec()).unwrap();
+    assert_ne!(w.agent_safety(&note.id).unwrap().fingerprint, second_hash,
+        "identical bytes re-extracted reused an old revision");
 }
 
 fn attachment_fixture() -> (tempfile::TempDir, Writer) {
@@ -197,6 +203,12 @@ fn attachment_envelope_pending_failed_html_legacy_and_cap_deny_text() {
                 .set_agent_safety_result(&note.id, &serde_json::to_string(&safety).unwrap(), true)
                 .unwrap();
             assert!(w.agent_may_read(&note.id), "legacy note behavior changed");
+        }
+        if matches!(case, "pending" | "failed" | "html" | "image") {
+            let read = w.read(&note.id).unwrap();
+            let envelope = w.agent_safety_envelope(&read.type_name, &read.doc);
+            assert_eq!(envelope["attachments"][0]["status"],
+                if matches!(case, "html" | "image") { "unsupported" } else { case });
         }
         assert!(w.agent_attachment_text(&asset.id).is_none(), "{case}");
         assert!(!w.agent_may_read_asset(&asset.id));

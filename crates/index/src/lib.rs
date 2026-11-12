@@ -47,7 +47,7 @@ use schema::{Doc, NoteReport, Schema};
 
 pub use asset_text::{
     EXTRACT_TIMEOUT, Extracted, MAX_EXTRACT_BYTES, MAX_RUNNING, MAX_TEXT, StoredText, TextKind,
-    bound_asset_text, extract_pdf_text, extract_text, is_pdf, text_digest,
+    asset_text_failed, bound_asset_text, extract_pdf_text, extract_text, is_pdf, text_digest,
 };
 pub use graph::{Graph, GraphEdge, GraphNode};
 pub use office::MAX_UNZIPPED_BYTES;

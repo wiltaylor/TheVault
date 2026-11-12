@@ -196,10 +196,17 @@ impl Writer {
     /// No inner-index lock: note writes call this while holding that lock. The bound
     /// extraction is an immutable snapshot, verified against both source and text hashes.
     pub fn agent_safety_envelope(&self, kind: &str, doc: &Doc) -> serde_json::Value {
+        let html = doc.field("html").and_then(schema::Value::as_str);
         let attachments: Vec<_> = attachment_ids(doc)
             .into_iter()
             .map(|id| {
                 let mut entry = serde_json::json!({"id":id,"status":"pending"});
+                if html == Some(id.as_str()) || !self.state()
+                    .meta(&format!("agent_safety.asset_html.{id}"))
+                    .is_ok_and(|v| v.is_none()) {
+                    entry["status"] = serde_json::json!("unsupported");
+                    return entry;
+                }
                 let Some(asset) = self.find_asset(&id) else {
                     return entry;
                 };
@@ -222,6 +229,9 @@ impl Writer {
                     return entry;
                 }
                 let Some(mut evidence) = index::bound_asset_text(&self.vault, &id) else {
+                    if index::asset_text_failed(&self.vault, &id) {
+                        entry["status"] = serde_json::json!("failed");
+                    }
                     return entry;
                 };
                 let Ok((_, bytes)) = self.asset_range(&id, 0, index::MAX_EXTRACT_BYTES as u64 + 1)
@@ -274,6 +284,9 @@ impl Writer {
     /// Keep the commit lock until the value has been copied for the caller.
     pub fn agent_attachment_text(&self, id: &str) -> Option<serde_json::Value> {
         let _guard = self.write_lock();
+        if self.state().meta(&format!("agent_safety.asset_html.{id}")).ok()?.is_some() {
+            return None;
+        }
         let raw = self
             .state()
             .meta(&format!("agent_safety.asset_owners.{id}"))
@@ -623,6 +636,17 @@ impl Writer {
         }
         if self.state().meta("agent_safety.index_ready")?.as_deref() == Some("1") {
             for (id, _, stored) in self.state().indexed_agent_safety()? {
+                // Offline reindex can replace extraction without changing the vault
+                // generation. Recheck v1 envelopes before trusting persisted query gates.
+                if stored.as_ref().and_then(|v| serde_json::from_str::<Safety>(v).ok())
+                    .is_some_and(|s| s.fingerprint.starts_with("attachment-v1:")) {
+                    if let Ok(note) = self.read(&id) {
+                        self.refresh_agent_safety_index(&id, &note.type_name, &note.doc)?;
+                    } else {
+                        self.state().forget_agent_safety_index(&id)?;
+                    }
+                    self.refresh_safety_parents(&id)?;
+                }
                 if let Some(mut safety) =
                     stored.and_then(|v| serde_json::from_str::<Safety>(&v).ok())
                     && safety.status == "pending"
@@ -804,6 +828,10 @@ impl Writer {
                 .meta(&format!("agent_safety.note.{id}"))?
                 .is_some()
         {
+            if let Some(html) = doc.field("html").and_then(schema::Value::as_str)
+                && schema::is_ulid(html) {
+                self.state().set_meta(&format!("agent_safety.asset_html.{html}"), "1")?;
+            }
             fn walk(w: &Writer, owner: &str, value: &serde_json::Value) -> Result<()> {
                 match value {
                     serde_json::Value::String(s) if schema::is_ulid(s) => {

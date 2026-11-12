@@ -1368,6 +1368,26 @@ fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
 }
 
 #[test]
+fn attachment_envelope_cap_is_aggregate_not_per_asset() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let asset: Value = api.client.post(api.server.url("/api/assets?filename=large.csv"))
+            .bearer_auth(api.server.admin_token()).body("x".repeat(70 * 1024))
+            .send().unwrap().json().unwrap();
+        ids.push(asset["id"].clone());
+    }
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
+        "title":"Large attachments", "attachments":ids, "sent":"2000-01-01T00:00:00Z"
+    }}}));
+    let visible = safety_wait(&api, note["id"].as_str().unwrap());
+    assert_eq!(visible["agent_safety"]["reason"], "too_large");
+    assert!(decisions.requests().is_empty());
+}
+
+#[test]
 fn incoming_assets_allowed_email_tools_and_script_deny_text() {
     let decisions = testkit::FakeDecisions::start();
     let chat = FakeAnthropic::start();
