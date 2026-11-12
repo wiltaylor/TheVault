@@ -167,7 +167,7 @@ fn after_update(note: Value) -> Result[(), string] {
     let previous = note.get("previous").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
     // Reference unlinking happens before the deleted event's after_delete handler runs.
     // Catch a pending update here while the old target is still in the payload.
-    if text_of(fields, "kind") == "event" && text_of(fields, "status") == "sending" && text_of(fields, "event_action") != "delete" &&
+    if text_of(fields, "kind") == "event" && (text_of(fields, "status") == "sending" || (text_of(fields, "status") == "failed" && text_of(fields, "error").contains("check before retrying"))) && text_of(fields, "event_action") != "delete" &&
         ((text_of(previous, "event") != "" && text_of(fields, "event") == "") ||
          (text_of(previous, "result") != "" && text_of(fields, "result") == "")) {
         vault::patch(text_of(note, "id"), Value::Map(#{ "status": Value::String("failed"), "error": Value::String("The event was deleted before this change was sent.") }), "")?

@@ -278,6 +278,46 @@ impl Api {
 }
 
 #[test]
+fn restart_during_event_create_never_repeats_provider_write() {
+    restart_during_event_write(false);
+}
+
+#[test]
+fn restart_during_event_update_never_repeats_provider_write() {
+    restart_during_event_write(true);
+}
+
+fn restart_during_event_write(update: bool) {
+    let mut api = Api::start();
+    let mut fields = json!({
+        "title": "Check interrupted event",
+        "when": {"start": "2026-04-02T09:00:00Z", "end": "2026-04-02T10:00:00Z"},
+        "attendees_raw": ["ann@example.com"],
+    });
+    if update {
+        api.google.put_event("primary", standup());
+        api.sync();
+        fields["event"] = json!(api.events().keys().next().unwrap());
+        fields["event_action"] = json!("update");
+    }
+    api.google.set_calendar_delay(Some(std::time::Duration::from_secs(60)));
+    let item = api.create("outbox", invite(fields, None));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !api.google.requests().iter().any(|r| r.route().starts_with("/calendar/") && (r.method == "POST" || r.method == "PATCH")) {
+        assert!(std::time::Instant::now() < until, "event write never started");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(api.fields(&item)["status"], "sending");
+    api.server.restart();
+    api.google.set_calendar_delay(None);
+    api.settle();
+    let fields = api.fields(&item);
+    assert_eq!(fields["status"], "failed", "{fields}");
+    assert!(fields["error"].as_str().unwrap().contains("Check interrupted event"));
+    assert_eq!(api.google.requests().iter().filter(|r| r.route().starts_with("/calendar/") && (r.method == "POST" || r.method == "PATCH")).count(), 1);
+}
+
+#[test]
 fn review_restart_during_delete_keeps_manual_retry_available() {
     let mut api = Api::start();
     api.google.put_event("primary", standup());
