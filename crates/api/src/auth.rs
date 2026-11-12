@@ -98,7 +98,8 @@ fn agent_memories_path(path: &str) -> bool {
 
 /// Paths that need `admin` even to read, because they disclose or hand out credentials, or, the
 /// activity log, show everything that happens in the vault (activity Y3).
-const ADMIN_PATHS: [&str; 4] = [
+const ADMIN_PATHS: [&str; 5] = [
+    "/api/agent-safety/evidence",
     "/api/tokens",
     "/api/secrets",
     "/api/integrations",
