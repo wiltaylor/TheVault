@@ -640,9 +640,9 @@ impl Shared {
                                 .is_some_and(|note| {
                                     let body = doc_to_json(&note.doc);
                                     body["fields"]["status"] == "failed"
-                                        && body["fields"]["error"]
+                                        && body["fields"]["interrupted_at"]
                                             .as_str()
-                                            .is_some_and(|e| e.contains("check before retrying"))
+                                            .is_some_and(|s| !s.is_empty())
                                 })
                     })
                 })

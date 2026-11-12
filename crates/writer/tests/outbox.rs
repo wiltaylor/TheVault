@@ -457,6 +457,82 @@ fn status(w: &Writer, id: &str) -> String {
     fields(w, id)["status"].as_str().unwrap().to_owned()
 }
 
+#[test]
+fn interruption_marker_is_handler_owned_and_retry_clears_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let at = "2026-10-23T10:00:00Z";
+    for by in [user(), Author::Token("test".into()), agent("drafter")] {
+        assert!(create(&w, &by, email(json!({"interrupted_at": at}))).is_err());
+        let draft = create(&w, &by, email(json!({}))).unwrap();
+        assert!(edit(&w, &draft, &by, json!({"interrupted_at": at})).is_err());
+    }
+    let id = create(&w, &user(), email(json!({"status": "ready"}))).unwrap();
+    edit(&w, &id, &handler(), json!({"status": "sending"})).unwrap();
+    edit(
+        &w,
+        &id,
+        &handler(),
+        json!({"status": "failed", "interrupted_at": at, "error": "Any wording"}),
+    )
+    .unwrap();
+    for by in [user(), Author::Token("test".into())] {
+        assert!(edit(&w, &id, &by, json!({"interrupted_at": null})).is_err());
+        assert!(
+            edit(
+                &w,
+                &id,
+                &by,
+                json!({"interrupted_at": "2026-10-24T10:00:00Z"})
+            )
+            .is_err()
+        );
+    }
+    edit(&w, &id, &user(), json!({"status": "ready"})).unwrap();
+    assert!(fields(&w, &id).get("interrupted_at").is_none());
+}
+
+#[test]
+fn late_confirmation_uses_marker_not_error_wording() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    for by in [handler(), Author::Handler("google_event".into())] {
+        let id = create(&w, &user(), email(json!({"status": "ready"}))).unwrap();
+        edit(&w, &id, &handler(), json!({"status": "sending"})).unwrap();
+        edit(
+            &w,
+            &id,
+            &handler(),
+            json!({"status": "failed", "error": "check before retrying"}),
+        )
+        .unwrap();
+        assert!(
+            edit(
+                &w,
+                &id,
+                &by,
+                json!({"status": "sending", "sent_at": "2026-10-23T10:00:00Z"})
+            )
+            .is_err()
+        );
+        edit(
+            &w,
+            &id,
+            &handler(),
+            json!({"interrupted_at": "2026-10-23T10:00:00Z", "error": "Reworded"}),
+        )
+        .unwrap();
+        edit(
+            &w,
+            &id,
+            &by,
+            json!({"status": "sending", "sent_at": "2026-10-23T10:01:00Z", "interrupted_at": null}),
+        )
+        .unwrap();
+        assert!(fields(&w, &id).get("interrupted_at").is_none());
+    }
+}
+
 /// The message of the issue refusing a write, which names the rule.
 #[track_caller]
 fn refused(result: Result<impl std::fmt::Debug, Error>) -> String {

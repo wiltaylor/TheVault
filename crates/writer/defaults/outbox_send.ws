@@ -167,7 +167,7 @@ fn after_update(note: Value) -> Result[(), string] {
     let previous = note.get("previous").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
     // Reference unlinking happens before the deleted event's after_delete handler runs.
     // Catch a pending update here while the old target is still in the payload.
-    if text_of(fields, "kind") == "event" && (text_of(fields, "status") == "sending" || (text_of(fields, "status") == "failed" && text_of(fields, "error").contains("check before retrying"))) && text_of(fields, "event_action") != "delete" &&
+    if text_of(fields, "kind") == "event" && (text_of(fields, "status") == "sending" || (text_of(fields, "status") == "failed" && text_of(fields, "interrupted_at") != "")) && text_of(fields, "event_action") != "delete" &&
         ((text_of(previous, "event") != "" && text_of(fields, "event") == "") ||
          (text_of(previous, "result") != "" && text_of(fields, "result") == "")) {
         vault::patch(text_of(note, "id"), Value::Map(#{ "status": Value::String("failed"), "error": Value::String("The event was deleted before this change was sent.") }), "")?
@@ -197,7 +197,7 @@ fn handle(note: Value) -> Result[(), string] {
         return Ok(())
     }
     // Claim the item against the version read, so it is sent once.
-    let claim = Value::Map(#{ "status": Value::String("sending"), "error": Value::Null })
+    let claim = Value::Map(#{ "status": Value::String("sending"), "error": Value::Null, "interrupted_at": Value::Null })
     match vault::patch(id, claim, text_of(item, "version")) {
         Ok(_) => {},
         Err(e) => {
@@ -251,7 +251,7 @@ fn reconcile_send(payload: Value) -> Result[(), string] {
         target = fmt("{}", f.get("to").unwrap_or(Value::Null))
     }
     let error = "The " + kind + " send to " + target + " was interrupted; check before retrying."
-    vault::patch(id, Value::Map(#{ "status": Value::String("failed"), "error": Value::String(error) }), text_of(item, "version"))?
+    vault::patch(id, Value::Map(#{ "status": Value::String("failed"), "error": Value::String(error), "interrupted_at": Value::String(rfc3339(vault::now())) }), text_of(item, "version"))?
     Ok(())
 }
 

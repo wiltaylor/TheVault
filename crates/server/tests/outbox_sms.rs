@@ -261,6 +261,33 @@ fn sms(extra: Value, body: &[&str]) -> Value {
 }
 
 #[test]
+fn error_phrase_without_marker_does_not_accept_late_sms_receipt() {
+    let api = Api::start();
+    let phone = api.phone();
+    let id = api.create(&api.admin, "outbox", sms(json!({}), &["Check once"]));
+    api.settle();
+    let cid = api.commands(&phone, "?status=pending")[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    api.edit(
+        &id,
+        json!({"status": "failed", "error": "Provider says check before retrying"}),
+    );
+    api.settle();
+    let before = api.fields(&id);
+    assert_eq!(before["status"], "failed");
+    assert!(before.get("interrupted_at").is_none_or(Value::is_null));
+    api.report(
+        &phone,
+        &cid,
+        json!({"status": "done", "result": {"device_ref": "sms:late"}}),
+    );
+    api.settle();
+    assert_eq!(api.fields(&id), before);
+}
+
+#[test]
 fn restart_unconfirmed_sms_accepts_late_receipt_without_second_command() {
     let mut api = Api::start();
     let phone = api.phone();

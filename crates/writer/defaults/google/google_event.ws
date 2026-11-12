@@ -829,7 +829,7 @@ fn push(id: string, created: bool) -> Result[string, string] {
     let interrupted = vault::query("from outbox where kind == \"event\" && status == \"failed\"")?
     for row in interrupted {
         let f = row.get("fields").unwrap_or(Value::Null)
-        if (text_of(f, "event") == id || text_of(f, "result") == id) && text_of(f, "error").contains("check before retrying") {
+        if (text_of(f, "event") == id || text_of(f, "result") == id) && text_of(f, "interrupted_at") != "" {
             return Ok("")
         }
     }
@@ -976,7 +976,7 @@ fn sending_items(id: string) -> List[string] {
     let out: List[string] = []
     for row in rows {
         let f = row.get("fields").unwrap_or(Value::Null)
-        if (text_of(f, "status") == "sending" || text_of(f, "error").contains("check before retrying")) && (text_of(f, "event") == id || text_of(f, "result") == id || (text_of(f, "event_action") == "delete" && text_of(f, "sent_ref") == id)) {
+        if (text_of(f, "status") == "sending" || text_of(f, "interrupted_at") != "") && (text_of(f, "event") == id || text_of(f, "result") == id || (text_of(f, "event_action") == "delete" && text_of(f, "sent_ref") == id)) {
             out.push(text_of(row, "id"))
         }
     }
@@ -1001,6 +1001,7 @@ fn sent_items(id: string, google_id: string) {
         let f = #{
             "sent_ref": Value::String(google_id),
             "sent_at": Value::String(now_text()),
+            "interrupted_at": Value::Null,
         }
         if text_of(item_fields, "status") == "failed" {
             f["status"] = Value::String("sending")
