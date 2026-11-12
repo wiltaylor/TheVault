@@ -507,7 +507,10 @@ fn build() -> Built {
         .post("/api/ai/discard", ai_turns::discard);
     let browser = Routes::new()
         .get("/api/integrations/browser", browser::status)
-        .get("/api/integrations/attempt-limits", attempt_limits::diagnostic);
+        .get(
+            "/api/integrations/attempt-limits",
+            attempt_limits::diagnostic,
+        );
     Built {
         api,
         login,
