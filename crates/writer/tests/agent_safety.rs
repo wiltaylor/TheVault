@@ -73,9 +73,13 @@ fn attachment_envelope_replacement_invalidates_note_clearance() {
     allow_attachment_note(&w, &note.id);
     let second_hash = w.agent_safety(&note.id).unwrap().fingerprint;
     w.evict_asset(&asset.id).unwrap();
-    w.put_asset_with_id(&asset.id, "invoice.csv", b"amount\n999\n".to_vec()).unwrap();
-    assert_ne!(w.agent_safety(&note.id).unwrap().fingerprint, second_hash,
-        "identical bytes re-extracted reused an old revision");
+    w.put_asset_with_id(&asset.id, "invoice.csv", b"amount\n999\n".to_vec())
+        .unwrap();
+    assert_ne!(
+        w.agent_safety(&note.id).unwrap().fingerprint,
+        second_hash,
+        "identical bytes re-extracted reused an old revision"
+    );
 }
 
 fn attachment_fixture() -> (tempfile::TempDir, Writer) {
@@ -128,8 +132,12 @@ fn attachment_envelope_shared_unlinked_deleted_and_unknown_owners_deny() {
                 assert!(w.agent_attachment_text(&asset.id).is_none());
                 allow_attachment_note(&w, &other.id);
                 assert!(w.agent_attachment_text(&asset.id).is_some());
-                w.delete(&other.id, Some(&other.version), &Author::Session("owner".into()))
-                    .unwrap();
+                w.delete(
+                    &other.id,
+                    Some(&other.version),
+                    &Author::Session("owner".into()),
+                )
+                .unwrap();
             }
             "unlinked" => {
                 w.update(
@@ -143,8 +151,12 @@ fn attachment_envelope_shared_unlinked_deleted_and_unknown_owners_deny() {
                 .unwrap();
             }
             "deleted" => {
-                w.delete(&note.id, Some(&note.version), &Author::Session("owner".into()))
-                    .unwrap();
+                w.delete(
+                    &note.id,
+                    Some(&note.version),
+                    &Author::Session("owner".into()),
+                )
+                .unwrap();
                 w.purge_from_trash(&note.id).unwrap();
             }
             _ => {}
@@ -207,8 +219,14 @@ fn attachment_envelope_pending_failed_html_legacy_and_cap_deny_text() {
         if matches!(case, "pending" | "failed" | "html" | "image") {
             let read = w.read(&note.id).unwrap();
             let envelope = w.agent_safety_envelope(&read.type_name, &read.doc);
-            assert_eq!(envelope["attachments"][0]["status"],
-                if matches!(case, "html" | "image") { "unsupported" } else { case });
+            assert_eq!(
+                envelope["attachments"][0]["status"],
+                if matches!(case, "html" | "image") {
+                    "unsupported"
+                } else {
+                    case
+                }
+            );
         }
         assert!(w.agent_attachment_text(&asset.id).is_none(), "{case}");
         assert!(!w.agent_may_read_asset(&asset.id));
@@ -254,7 +272,9 @@ fn attachment_envelope_is_sorted_and_late_extraction_and_rename_invalidate() {
 #[test]
 fn attachment_envelope_offline_rebuild_refreshes_materialized_gate() {
     let (dir, w) = attachment_fixture();
-    let asset = w.put_asset("invoice.csv", b"amount\n17\n".to_vec()).unwrap();
+    let asset = w
+        .put_asset("invoice.csv", b"amount\n17\n".to_vec())
+        .unwrap();
     let note = attachment_note(&w, &[&asset.id]);
     allow_attachment_note(&w, &note.id);
     assert!(w.agent_attachment_text(&asset.id).is_some());
@@ -275,18 +295,47 @@ fn attachment_envelope_offline_rebuild_refreshes_materialized_gate() {
 #[test]
 fn attachment_envelope_html_provenance_survives_field_removal() {
     let (_dir, w) = attachment_fixture();
-    let asset = w.put_asset("original.csv", b"<p>HTML_SECRET</p>".to_vec()).unwrap();
+    let asset = w
+        .put_asset("original.csv", b"<p>HTML_SECRET</p>".to_vec())
+        .unwrap();
     let owner = Author::Session("owner".into());
-    let note = w.create("email", &Input::Json(serde_json::json!({"fields":{
-        "title":"Incoming", "html":asset.id, "attachments":[asset.id]
-    }})), &owner).unwrap();
+    let note = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{
+                "title":"Incoming", "html":asset.id, "attachments":[asset.id]
+            }})),
+            &owner,
+        )
+        .unwrap();
     allow_attachment_note(&w, &note.id);
     assert!(w.agent_attachment_text(&asset.id).is_none());
-    w.update(&note.id, &Input::Json(serde_json::json!({"fields":{
-        "title":"Incoming", "attachments":[asset.id]
-    }})), Some(&note.version), &owner).unwrap();
+    w.update(
+        &note.id,
+        &Input::Json(serde_json::json!({"fields":{
+            "title":"Incoming", "attachments":[asset.id]
+        }})),
+        Some(&note.version),
+        &owner,
+    )
+    .unwrap();
     allow_attachment_note(&w, &note.id);
-    assert!(w.agent_attachment_text(&asset.id).is_none(), "original HTML became attachment text");
+    assert!(
+        w.agent_attachment_text(&asset.id).is_none(),
+        "original HTML became attachment text"
+    );
+}
+
+#[test]
+fn attachment_envelope_unreadable_cleared_note_stays_held_in_queries() {
+    let (dir, w) = attachment_fixture();
+    let asset = w.put_asset("invoice.csv", b"amount\n17\n".to_vec()).unwrap();
+    let note = attachment_note(&w, &[&asset.id]);
+    allow_attachment_note(&w, &note.id);
+    std::fs::write(dir.path().join(format!("notes/email/{}.wcl", note.id)), [0xff]).unwrap();
+    w.activate_agent_safety().unwrap();
+    assert!(w.state().held_agent_note_ids().unwrap().contains(&note.id));
+    assert!(w.agent_attachment_text(&asset.id).is_none());
 }
 
 #[test]

@@ -201,9 +201,12 @@ impl Writer {
             .into_iter()
             .map(|id| {
                 let mut entry = serde_json::json!({"id":id,"status":"pending"});
-                if html == Some(id.as_str()) || !self.state()
-                    .meta(&format!("agent_safety.asset_html.{id}"))
-                    .is_ok_and(|v| v.is_none()) {
+                if html == Some(id.as_str())
+                    || !self
+                        .state()
+                        .meta(&format!("agent_safety.asset_html.{id}"))
+                        .is_ok_and(|v| v.is_none())
+                {
                     entry["status"] = serde_json::json!("unsupported");
                     return entry;
                 }
@@ -284,7 +287,12 @@ impl Writer {
     /// Keep the commit lock until the value has been copied for the caller.
     pub fn agent_attachment_text(&self, id: &str) -> Option<serde_json::Value> {
         let _guard = self.write_lock();
-        if self.state().meta(&format!("agent_safety.asset_html.{id}")).ok()?.is_some() {
+        if self
+            .state()
+            .meta(&format!("agent_safety.asset_html.{id}"))
+            .ok()?
+            .is_some()
+        {
             return None;
         }
         let raw = self
@@ -626,24 +634,29 @@ impl Writer {
             // Withhold these orphans, without changing files still used by local notes.
             for summary in self.asset_summaries()? {
                 if summary.used_by() == 0 {
-                    self.state().set_meta(&format!("agent_safety.asset.{}", summary.asset.id), "1")?;
+                    self.state()
+                        .set_meta(&format!("agent_safety.asset.{}", summary.asset.id), "1")?;
                 }
             }
             for entry in self.asset_trash() {
-                self.state().set_meta(&format!("agent_safety.asset.{}", entry.asset.id), "1")?;
+                self.state()
+                    .set_meta(&format!("agent_safety.asset.{}", entry.asset.id), "1")?;
             }
             self.state().set_meta("agent_safety.assets_migrated", "1")?;
         }
         if self.state().meta("agent_safety.index_ready")?.as_deref() == Some("1") {
-            for (id, _, stored) in self.state().indexed_agent_safety()? {
+            for (id, hash, stored) in self.state().indexed_agent_safety()? {
                 // Offline reindex can replace extraction without changing the vault
                 // generation. Recheck v1 envelopes before trusting persisted query gates.
-                if stored.as_ref().and_then(|v| serde_json::from_str::<Safety>(v).ok())
-                    .is_some_and(|s| s.fingerprint.starts_with("attachment-v1:")) {
+                if stored
+                    .as_ref()
+                    .and_then(|v| serde_json::from_str::<Safety>(v).ok())
+                    .is_some_and(|s| s.allowed() && s.fingerprint.starts_with("attachment-v1:"))
+                {
                     if let Ok(note) = self.read(&id) {
                         self.refresh_agent_safety_index(&id, &note.type_name, &note.doc)?;
                     } else {
-                        self.state().forget_agent_safety_index(&id)?;
+                        self.state().index_agent_safety(&id, &hash, true)?;
                     }
                     self.refresh_safety_parents(&id)?;
                 }
@@ -829,8 +842,13 @@ impl Writer {
                 .is_some()
         {
             if let Some(html) = doc.field("html").and_then(schema::Value::as_str)
-                && schema::is_ulid(html) {
-                self.state().set_meta(&format!("agent_safety.asset_html.{html}"), "1")?;
+                && schema::is_ulid(html)
+            {
+                if self.state().meta(&format!("agent_safety.asset_html.{html}"))?.is_none() {
+                    self.invalidate_asset_safety(html)?;
+                }
+                self.state()
+                    .set_meta(&format!("agent_safety.asset_html.{html}"), "1")?;
             }
             fn walk(w: &Writer, owner: &str, value: &serde_json::Value) -> Result<()> {
                 match value {

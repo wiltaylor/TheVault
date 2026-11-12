@@ -1325,9 +1325,18 @@ fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
             .contains("WITHHELD_RAW_HTML_17")
     );
     let token = api.external_agent_token();
-    let login = api.client.post(api.server.url("/api/login"))
-        .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
-    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
     for id in &ids {
         let url = api.server.url(&format!("/api/assets/{id}"));
         assert_eq!(
@@ -1348,7 +1357,15 @@ fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
                 .status()
                 .is_success()
         );
-        assert!(api.client.get(&url).header("cookie", cookie).send().unwrap().status().is_success());
+        assert!(
+            api.client
+                .get(&url)
+                .header("cookie", cookie)
+                .send()
+                .unwrap()
+                .status()
+                .is_success()
+        );
     }
     api.agent("text_auditor", "label = \"Text auditor\"\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Read assets.\" }\n");
     chat.push(
@@ -1374,14 +1391,24 @@ fn attachment_envelope_cap_is_aggregate_not_per_asset() {
     let api = safety_setup(&chat, &decisions, "router");
     let mut ids = Vec::new();
     for _ in 0..2 {
-        let asset: Value = api.client.post(api.server.url("/api/assets?filename=large.csv"))
-            .bearer_auth(api.server.admin_token()).body("x".repeat(70 * 1024))
-            .send().unwrap().json().unwrap();
+        let asset: Value = api
+            .client
+            .post(api.server.url("/api/assets?filename=large.csv"))
+            .bearer_auth(api.server.admin_token())
+            .body("x".repeat(70 * 1024))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
         ids.push(asset["id"].clone());
     }
-    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
-        "title":"Large attachments", "attachments":ids, "sent":"2000-01-01T00:00:00Z"
-    }}}));
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Large attachments", "attachments":ids, "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
     let visible = safety_wait(&api, note["id"].as_str().unwrap());
     assert_eq!(visible["agent_safety"]["reason"], "too_large");
     assert!(decisions.requests().is_empty());

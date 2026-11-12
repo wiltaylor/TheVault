@@ -18,8 +18,15 @@ fn bound_extraction_revision_failure_and_replacement_are_fail_closed() {
     let first = index::bound_asset_text(&vault, id).unwrap();
     assert_eq!(first["source_hash"], hash);
     assert_eq!(first["text"], "text");
-    std::fs::write(vault.server_dir().join(format!("asset-text/v1/{id}.txt")), "changed").unwrap();
-    assert!(index::bound_asset_text(&vault, id).is_none(), "text hash was not checked");
+    std::fs::write(
+        vault.server_dir().join(format!("asset-text/v1/{id}.txt")),
+        "changed",
+    )
+    .unwrap();
+    assert!(
+        index::bound_asset_text(&vault, id).is_none(),
+        "text hash was not checked"
+    );
     idx.set_bound_asset_text(id, &hash, &Extracted::Text("text".into()))
         .unwrap();
     assert_ne!(

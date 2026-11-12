@@ -64,7 +64,11 @@ pub fn text_digest(bytes: &[u8]) -> String {
 
 /// Whether extraction recorded a failure rather than a pending representation.
 pub fn asset_text_failed(vault: &store::Vault, id: &str) -> bool {
-    schema::is_ulid(id) && vault.server_dir().join(format!("asset-text/v1/{id}.unreadable")).exists()
+    schema::is_ulid(id)
+        && vault
+            .server_dir()
+            .join(format!("asset-text/v1/{id}.unreadable"))
+            .exists()
 }
 
 /// Read a bound extraction without taking the note index lock. The writer serializes
@@ -77,7 +81,8 @@ pub fn bound_asset_text(vault: &store::Vault, id: &str) -> Option<serde_json::Va
     let mut evidence: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join(format!("{id}.evidence"))).ok()?).ok()?;
     if evidence["extraction_version"] != 1
-        || !evidence["revision"].as_str().is_some_and(schema::is_ulid) {
+        || !evidence["revision"].as_str().is_some_and(schema::is_ulid)
+    {
         return None;
     }
     if dir.join(format!("{id}.unreadable")).exists() {
