@@ -111,12 +111,19 @@ decisions response, while `tell decisions requests` reports the count. Other
 fakes accept their existing testkit stdin commands. An empty queue must fail
 visibly, never fall back to a real provider.
 
+The shipped mail classifiers are not changed by the seed. They do not use the
+Anthropic chat default as a decisions provider, so imported mail remains held
+unless the owner explicitly configures their `account = "Staging decisions"`
+and queues matching safety and scam replies. This seed does not claim to test
+those classifiers. The smoke agent reads the separate `staging_sms` type only.
+
 ## Evidence and limits
 
 `python3 /app/staging.py smoke` asserts that loopback is the only interface,
 attempts numeric external connections and asserts failure, then queues a fake
 Anthropic response, creates an SMS and verifies a successful trigger and an
-increased fake request count. No real outbound request can leave this network
+increased fake request count. It also checks imported fabricated mail and the
+agent's read-only tool list. No real outbound request can leave this network
 namespace, including from copied scripts or agents. Synthetic SMS notes test
 session writes, **not** device-origin provenance or phone capture. Fake models
 do not prove prompt quality, classification quality or real-model safety.
