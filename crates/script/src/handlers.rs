@@ -640,7 +640,7 @@ impl Shared {
                         })
                 }))
             {
-                return Ok(());
+                return Ok(None);
             }
             let text = |n: &str| {
                 p.get(n)
@@ -705,13 +705,14 @@ impl Shared {
                 .find(|(name, _)| *name == script)
                 .map(|(_, limit)| *limit);
             job.context = json!({ "chain": p.get("chain").cloned().unwrap_or_default() });
-            Ok::<_, String>(job)
+            Ok::<_, String>(Some(job))
         })();
         match job {
-            Ok(job) => {
+            Ok(Some(job)) => {
                 let out = self.after.run(job);
                 (out.result.map(|_| ()).map_err(|e| e.to_string()), out.log)
             }
+            Ok(None) => (Ok(()), String::new()),
             Err(message) => (Err(message), String::new()),
         }
     }
