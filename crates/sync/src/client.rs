@@ -401,8 +401,11 @@ impl Home {
                     });
                 }
                 // Missing/unknown metadata is not permission to preserve manual intent.
-                let denied = res.headers().get("x-vault-asset-incoming")
-                    .and_then(|v| v.to_str().ok()) != Some("false");
+                let denied = res
+                    .headers()
+                    .get("x-vault-asset-incoming")
+                    .and_then(|v| v.to_str().ok())
+                    != Some("false");
                 let mut out = std::fs::File::create(dest)
                     .map_err(|e| Error::Transfer(format!("writing {}: {e}", dest.display())))?;
                 while let Some(chunk) = res.chunk().await.map_err(|e| transfer_error(&e, &what))? {

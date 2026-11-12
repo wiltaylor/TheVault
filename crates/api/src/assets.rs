@@ -170,12 +170,15 @@ pub async fn put(
                 || !manual_upload(w, &author, Some("manual"))?
                 || q.provenance.as_deref() != Some("incoming")
             {
-                return Err(writer::Error::BadRequest("paired device denial required".into()));
+                return Err(writer::Error::BadRequest(
+                    "paired device denial required".into(),
+                ));
             }
             let asset = w.asset_info(&id)?;
             w.mark_incoming_asset(&id)?;
             Ok(asset)
-        }).await?;
+        })
+        .await?;
         return Ok(Json(asset_json(&asset)).into_response());
     }
     let filename = q
@@ -367,12 +370,15 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
     let next = (end < total).then(|| end.to_string());
     let page = picked[start..end].to_vec();
     let assets = blocking(w, move |w| {
-        page.iter().map(|s| {
-            let mut value = summary_json(s);
-            value["incoming"] = json!(w.asset_is_incoming(&s.asset.id)?);
-            Ok::<_, writer::Error>(value)
-        }).collect::<Result<Vec<_>, _>>()
-    }).await?;
+        page.iter()
+            .map(|s| {
+                let mut value = summary_json(s);
+                value["incoming"] = json!(w.asset_is_incoming(&s.asset.id)?);
+                Ok::<_, writer::Error>(value)
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await?;
     Ok(Json(json!({
         "assets": assets,
         "total": total,
@@ -600,7 +606,10 @@ pub async fn download(
         }
     };
     let h = res.headers_mut();
-    h.insert("x-vault-asset-incoming", HeaderValue::from_static(if incoming { "true" } else { "false" }));
+    h.insert(
+        "x-vault-asset-incoming",
+        HeaderValue::from_static(if incoming { "true" } else { "false" }),
+    );
     let ty = content_type(&asset.filename);
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(ty));
     h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));

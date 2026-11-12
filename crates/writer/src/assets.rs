@@ -54,7 +54,10 @@ pub(crate) fn check_filename(name: &str) -> Result<()> {
 impl Writer {
     /// Durable denial, independent of whether the asset's bytes are cached locally.
     pub fn asset_is_incoming(&self, id: &str) -> Result<bool> {
-        Ok(self.state().meta(&format!("agent_safety.asset.{id}"))?.is_some())
+        Ok(self
+            .state()
+            .meta(&format!("agent_safety.asset.{id}"))?
+            .is_some())
     }
 
     /// Creation-time intent only. A missing marker (including pre-upgrade assets) is unknown.
