@@ -222,6 +222,7 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "c468775afaa9cbce770b6bf18e8f72f3d517ba1e9f9d1ff5e10af91a3ee59a3f",
             "ae1e8226181e8001720b620bd5da05c5e3574f8389fc0d1934fcd4ea54b6e5a1",
             "bc9c5b42a6e9b25642a0f6037059e6ec9bdda49a37c962a15da9a85b448229ab",
+            "44e7f48082165527419b26f44205db3b38fd78883ae8476aa5791aa8814ba1bc",
         ],
     },
     // The Google Calendar write-back of event series, named by the shipped `event_series` type's
@@ -247,6 +248,8 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "e84c8da7e1825c5f7e976956c124aff923e73b63524e8b75e1df7a28a27765b1",
             "fd0a2569b6962ad9401cfd9b45fabd0f60587c8a907a59e56c054ef48b5c9a8b",
             "c49ce64d1666a4c06ed700f7a177758c809af1cf6750cecbd4b36c6da41424b4",
+            "836c5c81eaaea3fb3868a5021dad0db49f1a087f48b44fd9a27543d181df1786",
+            "936b12de7caccb4da3a52fb34d6dc153cb28a737e4874276574b0d69ce2ccab1",
         ],
     },
     // The built-in agent, the chat panel's default (agents G6).

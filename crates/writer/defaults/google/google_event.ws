@@ -1029,6 +1029,11 @@ fn failed_items(id: string, message: string) -> int {
 
 // Delete the note's event, or its one occurrence, in Google (D9).
 fn after_delete(event: Value) -> Result[(), string] {
+    // Outbox deletes have already succeeded at Google before the local write.
+    let author = event.get("author").unwrap_or(Value::Null)
+    if text_of(author, "kind") == "handler" && text_of(author, "name") == "outbox_send" {
+        return Ok(())
+    }
     let fields = event.get("note").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
     let google_ref = text_of(fields, "google_ref")
     if google_ref == "" {
