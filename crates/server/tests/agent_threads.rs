@@ -797,21 +797,48 @@ fn apply_refuses_a_deleted_proposer_without_changing_the_note() {
     std::fs::remove_file(api.server.vault_path().join("agents/reader.wcl")).unwrap();
     let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert!(response.text().unwrap().contains("proposing agent reader no longer exists"));
-    assert_eq!(api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"], "Original");
+    assert!(
+        response
+            .text()
+            .unwrap()
+            .contains("proposing agent reader no longer exists")
+    );
+    assert_eq!(
+        api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"],
+        "Original"
+    );
 }
 
 #[test]
 fn limited_agents_cannot_apply_type_create_delete_or_taxonomy_delete() {
     for restriction in ["change_types = []", "change_fields = { log: [] fresh: [] }"] {
         for (tool, input, event, path) in [
-            ("propose_type_change", json!({"name": "fresh", "wcl": LOG}), "type_proposal", "types/fresh.wcl"),
-            ("propose_type_delete", json!({"name": "log"}), "type_proposal", "types/log.wcl"),
-            ("propose_taxonomy_delete", json!({"name": "unused"}), "taxonomy_proposal", "taxonomies/unused.wcl"),
+            (
+                "propose_type_change",
+                json!({"name": "fresh", "wcl": LOG}),
+                "type_proposal",
+                "types/fresh.wcl",
+            ),
+            (
+                "propose_type_delete",
+                json!({"name": "log"}),
+                "type_proposal",
+                "types/log.wcl",
+            ),
+            (
+                "propose_taxonomy_delete",
+                json!({"name": "unused"}),
+                "taxonomy_proposal",
+                "taxonomies/unused.wcl",
+            ),
         ] {
             let fake = FakeAnthropic::start();
             let api = Api::start(&fake);
-            api.send("PUT", "/api/taxonomies/unused", json!({"wcl": "label = \"Unused\"\nterm \"One\"\n"}));
+            api.send(
+                "PUT",
+                "/api/taxonomies/unused",
+                json!({"wcl": "label = \"Unused\"\nterm \"One\"\n"}),
+            );
             api.agent("reader", "label = \"Reader\"\n");
             fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
             fake.push(AnthropicMessage::text("Done."));
@@ -821,7 +848,12 @@ fn limited_agents_cannot_apply_type_create_delete_or_taxonomy_delete() {
             let before = std::fs::read(&file).ok();
             api.agent("reader", &format!("permissions {{ {restriction} }}\n"));
             let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
-            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{tool}, {restriction}: {}", response.text().unwrap());
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "{tool}, {restriction}: {}",
+                response.text().unwrap()
+            );
             assert_eq!(std::fs::read(&file).ok(), before, "{tool}, {restriction}");
         }
     }
@@ -839,8 +871,15 @@ fn apply_with_empty_agent_and_no_proposer_uses_the_caller() {
     proposal.as_object_mut().unwrap().remove("proposer");
     proposal["agent"] = json!("");
     let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
-    assert!(response.status().is_success(), "{}", response.text().unwrap());
-    assert_eq!(api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"], "Changed");
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().unwrap()
+    );
+    assert_eq!(
+        api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"],
+        "Changed"
+    );
 }
 
 #[test]

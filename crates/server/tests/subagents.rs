@@ -681,13 +681,21 @@ fn delegated_apply_refuses_a_deleted_parent() {
     fake.push(AnthropicMessage::text("Proposed."));
     fake.push(AnthropicMessage::text("Over to you."));
     let events = api.chat("lead", Some(&thread), "Plan");
-    let proposal = find(&events, "proposal").expect("delegated proposal").clone();
+    let proposal = find(&events, "proposal")
+        .expect("delegated proposal")
+        .clone();
     assert_eq!(proposal["proposer_parent"], "lead");
     assert_eq!(proposal["proposer"], "writer");
     std::fs::remove_file(api.server.vault_path().join("agents/lead.wcl")).unwrap();
     let (status, result) = api.send("POST", "/api/ai/apply", Some(proposal));
     assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
-    assert!(result["message"].as_str().unwrap().contains("parent agent no longer exists"), "{result}");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("parent agent no longer exists"),
+        "{result}"
+    );
 }
 
 #[test]

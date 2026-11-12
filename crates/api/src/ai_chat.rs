@@ -5081,13 +5081,26 @@ mod tests {
         )
         .unwrap();
         let w = Writer::open(vault, state).unwrap();
-        w.put_agent("reader", "label = \"Reader\"\nenabled = false\n", |_| vec![]).unwrap();
+        w.put_agent(
+            "reader",
+            "label = \"Reader\"\nenabled = false\n",
+            |_| vec![],
+        )
+        .unwrap();
         let proposal = json!({
             "name": "fresh", "before": null,
             "after": "label = \"Fresh\"\n", "op": "create"
         });
-        let result = apply_change(&w, &Author::AgentMail("reader".into()), "type_proposal", &proposal);
-        assert!(matches!(result, Err(ApplyError::Refused(ref message)) if message.contains("disabled")), "{result:?}");
+        let result = apply_change(
+            &w,
+            &Author::AgentMail("reader".into()),
+            "type_proposal",
+            &proposal,
+        );
+        assert!(
+            matches!(result, Err(ApplyError::Refused(ref message)) if message.contains("disabled")),
+            "{result:?}"
+        );
         assert!(w.read_type("fresh").is_err());
     }
 
