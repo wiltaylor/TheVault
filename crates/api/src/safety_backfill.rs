@@ -219,7 +219,10 @@ fn decide_one(w: &Writer, item: &Item, classifier: &Classifier, account: &ai::Ac
     let note = w.read(&item.id)?;
     let envelope = w.agent_safety_envelope(&note.type_name, &note.doc);
     if writer::agent_safety::envelope_fingerprint(&envelope) != item.fingerprint || w.agent_safety(&item.id)?.allowed() { return Err(stale()); }
-    if envelope.to_string().len() > writer::agent_safety::ENVELOPE_LIMIT { return Ok((false, "too_large".into())); }
+    if envelope.to_string().len() > writer::agent_safety::ENVELOPE_LIMIT {
+        if !w.finish_agent_safety_backfill(&item.id, &item.fingerprint, "held", "too_large")? { return Err(stale()); }
+        return Ok((false, "too_large".into()));
+    }
     let saved = snapshot(w, &item.id)?;
     if !crate::classifiers::matches(w, &saved, classifier).map_err(ai_error)? { return Err(stale()); }
     let mut request = crate::classifiers::request(&saved, classifier).map_err(ai_error)?;

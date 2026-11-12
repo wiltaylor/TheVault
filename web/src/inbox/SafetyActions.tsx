@@ -15,7 +15,7 @@ export function SafetyActions(props: { selected: string[]; onReleased: (id: stri
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [result, setResult] = createSignal("");
-  async function act(action: () => Promise<void>) {
+  async function act(action: () => Promise<unknown>) {
     if (busy()) return;
     setBusy(true); setError("");
     try { await action(); } catch (e) { setError(errorText(e)); setPreview(undefined); setRelease(undefined); }

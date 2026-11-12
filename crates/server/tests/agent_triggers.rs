@@ -2490,7 +2490,8 @@ fn historical_safety_setup(fake: &testkit::FakeDecisions) -> (Api, String) {
             std::fs::write(vault.join(format!("types/{kind}.wcl")), format!("label = {kind:?}\ntemplate default {{ tab Main {{ slot title }} }}\n")).unwrap();
             std::fs::create_dir_all(vault.join(format!("notes/{kind}"))).unwrap();
             let created = if i == 4 { "2025-01-01T00:00:00Z" } else { "2026-01-01T00:00:00Z" };
-            std::fs::write(vault.join(format!("notes/{kind}/{}.wcl", BACKFILL_IDS[i])), format!("title = \"Historical fixture {i}\"\ncreated = {created:?}\n")).unwrap();
+            let incoming_event = if *kind == "event" { "organiser = \"external@example.test\"\n" } else { "" };
+            std::fs::write(vault.join(format!("notes/{kind}/{}.wcl", BACKFILL_IDS[i])), format!("title = \"Historical fixture {i}\"\ncreated = {created:?}\n{incoming_event}")).unwrap();
         }
     }, &[OsStr::new("--test-clock"), OsStr::new(START)]);
     let api = Api { server, client: Client::new() };

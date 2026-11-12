@@ -32,6 +32,26 @@ function unique(prefix: string): string {
   return `${prefix} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+test("historical safety controls require counted confirmation for selected held notes", async ({ page, admin }) => {
+  const title = unique("TV151 selection");
+  await create(admin, "email", { title, from_raw: "sender@example.test", labels: ["system/INBOX"] });
+  await logIn(page, "/inbox");
+  await page.getByRole("button", { name: /^Other held \(/ }).click();
+  const held = page.getByRole("region", { name: "Held items" });
+  await held.getByLabel(`Select ${title}`, { exact: true }).check();
+  await held.getByRole("button", { name: "Release selected", exact: true }).click();
+  await expect(held.getByText("Release 1 held notes? Matching agent triggers may run.")).toBeVisible();
+  await expect(held.getByRole("link", { name: title, exact: true })).toBeVisible();
+  await held.getByRole("button", { name: "Confirm release", exact: true }).click();
+  await expect(held.getByText("Released 1. Failed 0.")).toBeVisible();
+  await expect(held.getByRole("link", { name: title, exact: true })).toHaveCount(0);
+  const controls = held.getByRole("region", { name: "Historical safety actions" });
+  await expect(controls.getByRole("button", { name: "Preview safety pass", exact: true })).toBeDisabled();
+  await controls.getByLabel("Owner-entered estimated USD per classifier decision").fill("0");
+  await expect(controls.getByRole("button", { name: "Preview safety pass", exact: true })).toBeEnabled();
+  await expect(controls.getByText(/Cleared backlog notes do not start agents/)).toBeVisible();
+});
+
 async function create(admin: APIRequestContext, type: string, fields: Record<string, unknown>) {
   const res = await admin.post(`/api/notes?type=${type}`, { data: { note: { fields, blocks: [] } } });
   expect(res.status(), await res.text()).toBe(201);
