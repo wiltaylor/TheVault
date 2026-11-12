@@ -21,6 +21,8 @@ export interface NoteDoc {
 }
 
 export interface Note {
+  /** Server-owned Outbox not-before time, in Unix milliseconds. */
+  send_deadline_ms?: number;
   agent_safety?: AgentSafety;
   id: string;
   type: string;

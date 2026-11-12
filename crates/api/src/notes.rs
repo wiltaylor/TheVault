@@ -308,11 +308,18 @@ pub async fn read(
     }
     let (note, safety) = blocking(w, move |w| {
         let note = w.read(&id)?;
-        let safety = if w.state().meta("agent_safety.activation_ms")?.is_some() {
+        let mut safety = if w.state().meta("agent_safety.activation_ms")?.is_some() {
             json!({"agent_safety": w.agent_safety_doc(&id, &note.type_name, &note.doc)?})
         } else {
             json!({})
         };
+        // Read the durable admission deadline, never a caller-editable note field.
+        if note.type_name == "outbox"
+            && doc_to_json(&note.doc)["fields"]["status"] == "ready"
+            && let Some(deadline) = w.state().outbox_deadline(&id)?
+        {
+            safety["send_deadline_ms"] = json!(deadline);
+        }
         Ok::<_, writer::Error>((note, safety))
     })
     .await?;

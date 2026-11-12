@@ -266,6 +266,10 @@ fn legacy_sender_has_cap_delay_cancellation_and_new_deadline_on_retry() {
     assert_eq!(w.state().outbox_deadline(&id).unwrap(), Some(1_300_000));
     assert!(edit(&w, &id, &handler(), json!({"status": "sending"})).is_err());
     edit(&w, &id, &user(), json!({"status": "draft"})).unwrap();
+    clock.0.store(1_300_001, Ordering::SeqCst);
+    assert!(edit(&w, &id, &handler(), json!({"status": "sending"})).is_err());
+    assert_eq!(status(&w, &id), "draft");
+    assert!(w.read(&id).unwrap().doc.field("sent_at").is_none());
     clock.0.store(1_060_000, Ordering::SeqCst);
     edit(&w, &id, &user(), json!({"status": "ready"})).unwrap();
     assert_eq!(w.state().outbox_deadline(&id).unwrap(), Some(1_360_000));
