@@ -868,6 +868,9 @@ impl Round<'_> {
                 Ok(())
             }
             NoteState::Live { type_name, version } => {
+                if type_name == writer::AGENT_THREAD_TYPE {
+                    return Ok(());
+                }
                 if row.is_some_and(|r| r.base_hash == n.entry.hash) {
                     // Unchanged there since it was last taken.
                     return Ok(());
@@ -1003,7 +1006,7 @@ impl Round<'_> {
                 let Ok(note) = self.w.read(&row.note_id) else {
                     continue;
                 };
-                if writer::is_archived(&note.doc) {
+                if note.type_name == writer::AGENT_THREAD_TYPE || writer::is_archived(&note.doc) {
                     continue;
                 }
                 self.w
