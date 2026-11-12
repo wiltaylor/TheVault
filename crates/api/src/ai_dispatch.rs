@@ -291,8 +291,10 @@ pub async fn list(
         )));
     }
     let threads = blocking(w, move |w| {
+        // Filter origins below, including only trigger threads with unresolved proposals.
+        // Query each thread once rather than joining trigger-run history (which can repeat it).
         let mut cond = format!(
-            "(origin == \"{}\" || origin == \"{}\")",
+            "(origin == \"{}\" || origin == \"{}\" || pending > 0)",
             scheduler::DISPATCH_ORIGIN,
             scheduler::MENTION_ORIGIN
         );
@@ -317,6 +319,12 @@ pub async fn list(
                 let Some(id) = r["id"].as_str() else { continue };
                 let f = &r["fields"];
                 let pending = f["pending"].as_u64().unwrap_or(0) as usize;
+                let origin = f["origin"].as_str().unwrap_or("");
+                if ![scheduler::DISPATCH_ORIGIN, scheduler::MENTION_ORIGIN].contains(&origin)
+                    && !(origin.starts_with("trigger:") && pending > 0)
+                {
+                    continue;
+                }
                 let question = f["question"].as_str().unwrap_or("");
                 let running = agent_threads::running(id);
                 let state = agent_threads::state_of(running.is_some(), question, pending);

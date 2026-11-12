@@ -106,7 +106,7 @@ export function Dispatched() {
       <header class="note-header">
         <h1>Dispatched</h1>
       </header>
-      <p class="muted dispatched-intro">Notes you sent to an agent, and @ calls in notes, with where each stands.</p>
+      <p class="muted dispatched-intro">Sent notes, @ calls and trigger proposals waiting for your review.</p>
       <Show when={error()}>
         {(e) => (
           <p class="error" role="alert">

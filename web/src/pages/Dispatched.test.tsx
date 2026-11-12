@@ -57,6 +57,19 @@ afterEach(() => {
 const section = (name: string) => within(screen.getByRole("list", { name }));
 
 describe("the Dispatched page", () => {
+  it("links a trigger approval once with its origin, then removes it after resolution", async () => {
+    dispatched.mockResolvedValue({ threads: [row({ id: "trigger-thread", origin: "trigger:daily", state: "needs_you", pending: 2, notes: [] })] });
+    render(() => <Dispatched />);
+    const link = await screen.findByRole("link", { name: /Trigger: daily/ });
+    expect(link.getAttribute("href")).toBe("/agents/triage?thread=trigger-thread");
+    expect(section("Needs you").getAllByRole("link")).toHaveLength(1);
+    expect(link).toHaveTextContent("2 proposals wait for you");
+    dispatched.mockResolvedValue({ threads: [] });
+    bumpTurns({ agent: "triage", thread: "trigger-thread", turn: null, running: false });
+    await waitFor(() => expect(screen.queryByRole("link", { name: /Trigger: daily/ })).toBeNull());
+    expect(screen.getByText("Nothing waits for you.")).toBeTruthy();
+  });
+
   it("lists the threads in Active, Needs you and Done, each linking to its thread", async () => {
     dispatched.mockResolvedValue({
       threads: [

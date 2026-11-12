@@ -2892,6 +2892,11 @@ fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
     let path = format!("/api/agents/reader/threads/{thread}");
     let before = api.get(&path);
     assert_eq!(before["pending"], 3, "{before}");
+    let waiting = api.get("/api/dispatched?state=needs_you");
+    assert_eq!(waiting["threads"].as_array().unwrap().len(), 1, "{waiting}");
+    assert_eq!(waiting["threads"][0]["id"], thread);
+    assert_eq!(waiting["threads"][0]["origin"], "trigger:any");
+    assert_eq!(waiting["threads"][0]["pending"], 3);
     for event in ["proposal", "script_proposal"] {
         assert!(
             before["proposals"]
@@ -2914,10 +2919,21 @@ fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
     assert_eq!(reopened["proposals"], before["proposals"]);
     assert_eq!(reopened["pending"], 3);
     assert_eq!(api.get(&format!("/api/notes/{id}"))["version"], version);
+    let edit = reopened["proposals"].as_array().unwrap().iter().find(|p| {
+        p["data"]["op"] == "edit"
+    });
+    // Resolve one proposal through the existing Apply endpoint, the rest through Discard.
+    let edit = edit.unwrap_or(&reopened["proposals"][0]);
+    api.send("POST", "/api/ai/apply", edit["data"].clone());
+    assert_eq!(api.get(&path)["pending"], 2);
+    assert_eq!(api.get("/api/dispatched?state=needs_you")["threads"].as_array().unwrap().len(), 1);
     for p in reopened["proposals"].as_array().unwrap() {
+        if p == edit { continue; }
         api.send("POST", "/api/ai/discard", p["data"].clone());
     }
     assert_eq!(api.get(&path)["pending"], 0);
+    assert!(api.get("/api/dispatched?state=needs_you")["threads"].as_array().unwrap().is_empty());
+    assert!(api.get("/api/dispatched")["threads"].as_array().unwrap().is_empty());
     let resolved = api.get(&path)["proposals"].clone();
     api.server.restart();
     assert_eq!(api.get(&path)["proposals"], resolved);

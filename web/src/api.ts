@@ -645,7 +645,7 @@ export interface DispatchedThread {
   id: string;
   agent: string;
   title: string;
-  origin: "dispatch" | "mention";
+  origin: "dispatch" | "mention" | `trigger:${string}`;
   /** The notes the thread is about: those sent, or the note that called the agent. */
   notes: string[];
   state: DispatchState;
