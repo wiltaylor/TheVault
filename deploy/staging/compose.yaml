@@ -1,0 +1,29 @@
+name: tv-145-staging
+services:
+  staging:
+    image: tv-145-staging:local
+    build: .
+    network_mode: none
+    mem_limit: 2g
+    cpus: 1
+    pids_limit: 128
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=0700,size=64m
+    volumes:
+      - data:/data
+      - config:/config
+    environment:
+      VAULT_SECRET_KEY_FILE: /config/vault.key
+      XDG_CONFIG_HOME: /config
+    healthcheck:
+      test: [CMD, python3, /app/staging.py, health]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+volumes:
+  data:
+  config:

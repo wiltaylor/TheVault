@@ -6,7 +6,10 @@ use testkit::{FakeDecisions, Reply};
 
 fn main() {
     let fake = FakeDecisions::start();
-    println!("{}", json!({"base_url": fake.base_url(), "api_key": FakeDecisions::KEY}));
+    println!(
+        "{}",
+        json!({"base_url": fake.base_url(), "api_key": FakeDecisions::KEY})
+    );
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let answer = if line.trim() == "requests" {
