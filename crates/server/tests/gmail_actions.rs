@@ -798,7 +798,10 @@ fn interactive_agents_need_the_gmail_switch_for_archive_and_trash() {
                 1,
                 "a local-only agent delete must survive a Gmail relist"
             );
-            assert_eq!(api.server.secret_json("google_gmail_trashed"), json!(["two"]));
+            assert_eq!(
+                api.server.secret_json("google_gmail_trashed"),
+                json!(["two"])
+            );
             expect(
                 api.req("POST", &format!("/api/trash/{two}/restore"))
                     .send()
@@ -952,8 +955,14 @@ fn a_missing_message_or_missing_scope_does_not_clear_the_restore_ref() {
         let failed = api.server.settle_handlers();
         assert_eq!(failed.len(), 1);
         if !missing_message {
-            assert!(failed[0].contains("if it reached Gmail trash"), "{failed:?}");
-            assert!(api.notifications().iter().any(|n| n.to_string().contains("untrash the message in Gmail if it reached Gmail trash.")));
+            assert!(
+                failed[0].contains("if it reached Gmail trash"),
+                "{failed:?}"
+            );
+            assert!(api.notifications().iter().any(|n| {
+                n.to_string()
+                    .contains("untrash the message in Gmail if it reached Gmail trash.")
+            }));
         }
         assert_eq!(
             api.server.secret_json("google_gmail_trashed"),
