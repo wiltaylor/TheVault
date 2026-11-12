@@ -829,7 +829,7 @@ export interface AgentCallInfo {
 export interface AgentRuns {
   queue?: { waiting: number; failed: number; expired: number; dropped: number };
   tools: string[];
-  triggers: { name: string; kind: AgentTrigger["kind"]; runs: AgentRun[] }[];
+  triggers: { name: string; kind: AgentTrigger["kind"] | "recommendation"; runs: AgentRun[] }[];
 }
 
 /** A cron schedule in words and the next times it fires, as the scheduler reads it. */
@@ -2235,6 +2235,8 @@ export const api = {
    */
   markProcessedBefore: (before: string, dryRun: boolean) =>
     request<CatchUp>("POST", "/api/inbox/mark-processed", { before, dry_run: dryRun }),
+  mailTriagePreview: (agent: string, limit: number) => request<{ count: number; selected: number; preview: string }>("POST", "/api/inbox/triage", { agent, limit }),
+  mailTriageConfirm: (agent: string, preview: string) => request<{ queued: boolean }>("POST", "/api/inbox/triage", { agent, preview }),
   /** The app this page runs in, or null in a browser: the home server answers 404. */
   app: async (): Promise<AppInfo | null> => {
     try {

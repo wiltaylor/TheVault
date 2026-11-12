@@ -1506,6 +1506,28 @@ impl Writer {
         extra_files: Vec<Change>,
         dry_run: bool,
     ) -> Result<Vec<Saved>> {
+        self.apply_with_catch_up(
+            inner,
+            changes,
+            check_base,
+            author,
+            extra_files,
+            dry_run,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_with_catch_up(
+        &self,
+        inner: MutexGuard<'_, Inner>,
+        changes: Vec<NoteChange>,
+        check_base: &dyn Fn() -> Result<()>,
+        author: &Author,
+        extra_files: Vec<Change>,
+        dry_run: bool,
+        catch_up: bool,
+    ) -> Result<Vec<Saved>> {
         // Validate what was submitted before any handler sees it. A term new to an open
         // taxonomy is checked as the taxonomy will be once the write adds it.
         let mut changes = changes;
@@ -1807,7 +1829,14 @@ impl Writer {
             Author::Token(name) => Some(name.clone()),
             _ => None,
         });
-        self.hooks.after(&saved, author, &inner.schema);
+        // Internal hook provenance only. Versions and audit retain the real caller.
+        // Catch-up must not start agents, even for custom update triggers or mentions.
+        let hook_author = if catch_up {
+            Author::Handler("inbox-catch-up".into())
+        } else {
+            author.clone()
+        };
+        self.hooks.after(&saved, &hook_author, &inner.schema);
         self.people_to_contacts(&people);
         self.outbox_notifications(&items);
         Ok(saved)

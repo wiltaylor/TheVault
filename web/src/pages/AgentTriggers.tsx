@@ -454,6 +454,13 @@ export function TriggersTab(p: AgentTabProps) {
         </div>
       </fieldset>
       <SaveBar dirty={p.dirty} save={save} />
+      <Show when={runsOf("mail-triage")?.length}>
+        <section aria-label="Mail backlog recommendations">
+          <h3>Mail backlog recommendations</h3>
+          <p>Read-only summaries, not actionable proposals. No Apply action or note changes.</p>
+          <RunList agent={p.agent.name} runs={runsOf("mail-triage")} loading={runs.loading} />
+        </section>
+      </Show>
     </section>
   );
 }

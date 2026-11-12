@@ -147,6 +147,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ("GET", "/api/query", "Run a query, a page at a time"),
     (
         "POST",
+        "/api/inbox/triage",
+        "Preview or confirm a read-only mail recommendation batch (session only)",
+    ),
+    (
+        "POST",
         "/api/query",
         "Run a query sent in the body, a page at a time",
     ),

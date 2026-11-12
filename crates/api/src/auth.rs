@@ -322,6 +322,7 @@ fn is_definition_write(method: &Method, path: &str) -> bool {
 pub fn is_human_only(method: &Method, path: &str) -> bool {
     (*method == Method::POST && path == "/api/trash/empty")
         || path.starts_with("/api/ai/apply-kind/")
+        || path == "/api/inbox/triage"
         || path == "/api/agent-safety/backfill"
         || path.starts_with("/api/agent-safety/backfill/")
         || path.starts_with("/api/agent-safety/release/")
