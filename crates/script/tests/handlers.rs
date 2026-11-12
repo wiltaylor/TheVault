@@ -194,6 +194,7 @@ fn after_create(note: Value) -> Result[(), string] {
     Ok(())
 }
 fn after_update(note: Value) -> Result[(), string] { Ok(()) }
+fn reconcile_send(note: Value) -> Result[(), string] { Ok(()) }
 "#).unwrap();
     writer.create("outbox", &json_note(json!({"title": "Failed send", "kind": "event", "status": "sending"})), &user()).unwrap();
     handlers.start(&writer);
