@@ -21,6 +21,38 @@ const MODEL: &str = "claude-opus-5";
 /// An agent with browser automation and every other default.
 const DRIVER: &str = "label = \"Driver\"\n\npermissions {\n  browser = true\n}\n";
 
+#[test]
+fn browser_login_redaction() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    let api = Api::start(&fake, Some(&browser));
+    api.agent("driver", DRIVER);
+    let response = api.client.put(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token()).json(&json!({"kind":"login", "username":"fabricated-user", "password":"fabricated-pass", "totp_seed":"JBSWY3DPEHPK3PXP", "origins":[]})).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = "fabricated-user fabricated-pass JBSWY3DPEHPK3PXP";
+    browser.push_run(BrowserRun::exited(0, text, text));
+    browser.file("/work/login.txt", "text/plain", text.as_bytes().to_vec());
+    for (tool, input) in [
+        ("browser_run", json!({"command":"snapshot"})),
+        ("browser_file", json!({"path":"/work/login.txt"})),
+    ] {
+        let events = api.call(&fake, Some("driver"), tool, input);
+        let output = format!(
+            "{} {}",
+            serde_json::to_string(&events).unwrap(),
+            fake.message_requests().last().unwrap().json()
+        );
+        for secret in text.split_whitespace() {
+            assert!(!output.contains(secret), "credential leaked");
+        }
+    }
+    let lines = api
+        .server
+        .stderr_lines_when(|lines| lines.iter().any(|l| l.contains("browser: exit=")));
+    assert!(!lines.join("\n").contains("fabricated-"));
+}
+
 fn eventually(timeout: u64, mut condition: impl FnMut() -> bool) {
     let started = std::time::Instant::now();
     while !condition() {

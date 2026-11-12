@@ -102,6 +102,7 @@ mod auth;
 mod batch;
 mod brave;
 mod browser;
+mod browser_redaction;
 pub mod classifiers;
 mod defs;
 mod devices;

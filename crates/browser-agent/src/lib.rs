@@ -742,13 +742,9 @@ async fn run(
                 format!("could not run bash: {e}"),
             )
         })?;
-    let first: String = req.command.chars().take(120).collect();
     eprintln!(
-        "browser-agent: run exit={} ms={} timed_out={} cmd={}",
-        outcome.exit,
-        outcome.ms,
-        outcome.timed_out,
-        first.replace('\n', " ")
+        "browser-agent: run exit={} ms={} timed_out={}",
+        outcome.exit, outcome.ms, outcome.timed_out,
     );
     Ok(Json(json!({
         "exit": outcome.exit,
