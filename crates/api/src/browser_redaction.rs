@@ -211,7 +211,9 @@ mod tests {
     }
     #[test]
     fn uri_seed_redacts_normalized_forms() {
-        assert_seed_forms_redacted("otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&digits=8&period=60");
+        assert_seed_forms_redacted(
+            "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&digits=8&period=60",
+        );
     }
     #[test]
     fn normalized_seed_and_uri_parameters() {
