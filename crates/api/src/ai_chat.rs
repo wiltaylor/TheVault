@@ -351,8 +351,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
 }
 
 /// The change tools that always propose, whatever the agent's switches say: their change waits
-/// for the user's Apply in every run. A trigger's run ([`Held::Drop`]) leaves them out, as no one
-/// would see the proposal; a chat, a call from a note and a dispatch offer them (TV-77 F11). A
+/// for the user's Apply in every run, including durable trigger threads (TV-240). A
 /// new tool of that kind is added here, and [`Direct::covers`] never covers its events.
 const ALWAYS_PROPOSE: &[&str] = &[
     "propose_device_file_change",
@@ -367,7 +366,7 @@ const ALWAYS_PROPOSE: &[&str] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
     /// Offer it: the change waits in the thread as a proposal for the user's Apply. A chat, and
-    /// an unattended run a person asked for: a call from a note or a dispatch.
+    /// an unattended trigger, a call from a note or a dispatch.
     Propose,
     /// Leave it out, and say which changes are held back ([`withheld_note`]): a trigger's run,
     /// whose thread no one looks at.
@@ -378,10 +377,10 @@ enum Held {
 const PROPOSING_ORIGINS: [&str; 2] = [scheduler::MENTION_ORIGIN, scheduler::DISPATCH_ORIGIN];
 
 impl Held {
-    /// The mode of a turn, unattended or not, on a thread of origin `origin`. An unattended run
-    /// of any other origin, a trigger's (`trigger:<name>`) or one not known here, drops them.
+    /// Known top-level origins keep proposals in their durable thread. Unknown unattended
+    /// origins retain the conservative drop behavior.
     fn of(unattended: bool, origin: &str) -> Held {
-        if !unattended || PROPOSING_ORIGINS.contains(&origin) {
+        if !unattended || PROPOSING_ORIGINS.contains(&origin) || origin.starts_with("trigger:") {
             Held::Propose
         } else {
             Held::Drop
@@ -515,16 +514,14 @@ fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
     ))
 }
 
-/// The tools a trigger's run of `agent` is offered, by name (agents G12): [`Held::Drop`]. A call
-/// from a note or a dispatch is offered the change tools that would only propose too.
+/// The tools a trigger's run of `agent` is offered, including held proposals (TV-240).
 pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
-    let direct = Direct::of(confirm_of(agent), unattended_scope(agent));
     let brave = crate::brave::Search::load(w.state()).is_some();
     turn_tools(
         web_of(agent),
         brave,
         agent.permissions.tools.as_deref(),
-        Some(direct),
+        None,
         agent.permissions.browser && crate::ai_browser::BrowserBox::from_env().is_some(),
         crate::ai_skills::uses_skills(agent),
         false,
@@ -5225,16 +5222,18 @@ mod tests {
     }
 
     #[test]
-    fn only_a_trigger_run_drops_the_changes_that_would_only_be_proposed() {
+    fn known_top_level_runs_keep_durable_proposals() {
         // A chat keeps them, whatever its thread's origin.
         for origin in ["user", "mention", "trigger:nightly"] {
             assert_eq!(Held::of(false, origin), Held::Propose, "{origin}");
         }
-        // Unattended: a call from a note and a dispatch keep them (TV-77 D2), a trigger's run
-        // and any origin not known here drop them.
+        // Trigger proposals use the same durable transcript as mention and dispatch.
         assert_eq!(Held::of(true, "mention"), Held::Propose);
         assert_eq!(Held::of(true, "dispatch"), Held::Propose);
-        for origin in ["trigger:nightly", "trigger:mention", "subagent:01JB", ""] {
+        for origin in ["trigger:nightly", "trigger:mention"] {
+            assert_eq!(Held::of(true, origin), Held::Propose, "{origin}");
+        }
+        for origin in ["subagent:01JB", ""] {
             assert_eq!(Held::of(true, origin), Held::Drop, "{origin}");
         }
     }
