@@ -3038,7 +3038,7 @@ fn a_trigger_run_is_sent_no_ask_user_and_no_section_about_it() {
     assert!(tools.contains(&"get_note".to_owned()), "{tools:?}");
     assert!(!tools.contains(&"ask_user".to_owned()), "{tools:?}");
     let system = fake.message_requests()[0].json()["system"].to_string();
-    assert!(system.contains("This run is unattended"), "{system}");
+    assert!(!system.contains("This run is unattended"), "{system}");
     assert!(!system.contains("Asking the user"), "{system}");
 }
 
@@ -3074,7 +3074,7 @@ fn a_failed_run_is_recorded_and_notified_once() {
 }
 
 #[test]
-fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
+fn an_unattended_run_starts_sub_agents_that_keep_held_proposals() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent(
@@ -3100,12 +3100,11 @@ fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
     api.memo("Roof", "open");
     api.advance("PT31S");
     assert_eq!(fake.message_requests().len(), 3);
-    // The sub agent, like its run, has nobody to ask (subagents U8): it is offered the change
-    // tools it makes itself, not those that would only propose, and never start_subagent.
+    // The sub agent inherits the parent's proposal mode, but cannot start another subagent.
     let sub = tool_names(&fake, 1);
     assert!(sub.contains(&"propose_delete".to_owned()), "{sub:?}");
     assert!(sub.contains(&"get_note".to_owned()), "{sub:?}");
-    assert!(!sub.contains(&"propose_create".to_owned()), "{sub:?}");
+    assert!(sub.contains(&"propose_create".to_owned()), "{sub:?}");
     assert!(!sub.contains(&"start_subagent".to_owned()), "{sub:?}");
     let runs = api.runs("chief");
     assert_eq!(

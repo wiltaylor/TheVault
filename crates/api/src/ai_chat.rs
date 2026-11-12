@@ -368,8 +368,8 @@ enum Held {
     /// Offer it: the change waits in the thread as a proposal for the user's Apply. A chat, and
     /// an unattended trigger, a call from a note or a dispatch.
     Propose,
-    /// Leave it out, and say which changes are held back ([`withheld_note`]): a trigger's run,
-    /// whose thread no one looks at.
+    /// Leave it out, and say which changes are held back ([`withheld_note`]) for an unknown
+    /// unattended origin without a supported review path.
     Drop,
 }
 
@@ -5432,7 +5432,7 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_run_leaves_out_the_task_proposals_and_an_agent_with_them_runs_as_admin() {
+    fn a_dropped_run_leaves_out_task_proposals_and_an_agent_with_them_runs_as_admin() {
         let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
         let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
         let names = |drop: Option<Direct>| -> Vec<String> {
@@ -5467,7 +5467,7 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_run_leaves_out_the_script_proposals_and_names_them() {
+    fn a_dropped_run_leaves_out_script_proposals_and_names_them() {
         let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
         let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
         let names = |drop: Option<Direct>| -> Vec<String> {
