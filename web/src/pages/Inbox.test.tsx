@@ -66,6 +66,28 @@ afterEach(() => {
 const rowOf = (title: string) => screen.getByRole("link", { name: title }).closest("li")!;
 
 describe("the Inbox", () => {
+  it("keeps a convert picker and its input across refreshed and reordered rows", async () => {
+    const capture = { ...items[0], source: SOURCES.find((s) => s.key === "captures")! };
+    loadInbox.mockResolvedValueOnce({ items: [capture], total: 1 });
+    render(() => <Inbox />);
+    await screen.findByRole("link", { name: "Roof quote" });
+    const originalRow = rowOf("Roof quote");
+    fireEvent.click(within(originalRow).getByRole("button", { name: "Convert to…" }));
+    const input = await screen.findByRole("combobox");
+    fireEvent.input(input, { target: { value: "Ta" } });
+    loadInbox.mockResolvedValueOnce({ items: [items[1], {
+      ...capture, row: { ...capture.row, title: "Updated capture" },
+    }], total: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Inbox", exact: true }));
+    await screen.findByRole("link", { name: "Updated capture" });
+    expect(rowOf("Updated capture")).toBe(originalRow);
+    expect(screen.getByRole("combobox")).toBe(input);
+    expect(input).toHaveValue("Ta");
+    fireEvent.input(input, { target: { value: "Task" } });
+    expect(input).toHaveValue("Task");
+    expect(within(originalRow).getByRole("button", { name: "Convert to…" })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("shows held counts and separates scams from other holds", async () => {
     vi.mocked(api.heldAgentNotes).mockResolvedValueOnce({ notes: [
       { id: "scam", type: "email", created: null, agent_safety: { status: "held", reason: "scam", fingerprint: "a" } },
