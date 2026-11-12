@@ -33,7 +33,7 @@ fn create(w: &Writer, title: &str) -> writer::Saved {
 fn attachment_envelope_replacement_invalidates_note_clearance() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
-    w.put_type("email", "label = \"Email\"\nfield attachments { kind = \"asset\" list = true }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    w.put_type("email", "label = \"Email\"\nfield attachments { kind = \"list\" items = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
     w.activate_agent_safety().unwrap();
     let asset = w.put_asset("invoice.csv", b"amount\n12\n".to_vec()).unwrap();
     let owner = Author::Session("owner".into());
