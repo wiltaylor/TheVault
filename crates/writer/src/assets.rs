@@ -55,8 +55,13 @@ impl Writer {
     /// Creation-time intent only. A missing marker (including pre-upgrade assets) is unknown.
     /// Incoming provenance always wins, including after unlink, eviction or retry.
     pub fn asset_is_manual(&self, id: &str) -> Result<bool> {
-        Ok(self.state().meta(&format!("asset.manual.{id}"))?.as_deref() == Some("1")
-            && self.state().meta(&format!("agent_safety.asset.{id}"))?.is_none())
+        Ok(
+            self.state().meta(&format!("asset.manual.{id}"))?.as_deref() == Some("1")
+                && self
+                    .state()
+                    .meta(&format!("agent_safety.asset.{id}"))?
+                    .is_none(),
+        )
     }
 
     /// The in-app picker, camera and drawing create a fresh ID. Never expose this through
@@ -73,12 +78,12 @@ impl Writer {
     fn mark_imported_asset_upload(&self, id: &str) -> Result<()> {
         if self.state().meta("asset.local_device")?.as_deref() == Some("1")
             || script_core::run::peek(|run| {
-            matches!(
-                run.job.name.as_str(),
-                "google_gmail" | "google_calendar" | "google_mail"
-            )
-        })
-        .unwrap_or(false)
+                matches!(
+                    run.job.name.as_str(),
+                    "google_gmail" | "google_calendar" | "google_mail"
+                )
+            })
+            .unwrap_or(false)
         {
             self.mark_incoming_asset(id)?;
         }
@@ -196,7 +201,13 @@ impl Writer {
         Ok(dir.join(format!("{}.part", ulid::Ulid::new())))
     }
 
-    fn put_asset_file_as(&self, id: &str, filename: &str, file: &std::path::Path, manual: bool) -> Result<Asset> {
+    fn put_asset_file_as(
+        &self,
+        id: &str,
+        filename: &str,
+        file: &std::path::Path,
+        manual: bool,
+    ) -> Result<Asset> {
         if !manual {
             self.mark_imported_asset_upload(id)?;
         }

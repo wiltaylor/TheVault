@@ -1524,7 +1524,10 @@ impl Engine {
             let path = self.writer.vault().root().join(asset.path());
             let what = format!("sending asset {}", asset.id);
             let manual = self.writer.asset_is_manual(&asset.id)?;
-            let error = match self.home.put_asset_file(&asset.id, &asset.filename, &path, manual) {
+            let error = match self
+                .home
+                .put_asset_file(&asset.id, &asset.filename, &path, manual)
+            {
                 Ok(answer) if answer.status.is_success() => None,
                 Ok(answer) if matches!(answer.status.as_u16(), 401 | 403) => {
                     answer.ok(&what)?;

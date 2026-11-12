@@ -310,7 +310,13 @@ impl Home {
     /// `PUT /api/assets/{id}` with the file at `path`, streamed from disk. Fails with
     /// [`Error::Transfer`] when no bytes move for [`Timeouts::stall`], and with [`Error::Http`]
     /// only when the server cannot be reached at all.
-    pub fn put_asset_file(&self, id: &str, filename: &str, path: &Path, manual: bool) -> Result<Answer> {
+    pub fn put_asset_file(
+        &self,
+        id: &str,
+        filename: &str,
+        path: &Path,
+        manual: bool,
+    ) -> Result<Answer> {
         let file = std::fs::File::open(path)
             .map_err(|e| Error::Transfer(format!("reading {}: {e}", path.display())))?;
         let size = file
@@ -321,7 +327,10 @@ impl Home {
         let progress = Progress::new();
         let request = client
             .put(self.url(&format!("/api/assets/{id}")))
-            .query(&[("filename", filename), ("provenance", if manual { "manual" } else { "incoming" })])
+            .query(&[
+                ("filename", filename),
+                ("provenance", if manual { "manual" } else { "incoming" }),
+            ])
             .header(AUTHORIZATION, format!("Bearer {}", self.remote.token))
             .header(ACCEPT, "application/json")
             .header(CONTENT_LENGTH, size)

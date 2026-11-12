@@ -45,10 +45,12 @@ fn manual_asset_provenance_survives_restart_and_cache_refill_but_not_incoming() 
     w.evict_asset(&asset.id).unwrap();
     let file = w.incoming_file().unwrap();
     std::fs::write(&file, b"drawing").unwrap();
-    w.cache_asset_file_with_id(&asset.id, "drawing.png", &file).unwrap();
+    w.cache_asset_file_with_id(&asset.id, "drawing.png", &file)
+        .unwrap();
     assert!(w.agent_may_read_asset(&asset.id));
     // A generic import using the same ID, even with identical bytes, always wins.
-    w.put_asset_with_id(&asset.id, "drawing.png", b"drawing".to_vec()).unwrap();
+    w.put_asset_with_id(&asset.id, "drawing.png", b"drawing".to_vec())
+        .unwrap();
     assert!(!w.asset_is_manual(&asset.id).unwrap());
     assert!(!w.agent_may_read_asset(&asset.id));
     drop(w);
@@ -67,7 +69,12 @@ fn device_unknown_old_native_script_and_file_uploads_never_gain_manual_intent() 
     let file = w.incoming_file().unwrap();
     std::fs::write(&file, b"share").unwrap();
     let shared = w.put_asset_file("share.bin", &file).unwrap();
-    for id in [&old.id, &native.id, script["id"].as_str().unwrap(), &shared.id] {
+    for id in [
+        &old.id,
+        &native.id,
+        script["id"].as_str().unwrap(),
+        &shared.id,
+    ] {
         assert!(!w.asset_is_manual(id).unwrap());
         assert!(!w.agent_may_read_asset(id));
     }
@@ -84,7 +91,12 @@ fn failed_manual_creation_and_later_incoming_reference_fail_closed() {
     std::fs::write(&file, b"photo").unwrap();
     let asset = w.put_manual_asset_file("photo.png", &file).unwrap();
     w.put_type("email", "label = \"Email\"\nfield attachments { kind = \"list\" items = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
-    w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Incoming", "attachments":[asset.id]}})), &Author::Session("owner".into())).unwrap();
+    w.create(
+        "email",
+        &Input::Json(serde_json::json!({"fields":{"title":"Incoming", "attachments":[asset.id]}})),
+        &Author::Session("owner".into()),
+    )
+    .unwrap();
     assert!(!w.asset_is_manual(&asset.id).unwrap());
     assert!(!w.agent_may_read_asset(&asset.id));
 }

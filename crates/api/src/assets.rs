@@ -26,20 +26,32 @@ type Shared = State<Arc<Writer>>;
 
 // A source assertion is intent, not declassification. Authentication and a live pairing,
 // not an app version or a supplied device ID, grant this narrow exception.
-fn manual_upload(w: &Writer, author: &state::Author, provenance: Option<&str>) -> writer::Result<bool> {
+fn manual_upload(
+    w: &Writer,
+    author: &state::Author,
+    provenance: Option<&str>,
+) -> writer::Result<bool> {
     if provenance != Some("manual") {
         return Ok(false);
     }
     match author {
         state::Author::Session(_) => Ok(true),
-        state::Author::Token(name) => Ok(w.state().list_tokens()?.iter()
+        state::Author::Token(name) => Ok(w
+            .state()
+            .list_tokens()?
+            .iter()
             .any(|t| t.name == *name && t.kind == "device")
             && w.state().device_for_token(name)?.is_some()),
         _ => Ok(false),
     }
 }
 
-fn mark_device_upload(w: &Writer, author: &state::Author, id: &str, manual: bool) -> writer::Result<()> {
+fn mark_device_upload(
+    w: &Writer,
+    author: &state::Author,
+    id: &str,
+    manual: bool,
+) -> writer::Result<()> {
     if let state::Author::Token(name) = author
         && w.state()
             .list_tokens()?

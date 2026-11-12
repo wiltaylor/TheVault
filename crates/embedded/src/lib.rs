@@ -149,7 +149,9 @@ impl Embedded {
         let queue = Arc::new(sync::Queue::open(&state_path).context("opening the sync queue")?);
         // All native, share and script creation paths are incoming unless the UI explicitly
         // uses the fresh-ID manual upload path. Old assets never acquire a manual marker.
-        state.set_meta("asset.local_device", "1").context("recording device asset policy")?;
+        state
+            .set_meta("asset.local_device", "1")
+            .context("recording device asset policy")?;
         let handlers = script::Handlers::on_device(script::Limits::default());
         let bound = Arc::new(OnceLock::new());
         let writer = Arc::new(
