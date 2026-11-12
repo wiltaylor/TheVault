@@ -346,6 +346,23 @@ fn device_can_narrow_but_cannot_broaden_send_conditions() {
 }
 
 #[test]
+fn agents_can_delete_local_only_events_with_residual_send_updates() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    for author in [agent("drafter"), Author::AgentMail("drafter".into())] {
+        let event = w
+            .create(
+                "event",
+                &Input::Json(json!({"fields": {"title": "Failed insert", "send_updates": "all"}})),
+                &handler(),
+            )
+            .unwrap();
+        w.delete(&event.id, Some(&event.version), &author).unwrap();
+        assert!(matches!(w.read(&event.id), Err(Error::NotFound(_))));
+    }
+}
+
+#[test]
 fn gmail_capability_does_not_bypass_calendar_review() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());

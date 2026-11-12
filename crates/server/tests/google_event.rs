@@ -887,6 +887,7 @@ fn deleting_deletes_in_google_and_restoring_recreates_it_with_a_new_google_ref()
     let writes = api.writes();
     assert_eq!(writes.len(), 1, "{writes:?}");
     assert_eq!(writes[0].method, "DELETE");
+    assert!(writes[0].query("sendUpdates").is_none());
     assert_eq!(
         writes[0].route(),
         format!("{CALENDAR_PATH}/calendars/primary/events/standup")
