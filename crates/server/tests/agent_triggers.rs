@@ -3332,6 +3332,49 @@ fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
     let path = format!("/api/agents/reader/threads/{thread}");
     let before = api.get(&path);
     assert_eq!(before["pending"], 3, "{before}");
+    let waiting = api.get("/api/dispatched?state=needs_you");
+    assert_eq!(waiting["threads"].as_array().unwrap().len(), 1, "{waiting}");
+    assert_eq!(waiting["threads"][0]["id"], thread);
+    assert_eq!(waiting["threads"][0]["origin"], "trigger:any");
+    assert_eq!(waiting["threads"][0]["pending"], 3);
+    let agent_token = api.external_agent_token();
+    let denied = api
+        .client
+        .get(api.server.url("/api/dispatched"))
+        .bearer_auth(agent_token["secret"].as_str().unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(
+        denied.status(),
+        403,
+        "agent tokens cannot list approval threads"
+    );
+    let read_token = api.send(
+        "POST",
+        "/api/tokens",
+        json!({"name":"approval-reader", "scope":"read"}),
+    );
+    let listed: Value = api
+        .client
+        .get(api.server.url("/api/dispatched?state=needs_you"))
+        .bearer_auth(read_token["secret"].as_str().unwrap())
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(listed["threads"], waiting["threads"]);
+    for route in ["/api/ai/apply", "/api/ai/discard"] {
+        let denied = api
+            .client
+            .post(api.server.url(route))
+            .bearer_auth(read_token["secret"].as_str().unwrap())
+            .json(&before["proposals"][0]["data"])
+            .send()
+            .unwrap();
+        assert_eq!(denied.status(), 403, "read tokens cannot resolve proposals");
+    }
     for event in ["proposal", "script_proposal"] {
         assert!(
             before["proposals"]
@@ -3354,10 +3397,41 @@ fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
     assert_eq!(reopened["proposals"], before["proposals"]);
     assert_eq!(reopened["pending"], 3);
     assert_eq!(api.get(&format!("/api/notes/{id}"))["version"], version);
+    let edit = reopened["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["event"] == "proposal" && p["data"]["op"] != "delete");
+    // Resolve one proposal through the existing Apply endpoint, the rest through Discard.
+    let edit = edit.expect("the trigger retained its edit proposal");
+    api.send("POST", "/api/ai/apply", edit["data"].clone());
+    assert_eq!(api.get(&path)["pending"], 2);
+    assert_eq!(
+        api.get("/api/dispatched?state=needs_you")["threads"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     for p in reopened["proposals"].as_array().unwrap() {
+        if p == edit {
+            continue;
+        }
         api.send("POST", "/api/ai/discard", p["data"].clone());
     }
     assert_eq!(api.get(&path)["pending"], 0);
+    assert!(
+        api.get("/api/dispatched?state=needs_you")["threads"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        api.get("/api/dispatched")["threads"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     let resolved = api.get(&path)["proposals"].clone();
     api.server.restart();
     assert_eq!(api.get(&path)["proposals"], resolved);

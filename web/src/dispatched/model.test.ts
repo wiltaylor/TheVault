@@ -53,6 +53,8 @@ describe("the Dispatched model", () => {
     expect(originText(row({ notes: ["a"] }))).toBe("Sent 1 note");
     expect(originText(row({ notes: ["a", "b"] }))).toBe("Sent 2 notes");
     expect(originText(row({ origin: "mention" }))).toBe("Called from a note");
+    expect(originText(row({ origin: "trigger:daily", notes: [] }))).toBe("Trigger: daily");
+    expect(originText(row({ origin: "trigger:mail:arrived" }))).toBe("Trigger: mail:arrived");
   });
 
   it("links to the thread in the agent's chat", () => {
