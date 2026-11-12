@@ -539,7 +539,8 @@ pub async fn authenticate(
         return human_only_for(req.uri().path()).into_response();
     }
     let path = req.uri().path();
-    let agent_admin_route = is_definition_write(req.method(), path)
+    let agent_admin_route = path == "/api/integrations/attempt-limits"
+        || is_definition_write(req.method(), path)
         || (*req.method() == Method::POST
             && matches!(
                 path,
@@ -625,7 +626,7 @@ pub async fn login(
         let ok = w.state().verify_password(&body.password)?;
         // Never the password itself (activity Y2).
         let detail = json!({ "user_agent": agent.as_deref().map(|a| state::one_line(a, 200)) });
-        w.state().record_activity(if ok {
+        if ok { w.state().record_activity(
             state::NewActivity::new(
                 "auth.login",
                 "auth",
@@ -633,10 +634,7 @@ pub async fn login(
                 "Signed in with the password",
             )
             .detail(detail)
-        } else {
-            state::NewActivity::server("auth.login_failed", "auth", "A password login failed")
-                .detail(detail)
-        });
+        ); }
         Ok::<_, state::Error>(ok)
     })
     .await?;

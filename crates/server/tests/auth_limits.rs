@@ -131,6 +131,8 @@ fn all_three_endpoints_share_failures_and_notify_once() {
         .json()
         .unwrap();
     let items = notifications["items"].as_array().unwrap();
+    let notice = items.iter().find(|n| n["source"] == "server:auth").unwrap();
+    assert!(notice["body"].as_str().unwrap().contains("127.0.0.1 (peer)"));
     assert_eq!(
         items
             .iter()

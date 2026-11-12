@@ -588,7 +588,8 @@ pub fn router(
     if let Some(desktop) = browser::desktop_router(&browser) {
         app = app.merge(desktop);
     }
-    app.layer(middleware::from_fn_with_state(sessions, auth::authenticate))
+    app.route("/api/integrations/attempt-limits", axum::routing::get(attempt_limits::diagnostic))
+        .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
         .layer(middleware::from_fn_with_state(
             limits,
             attempt_limits::check,

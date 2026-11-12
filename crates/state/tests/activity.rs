@@ -37,6 +37,26 @@ fn owner() -> Author {
 }
 
 #[test]
+fn authentication_addresses_expire_after_24_hours() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = TestClock::new(1_000);
+    let s = open(&dir, clock.clone());
+    for kind in ["auth.login_failed", "auth.pair_failed", "auth.agent_code_failed", "auth.login"] {
+        s.record_activity(NewActivity::server(kind, "auth", "Check").detail(json!({"client_address":"192.0.2.1"})));
+    }
+    let n = s.add_notification(&state::NewNotification {
+        title: "Repeated failures".into(), body: Some("192.0.2.1".into()),
+        source: "server:auth".into(), note_id: None, url: None,
+    }).unwrap();
+    clock.advance(DAY_MS - 1);
+    assert_eq!(s.activity(&ActivityFilter::default()).unwrap().items.len(), 4);
+    assert!(s.notification(&n.id).unwrap().is_some());
+    clock.advance(1);
+    assert_eq!(s.activity(&ActivityFilter::default()).unwrap().items.len(), 1);
+    assert!(s.notification(&n.id).unwrap().is_none());
+}
+
+#[test]
 fn activity_upkeep_prunes_call_reservations_and_copy_refusals() {
     let dir = tempfile::tempdir().unwrap();
     let clock = TestClock::new(1_000);

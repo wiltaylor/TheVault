@@ -316,6 +316,7 @@ impl State {
 
     /// One notification by id.
     pub fn notification(&self, id: &str) -> Result<Option<Notification>> {
+        self.prune_auth_failure_history()?;
         Ok(self
             .conn()
             .query_row(
@@ -334,6 +335,7 @@ impl State {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<NotificationPage> {
+        self.prune_auth_failure_history()?;
         let limit = limit.clamp(1, MAX_NOTIFICATIONS);
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
