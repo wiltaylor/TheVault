@@ -38,6 +38,7 @@ mod auth_limits;
 mod background_turns;
 mod brave;
 mod browser_desktop;
+mod browser_secrets;
 mod canvas;
 mod classifiers;
 mod client_ids;

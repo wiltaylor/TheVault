@@ -245,14 +245,78 @@ impl State {
     }
 
     pub fn delete_login_secret(&self, name: &str) -> Result<()> {
-        if self
-            .conn()
-            .execute("DELETE FROM login_secrets WHERE name=?1", [name])?
-            == 0
-        {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if tx.execute("DELETE FROM login_secrets WHERE name=?1", [name])? == 0 {
             return Err(Error::UnknownSecret(name.to_owned()));
         }
+        tx.execute("INSERT INTO browser_secret_events(kind,name,time_ms) VALUES ('deleted',?1,MAX(?2,COALESCE((SELECT MAX(time_ms)+1 FROM browser_secret_events),?2))) ON CONFLICT(kind,name) DO UPDATE SET time_ms=excluded.time_ms", params![name, self.now()])?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Called only after an owner saves an agent through the admin definition route.
+    /// The logical millisecond clock also orders events when wall time stands still or rolls back.
+    pub fn confirm_browser_secrets(&self, agent: &str, names: &[String]) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("INSERT INTO browser_secret_events(kind,name,time_ms) VALUES ('saved',?1,MAX(?2,COALESCE((SELECT MAX(time_ms)+1 FROM browser_secret_events),?2))) ON CONFLICT(kind,name) DO UPDATE SET time_ms=excluded.time_ms", params![agent, self.now()])?;
+        tx.execute("DELETE FROM browser_secret_grants WHERE agent=?1", [agent])?;
+        for name in names {
+            tx.execute("INSERT INTO browser_secret_grants(agent,name,time_ms) SELECT ?1,?2,time_ms FROM browser_secret_events WHERE kind='saved' AND name=?1", params![agent, name])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Revokes all confirmed names when an agent is deleted, including proposal Apply.
+    pub fn revoke_browser_secrets(&self, agent: &str) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM browser_secret_grants WHERE agent=?1", [agent])?;
+        Ok(())
+    }
+
+    /// A proposal may remove confirmations, never refresh or add them.
+    pub fn narrow_browser_secrets(&self, agent: &str, names: &[String]) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let previous: Vec<String> = {
+            let mut stmt = tx.prepare("SELECT name FROM browser_secret_grants WHERE agent=?1")?;
+            stmt.query_map([agent], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        for name in previous {
+            if !names.contains(&name) {
+                tx.execute(
+                    "DELETE FROM browser_secret_grants WHERE agent=?1 AND name=?2",
+                    params![agent, name],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Revoke grants for agent files whose absence the writer has observed.
+    pub fn revoke_missing_browser_secrets(&self, exists: impl Fn(&str) -> bool) -> Result<()> {
+        let conn = self.conn();
+        let agents: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT DISTINCT agent FROM browser_secret_grants")?;
+            stmt.query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        for agent in agents {
+            if !exists(&agent) {
+                conn.execute("DELETE FROM browser_secret_grants WHERE agent=?1", [agent])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Liveness only, not an authorization check: callers must also check the agent's list.
+    /// Missing save records fail closed, including files imported without owner confirmation.
+    pub fn browser_secret_active(&self, agent: &str, name: &str) -> Result<bool> {
+        Ok(self.conn().query_row("SELECT EXISTS(SELECT 1 FROM login_secrets l JOIN browser_secret_grants g ON g.agent=?1 AND g.name=l.name WHERE l.name=?2 AND g.time_ms > COALESCE((SELECT time_ms FROM browser_secret_events WHERE kind='deleted' AND name=?2),-1))", params![agent, name], |r| r.get(0))?)
     }
 
     /// Whether a key file was loaded, so secrets can be read and written.

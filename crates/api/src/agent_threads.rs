@@ -1150,12 +1150,115 @@ pub async fn start(
 }
 
 /// `GET /api/agents/{name}/threads/{id}`.
+fn client_json(w: &Writer, t: &Thread, author: &state::Author) -> Result<Value, ApiError> {
+    let mut value = t.json();
+    if !crate::tasks::may_manage_login_secrets(w, author)? {
+        crate::ai_agents::hide_browser_secrets(&mut value);
+    }
+    Ok(value)
+}
+
+/// A client copy of a stored note, never the text used by Apply or persistence.
+pub(crate) fn redact_note(
+    w: &Writer,
+    author: &state::Author,
+    type_name: &str,
+    text: &str,
+) -> Result<String, ApiError> {
+    if crate::tasks::may_manage_login_secrets(w, author)? {
+        return Ok(text.to_owned());
+    }
+    redact_note_text(type_name, text)
+}
+
+fn redaction_error() -> ApiError {
+    ApiError::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "private_transcript",
+        "The private transcript could not be redacted.",
+    )
+}
+
+fn redact_note_text(type_name: &str, text: &str) -> Result<String, ApiError> {
+    writer::redact_agent_note(type_name, text).map_err(|_| redaction_error())
+}
+
+pub(crate) fn redact_content(value: &mut Value) -> Result<(), ApiError> {
+    writer::redact_agent_content(value).map_err(|_| redaction_error())
+}
+
+/// All tool answers pass here before any provider sees them, including script/query tools.
+pub(crate) fn redact_tool_content(text: &str) -> Result<String, ApiError> {
+    match serde_json::from_str::<Value>(text) {
+        Ok(mut value) => {
+            redact_content(&mut value)?;
+            Ok(value.to_string())
+        }
+        Err(_) => redact_note_text("", text),
+    }
+}
+
+const REDACTION_LIMIT: usize = 32 * 1024 * 1024;
+
+/// A single response boundary for every authenticated content route, including errors.
+pub(crate) async fn redact_response(
+    w: &Writer,
+    author: &state::Author,
+    path: &str,
+    response: axum::response::Response,
+) -> Result<axum::response::Response, ApiError> {
+    // The owner pays no buffering/parsing cost, even for a large response.
+    if crate::tasks::may_manage_login_secrets(w, author)? {
+        return Ok(response);
+    }
+    // Sync redacts each entry before serialization and must deliver even one huge note.
+    if path == "/api/sync/changes" {
+        return Ok(response);
+    }
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let json = content_type.starts_with("application/json");
+    let wcl = content_type.starts_with("text/plain") || content_type.contains("wcl");
+    // Asset downloads, zips and SSE keep their own authorization/streaming boundary.
+    if path.starts_with("/api/assets/") || (!json && !wcl) {
+        return Ok(response);
+    }
+    let (mut parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, REDACTION_LIMIT).await.map_err(|_| ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "response_too_large", "This response exceeds the 32 MiB Login-metadata scan limit. Narrow the query or use an owner session."))?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| redaction_error())?;
+    let text = if json {
+        let mut value: Value = serde_json::from_str(text).map_err(|_| redaction_error())?;
+        redact_content(&mut value)?;
+        value.to_string()
+    } else {
+        let type_name = parts
+            .headers
+            .get("x-note-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        redact_note(w, author, type_name, text)?
+    };
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    Ok(axum::response::Response::from_parts(
+        parts,
+        axum::body::Body::from(text),
+    ))
+}
+
 pub async fn read(
     State(w): Shared,
+    Caller(author): Caller,
     Path((name, id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
-    let t = blocking(w, move |w| Thread::read_of(w, &name, &id)).await?;
-    Ok(Json(t.json()))
+    let value = blocking(w, move |w| {
+        let t = Thread::read_of(w, &name, &id)?;
+        client_json(w, &t, &author)
+    })
+    .await?;
+    Ok(Json(value))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1178,10 +1281,11 @@ pub async fn rename(
     let t = blocking(w, move |w| {
         Thread::read_of(w, &name, &id)?;
         let label = agent_label(w, &name);
-        save(w, &id, &label, Some(&author), |t| t.title = title.clone())
+        let t = save(w, &id, &label, Some(&author), |t| t.title = title.clone())?;
+        client_json(w, &t, &author)
     })
     .await?;
-    Ok(Json(t.json()))
+    Ok(Json(t))
 }
 
 /// Where a thread is cut: before message `at`.
@@ -1245,13 +1349,15 @@ pub async fn truncate(
         // The writer deletes the sub agent sessions of the calls cut (subagents U5). A question
         // the agent asked ended the thread's last turn, after every question of the user's, so
         // the cut always takes it away too (TV-77 D3).
-        save(w, &id, &label, Some(&author), move |t| {
+        let t = save(w, &id, &label, Some(&author), move |t| {
             t.transcript = cut.clone();
             t.question.clear();
-        })
+        })?;
+        drop(_busy);
+        client_json(w, &t, &author)
     })
     .await?;
-    Ok(Json(t.json()))
+    Ok(Json(t))
 }
 
 /// `POST /api/agents/{name}/threads/{id}/fork`: a new thread from this one's first `at` messages.
@@ -1268,12 +1374,13 @@ pub async fn fork(
         let title = format!("{} (fork)", thread.title);
         let made = create(w, &thread.agent, Some(&title), "user")?;
         let label = agent_label(w, &name);
-        save(w, &made.id, &label, Some(&author), move |t| {
+        let t = save(w, &made.id, &label, Some(&author), move |t| {
             t.transcript = cut.clone()
-        })
+        })?;
+        client_json(w, &t, &author)
     })
     .await?;
-    Ok((StatusCode::CREATED, Json(t.json())))
+    Ok((StatusCode::CREATED, Json(t)))
 }
 
 /// `DELETE /api/agents/{name}/threads/{id}`: the note goes to the trash.
@@ -1294,6 +1401,70 @@ pub async fn delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn browser_secrets_response_boundary_is_bounded_and_keeps_streams_unbuffered() {
+        use axum::body::Body;
+        use axum::http::header::CONTENT_TYPE;
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        let reader = state::Author::Token("reader".into());
+        for content_type in ["application/json", "text/plain"] {
+            let response = axum::response::Response::builder()
+                .header(CONTENT_TYPE, content_type)
+                .body(Body::from("x".repeat(REDACTION_LIMIT + 1)))
+                .unwrap();
+            let error = redact_response(&w, &reader, "/api/new-content-route", response)
+                .await
+                .unwrap_err();
+            assert_eq!(error.status, StatusCode::PAYLOAD_TOO_LARGE);
+        }
+        // A body which errors when polled proves the bypass did not consume it.
+        for (author, path, content_type) in [
+            (
+                state::Author::Session("owner".into()),
+                "/api/query",
+                "application/json",
+            ),
+            (reader.clone(), "/api/ai/chat", "text/event-stream"),
+            (reader.clone(), "/api/assets/id", "application/json"),
+            (
+                reader.clone(),
+                "/api/skills/example/export",
+                "application/zip",
+            ),
+        ] {
+            let body = Body::from_stream(futures_util::stream::once(async {
+                Err::<axum::body::Bytes, _>(std::io::Error::other("body was polled"))
+            }));
+            let response = axum::response::Response::builder()
+                .header(CONTENT_TYPE, content_type)
+                .body(body)
+                .unwrap();
+            let response = redact_response(&w, &author, path, response).await.unwrap();
+            assert!(
+                axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .is_err()
+            );
+        }
+        let note = writer::Input::Json(json!({"fields":{"transcript":json!({"messages":[],"proposals":[{"kind":"agent", "name":"helper", "before":"permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n"}]}).to_string()},"blocks":[]})).parse("note.wcl").unwrap();
+        let response = axum::response::Response::builder()
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({"type":"agent_thread","wcl":writer::print_doc(&note)}).to_string(),
+            ))
+            .unwrap();
+        let response = redact_response(&w, &reader, "/api/new-content-route", response)
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), REDACTION_LIMIT)
+            .await
+            .unwrap();
+        assert!(!std::str::from_utf8(&bytes).unwrap().contains("bank"));
+    }
 
     fn stored(event: &str, data: Value, status: Status) -> Stored {
         Stored {

@@ -519,6 +519,7 @@ fn permissions_narrow_for_a_throwaway_and_meet_for_a_named_agent() {
         "confirm": null,
         "web": null,
         "browser": true,
+        "browser_secrets": null,
         "run_code": null,
     });
     fake.push(calls(&[narrowed]));
@@ -645,7 +646,7 @@ fn delegated_apply_rechecks_the_current_parent_and_saved_ceiling() {
         if named {
             start.2["agent"] = json!("writer");
         }
-        start.2["permissions"] = json!({ "types": ["item"], "tools": null, "confirm": null, "web": null, "browser": null, "run_code": null });
+        start.2["permissions"] = json!({ "types": ["item"], "tools": null, "confirm": null, "web": null, "browser": null, "browser_secrets": null, "run_code": null });
         fake.push(calls(&[start]));
         fake.push(AnthropicMessage::new().tool_use("toolu_s", "propose_create", item("From sub")));
         fake.push(AnthropicMessage::text("Proposed."));

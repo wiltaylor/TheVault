@@ -683,6 +683,7 @@ export interface AgentPermissions {
    * absent from a server before the browser box.
    */
   browser?: boolean;
+  browser_secrets?: string[];
   gmail_actions?: boolean;
   /**
    * The skills the agent is offered, by name (skills S6); null or absent is every valid skill.
@@ -755,6 +756,7 @@ export interface AgentForm {
 
 /** An agent file, parsed, with its WCL (agents G1). */
 export interface Agent extends AgentForm {
+  browser_secrets_inactive?: string[];
   name: string;
   built_in: boolean;
   wcl: string;

@@ -108,6 +108,51 @@ Then revoke the token as above, and remove the line you added to the agent's ins
 | `POST /api/agent-codes` `{ name, scope, server_url? }` | `admin` | Issues a code that works once for 10 minutes. Answers `{ code, expires, name, scope, server_url, command }`. `server_url` defaults to the address the request came in on. |
 | `POST /api/agent-codes/redeem` `{ code }` | None | Creates the `agent-<name>` token, replacing one of that name. Answers 201 `{ server_url, token, name, scope }`, or 410 for a wrong, used or expired code. |
 | `GET /agent/install.sh` | None | The install script, with the server's URL as the request reached it. Behind a proxy, the server reads `X-Forwarded-Host` and `X-Forwarded-Proto`. |
+# Login secret permissions
+
+On Permissions, Browser automation must be on before selecting Login secrets.
+The list is empty by default. Only an owner session or ordinary admin user token
+can save it. Agent changes wait for Apply and cannot re-confirm deleted names.
+Names missing after deletion or rename remain listed as "missing - re-confirm".
+Recreating the same name does not reactivate an old grant. The owner must save
+the list again. Exactly the saved names and their confirmation times live in
+state.db, alongside deletion times, not in agent files. A file changed outside
+the app or by a proposal can only narrow that confirmed list. Deleting an agent
+revokes its confirmations, so recreating its name cannot inherit them.
+The sync feed hides Login names from non-managers, including paired devices,
+and marks those entries with `browser_secrets_hidden`.
+An observed missing agent file also revokes its confirmations, at startup, on
+agent scans and on missing-file reads. There is no filesystem watcher. Removing
+and recreating a file between observations is not detectable here. That requires
+write access to the server's agent files, which already permits any file change.
+Applying an agent proposal can only narrow its confirmed names. Proposal text in
+chat events and thread responses hides Login names from non-managers, while the
+server keeps the original text for the owner's Apply.
+Generic note, history, query, sync, trash, write and conflict responses use the
+same caller-aware transcript redaction boundary. Non-manager JSON and WCL
+responses are scanned up to 32 MiB; larger bodies are refused, never passed
+through unscanned. Narrow the query or use an owner session for larger results.
+Sessions and admin user tokens bypass scanning without buffering. SSE, asset
+downloads and zip exports keep their existing streaming authorization boundaries.
+Tool answers are redacted before truncation and before the model sees them.
+Agent-thread indexes also hold only the redacted copy, including full-text data.
+This prevents query conditions from recovering hidden names. Managers can still
+read the raw stored note, but cannot filter on its hidden Login names. Existing
+indexes are rebuilt on upgrade.
+Sync pages target 16 MiB after per-entry redaction and always include at least
+one change. The sync route is exempt from the 32 MiB response scan limit so a
+single large note cannot strand a device cursor. Non-manager query/search pages
+also target 16 MiB and return a continuation cursor. A single oversized query
+row or aggregate may still require selecting fewer fields or an owner session.
+Ship updated desktop and Android apps before saving the new permission: old
+apps reject the unknown field, as they do `browser = true`.
+
+This permission does not implement password fill. Later fill must use the
+authenticated, decrypted Login origins through `state::canonical_origin`, never
+the clear metadata origins. A password must reach the page to work, so a misled
+agent with a shell in the box may reach it indirectly (assumed, not tested).
+Prompt injection can make an agent sign in and act. No origin restriction means
+a secret could be entered on a look-alike page.
 
 ## External CLI agents
 

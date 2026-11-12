@@ -714,12 +714,17 @@ fn spawn_turn(
         prepared.log.as_ref().map(|l| l.id.clone()),
         &cfg.origin,
     );
+    let full_logins = crate::tasks::may_manage_login_secrets(&w, &cfg.owner).unwrap_or(false);
     let turn = Turn {
         writer: w,
         author: cfg.author,
         owner: cfg.owner,
         scope: cfg.scope,
-        out: Out { tx, stop },
+        out: Out {
+            tx,
+            stop,
+            full_logins,
+        },
         images: ai_assets::Images::default(),
         agent_name: cfg.agent_name,
         log: prepared.log.map(std::sync::Mutex::new),
@@ -1072,15 +1077,19 @@ pub(crate) fn receive(
 
 /// Where the events go. A send fails once the client has gone or the turn was stopped.
 struct Out {
+    full_logins: bool,
     tx: mpsc::Sender<Sent>,
     /// Turns true when the turn is stopped (`DELETE /api/ai/chat/turns/{turn}`).
     stop: watch::Receiver<bool>,
 }
 
 impl Out {
-    async fn send(&self, name: &str, data: Value) -> bool {
+    async fn send(&self, name: &str, mut data: Value) -> bool {
         if self.gone() {
             return false;
+        }
+        if !self.full_logins {
+            crate::ai_agents::hide_browser_secrets(&mut data);
         }
         let e = Sent {
             name: name.to_owned(),
@@ -1460,6 +1469,14 @@ fn setup(
     asks: bool,
 ) -> Result<Setup, AiError> {
     let state = w.state();
+    let mut effective_agent = agent.clone();
+    effective_agent.permissions.browser_secrets.retain(|name| {
+        agent.permissions.browser
+            && state
+                .browser_secret_active(&agent.name, name)
+                .unwrap_or(false)
+    });
+    let agent = &effective_agent;
     let settings = Settings::load(state)?;
     // The request's choice, made in the chat box, wins; without one the agent's account and
     // model, and then the default account and its model (agents G1, accounts A5). A model alone
@@ -2181,7 +2198,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2251,7 +2268,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2292,7 +2309,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: got.parts,
                     });
@@ -2324,7 +2341,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: got.parts,
                     });
@@ -2395,7 +2412,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2449,7 +2466,7 @@ impl Turn {
                 }
                 results.push(Content::ToolResult {
                     id: c.id,
-                    content: cut(&got.content, RESULT_LIMIT),
+                    content: got.content,
                     is_error: got.is_error,
                     parts: Vec::new(),
                 });
@@ -2467,13 +2484,27 @@ impl Turn {
                     }
                     results[at] = Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     };
                 }
                 if self.out.gone() {
                     return;
+                }
+            }
+            for result in &mut results {
+                if let Content::ToolResult {
+                    content, is_error, ..
+                } = result
+                {
+                    match agent_threads::redact_tool_content(content) {
+                        Ok(redacted) => *content = cut(&redacted, RESULT_LIMIT),
+                        Err(_) => {
+                            *content = "The private transcript could not be redacted.".to_owned();
+                            *is_error = true;
+                        }
+                    }
                 }
             }
             added.push(Message::tool_results(results));
@@ -4169,6 +4200,9 @@ fn propose_or_read(
             }
             Vault::get(w, id)
                 .map(|mut note| {
+                    if agent_threads::redact_content(&mut note).is_err() {
+                        return ToolOut::error("The private transcript could not be redacted.");
+                    }
                     cut_strings(&mut note, BODY_LIMIT);
                     note["assets"] = json!(ai_assets::note_assets(w, &note["note"]));
                     let summary = json!({ "notes": [{

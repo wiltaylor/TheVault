@@ -563,9 +563,19 @@ pub async fn authenticate(
     {
         return e.into_response();
     }
+    let response_author = granted.author.clone();
+    let response_path = req.uri().path().to_owned();
     req.extensions_mut().insert(Caller(granted.author));
     req.extensions_mut().insert(GrantedScope(granted.scope));
     let mut res = next.run(req).await;
+    res = crate::agent_threads::redact_response(
+        &sessions.writer,
+        &response_author,
+        &response_path,
+        res,
+    )
+    .await
+    .unwrap_or_else(IntoResponse::into_response);
     // A renewed session's cookie goes out again with a fresh Max-Age, so the browser keeps it as
     // long as the server does. A response that sets the cookie itself, such as logout, wins.
     if let Some(id) = granted.renewed
