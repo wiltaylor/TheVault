@@ -252,12 +252,13 @@ fn pattern(len: usize) -> Vec<u8> {
 #[test]
 fn manual_provenance_is_relayed_from_creation_and_unknown_stays_incoming() {
     let server = TestServer::start_seeded(seed);
-    let phone = Device::pair(&server, &server.url(""));
+    let proxy = Proxy::start(server.addr());
+    let phone = Device::pair(&server, &proxy.url());
     phone.engine(Timeouts::default()).sync().unwrap();
     let manual = phone.call(
         "POST",
         "/api/assets?filename=manual.bin&provenance=manual",
-        Body::from("manual"),
+        Body::from(pattern(32 * 1024 * 1024)),
         201,
     );
     let manual = str(&manual["id"]);
@@ -271,13 +272,24 @@ fn manual_provenance_is_relayed_from_creation_and_unknown_stays_incoming() {
     assert!(!phone.embedded.writer().asset_is_manual(&unknown).unwrap());
     // Fresh engine/adoption must use durable creation state, not infer intent from orphans.
     phone.engine(Timeouts::default()).adopt().unwrap();
+    let quick = Timeouts {
+        stall: Duration::from_secs(2),
+        asset_retry: Duration::ZERO,
+        ..Timeouts::default()
+    };
+    proxy.set(Mode::StallAfter(1024 * 1024));
+    let failed = phone.engine(quick).sync().unwrap();
+    assert_eq!(failed.assets_failed, 1);
+    assert_eq!(failed.assets_sent, 2);
+    assert!(phone.embedded.writer().asset_is_manual(&manual).unwrap());
+    proxy.set(Mode::Pass);
     assert_eq!(
         phone
             .engine(Timeouts::default())
             .sync()
             .unwrap()
             .assets_sent,
-        3
+        1
     );
     assert_eq!(
         phone

@@ -162,6 +162,8 @@ describe("CaptureModal", () => {
 
 describe("Camera", () => {
   it("on a phone is a file input that asks for the camera, and the photo is attached", async () => {
+    upload.mockResolvedValue({ id: "A1", filename: "IMG_1.jpg", size: 3, path: "assets/A1/IMG_1.jpg" });
+    createNote.mockResolvedValue(saved("N2", "Photo"));
     setPhone(true);
     const m = mount();
     const button = await m.findByRole("button", { name: "Camera" });
@@ -175,6 +177,8 @@ describe("Camera", () => {
     const photo = new File(["jpg"], "IMG_1.jpg", { type: "image/jpeg" });
     fireEvent.change(input, { target: { files: [photo] } });
     expect(m.getByRole("list", { name: "Attached images" }).querySelectorAll("img").length).toBe(1);
+    fireEvent.click(m.save());
+    await waitFor(() => expect(upload).toHaveBeenCalledWith(photo, true));
   });
 
   it("in the Android app is the file input too", async () => {
