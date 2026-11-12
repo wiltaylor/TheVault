@@ -752,7 +752,9 @@ fn apply_as_agent(
     // Per-Ai and test-only: no process-global state or production fault switch.
     #[cfg(test)]
     let result = if result.is_ok() && _a.fail_apply_after_commit.swap(false, Ordering::SeqCst) {
-        Err(ai_chat::ApplyError::Write(writer::Error::Store(store::Error::Interrupted)))
+        Err(ai_chat::ApplyError::Write(writer::Error::Store(
+            store::Error::Interrupted,
+        )))
     } else {
         result
     };
@@ -777,8 +779,16 @@ fn apply_as_agent(
                 // The writer can commit before journal/index bookkeeping returns an error.
                 // Without a proven rollback every unsuccessful attempt is terminal. This
                 // deliberately favors a new reviewed proposal over repeating a create.
-                agent_threads::record_outcome(w, thread, id, Status::Stale, None,
-                    Some(format!("Apply failed. Check the target before proposing again: {e}")))
+                agent_threads::record_outcome(
+                    w,
+                    thread,
+                    id,
+                    Status::Stale,
+                    None,
+                    Some(format!(
+                        "Apply failed. Check the target before proposing again: {e}"
+                    )),
+                )
             }
         };
         if let Err(e) = recorded {

@@ -200,35 +200,74 @@ mod tests {
         let vault = store::Vault::init(root.path()).unwrap();
         let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
         let w = Arc::new(writer::Writer::open(vault, state).unwrap());
-        w.put_type("memo", "label = \"Memo\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n").unwrap();
-        w.put_agent("reader", "label = \"Reader\"\n", |_| vec![]).unwrap();
+        w.put_type(
+            "memo",
+            "label = \"Memo\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n",
+        )
+        .unwrap();
+        w.put_agent("reader", "label = \"Reader\"\n", |_| vec![])
+            .unwrap();
         let thread = agent_threads::create(&w, "reader", None, "trigger:test").unwrap();
         let data = json!({"id":"uncertain-create", "thread":thread.id, "agent":"reader",
             "op":"create", "type":"memo", "after":{"fields":{"title":"Written once"}}});
         agent_threads::save(&w, &thread.id, "Reader", None, |t| {
             t.transcript.proposals.push(Stored {
-                event: "proposal".into(), data: data.clone(), status: agent_threads::Status::Pending,
-                result: None, error: None, reported: false,
+                event: "proposal".into(),
+                data: data.clone(),
+                status: agent_threads::Status::Pending,
+                result: None,
+                error: None,
+                reported: false,
             });
-        }).unwrap();
+        })
+        .unwrap();
         let a = Arc::new(Ai::new(w.clone()));
         let author = Author::Session("owner".into());
         let mut headers = HeaderMap::new();
         headers.insert("cookie", "tv_session=fault-test".parse().unwrap());
-        let Json(p) = preview(State(a.clone()), Caller(author.clone()), headers.clone(),
-            Json(Selection { thread: thread.id.clone(), proposal: "uncertain-create".into() })).await.unwrap();
-        a.fail_apply_after_commit.store(true, std::sync::atomic::Ordering::SeqCst);
+        let Json(p) = preview(
+            State(a.clone()),
+            Caller(author.clone()),
+            headers.clone(),
+            Json(Selection {
+                thread: thread.id.clone(),
+                proposal: "uncertain-create".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        a.fail_apply_after_commit
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let mut created = None;
         for attempt in 0..2 {
-            let Json(out) = confirm(State(a.clone()), Caller(author.clone()), Extension(GrantedScope(state::Scope::Admin)),
-                headers.clone(), Json(Confirmation { preview: p["preview"].as_str().unwrap().into(), confirmed: true })).await.unwrap();
+            let Json(out) = confirm(
+                State(a.clone()),
+                Caller(author.clone()),
+                Extension(GrantedScope(state::Scope::Admin)),
+                headers.clone(),
+                Json(Confirmation {
+                    preview: p["preview"].as_str().unwrap().into(),
+                    confirmed: true,
+                }),
+            )
+            .await
+            .unwrap();
             assert_eq!(out["results"][0]["ok"], false, "attempt {attempt}: {out}");
             let notes = w.list(Some("memo")).unwrap();
-            assert_eq!(notes.len(), 1, "the injected error occurs after a real create");
-            if let Some(id) = &created { assert_eq!(&notes[0].id, id); }
+            assert_eq!(
+                notes.len(),
+                1,
+                "the injected error occurs after a real create"
+            );
+            if let Some(id) = &created {
+                assert_eq!(&notes[0].id, id);
+            }
             created = Some(notes[0].id.clone());
             let t = agent_threads::Thread::read(&w, &thread.id).unwrap();
-            assert!(!t.transcript.proposals[0].waits(), "uncertain storage failure must not become Failed");
+            assert!(
+                !t.transcript.proposals[0].waits(),
+                "uncertain storage failure must not become Failed"
+            );
         }
         drop(a);
         drop(w);
@@ -236,10 +275,29 @@ mod tests {
         let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
         let w = Arc::new(writer::Writer::open(vault, state).unwrap());
         let a = Arc::new(Ai::new(w.clone()));
-        assert!(crate::ai_turns::apply(State(a.clone()), Caller(author.clone()),
-            Extension(GrantedScope(state::Scope::Admin)), Json(data)).await.is_err());
-        assert!(preview(State(a), Caller(author), headers,
-            Json(Selection { thread: thread.id, proposal: "uncertain-create".into() })).await.is_err());
+        assert!(
+            crate::ai_turns::apply(
+                State(a.clone()),
+                Caller(author.clone()),
+                Extension(GrantedScope(state::Scope::Admin)),
+                Json(data)
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            preview(
+                State(a),
+                Caller(author),
+                headers,
+                Json(Selection {
+                    thread: thread.id,
+                    proposal: "uncertain-create".into()
+                })
+            )
+            .await
+            .is_err()
+        );
         let notes = w.list(Some("memo")).unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(Some(notes[0].id.clone()), created);
