@@ -269,8 +269,8 @@ pub(crate) struct Diagnostic {
 
 pub(crate) async fn diagnostic(
     axum::Extension(info): axum::Extension<Diagnostic>,
-) -> axum::Json<Diagnostic> {
-    axum::Json(info)
+) -> impl IntoResponse {
+    ([("cache-control", "no-store")], axum::Json(info))
 }
 
 pub(crate) struct Limits {
@@ -384,10 +384,16 @@ struct Attempt {
     started: Started,
     finished: bool,
     info: Diagnostic,
+    kind: &'static str,
+    user_agent: Option<String>,
 }
 
 impl Attempt {
     fn finish(mut self, status: StatusCode) -> Option<tokio::task::JoinHandle<()>> {
+        self.complete(status)
+    }
+
+    fn complete(&mut self, status: StatusCode) -> Option<tokio::task::JoinHandle<()>> {
         let notify = self
             .limits
             .counters
@@ -395,27 +401,38 @@ impl Attempt {
             .expect("attempt counters")
             .record(self.key, &self.started, status, Instant::now());
         self.finished = true;
-        notify.then(|| notify_owner(self.limits.clone(), self.info.clone()))
+        if status.is_success() {
+            return None;
+        }
+        let limits = self.limits.clone();
+        let info = self.info.clone();
+        let kind = self.kind;
+        let user_agent = self.user_agent.clone();
+        Some(tokio::spawn(async move {
+            let detail = json!({
+                "client_address": info.client_address,
+                "client_address_source": info.client_address_source,
+                "user_agent": user_agent,
+            });
+            let result = crate::blocking(limits.writer.clone(), move |w| {
+                w.state().prune_auth_failure_history()?;
+                w.state().record_activity(state::NewActivity::server(kind, "auth", "A credential check failed").detail(detail));
+                Ok::<_, state::Error>(())
+            }).await;
+            if result.is_err() {
+                tracing::warn!("could not store authentication failure activity");
+            }
+            if notify {
+                let _ = notify_owner(limits, info).await;
+            }
+        }))
     }
 }
 
 impl Drop for Attempt {
     fn drop(&mut self) {
         if !self.finished {
-            let notify = self
-                .limits
-                .counters
-                .lock()
-                .expect("attempt counters")
-                .record(
-                    self.key,
-                    &self.started,
-                    StatusCode::REQUEST_TIMEOUT,
-                    Instant::now(),
-                );
-            if notify {
-                drop(notify_owner(self.limits.clone(), self.info.clone()));
-            }
+            drop(self.complete(StatusCode::REQUEST_TIMEOUT));
         }
     }
 }
@@ -520,24 +537,10 @@ pub(crate) async fn check(
         started,
         finished: false,
         info: info.clone(),
+        kind,
+        user_agent,
     };
     let response = next.run(Request::from_parts(parts, Body::from(body))).await;
-    if !response.status().is_success() {
-        let _ = crate::blocking(limits.writer.clone(), move |w| {
-            w.state().prune_auth_failure_history()?;
-            w.state().record_activity(
-                state::NewActivity::server(kind, "auth", "A credential check failed").detail(
-                    json!({
-                        "client_address": info.client_address,
-                        "client_address_source": info.client_address_source,
-                        "user_agent": user_agent,
-                    }),
-                ),
-            );
-            Ok::<_, state::Error>(())
-        })
-        .await;
-    }
     if let Some(notice) = attempt.finish(response.status()) {
         // Dropping this JoinHandle on disconnect detaches rather than cancels the write.
         let _ = notice.await;
