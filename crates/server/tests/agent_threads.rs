@@ -782,6 +782,22 @@ fn legacy_type_permissions_keep_definition_operations() {
 }
 
 #[test]
+fn apply_with_empty_agent_and_no_proposer_uses_the_caller() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let (memo, version) = api.note("memo", "Original");
+    fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_fields", json!({ "id": memo, "base_version": version, "fields": json!({ "title": "Changed" }).to_string() })));
+    fake.push(AnthropicMessage::text("Done."));
+    let events = api.chat(json!({ "agent": "assistant", "messages": [user("Go.")] }));
+    let mut proposal = events_named(&events, "proposal")[0].clone();
+    proposal.as_object_mut().unwrap().remove("proposer");
+    proposal["agent"] = json!("");
+    let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+    assert!(response.status().is_success(), "{}", response.text().unwrap());
+    assert_eq!(api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"], "Changed");
+}
+
+#[test]
 fn assistant_proposals_apply_without_an_agent_file() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
