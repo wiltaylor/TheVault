@@ -19,11 +19,9 @@ class RelayTests(unittest.TestCase):
     def test_owned_image_container_copy_and_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="thevault-release-relay-test-") as directory:
             root = Path(directory)
-            config = {"delivery": {"release_target": "fake-card-target", "docker_release": {
-                "destination": "card-docker-vm", "port": 22, "known_hosts": "fake-plan-pin"}}}
             release = identity("a" * 40, "0.0.1-alpha.1", "release/0.0.1", "pre-release")
             with patch.dict(os.environ, {"DOCKER_HOST": "unix:///var/run/docker.sock"}):
-                job = Release(root / "state", release, config, root / "runtime")
+                job = Release(root / "state", release, root / "runtime")
             image = job.prefix + "-fixture:test"
             context = root / "context"
             context.mkdir()

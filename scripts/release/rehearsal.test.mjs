@@ -1,14 +1,11 @@
 // These are plan/schema rehearsals, not compiled package size measurements.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 
-const config = {delivery: {release_target: 'fake-release-client', docker_release: {
-  destination: 'fake@relay', port: 2251, known_hosts: 'fake-pinned-host-key', key: 'not-a-real-secret',
-}}};
 const stages = ['preflight', 'cut', 'build', 'unsigned-manifest', 'sign', 'signed-manifest',
   'images', 'draft', 'push', 'smoke', 'publish', 'verify'];
 const version = '0.1.14-alpha.38';
@@ -16,14 +13,13 @@ const sha = 'a'.repeat(40);
 function plan() {
   const dir = mkdtempSync(join(tmpdir(), 'thevault-release-plan-'));
   try {
-    writeFileSync(join(dir, 'delivery.json'), JSON.stringify(config));
     return JSON.parse(execFileSync('python3', ['scripts/release/release.py', 'plan',
-      '--delivery-config', join(dir, 'delivery.json'), '--state', join(dir, 'state'),
+      '--state', join(dir, 'state'),
       '--plan-sha', sha, '--version', version], {encoding: 'utf8'}));
   } finally { rmSync(dir, {recursive: true, force: true}); }
 }
 for (const stage of stages) {
-  test(`fake-config dry-run stage: ${stage}`, () => {
+  test(`daemon-relay contract dry-run stage: ${stage}`, () => {
     const output = plan();
     const entry = output.stages.find(row => row.stage === stage);
     assert.ok(entry);

@@ -104,27 +104,12 @@ def compare_baseline(recorded: dict, baseline: dict) -> list[dict]:
     return comparisons
 
 
-def delivery_identity(config: dict) -> dict:
-    """Keep only routing, never secret references or secret values."""
-    delivery = config.get("delivery", config)
-    target = delivery.get("release_target")
-    relay = delivery.get("docker_release") or {}
-    if not isinstance(target, str) or not target:
-        raise ReleaseError("delivery config has no release_target")
-    if not relay.get("destination") or not relay.get("known_hosts"):
-        raise ReleaseError("delivery config has no pinned docker_release destination")
-    return {"release_target": target, "docker_release": {
-        key: relay[key] for key in ("destination", "port", "known_hosts") if key in relay
-    }}
-
-
-def stage_plan(release: dict, delivery: dict) -> list[dict]:
-    routing = delivery_identity(delivery)
+def stage_plan(release: dict) -> list[dict]:
     return [{"stage": stage, "target": (
         "thevault-android (lead-owned signed smoke)" if stage == "smoke" else
         "cut evidence from lead-owned target runs" if stage == "cut" else
-        routing["docker_release"]["destination"] if stage in ("build", "images") else
-        routing["release_target"]), "sha": release["sha"], "version": release["version"],
+        "DOCKER_HOST (daemon-provisioned relay)" if stage in ("build", "images") else
+        "release_target (current release job)"), "sha": release["sha"], "version": release["version"],
         "dry_run": True} for stage in STAGES]
 
 

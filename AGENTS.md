@@ -57,10 +57,14 @@ provided as a daemon-owned Docker socket relay. Agents never test or exec on
 the release client. The job builds in secret-free relay containers, signs only
 at the custodian, uploads a draft and pushes version-only images. After the
 lead runs signed x86_64 smoke on thevault-android, a second job publishes the
-draft and advances image channels. See `just release::publish` and
-`just release::finish`; both take a sanitized delivery snapshot and durable
-state root as arguments. Missing keys stop before signing without discarding
-the unsigned build.
+draft and advances image channels. The single recipe `just release::publish`
+reads `release-phase: finish`, `release-version: <exact version>` and
+`signed-smoke: <test run ID>` trailers for phase 2. The lead starts either job
+with `terrarium job release <version-card> --commit <main-commit>`. No delivery
+snapshot is passed to the script. The client resets between jobs, so private
+draft checkpoints, not local files, preserve the unsigned build and journal.
+Missing keys stop before signing. The Android certificate fingerprint is
+committed in `scripts/release/android-signer.sha256`.
 
 The cut gate is lead-owned: `just release::gate-dev` and
 `just release::gate-android` on thevault-dev under `/src/thevault-heavy.sh`,

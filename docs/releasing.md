@@ -60,39 +60,27 @@ first attempt. Resume keeps the selected version without recalculating alpha N.
 
 ## Delivery configuration and tools
 
-META configures `release_recipe` to invoke:
+META configures `release_recipe` as `just release::publish`. There is one recipe
+and one run per release job. The lead starts it with:
 
 ```sh
-just release::publish --delivery-config <delivery-snapshot.json> --state <durable-state-root>
+terrarium job release <version-card> --commit <main-commit>
 ```
 
-The snapshot is the public routing portion of
-`terrarium project delivery show --json`. Supply it as a recipe argument,
-not a fixed path embedded in the script:
-
-```json
-{
-  "delivery": {
-    "release_target": "thevault-release-client",
-    "docker_release": {
-      "destination": "<configured SSH destination>",
-      "port": 2251,
-      "known_hosts": "<administrator-verified host key>"
-    }
-  }
-}
-```
-
-No secret value belongs in that file. Only target, destination, port and pin are
-kept in the journal. The daemon enforces the SSH pin and holds the relay key;
-the recipe talks only to its job-scoped Docker socket. A changed routing
-snapshot is rejected on resume.
+The daemon reads `release_target` and `docker_release` from project delivery
+configuration. It enforces the relay pin, holds the SSH key and supplies a
+per-job Unix socket in DOCKER_HOST. The script has no delivery-config argument,
+relay address, pin or SSH key. The client is rebuilt from its base snapshot
+for each job and retains no local state. Private draft checkpoints are the
+cross-job recovery store, not the client's filesystem.
 
 The client needs Python 3.11+, git, bash, jq, Docker CLI/buildx, gh, crane,
 Android build-tools (`zipalign`, `apksigner`, `aapt2`), cargo-tauri signer
 and minisign on PATH. It needs writable tmpfs at /dev/shm. It does not need a
 Rust compiler to build the application. The dev Dockerfile supplies the build
-toolchain inside the relay container.
+toolchain inside the relay container. It pins cargo-tauri CLI **2.12.3** and
+Android build-tools **36.0.0**. META installs those signing tool versions on
+the client too.
 
 | Runtime environment | Purpose |
 |---|---|
@@ -103,7 +91,6 @@ toolchain inside the relay container.
 | ANDROID_KEYSTORE_BASE64 | existing keystore, not a new key |
 | ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS | existing Android signing identity |
 | ANDROID_KEY_PASSWORD | optional, defaults to keystore password |
-| ANDROID_SIGNER_SHA256 | public SHA256 fingerprint of the existing shipped APK signer |
 | TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD | existing updater signing key and password |
 
 PATH, LANG, LC_ALL, TZ, RUSTUP_HOME and CARGO_HOME are allowed through to client
@@ -113,17 +100,20 @@ keystore material live in mode-0700 tmpfs directories removed on exit.
 Passwords are environment references, not command-line values. Do not enable
 shell tracing or dump the environment.
 
-Missing signing prerequisites stop the run before signing, leaving the
-unsigned build and its journal ready for the same-version resume. Do not
-generate replacement signing keys. The Android fingerprint must match the
-existing app. AppImage signatures are verified with the public updater key
-embedded in the frozen source.
+Missing signing prerequisites stop the run before signing. The preceding
+private draft checkpoint preserves the unsigned build for the same-version
+resume. Do not generate replacement signing keys. The Android fingerprint must
+match `scripts/release/android-signer.sha256`, extracted from a shipped APK.
+That public value is reviewed in git, never configured as a secret. AppImage
+signatures are verified with the updater public key embedded in the frozen source.
 
 ## Phase 1: prepare
 
-`just release::publish` enters `scripts/release/release.py prepare`.
+`just release::publish` enters `scripts/release/release.py publish`. With no
+release-phase trailer (or `release-phase: prepare`) it prepares the release.
 
-1. Freeze identity and routing under one release lock. Check cut evidence.
+1. Freeze identity under the release lock. Check cut evidence and create the
+   private GitHub draft that will hold cross-job checkpoints.
 2. Build the dev image from the frozen source and create an isolated build
    container. Build unsigned arm64 and x86_64 release APKs, desktop bundles
    and startup smoke, AUR archive, both static CLIs and device fixtures.
@@ -133,7 +123,7 @@ embedded in the frozen source.
 4. Recompute checksums. Build server and browser images on the relay from
    the same stamped source. Test served client hashes and the complete
    browser image behavior before exporting local image archives.
-5. Create a draft release targeting the exact main SHA, upload all assets,
+5. Fill the draft targeting the exact main SHA with all signed assets,
    and push only immutable version image tags. No edge, latest or
    major.minor channel moves yet.
 
@@ -149,8 +139,9 @@ Cleanup removes only exact owned names. No prune or filter deletion is used.
 The public asset manifest preserves alpha.37's 14 filenames: arm64 APK,
 AppImage and signature, deb, rpm, AUR tarball, two CLIs, three checksum files,
 compose.yaml, Caddyfile and env.example. The draft additionally carries the
-x86_64 smoke APK, smoke-fixtures.tar.gz and release-manifest.json. These extra
-assets remain attached when published.
+x86_64 smoke APK, smoke-fixtures.tar.gz and release-manifest.json. The later
+release-state.json and signed-smoke.json record the handoff. These extra assets
+remain attached when published. Private checkpoint archives do not.
 
 The signed-manifest stage compares actual asset sizes against alpha.37 at
 0.5x..2x and saves asset-comparison.json. A size outside that broad range stops
@@ -184,14 +175,28 @@ time before PID-only cleanup.
 
 ## Phase 2: finish
 
-After the lead has uploaded the smoke report, pass its original run ID and
-the hash-bound sidecar back to a release job on the same main commit:
+After uploading the original smoke report with `terrarium test push`, the lead
+uploads the unchanged hash-bound sidecar to the draft as `signed-smoke.json`.
+Use authorized lead release access, never copy a publishing token to android.
+Add an empty main commit with these trailers:
 
-```sh
-just release::finish --delivery-config <delivery-snapshot.json> --state <same-state-root> --smoke-evidence <signed-smoke.json> --smoke-run-id <test-run-id>
+```text
+release-phase: finish
+release-version: 0.1.14-alpha.38
+signed-smoke: <original-test-run-id>
 ```
 
-Finish verifies the local manifest, draft inventory and hashes, tag target,
+Start the same recipe with
+`terrarium job release <version-card> --commit <finish-main-commit>`.
+The finish tree must equal the prepared tree, and the original prepared main
+SHA must be an ancestor. The release tag still names the original phase-1
+main SHA, not the empty finish commit. The exact release-version prevents
+alpha renumbering. The signed-smoke trailer is the lead's attestation linking
+the original run ID to the uploaded sidecar, which the job checks against
+the signed APK hash and frozen SHA.
+
+Finish restores the private draft state on the fresh client and verifies the
+manifest, draft inventory and hashes, tag target,
 signed APK hash and tested image digests. It then advances image channels and
 publishes the draft. Pre-releases get version and edge only. Stable releases
 also get major.minor and latest. The final step checks GitHub asset hashes,
@@ -199,21 +204,36 @@ tag SHA, release kind and registry channel digests.
 
 Publication is not transactional across GitHub and ghcr. A failure partway
 through finish can leave advanced image channels or a published draft.
-Resume the same version and state, never delete the journal to recut it.
+Resume with the same trailers and version, never recut from a later next.
 Existing mismatched assets or version tags are errors, not overwrite requests.
 
 ## Recovery and evidence
 
-Keep the durable state root outside disposable job checkouts. It holds one
-global lock, selected identity, per-version journal, source copy, manifests,
-unsigned originals, signed assets, image archives and secret-free build/test
-logs. Stages advance only after success. A failed stage is retried; completed
-stages are not silently rerun. The signing stage restores its immutable
-unsigned inputs before retrying a partial signing attempt.
+The default release-out directory is job-local scratch. Stages advance only
+after success. Each completed stage after the cut uploads a hash-named private
+draft checkpoint. Only after that upload succeeds is the preceding checkpoint
+removed. Checkpoints include the journal, run identity, source, manifests,
+unsigned inputs and signed assets/fixtures. An explicit allowlist excludes
+keys, tmpfs state, transient signing files and large image tar exports. A
+checkpoint above GitHub's 2 GiB limit fails rather than dropping state.
+
+The next job downloads the highest completed checkpoint, verifies its hash
+and release identity, and resumes. A failed stage is retried; completed stages
+are not silently rerun. Signing restores immutable unsigned inputs before a
+partial-signing retry. Tested image IDs and manifest digests identify the exact
+owned relay images for re-export after a client reset. A missing or changed
+relay image stops an unfinished push; it never silently rebuilds a replacement.
+
+After version-only pushes, a small release-state.json also records the
+handoff. Finish saves the verified smoke identity there before removing all
+private checkpoints and publishing. Recovery after that point uses this
+state capsule plus hash-verified public/draft assets. Published recovery
+metadata is not silently changed.
 
 Never edit a manifest to bless changed bytes. Resolve the cause or cut a new
 authorized version. After verified publication, owned relay tags are removed.
-Local archives and evidence remain for review and operator-controlled retention.
+The job-local build logs must be collected by the release job before the client
+is reset. Public release manifests and the final handoff remain on GitHub.
 SIGKILL may leave exact run-owned containers; use the recorded run prefix to
 inspect and remove those specific names only.
 
@@ -232,7 +252,7 @@ The local tests use Python's built-in unittest; no pytest install is needed.
 Run actionlint against all nine inert workflows. Upload original TAP/XML output
 with `terrarium test push --card TV-209`.
 
-`just release::dry-run --delivery-config <fake-config.json> --plan-sha <40-hex-sha> --version 0.1.14-alpha.38`
+`just release::dry-run --plan-sha <40-hex-sha> --version 0.1.14-alpha.38`
 prints every stage, target and expected public asset. It never builds, signs,
 publishes or marks real stages complete. Unit command rehearsals use fake
 tool responses, not real keys or registries. The alpha.37 fixture records

@@ -1,9 +1,6 @@
 # Run on release_target only. The daemon provisions DOCKER_HOST and secrets.
 publish *args:
-	python3 scripts/release/release.py prepare {{args}}
-
-finish *args:
-	python3 scripts/release/release.py finish {{args}}
+	python3 scripts/release/release.py publish {{args}}
 
 dry-run *args:
 	python3 scripts/release/release.py plan {{args}}

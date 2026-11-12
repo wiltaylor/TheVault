@@ -25,7 +25,7 @@ import tempfile
 import uuid
 
 from local import (Journal, ReleaseError, STAGES, assets, atomic_json, compare_baseline,
-                   delivery_identity, digest, identity, manifest, release_lock,
+                   digest, identity, manifest, release_lock,
                    stage_plan, verify_manifest)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +34,14 @@ REGISTRY = "ghcr.io/wiltaylor/"
 BASE_ENV = ("PATH", "LANG", "LC_ALL", "TZ", "RUSTUP_HOME", "CARGO_HOME")
 SIGN_ENV = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS",
             "ANDROID_KEY_PASSWORD", "TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+CHECKPOINT = re.compile(r"thevault-release-checkpoint-([0-9]{2})-([0-9a-f]{64})\.tar\.gz")
+
+
+def android_signer():
+    expected = (ROOT / "scripts/release/android-signer.sha256").read_text().strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ReleaseError("invalid committed Android certificate fingerprint")
+    return expected
 
 
 def command(argv, *, cwd=ROOT, env=None, input=None, check=True):
@@ -58,6 +66,80 @@ def source_digest(source):
         elif path.is_file():
             rows.append((str(path.relative_to(source)), path.stat().st_mode & 0o777, digest(path)))
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+
+
+def client_env(runtime):
+    env = {key: os.environ[key] for key in BASE_ENV if key in os.environ}
+    return env | {"HOME": str(runtime), "XDG_CONFIG_HOME": str(runtime),
+                  "GH_CONFIG_DIR": str(runtime / "gh"), "DOCKER_CONFIG": str(runtime / "docker")}
+
+
+def github(runtime, *args, check=True):
+    if not os.environ.get("GH_TOKEN"):
+        raise ReleaseError("missing GH_TOKEN from release-github")
+    return command(["gh", *args], env=client_env(runtime) | {
+        "GH_TOKEN": os.environ["GH_TOKEN"], "GH_PROMPT_DISABLED": "1"}, check=check)
+
+
+def restore_remote(state, version, runtime):
+    """Restore only hash-verified files from this version's authenticated draft."""
+    # Validate before using a version in a path or tag.
+    identity("0" * 40, version, "release/" + version.split("-")[0], "pre-release" if "-" in version else "release")
+    tag = "v" + version
+    result = github(runtime, "api", f"repos/{REPO}/releases/tags/{tag}", check=False)
+    if result.returncode:
+        if b"404" in result.stderr:
+            return None
+        raise ReleaseError("cannot inspect remote release recovery state")
+    remote = json.loads(result.stdout)
+    items = {item["name"]: item for item in remote["assets"]}
+    out = state / version
+    out.mkdir(parents=True, exist_ok=True)
+
+    def download(name, directory):
+        item = items[name]
+        directory.mkdir(parents=True, exist_ok=True)
+        github(runtime, "release", "download", tag, "--repo", REPO, "--pattern", name, "--dir", str(directory), "--clobber")
+        path = directory / name
+        if item.get("digest") != "sha256:" + digest(path) or item["size"] != path.stat().st_size:
+            raise ReleaseError("remote recovery asset hash mismatch: " + name)
+        return path
+
+    checkpoints = [(int(CHECKPOINT.fullmatch(name)[1]), item.get("created_at", ""), name)
+                   for name, item in items.items() if CHECKPOINT.fullmatch(name)]
+    if checkpoints and remote["draft"]:
+        name = max(checkpoints)[2]
+        archive = download(name, state / "downloads")
+        if digest(archive) != CHECKPOINT.fullmatch(name)[2]:
+            raise ReleaseError("checkpoint filename hash mismatch")
+        with tarfile.open(archive) as tar:
+            members = tar.getmembers()
+            if sum(member.size for member in members) > 8 * 1024**3:
+                raise ReleaseError("checkpoint uncompressed size exceeds 8 GiB")
+            tar.extractall(out, members=members, filter="data")
+        archive.unlink()
+        journal = json.loads((out / "journal.json").read_text())
+    elif "release-state.json" in items:
+        capsule = json.loads(download("release-state.json", out).read_text())
+        journal = capsule["journal"]
+        atomic_json(out / "journal.json", journal)
+        atomic_json(out / "run.json", capsule["run"])
+        release = journal["release"]
+        for name in assets(version):
+            download(name, out / "assets")
+        download("release-manifest.json", out)
+        download(f"TheVault_{version}_x86_64.apk", out / "smoke")
+        download("smoke-fixtures.tar.gz", out / "device")
+    else:
+        # An interrupted create/checkpoint upload can leave an empty draft.
+        return None
+    release = journal["release"]
+    if release["version"] != version or release["tagged_sha"] != remote["target_commitish"]:
+        raise ReleaseError("recovery state targets another release")
+    Journal(out / "journal.json", release)  # validate stage prefix before use
+    if "signed-smoke.json" in items:
+        download("signed-smoke.json", out)
+    return release
 
 
 def freeze(version: str | None, branch: str | None, *, resume=False) -> dict:
@@ -104,21 +186,21 @@ def private_runtime():
 
 
 class Release:
-    def __init__(self, state: Path, release: dict, config: dict, runtime: Path):
+    def __init__(self, state: Path, release: dict, runtime: Path):
         self.state, self.release, self.runtime = state, release, runtime
-        self.routing = delivery_identity(config)
         self.out = state / release["version"]
         self.out.mkdir(parents=True, exist_ok=True)
-        self.journal = Journal(self.out / "journal.json", release | {"delivery": self.routing})
+        self.journal = Journal(self.out / "journal.json", release)
         run_file = self.out / "run.json"
         if not run_file.exists():
             atomic_json(run_file, {"id": uuid.uuid4().hex[:12]})
-        self.prefix = f'thevault-release-{release["version"]}-{json.loads(run_file.read_text())["id"]}'
+        run_id = json.loads(run_file.read_text())["id"]
+        if not re.fullmatch(r"[0-9a-f]{12}", run_id):
+            raise ReleaseError("invalid checkpoint run identity")
+        self.prefix = f'thevault-release-{release["version"]}-{run_id}'
         self.dist = self.out / "assets"
         self.source = self.out / "source"
-        self.base = {key: os.environ[key] for key in BASE_ENV if key in os.environ}
-        self.base.update(HOME=str(runtime), XDG_CONFIG_HOME=str(runtime),
-                         GH_CONFIG_DIR=str(runtime / "gh"), DOCKER_CONFIG=str(runtime / "docker"))
+        self.base = client_env(runtime)
         self.denv = self.base | {"DOCKER_HOST": os.environ.get("DOCKER_HOST") or os.environ.get("TERRARIUM_DOCKER_HOST", "")}
         if not self.denv["DOCKER_HOST"]:
             raise ReleaseError("missing daemon-provided Docker release relay")
@@ -130,9 +212,7 @@ class Release:
         return command(["docker", *args], env=self.denv, **kwargs)
 
     def gh(self, *args, check=True):
-        if not os.environ.get("GH_TOKEN"):
-            raise ReleaseError("missing GH_TOKEN from release-github")
-        return command(["gh", *args], env=self.base | {"GH_TOKEN": os.environ["GH_TOKEN"], "GH_PROMPT_DISABLED": "1"}, check=check)
+        return github(self.runtime, *args, check=check)
 
     def clean_container(self, name):
         if not name.startswith(self.prefix + "-"):
@@ -169,6 +249,7 @@ class Release:
     def cut(self):
         if not self.release.get("cut_runs"):
             raise ReleaseError("missing tested-at-cut run IDs")
+        self.ensure_draft()
         return {"frozen_sha": self.release["sha"], "tree": self.release["tree"], "runs": self.release["cut_runs"]}
 
     def build(self):
@@ -213,8 +294,6 @@ class Release:
 
     def sign(self):
         missing = [name for name in SIGN_ENV if name != "ANDROID_KEY_PASSWORD" and not os.environ.get(name)]
-        if not os.environ.get("ANDROID_SIGNER_SHA256"):
-            missing.append("ANDROID_SIGNER_SHA256 (existing shipped certificate fingerprint)")
         if missing:
             raise ReleaseError("waiting for operator signing prerequisites: " + ", ".join(missing))
         original = self.out / "unsigned"
@@ -245,7 +324,7 @@ class Release:
                          "--ks-key-alias", env["ANDROID_KEY_ALIAS"], "--key-pass", "env:ANDROID_KEY_PASSWORD",
                          "--out", str(output), str(aligned)], env=env)
                 cert = self.run(["apksigner", "verify", "--min-sdk-version", "33", "--print-certs", str(output)]).stdout.decode()
-                expected = os.environ["ANDROID_SIGNER_SHA256"].replace(":", "").lower()
+                expected = android_signer()
                 found = re.findall(r"certificate SHA-256 digest: ([0-9a-fA-F]+)", cert)
                 if found != [expected]:
                     raise ReleaseError("APK signer differs from existing shipped certificate")
@@ -337,6 +416,8 @@ class Release:
             archive = self.out / (name + ".tar")
             self.docker("save", "--output", str(archive), tag)
             output[name] = {"archive": archive.name, "sha256": digest(archive),
+                            "local_tag": tag,
+                            "manifest_digest": self.run(["crane", "digest", "--tarball", str(archive)]).stdout.decode().strip(),
                             "image_id": self.docker("image", "inspect", "--format", "{{.Id}}", tag).stdout.decode().strip()}
         return output
 
@@ -344,8 +425,7 @@ class Release:
         return [*(self.dist / name for name in assets(self.release["version"])),
                 self.out / "release-manifest.json", self.smoke_apk(), self.out / "device/smoke-fixtures.tar.gz"]
 
-    def draft(self):
-        self.check_assets()
+    def ensure_draft(self):
         tag = "v" + self.release["version"]
         # Network/auth errors are not evidence of absence. Only a 404 is absence.
         ref = self.gh("api", f"repos/{REPO}/git/ref/tags/{tag}", check=False)
@@ -365,7 +445,13 @@ class Release:
                     "--title", "TheVault " + tag, "--generate-notes", "--latest=false",
                     "--prerelease=" + str(self.release["kind"] == "pre-release").lower())
             value = {"assets": []}
-        remote = {asset["name"]: asset for asset in value["assets"]}
+        return value
+
+    def draft(self):
+        self.check_assets()
+        tag = "v" + self.release["version"]
+        value = self.ensure_draft()
+        remote = {asset["name"]: asset for asset in value["assets"] if not CHECKPOINT.fullmatch(asset["name"])}
         if set(remote) - {path.name for path in self.upload_files()}:
             raise ReleaseError("draft contains unexpected assets")
         for path in self.upload_files():
@@ -394,11 +480,21 @@ class Release:
         self.check_assets()
         pushed = {}
         for name, image in self.journal.data["outputs"]["images"].items():
+            if name not in ("thevault", "thevault-browser") or image["archive"] != name + ".tar":
+                raise ReleaseError("invalid checkpoint image identity")
             archive = self.out / image["archive"]
-            if digest(archive) != image["sha256"]:
+            if not archive.exists():
+                suffix = "server" if name == "thevault" else "browser"
+                tag = self.prefix + "-" + suffix + ":build"
+                if image["local_tag"] != tag or self.docker("image", "inspect", "--format", "{{.Id}}", tag).stdout.decode().strip() != image["image_id"]:
+                    raise ReleaseError("tested relay image missing or changed; refusing rebuild on resume")
+                self.docker("save", "--output", str(archive), tag)
+            elif digest(archive) != image["sha256"]:
                 raise ReleaseError("tested image archive changed")
             ref = REGISTRY + name + ":" + self.release["version"]
             want = self.crane("digest", "--tarball", str(archive)).stdout.decode().strip()
+            if want != image["manifest_digest"]:
+                raise ReleaseError("exported image differs from tested manifest digest")
             found = self.crane("digest", ref, check=False)
             if found.returncode == 0:
                 if found.stdout.decode().strip() != want:
@@ -431,18 +527,26 @@ class Release:
         value = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
         if value["target_commitish"] != self.release["tagged_sha"]:
             raise ReleaseError("draft target changed after prepare")
-        by_name = {asset["name"]: asset for asset in value["assets"]}
-        if set(by_name) != {path.name for path in self.upload_files()}:
+        by_name = {asset["name"]: asset for asset in value["assets"] if not CHECKPOINT.fullmatch(asset["name"])}
+        if set(by_name) != {path.name for path in self.upload_files()} | {"release-state.json", "signed-smoke.json"}:
             raise ReleaseError("draft asset inventory changed after prepare")
         for path in self.upload_files():
             if by_name.get(path.name, {}).get("digest") != "sha256:" + digest(path):
                 raise ReleaseError("draft asset changed after prepare: " + path.name)
+        if by_name["signed-smoke.json"].get("digest") != "sha256:" + self.journal.data["outputs"]["smoke"]["sha256"]:
+            raise ReleaseError("remote signed smoke evidence changed")
         ref = self.gh("api", f"repos/{REPO}/git/ref/tags/{tag}", check=False)
         if ref.returncode == 0:
             if json.loads(ref.stdout)["object"]["sha"] != self.release["tagged_sha"]:
                 raise ReleaseError("tag changed after prepare")
         elif b"404" not in ref.stderr:
             raise ReleaseError("cannot verify tag before publishing")
+        # Save the verified finish handoff before removing private recovery
+        # bundles. A client reset after this point resumes from public assets.
+        self.save_capsule()
+        for asset in value["assets"]:
+            if CHECKPOINT.fullmatch(asset["name"]):
+                self.gh("release", "delete-asset", tag, asset["name"], "--repo", REPO, "--yes")
         # Mutable tags only advance after the signed smoke stage has been recorded.
         for name, image in self.journal.data["outputs"]["push"].items():
             if self.crane("digest", image["ref"]).stdout.decode().strip() != image["digest"]:
@@ -483,6 +587,50 @@ class Release:
         for suffix in ("dev", "plain", "server", "browser"):
             self.docker("image", "rm", self.prefix + "-" + suffix + ":build", check=False)
 
+    def save_capsule(self):
+        capsule = self.out / "release-state.json"
+        atomic_json(capsule, {"journal": self.journal.data, "run": json.loads((self.out / "run.json").read_text())})
+        remote = json.loads(self.gh("api", f'repos/{REPO}/releases/tags/v{self.release["version"]}').stdout)
+        if not remote["draft"]:
+            existing = next((a for a in remote["assets"] if a["name"] == capsule.name), {})
+            if existing.get("digest") != "sha256:" + digest(capsule):
+                raise ReleaseError("refusing to change published release recovery metadata")
+            return
+        self.gh("release", "upload", "v" + self.release["version"], "--repo", REPO, "--clobber", str(capsule))
+
+    def checkpoint(self):
+        completed = self.journal.data["completed"]
+        if "cut" not in completed or "publish" in completed:
+            return
+        if "push" in completed:
+            self.save_capsule()
+        archive = self.state / "checkpoint.tar.gz"
+        # No credentials ever enter out. Explicit allowlist also excludes
+        # image tarballs, runtime state, and transient signing intermediates.
+        allowed = ("journal.json", "run.json", "source", "assets", "unsigned", "smoke", "device",
+                   "unsigned-manifest.json", "release-manifest.json", "asset-comparison.json")
+        with tarfile.open(archive, "w:gz") as tar:
+            for name in allowed:
+                path = self.out / name
+                if path.exists():
+                    tar.add(path, arcname=name)
+        if archive.stat().st_size >= 2 * 1024**3:
+            raise ReleaseError("private checkpoint exceeds GitHub's 2 GiB asset limit")
+        name = f"thevault-release-checkpoint-{len(completed):02}-{digest(archive)}.tar.gz"
+        named = self.state / name
+        os.replace(archive, named)
+        tag = "v" + self.release["version"]
+        # New immutable checkpoint first, delete old owned checkpoints only
+        # after its successful upload. An interrupted upload retains the old one.
+        self.gh("release", "upload", tag, "--repo", REPO, str(named))
+        value = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
+        if not any(a["name"] == name and a.get("digest") == "sha256:" + digest(named) for a in value["assets"]):
+            raise ReleaseError("uploaded checkpoint digest mismatch")
+        for asset in value["assets"]:
+            if asset["name"] != name and CHECKPOINT.fullmatch(asset["name"]):
+                self.gh("release", "delete-asset", tag, asset["name"], "--repo", REPO, "--yes")
+        named.unlink()
+
     def execute(self, finish=False, evidence=None, run_id=None):
         if "signed-manifest" in self.journal.data["completed"]:
             self.check_assets()
@@ -495,64 +643,87 @@ class Release:
             method = getattr(self, stage.replace("-", "_"))
             result = method(evidence, run_id) if stage == "smoke" else method()
             self.journal.complete(stage, result)
+            self.checkpoint()
         self.cleanup_images()
         return "published and verified"
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("plan", "prepare", "finish"))
-    parser.add_argument("--delivery-config", type=Path, required=True)
-    parser.add_argument("--state", type=Path, default=Path("release-out"))
-    parser.add_argument("--version")
+    parser.add_argument("mode", choices=("publish", "plan"))
+    parser.add_argument("--state", type=Path, default=Path("release-out"),
+                        help="job-local scratch; private draft checkpoints survive client reset")
+    parser.add_argument("--version", help="optional version assertion, or test version for plan")
     parser.add_argument("--branch")
-    parser.add_argument("--smoke-evidence", type=Path)
-    parser.add_argument("--smoke-run-id")
     parser.add_argument("--plan-sha", help="plan only: test frozen SHA without release trailers")
     args = parser.parse_args(argv)
+
     def stop(signum, _frame):
         raise ReleaseError(f"interrupted by signal {signum}; resume the same release")
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, stop)
-    config = json.loads(args.delivery_config.read_text())
     try:
-        delivery_identity(config)
         with release_lock(args.state):
-            if args.mode == "plan" and args.plan_sha:
-                version = args.version or "0.1.14-alpha.38"
-                release = identity(args.plan_sha, version, args.branch or "release/" + version.split("-")[0],
-                                   "pre-release" if "-" in version else "release")
-            else:
+            if args.mode == "plan":
                 if args.plan_sha:
-                    raise ReleaseError("--plan-sha cannot authorize execution")
-                # Reuse the version selected before an interrupted prepare.
-                selected = args.state / "selected.json"
-                if selected.exists():
-                    saved = json.loads(selected.read_text())
-                    previous = args.state / saved["version"] / "journal.json"
-                    if previous.exists() and json.loads(previous.read_text())["completed"] == list(STAGES) and git("rev-parse", "HEAD") != saved["tagged_sha"]:
-                        release = freeze(args.version, args.branch)
-                        if args.mode != "plan":
-                            atomic_json(selected, release)
-                        saved = release
-                    if args.version and args.version != saved["version"]:
-                        raise ReleaseError("requested version differs from selected release")
-                    release = freeze(saved["version"], args.branch, resume=True)
-                    if release != saved:
-                        raise ReleaseError("release identity changed since selection")
+                    version = args.version or "0.1.14-alpha.38"
+                    release = identity(args.plan_sha, version, args.branch or "release/" + version.split("-")[0],
+                                       "pre-release" if "-" in version else "release")
                 else:
                     release = freeze(args.version, args.branch)
-                    if args.mode != "plan":
-                        atomic_json(selected, release)
-            if args.mode == "plan":
-                print(json.dumps({"stages": stage_plan(release, config), "assets": assets(release["version"])}, indent=2))
+                print(json.dumps({"stages": stage_plan(release), "assets": assets(release["version"])}, indent=2))
                 return 0
+            if args.plan_sha:
+                raise ReleaseError("--plan-sha cannot authorize execution")
+            phase = git("log", "-1", "--format=%(trailers:key=release-phase,valueonly)") or "prepare"
+            if phase not in ("prepare", "finish"):
+                raise ReleaseError("release-phase must be prepare or finish")
+            state = args.state.resolve()
             with private_runtime() as runtime:
-                job = Release(args.state.resolve(), release, config, runtime)
-                print(job.execute(args.mode == "finish", args.smoke_evidence, args.smoke_run_id))
+                run_id = None
+                if phase == "finish":
+                    version = git("log", "-1", "--format=%(trailers:key=release-version,valueonly)")
+                    if not version or (args.version and args.version != version):
+                        raise ReleaseError("finish needs the exact release-version trailer")
+                    run_id = git("log", "-1", "--format=%(trailers:key=signed-smoke,valueonly)")
+                    if not re.fullmatch(r"[A-Za-z0-9_-]+", run_id):
+                        raise ReleaseError("finish needs signed-smoke: <original test run ID>")
+                    release = restore_remote(state, version, runtime)
+                    if not release:
+                        raise ReleaseError("no prepared draft recovery state for finish")
+                    if git("rev-parse", "HEAD^{tree}") != release["tree"]:
+                        raise ReleaseError("finish commit tree differs from prepared release tree")
+                    command(["git", "merge-base", "--is-ancestor", release["tagged_sha"], "HEAD"])
+                else:
+                    head = git("rev-parse", "HEAD")
+                    response = github(runtime, "api", f"repos/{REPO}/releases?per_page=100")
+                    releases = json.loads(response.stdout)
+                    if any(not row["draft"] and row["target_commitish"] == head for row in releases):
+                        raise ReleaseError("this main commit is already published; refusing a second version")
+                    drafts = [row for row in releases if row["draft"]]
+                    matching = [row for row in drafts if row["target_commitish"] == head]
+                    if len(matching) > 1:
+                        raise ReleaseError("multiple drafts target this commit")
+                    if any(row["target_commitish"] != head for row in drafts):
+                        raise ReleaseError("another draft release is unfinished; finish it before a new cut")
+                    if matching:
+                        version = matching[0]["tag_name"].removeprefix("v")
+                        if args.version and args.version != version:
+                            raise ReleaseError("requested version differs from existing draft")
+                        release = freeze(version, args.branch, resume=True)
+                        restored = restore_remote(state, version, runtime)
+                        if restored and restored != release:
+                            raise ReleaseError("remote checkpoint SHA/tree/version mismatch")
+                    else:
+                        release = freeze(args.version, args.branch)
+                job = Release(state, release, runtime)
+                evidence = job.out / "signed-smoke.json" if phase == "finish" else None
+                if phase == "finish" and "smoke" in job.journal.data["completed"]:
+                    if job.journal.data["outputs"]["smoke"]["run_id"] != run_id:
+                        raise ReleaseError("finish smoke run ID differs from recorded handoff")
+                print(job.execute(phase == "finish", evidence, run_id))
             return 0
-    except (ReleaseError, ValueError, KeyError, OSError) as error:
-        # Avoid repr of objects/environment. Errors defined here contain names only.
+    except (ReleaseError, ValueError, KeyError, OSError, tarfile.TarError) as error:
         print("release stopped:", str(error) if isinstance(error, ReleaseError) else type(error).__name__, file=sys.stderr)
         return 1
 

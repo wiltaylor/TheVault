@@ -109,22 +109,18 @@ class LocalReleaseTests(unittest.TestCase):
         with self.assertRaises(local.ReleaseError):
             local.Journal(path, self.release)
 
-    def config(self):
-        return {"delivery": {"release_target": "test-release-client", "docker_release": {
-            "destination": "test@relay", "port": 2251, "known_hosts": "test relay pin", "key": "must-not-leak"},
-            "release_secrets": {"GH_TOKEN": "must-not-leak"}}}
-
-    def test_delivery_identity_excludes_credentials(self):
-        public = local.delivery_identity(self.config())
+    def test_delivery_plan_does_not_read_credentials_or_relay_addresses(self):
+        with patch.dict("os.environ", {"GH_TOKEN": "must-not-leak", "DOCKER_HOST": "unix:///private-job-socket"}):
+            public = local.stage_plan(self.release)
         self.assertNotIn("must-not-leak", json.dumps(public))
+        self.assertNotIn("private-job-socket", json.dumps(public))
 
     def test_missing_delivery_route_fails_closed(self):
-        for config in [{}, {"release_target": "client"}, {"release_target": "client", "docker_release": {"destination": "relay"}}]:
-            with self.subTest(config=config), self.assertRaises(local.ReleaseError):
-                local.delivery_identity(config)
+        with patch.dict("os.environ", {}, clear=True), self.assertRaises(local.ReleaseError):
+            coordinator.Release(self.root / "state", self.release, self.root / "ram")
 
     def test_dry_run_every_stage_has_target_identity_and_no_execution(self):
-        plan = local.stage_plan(self.release, self.config())
+        plan = local.stage_plan(self.release)
         self.assertEqual([row["stage"] for row in plan], list(local.STAGES))
         for row in plan:
             self.assertTrue(row["dry_run"])
@@ -134,11 +130,11 @@ class LocalReleaseTests(unittest.TestCase):
 
     def job(self):
         with patch.dict("os.environ", {"DOCKER_HOST": "unix:///test-relay"}, clear=True):
-            return coordinator.Release(self.root / "state", self.release, self.config(), self.root / "ram")
+            return coordinator.Release(self.root / "state", self.release, self.root / "ram")
 
     def test_docker_environment_never_inherits_signing_or_publisher_credentials(self):
         with patch.dict("os.environ", {"GH_TOKEN": "secret", "TAURI_SIGNING_PRIVATE_KEY": "secret", "DOCKER_HOST": "unix:///relay"}):
-            job = coordinator.Release(self.root / "state", self.release, self.config(), self.root / "ram")
+            job = coordinator.Release(self.root / "state", self.release, self.root / "ram")
         self.assertNotIn("secret", json.dumps(job.denv))
         self.assertNotIn("GH_TOKEN", job.base)
 
@@ -161,6 +157,7 @@ class LocalReleaseTests(unittest.TestCase):
     def test_prepare_stops_before_smoke_and_publication(self):
         job = self.job()
         with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(job, "checkpoint"))
             methods = {stage: stack.enter_context(patch.object(job, stage.replace("-", "_"), return_value={})) for stage in local.STAGES}
             self.assertIn("await signed smoke", job.execute())
             methods["smoke"].assert_not_called()
@@ -292,7 +289,6 @@ class LocalReleaseTests(unittest.TestCase):
         job = self.signing_job()
         env = {name: "dummy-test-value" for name in coordinator.SIGN_ENV}
         env["ANDROID_KEYSTORE_BASE64"] = base64.b64encode(b"dummy-keystore").decode()
-        env["ANDROID_SIGNER_SHA256"] = "ab" * 32
         env["ANDROID_KEY_ALIAS"] = "test-key-alias"
         calls = []
         def fake_command(argv, **kwargs):
@@ -312,7 +308,7 @@ class LocalReleaseTests(unittest.TestCase):
             elif argv[0] == "cargo":
                 Path(argv[-1] + ".sig").write_bytes(base64.b64encode(b"trusted comment: app-version:0.1.14-alpha.38\n"))
             return subprocess.CompletedProcess(argv, 0, stdout, b"")
-        with patch.dict("os.environ", env, clear=True), patch.object(coordinator, "command", side_effect=fake_command):
+        with patch.dict("os.environ", env, clear=True), patch.object(coordinator, "android_signer", return_value="ab" * 32), patch.object(coordinator, "command", side_effect=fake_command):
             result = job.sign()
         operations = [argv[0] + (" " + argv[1] if argv[0] == "apksigner" else "") for argv in calls]
         self.assertLess(operations.index("zipalign"), operations.index("apksigner sign"))
@@ -325,7 +321,7 @@ class LocalReleaseTests(unittest.TestCase):
     def test_mocked_failed_signing_keeps_unsigned_inputs_and_removes_key(self):
         job = self.signing_job()
         env = {name: "dummy" for name in coordinator.SIGN_ENV}
-        env.update(ANDROID_KEYSTORE_BASE64=base64.b64encode(b"dummy").decode(), ANDROID_SIGNER_SHA256="ab" * 32)
+        env.update(ANDROID_KEYSTORE_BASE64=base64.b64encode(b"dummy").decode())
         with patch.dict("os.environ", env, clear=True), patch.object(job, "run", side_effect=local.ReleaseError("zipalign failed")):
             with self.assertRaises(local.ReleaseError):
                 job.sign()
@@ -339,10 +335,53 @@ class LocalReleaseTests(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(job, "check_assets"))
             stack.enter_context(patch.object(job, "cleanup_images"))
+            stack.enter_context(patch.object(job, "checkpoint"))
             for stage in local.STAGES:
                 stack.enter_context(patch.object(job, stage.replace("-", "_"), side_effect=lambda *a, stage=stage: calls.append(stage) or {}))
             job.execute(True, self.root / "evidence", "TEST-1")
         self.assertEqual(calls, ["smoke", "publish", "verify"])
+
+    def test_mocked_checkpoint_survives_fresh_client_without_secrets(self):
+        job = self.job()
+        job.release["tagged_sha"] = "b" * 40
+        job.journal.data["completed"] = ["preflight", "cut"]
+        local.atomic_json(job.out / "journal.json", job.journal.data)
+        (job.out / "never-upload-key.jks").write_bytes(b"private-sentinel")
+        uploaded = {}
+        def fake_gh(*args, **kwargs):
+            if args[:2] == ("release", "upload"):
+                path = Path(args[-1])
+                uploaded[path.name] = path.read_bytes()
+                data = b""
+            elif args[:2] == ("release", "download"):
+                name = args[args.index("--pattern") + 1]
+                directory = Path(args[args.index("--dir") + 1])
+                (directory / name).write_bytes(uploaded[name])
+                data = b""
+            else:
+                rows = [{"name": name, "size": len(data), "digest": "sha256:" + coordinator.hashlib.sha256(data).hexdigest()} for name, data in uploaded.items()]
+                data = json.dumps({"draft": True, "target_commitish": "b" * 40, "assets": rows}).encode()
+            return subprocess.CompletedProcess(args, 0, data, b"")
+        with patch.object(job, "gh", side_effect=fake_gh):
+            job.checkpoint()
+        self.assertEqual(len(uploaded), 1)
+        with tarfile.open(fileobj=io.BytesIO(next(iter(uploaded.values())))) as archive:
+            self.assertNotIn("never-upload-key.jks", archive.getnames())
+        fresh = self.root / "fresh-client"
+        with patch.object(coordinator, "github", side_effect=lambda runtime, *a, **kw: fake_gh(*a, **kw)):
+            restored = coordinator.restore_remote(fresh, job.release["version"], self.root / "ram")
+        self.assertEqual(restored, job.release)
+        self.assertEqual(json.loads((fresh / job.release["version"] / "journal.json").read_text())["completed"], ["preflight", "cut"])
+
+    def test_failed_checkpoint_upload_does_not_delete_previous_checkpoint(self):
+        job = self.job()
+        job.journal.data["completed"] = ["preflight", "cut"]
+        local.atomic_json(job.out / "journal.json", job.journal.data)
+        with patch.object(job, "gh", side_effect=local.ReleaseError("upload interrupted")) as gh:
+            with self.assertRaisesRegex(local.ReleaseError, "upload interrupted"):
+                job.checkpoint()
+        self.assertEqual(len(gh.call_args_list), 1)
+        self.assertEqual(gh.call_args.args[:2], ("release", "upload"))
 
 
 if __name__ == "__main__":
