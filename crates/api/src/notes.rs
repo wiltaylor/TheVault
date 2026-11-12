@@ -343,6 +343,44 @@ pub struct HeldNotesQuery {
     limit: Option<usize>,
 }
 
+pub async fn safety_evidence(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(author, Author::Session(_) | Author::Token(_)) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden", "Owner access required"));
+    }
+    blocking(w, move |w| {
+        let note = w.read(&id)?;
+        let envelope = w.agent_safety_envelope(&note.type_name, &note.doc);
+        let fingerprint = writer::agent_safety::envelope_fingerprint(&envelope);
+        let stored = w.state().meta(&format!("agent_safety.note.{id}"))?
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let current = stored.as_ref().is_some_and(|s| s["fingerprint"] == fingerprint);
+        let bytes = envelope.to_string().len();
+        let mut omissions = Vec::new();
+        if let Some(html) = note.doc.field("html").and_then(schema::Value::as_str) {
+            omissions.push(json!({"id":html,"reason":"HTML stays withheld"}));
+        }
+        for entry in envelope["attachments"].as_array().into_iter().flatten() {
+            let asset_id = entry["id"].as_str().unwrap_or_default();
+            let html = w.state().meta(&format!("agent_safety.asset_html.{asset_id}"))?.is_some();
+            if html || entry["status"] != "ready" || bytes > writer::agent_safety::ENVELOPE_LIMIT {
+                omissions.push(json!({"id":asset_id,"reason":if html {"HTML stays withheld"} else if bytes > writer::agent_safety::ENVELOPE_LIMIT {"over cap"} else {entry["status"].as_str().unwrap_or("unsupported")}}));
+            }
+        }
+        Ok::<_, ApiError>(Json(json!({
+            "envelope": envelope, "fingerprint": fingerprint,
+            "decision_status": stored.as_ref().map(|s| &s["status"]),
+            "omissions": omissions,
+            "decision_current": current, "bytes": bytes,
+            "limit": writer::agent_safety::ENVELOPE_LIMIT,
+            "estimated_input_tokens": bytes.div_ceil(4)
+        })))
+    }).await
+}
+
 pub async fn held_agent_notes(
     State(w): Shared,
     Caller(author): Caller,
