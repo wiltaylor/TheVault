@@ -45,7 +45,12 @@ async function setProcessed(id: string, value: boolean): Promise<Note> {
 export function Inbox() {
   const navigate = useNavigate();
   const [view, setView] = createSignal<"inbox" | "scam" | "other">("inbox");
-  const [held, { mutate: mutateHeld, refetch: refreshHeld }] = createResource(changes, loadHeld);
+  const [heldError, setHeldError] = createSignal("");
+  const [held, { mutate: mutateHeld, refetch: refreshHeld }] = createResource(changes, async () => {
+    setHeldError("");
+    try { return await loadHeld(); }
+    catch (e) { setHeldError(errorText(e)); return []; }
+  });
   const scams = () => (held() ?? []).filter((n) => n.agent_safety.reason === "scam");
   const otherHeld = () => (held() ?? []).filter((n) => n.agent_safety.reason !== "scam");
   const [showProcessed, setShowProcessed] = createSignal(false);
@@ -224,7 +229,7 @@ export function Inbox() {
         <button type="button" aria-pressed={view() === "scam"} onClick={() => setView("scam")}>Possible scams ({scams().length})</button>
         <button type="button" aria-pressed={view() === "other"} onClick={() => setView("other")}>Other held ({otherHeld().length})</button>
       </nav>
-      <Show when={held.error}><p role="alert" class="error">Could not load held items: {errorText(held.error)} <button type="button" onClick={() => void refreshHeld()}>Retry</button></p></Show>
+      <Show when={heldError()}><p role="alert" class="error">Could not load held items: {heldError()} <button type="button" onClick={() => void refreshHeld()}>Retry</button></p></Show>
       <Show when={view() !== "inbox"}>
         <HeldInbox notes={view() === "scam" ? scams() : otherHeld()} onReleased={(id) => {
           mutateHeld((notes) => notes?.filter((n) => n.id !== id));

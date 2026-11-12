@@ -53,7 +53,11 @@ export function HeldInbox(props: { notes: HeldNote[]; onReleased: (id: string) =
     </Show>
     <Show when={props.notes.length} fallback={<p>No held items in this view.</p>}>
       <ul class="inbox-list"><For each={props.notes}>{(held) => {
-        const [note] = createResource(() => held.id, (id) => api.note(id));
+        const [loadError, setLoadError] = createSignal("");
+        const [note] = createResource(() => held.id, async (id) => {
+          try { return await api.note(id); }
+          catch (e) { setLoadError(errorText(e)); return null; }
+        });
         const fields = () => note()?.note.fields ?? {};
         const title = () => String(fields().title ?? held.id);
         return <li class="inbox-item">
@@ -63,7 +67,7 @@ export function HeldInbox(props: { notes: HeldNote[]; onReleased: (id: string) =
             <p>{String(fields().from_raw ?? "Sender unavailable")}</p>
             <p>Reason: {held.agent_safety.reason}</p>
             <p>Scam probability: {typeof fields().scam_probability === "number" ? `${Math.round(Number(fields().scam_probability) * 100)}%` : "Unavailable"}</p>
-            <Show when={note.error}><p role="alert">{errorText(note.error)}</p></Show>
+            <Show when={loadError()}><p role="alert">{loadError()}</p></Show>
           </div>
           <button type="button" disabled={busy() || !note() || note()?.agent_safety?.fingerprint !== held.agent_safety.fingerprint} onClick={() => void release([held])}>Release</button>
         </li>;
