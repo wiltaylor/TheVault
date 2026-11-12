@@ -359,7 +359,9 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
                 .map(|doc| writer.agent_safety_envelope(&saved.type_name, &doc))
         })
         .flatten();
-    let safety_hash = safety_envelope.as_ref().map(writer::agent_safety::envelope_fingerprint);
+    let safety_hash = safety_envelope
+        .as_ref()
+        .map(writer::agent_safety::envelope_fingerprint);
     if let (Some(envelope), Some(hash)) = (&safety_envelope, &safety_hash)
         && envelope.to_string().len() > writer::agent_safety::ENVELOPE_LIMIT
     {

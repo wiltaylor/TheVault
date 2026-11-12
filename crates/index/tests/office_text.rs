@@ -13,18 +13,29 @@ fn bound_extraction_revision_failure_and_replacement_are_fail_closed() {
     let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
     assert!(index::bound_asset_text(&vault, id).is_none());
     let hash = index::text_digest(b"source");
-    idx.set_bound_asset_text(id, &hash, &Extracted::Text("text".into())).unwrap();
+    idx.set_bound_asset_text(id, &hash, &Extracted::Text("text".into()))
+        .unwrap();
     let first = index::bound_asset_text(&vault, id).unwrap();
     assert_eq!(first["source_hash"], hash);
     assert_eq!(first["text"], "text");
-    idx.set_bound_asset_text(id, &hash, &Extracted::Text("text".into())).unwrap();
-    assert_ne!(index::bound_asset_text(&vault, id).unwrap()["revision"], first["revision"]);
-    idx.set_asset_text(id, &Extracted::Text("replacement".into())).unwrap();
+    idx.set_bound_asset_text(id, &hash, &Extracted::Text("text".into()))
+        .unwrap();
+    assert_ne!(
+        index::bound_asset_text(&vault, id).unwrap()["revision"],
+        first["revision"]
+    );
+    idx.set_asset_text(id, &Extracted::Text("replacement".into()))
+        .unwrap();
     assert!(index::bound_asset_text(&vault, id).is_none());
-    idx.set_bound_asset_text(id, &hash, &Extracted::Failed("bad input".into())).unwrap();
+    idx.set_bound_asset_text(id, &hash, &Extracted::Failed("bad input".into()))
+        .unwrap();
     assert!(index::bound_asset_text(&vault, id).is_none());
-    idx.set_bound_asset_text(id, &hash, &Extracted::Text("recovered".into())).unwrap();
-    assert_eq!(index::bound_asset_text(&vault, id).unwrap()["text"], "recovered");
+    idx.set_bound_asset_text(id, &hash, &Extracted::Text("recovered".into()))
+        .unwrap();
+    assert_eq!(
+        index::bound_asset_text(&vault, id).unwrap()["text"],
+        "recovered"
+    );
     idx.forget_asset_text(id);
     assert!(index::bound_asset_text(&vault, id).is_none());
 }

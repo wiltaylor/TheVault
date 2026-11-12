@@ -69,9 +69,8 @@ pub fn bound_asset_text(vault: &store::Vault, id: &str) -> Option<serde_json::Va
         return None;
     }
     let dir = vault.server_dir().join("asset-text/v1");
-    let mut evidence: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(dir.join(format!("{id}.evidence"))).ok()?,
-    ).ok()?;
+    let mut evidence: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join(format!("{id}.evidence"))).ok()?).ok()?;
     if dir.join(format!("{id}.unreadable")).exists() {
         return None;
     }
@@ -410,7 +409,9 @@ impl AssetTexts {
     }
 
     pub fn bind(&self, id: &str, source_hash: &str) -> Result<()> {
-        let StoredText::Text(text) = self.stored(id) else { return Ok(()); };
+        let StoredText::Text(text) = self.stored(id) else {
+            return Ok(());
+        };
         let path = self.dir.join(format!("{id}.evidence"));
         let evidence = serde_json::json!({
             "extraction_version": 1,

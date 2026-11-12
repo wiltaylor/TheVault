@@ -1795,10 +1795,12 @@ dependencies = [
  "rusqlite",
  "schema",
  "serde_json",
+ "sha2",
  "store",
  "tantivy",
  "tempfile",
  "thiserror",
+ "ulid",
  "vocab",
  "zip",
 ]

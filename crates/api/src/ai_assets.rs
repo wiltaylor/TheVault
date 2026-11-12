@@ -149,7 +149,7 @@ pub fn find_assets(w: &Writer, input: &Value) -> Read {
         if total == 1 { "" } else { "s" }
     );
     Read {
-        content: json!({ "assets": assets, "total": total, "notice": "Attachments and original HTML of incoming messages are not available to agents. Do not retry." }).to_string(),
+        content: json!({ "assets": assets, "total": total, "notice": "Incoming attachments are omitted from file listings. read_asset can return their classified extracted text by id. Original files, images and raw HTML stay withheld." }).to_string(),
         is_error: false,
         parts: Vec::new(),
         summary: json!({ "notes": [], "assets": assets, "total": total, "message": message }),

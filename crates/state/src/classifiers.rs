@@ -10,17 +10,30 @@ impl State {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let key = format!("agent_safety.asset_owners.{id}");
-        let inserted = tx.execute("INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'1')", [format!("agent_safety.asset.{id}")])?;
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'1')",
+            [format!("agent_safety.asset.{id}")],
+        )?;
         if inserted == 1 {
-            tx.execute("INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'[]')", [&key])?;
+            tx.execute(
+                "INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'[]')",
+                [&key],
+            )?;
         }
         if let Some(owner) = owner {
-            let raw: Option<String> = tx.query_row("SELECT value FROM meta WHERE key=?1", [&key], |r| r.get(0)).optional()?;
-            if let Some(raw) = raw && let Ok(mut owners) = serde_json::from_str::<Vec<String>>(&raw)
-                && !owners.iter().any(|id| id == owner) {
+            let raw: Option<String> = tx
+                .query_row("SELECT value FROM meta WHERE key=?1", [&key], |r| r.get(0))
+                .optional()?;
+            if let Some(raw) = raw
+                && let Ok(mut owners) = serde_json::from_str::<Vec<String>>(&raw)
+                && !owners.iter().any(|id| id == owner)
+            {
                 owners.push(owner.to_owned());
                 owners.sort();
-                tx.execute("UPDATE meta SET value=?2 WHERE key=?1", [&key, &serde_json::to_string(&owners).expect("owners")])?;
+                tx.execute(
+                    "UPDATE meta SET value=?2 WHERE key=?1",
+                    [&key, &serde_json::to_string(&owners).expect("owners")],
+                )?;
             }
         }
         tx.commit()?;

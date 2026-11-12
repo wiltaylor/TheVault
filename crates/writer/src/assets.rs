@@ -185,7 +185,7 @@ impl Writer {
                     Ok(bytes) => {
                         source_hash = index::text_digest(&bytes);
                         index::extract_text(kind, bytes)
-                    },
+                    }
                     Err(e) => index::Extracted::Failed(e.to_string()),
                 }
             } else {
@@ -193,7 +193,10 @@ impl Writer {
             };
             let _w = self.write_lock();
             self.invalidate_asset_safety(&asset.id)?;
-            let _ = self.lock().index.set_bound_asset_text(&asset.id, &source_hash, &extracted);
+            let _ = self
+                .lock()
+                .index
+                .set_bound_asset_text(&asset.id, &source_hash, &extracted);
         }
         Ok(asset)
     }
@@ -220,7 +223,10 @@ impl Writer {
         let kind = index::TextKind::of(filename);
         let text_of =
             (kind.is_some() && bytes.len() <= index::MAX_EXTRACT_BYTES).then(|| bytes.clone());
-        let source_hash = text_of.as_ref().map(|bytes| index::text_digest(bytes)).unwrap_or_default();
+        let source_hash = text_of
+            .as_ref()
+            .map(|bytes| index::text_digest(bytes))
+            .unwrap_or_default();
         let asset = {
             let _w = self.write_lock();
             let mut inner = self.lock();
@@ -244,7 +250,10 @@ impl Writer {
             // The asset is stored; text that cannot be kept only means search misses it.
             let _w = self.write_lock();
             self.invalidate_asset_safety(&asset.id)?;
-            let _ = self.lock().index.set_bound_asset_text(&asset.id, &source_hash, &extracted);
+            let _ = self
+                .lock()
+                .index
+                .set_bound_asset_text(&asset.id, &source_hash, &extracted);
         }
         Ok(asset)
     }

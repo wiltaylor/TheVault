@@ -136,7 +136,7 @@ fn extract_missing(index: &mut Index, vault: &store::Vault) -> Result<()> {
                 Ok(bytes) => {
                     source_hash = asset_text::text_digest(&bytes);
                     asset_text::extract_text(kind, bytes)
-                },
+                }
                 Err(_) => continue,
             }
         };

@@ -1245,13 +1245,27 @@ fn attachment_envelope_provider_receives_text_and_aggregate_cap_skips_call() {
     let chat = FakeAnthropic::start();
     let decisions = testkit::FakeDecisions::start();
     let api = safety_setup(&chat, &decisions, "router");
-    for (text, expected) in [("amount\n17\n".to_owned(), "allowed"), ("x".repeat(128 * 1024), "held")] {
-        let asset: Value = api.client.post(api.server.url("/api/assets?filename=invoice.csv"))
-            .bearer_auth(api.server.admin_token()).body(text.clone()).send().unwrap().json().unwrap();
+    for (text, expected) in [
+        ("amount\n17\n".to_owned(), "allowed"),
+        ("x".repeat(128 * 1024), "held"),
+    ] {
+        let asset: Value = api
+            .client
+            .post(api.server.url("/api/assets?filename=invoice.csv"))
+            .bearer_auth(api.server.admin_token())
+            .body(text.clone())
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
         decisions.push(safety_reply("allow"));
-        let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
-            "title":"Invoice", "attachments":[asset["id"]], "sent":"2000-01-01T00:00:00Z"
-        }}}));
+        let note = api.send(
+            "POST",
+            "/api/notes?type=email",
+            json!({"note":{"fields":{
+                "title":"Invoice", "attachments":[asset["id"]], "sent":"2000-01-01T00:00:00Z"
+            }}}),
+        );
         let visible = safety_wait(&api, note["id"].as_str().unwrap());
         assert_eq!(visible["agent_safety"]["status"], expected);
         assert_eq!(decisions.requests().len(), 1);
@@ -1259,7 +1273,10 @@ fn attachment_envelope_provider_receives_text_and_aggregate_cap_skips_call() {
         assert_eq!(request["state"]["envelope_version"], 1);
         assert!(request["state"].to_string().contains("amount\\n17\\n"));
         if expected == "allowed" {
-            assert_eq!(visible["agent_safety"]["fingerprint"], writer::agent_safety::envelope_fingerprint(&request["state"]));
+            assert_eq!(
+                visible["agent_safety"]["fingerprint"],
+                writer::agent_safety::envelope_fingerprint(&request["state"])
+            );
         }
         if expected == "held" {
             assert_eq!(visible["agent_safety"]["reason"], "too_large");
@@ -1272,29 +1289,73 @@ fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
     let chat = FakeAnthropic::start();
     let decisions = testkit::FakeDecisions::start();
     let api = safety_setup(&chat, &decisions, "router");
+    api.agent("reader", "label = \"Reader\"\nenabled = false\n");
     let mut ids = Vec::new();
-    for (name, text) in [("invoice.csv", "amount\nCLEARED_INVOICE_17\n"), ("original.html", "<p>WITHHELD_RAW_HTML_17</p>")] {
-        let asset: Value = api.client.post(api.server.url(&format!("/api/assets?filename={name}")))
-            .bearer_auth(api.server.admin_token()).body(text).send().unwrap().json().unwrap();
+    for (name, text) in [
+        ("invoice.csv", "amount\nCLEARED_INVOICE_17\n"),
+        ("original.html", "<p>WITHHELD_RAW_HTML_17</p>"),
+    ] {
+        let asset: Value = api
+            .client
+            .post(api.server.url(&format!("/api/assets?filename={name}")))
+            .bearer_auth(api.server.admin_token())
+            .body(text)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
         ids.push(asset["id"].as_str().unwrap().to_owned());
     }
     decisions.push(safety_reply("allow"));
-    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
-        "title":"Invoice", "attachments":[ids[0]], "html":ids[1], "sent":"2000-01-01T00:00:00Z"
-    }}}));
-    assert_eq!(safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["status"], "allowed");
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Invoice", "attachments":[ids[0]], "html":ids[1], "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
+    assert_eq!(
+        safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["status"],
+        "allowed"
+    );
     let request: Value = serde_json::from_slice(&decisions.requests()[0].body).unwrap();
-    assert!(!request["state"].to_string().contains("WITHHELD_RAW_HTML_17"));
+    assert!(
+        !request["state"]
+            .to_string()
+            .contains("WITHHELD_RAW_HTML_17")
+    );
     let token = api.external_agent_token();
+    let login = api.client.post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
     for id in &ids {
         let url = api.server.url(&format!("/api/assets/{id}"));
-        assert_eq!(api.client.get(&url).bearer_auth(token["secret"].as_str().unwrap()).send().unwrap().status(), 403);
-        assert!(api.client.get(&url).bearer_auth(api.server.admin_token()).send().unwrap().status().is_success());
+        assert_eq!(
+            api.client
+                .get(&url)
+                .bearer_auth(token["secret"].as_str().unwrap())
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+        assert!(
+            api.client
+                .get(&url)
+                .bearer_auth(api.server.admin_token())
+                .send()
+                .unwrap()
+                .status()
+                .is_success()
+        );
+        assert!(api.client.get(&url).header("cookie", cookie).send().unwrap().status().is_success());
     }
     api.agent("text_auditor", "label = \"Text auditor\"\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Read assets.\" }\n");
-    chat.push(AnthropicMessage::new()
-        .tool_use("text_read", "read_asset", json!({"id":ids[0]}))
-        .tool_use("html_read", "read_asset", json!({"id":ids[1]})));
+    chat.push(
+        AnthropicMessage::new()
+            .tool_use("text_read", "read_asset", json!({"id":ids[0]}))
+            .tool_use("html_read", "read_asset", json!({"id":ids[1]})),
+    );
     chat.push(AnthropicMessage::text("Done."));
     api.memo("Text audit", "open");
     api.advance("PT35S");
