@@ -23,6 +23,8 @@ fn peer_note_over_thread(legacy_row: bool) {
     let text = memo("Peer memo", "share", "yes");
     let hash = gitsync::pack::sha256_hex(text.as_bytes());
     let mut files = BTreeMap::new();
+    manifest.types.push(gitsync::DefEntry { name: "memo".into(), path: layout.type_def("memo") });
+    files.insert(layout.type_def("memo"), key.seal(MEMO.as_bytes()));
     if legacy_row {
         let state = state::State::open(&b.server.vault_path().join("state.db"), None).unwrap();
         state.gitsync_put(&state::GitsyncNote {
@@ -46,6 +48,7 @@ fn peer_note_over_thread(legacy_row: bool) {
     git.force_push(&commit, &layout.branch()).unwrap();
     for _ in 0..2 {
         let report = b.sync();
+        assert!(report["skipped_branches"].as_array().unwrap().is_empty(), "{report}");
         assert!(report["warnings"].as_array().unwrap().is_empty(), "{report}");
         assert!(ids(&report, "archived").is_empty(), "{report}");
         assert_eq!(b.note(id).unwrap()["version"], before["version"]);
