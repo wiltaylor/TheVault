@@ -474,7 +474,10 @@ impl State {
         let cutoff = self.now().saturating_sub(24 * 60 * 60 * 1000);
         let conn = self.conn();
         conn.execute("DELETE FROM activity WHERE at_ms <= ?1 AND kind IN ('auth.login_failed', 'auth.pair_failed', 'auth.agent_code_failed')", [cutoff])?;
-        conn.execute("DELETE FROM notifications WHERE created_ms <= ?1 AND source = 'server:auth'", [cutoff])?;
+        conn.execute(
+            "DELETE FROM notifications WHERE created_ms <= ?1 AND source = 'server:auth'",
+            [cutoff],
+        )?;
         Ok(())
     }
 
