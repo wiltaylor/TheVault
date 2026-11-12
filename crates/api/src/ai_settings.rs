@@ -319,6 +319,7 @@ fn status_of(w: &Writer) -> Result<Value, ApiError> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(json!({
         "secrets_key": keyed,
+        "token_usage_daily": s.ai_usage_daily()?,
         "accounts": accounts,
         "default": all.default_account().map(|a| a.id.clone()),
         "kinds": kinds_json(),

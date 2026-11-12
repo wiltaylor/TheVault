@@ -1996,6 +1996,9 @@ impl Turn {
             };
             let mut began = Instant::now();
             let trail = |began: Instant, usage: Usage, outcome: Outcome| {
+                if let Err(e) = self.writer.state().record_ai_usage(&setup.cred.account, &setup.model, "agent", usage.input, usage.output) {
+                    eprintln!("ai: recording agent usage: {e}");
+                }
                 let line = ai::trail_line(
                     &setup.cred.name,
                     setup.cred.kind,
@@ -2744,6 +2747,9 @@ impl Turn {
             }
         }
         self.keep_usage(&setup.cred, stream.plan_usage()).await;
+        if let Err(e) = self.writer.state().record_ai_usage(&setup.cred.account, &setup.model, "agent", usage.input, usage.output) {
+            eprintln!("ai: recording compaction usage: {e}");
+        }
         let line = ai::trail_line(
             &setup.cred.name,
             setup.cred.kind,
