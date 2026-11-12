@@ -682,6 +682,28 @@ fn bodies_html_and_attachments_are_stored_and_an_oversized_message_keeps_its_hea
 }
 
 #[test]
+fn adversarial_import_markup_gmail_plain_and_html() {
+    use crate::import_markup::{TEXT, assert_literal};
+    let google = FakeGoogle::start();
+    for (id, key, body) in [
+        ("adversarial-plain", "text", TEXT.to_owned()),
+        ("adversarial-html", "html", format!("<p>{TEXT}</p>")),
+    ] {
+        let mut message = json!({ "id": id, "labels": ["INBOX"], "at": ago(1),
+            "from": "alex@example.com", "subject": TEXT });
+        message[key] = json!(body);
+        google.add_message(message);
+    }
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    gmail.run_ok();
+    for id in ["adversarial-plain", "adversarial-html"] {
+        let note = gmail.email(id);
+        assert_eq!(note["note"]["fields"]["title"], TEXT);
+        assert_literal(&note, "body");
+    }
+}
+
+#[test]
 fn threads_group_messages_and_senders_link_to_people_by_email() {
     let google = FakeGoogle::start();
     google.add_message(json!({
