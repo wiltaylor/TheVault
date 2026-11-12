@@ -310,7 +310,13 @@ impl Home {
     /// `PUT /api/assets/{id}` with the file at `path`, streamed from disk. Fails with
     /// [`Error::Transfer`] when no bytes move for [`Timeouts::stall`], and with [`Error::Http`]
     /// only when the server cannot be reached at all.
-    pub fn put_asset_file(&self, id: &str, filename: &str, path: &Path) -> Result<Answer> {
+    pub fn put_asset_file(
+        &self,
+        id: &str,
+        filename: &str,
+        path: &Path,
+        manual: bool,
+    ) -> Result<Answer> {
         let file = std::fs::File::open(path)
             .map_err(|e| Error::Transfer(format!("reading {}: {e}", path.display())))?;
         let size = file
@@ -321,7 +327,10 @@ impl Home {
         let progress = Progress::new();
         let request = client
             .put(self.url(&format!("/api/assets/{id}")))
-            .query(&[("filename", filename)])
+            .query(&[
+                ("filename", filename),
+                ("provenance", if manual { "manual" } else { "incoming" }),
+            ])
             .header(AUTHORIZATION, format!("Bearer {}", self.remote.token))
             .header(ACCEPT, "application/json")
             .header(CONTENT_LENGTH, size)
@@ -352,6 +361,14 @@ impl Home {
         })
     }
 
+    /// Send denial without requiring cached bytes. Called only when the asset list
+    /// explicitly advertises the new incoming metadata contract.
+    pub fn deny_asset(&self, id: &str) -> Result<Answer> {
+        self.send(self.authed(self.client.put(self.url(&format!(
+            "/api/assets/{id}?incoming_only=true&provenance=incoming"
+        )))))
+    }
+
     /// Download asset `id` into a new file at `dest`, streamed to disk, telling `on_bytes` the
     /// size of each block as it arrives (ticket 144). On failure the partial file is removed.
     /// Fails with [`Error::Transfer`] when no bytes move for [`Timeouts::stall`].
@@ -360,7 +377,7 @@ impl Home {
         id: &str,
         dest: &Path,
         on_bytes: &mut dyn FnMut(u64),
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let (rt, client) = self.transfers()?;
         let what = format!("fetching asset {id}");
         let stall = self.timeouts.stall;
@@ -383,6 +400,12 @@ impl Home {
                         body: res.text().await.unwrap_or_default(),
                     });
                 }
+                // Missing/unknown metadata is not permission to preserve manual intent.
+                let denied = res
+                    .headers()
+                    .get("x-vault-asset-incoming")
+                    .and_then(|v| v.to_str().ok())
+                    != Some("false");
                 let mut out = std::fs::File::create(dest)
                     .map_err(|e| Error::Transfer(format!("writing {}: {e}", dest.display())))?;
                 while let Some(chunk) = res.chunk().await.map_err(|e| transfer_error(&e, &what))? {
@@ -393,7 +416,7 @@ impl Home {
                 }
                 out.sync_all()
                     .map_err(|e| Error::Transfer(format!("writing {}: {e}", dest.display())))?;
-                Ok(())
+                Ok(denied)
             };
             tokio::select! {
                 done = fetch => done,
@@ -499,7 +522,7 @@ mod tests {
         .unwrap();
         let before = peak_rss();
         let answer = home
-            .put_asset_file("01J00000000000000000000000", "big.bin", &path)
+            .put_asset_file("01J00000000000000000000000", "big.bin", &path, false)
             .unwrap();
         let grew = peak_rss().saturating_sub(before);
         assert_eq!(answer.status, StatusCode::OK);

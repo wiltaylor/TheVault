@@ -30,8 +30,8 @@ function assetsById(): Promise<Map<string, Asset>> {
 }
 
 /** Upload `file` as a new asset. */
-export async function upload(file: File): Promise<Asset> {
-  const asset = await api.uploadAsset(file);
+export async function upload(file: File, manual = false): Promise<Asset> {
+  const asset = await api.uploadAsset(file, manual);
   if (known) (await known.catch(() => new Map<string, Asset>())).set(asset.id, asset);
   return asset;
 }
@@ -177,7 +177,7 @@ function ImageDialog(props: { block: Block; fields?: FieldDef[]; onSave: (block:
     setError(null);
     setBusy(true);
     try {
-      const a = await upload(file);
+      const a = await upload(file, true);
       setAsset(a.id);
     } catch (e) {
       setError(`Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -338,7 +338,7 @@ function FixedImage(props: ImageBlockProps) {
   async function choose(file: File) {
     setError(null);
     try {
-      const a = await upload(file);
+      const a = await upload(file, true);
       props.onChange?.(withItem(props.block, "asset", a.id));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -439,14 +439,14 @@ function FieldImage(props: ImageBlockProps) {
   };
   const canAdd = () => !props.onChange && !!binding?.set && !binding.preview && field()?.kind === "asset" && !placedElsewhere();
 
-  async function add(file: File) {
+  async function add(file: File, manual: boolean) {
     const f = field();
     const set = binding?.set;
     if (!f || !set) return;
     setError(null);
     setBusy(true);
     try {
-      const a = await upload(file);
+      const a = await upload(file, manual);
       set(f, f.multiple ? [...ids(), a.id] : a.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -484,7 +484,7 @@ function FieldImage(props: ImageBlockProps) {
         fallback={
           <Show when={canAdd()}>
             <figure class="block-image field-image empty" data-field={name()}>
-              <FieldImageAdd label={label()} busy={busy()} onFile={(file) => void add(file)} />
+              <FieldImageAdd label={label()} busy={busy()} onFile={(file, manual) => void add(file, manual)} />
               <Show when={error()}>
                 <p class="error" role="alert">
                   {error()}
@@ -517,7 +517,7 @@ const dragsFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.type
  * and which grows into a drop target while a file is dragged over it. Either uploads the file and
  * sets the field.
  */
-function FieldImageAdd(props: { label: string; busy: boolean; onFile: (file: File) => void }) {
+function FieldImageAdd(props: { label: string; busy: boolean; onFile: (file: File, manual: boolean) => void }) {
   let input!: HTMLInputElement;
   const [over, setOver] = createSignal(false);
   const enter = (e: DragEvent) => {
@@ -536,7 +536,7 @@ function FieldImageAdd(props: { label: string; busy: boolean; onFile: (file: Fil
         onChange={(e) => {
           const file = e.currentTarget.files?.[0];
           e.currentTarget.value = "";
-          if (file) props.onFile(file);
+          if (file) props.onFile(file, true);
         }}
       />
       <button
@@ -560,7 +560,7 @@ function FieldImageAdd(props: { label: string; busy: boolean; onFile: (file: Fil
           setOver(false);
           const files = [...(e.dataTransfer?.files ?? [])];
           const file = files.find((f) => f.type.startsWith("image/") || isImageFile(f.name));
-          if (file && !props.busy) props.onFile(file);
+          if (file && !props.busy) props.onFile(file, false);
         }}
       >
         <ImageIcon />

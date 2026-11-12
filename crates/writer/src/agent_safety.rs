@@ -812,6 +812,17 @@ impl Writer {
     }
 
     pub fn agent_may_read_asset(&self, id: &str) -> bool {
+        if self
+            .state()
+            .meta("asset.local_device")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("1")
+            && !self.asset_is_manual(id).unwrap_or(false)
+        {
+            return false;
+        }
         if !self
             .state()
             .meta(&format!("agent_safety.asset.{id}"))

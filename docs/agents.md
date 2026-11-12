@@ -108,7 +108,8 @@ Then revoke the token as above, and remove the line you added to the agent's ins
 | `POST /api/agent-codes` `{ name, scope, server_url? }` | `admin` | Issues a code that works once for 10 minutes. Answers `{ code, expires, name, scope, server_url, command }`. `server_url` defaults to the address the request came in on. |
 | `POST /api/agent-codes/redeem` `{ code }` | None | Creates the `agent-<name>` token, replacing one of that name. Answers 201 `{ server_url, token, name, scope }`, or 410 for a wrong, used or expired code. |
 | `GET /agent/install.sh` | None | The install script, with the server's URL as the request reached it. Behind a proxy, the server reads `X-Forwarded-Host` and `X-Forwarded-Proto`. |
-# Login secret permissions
+
+## Login secret permissions
 
 On Permissions, Browser automation must be on before selecting Login secrets.
 The list is empty by default. Only an owner session or ordinary admin user token
@@ -159,7 +160,7 @@ a secret could be entered on a look-alike page.
 Agent tokens cannot run even an in-app agent with a matching name. In-app agents
 use the agent tool for sub-agents, not the chat API.
 
-# External agents and held notes
+## External agents and held notes
 
 An external agent can use the filtered `/api/query` (GET or POST), `/api/search`,
 and `/api/notes` list. These responses exclude held notes and include the fixed
@@ -175,3 +176,33 @@ Use filtered queries and current-note reads instead. These historical and
 aggregate representations do not have a content-bound clearance of their own.
 Normal user sessions retain access. Only a user session may release a held note.
 
+New attachments made with the in-app picker, camera or drawing carry manual
+intent through device sync. Only a live paired device may assert this exception
+to the server's default incoming policy. It is not a statement that the file is
+safe. Share-to-vault, MMS, call captures and script uploads remain incoming.
+Pasted and dropped files also stay incoming rather than claiming picker intent.
+Existing incoming marks always win, even after unlinking or a manual retry.
+
+Both apps and server need the provenance protocol for manual device attachments
+to become readable. Uploads add `provenance=manual|incoming` to POST/PUT, without
+changing the byte body. Missing, empty or unknown values from devices remain
+incoming. Old apps stay conservative on new servers, and old servers ignore the
+new field and keep their existing denial. Upgrading never relabels old queue
+entries or releases historical attachments. Local intent survives restart and
+cache eviction, but files downloaded from another device do not acquire it.
+
+Sticky denial also syncs after the bytes have been uploaded. The asset list's
+`incoming` boolean carries denial to existing caches. A paired device sends
+`PUT /api/assets/{id}?incoming_only=true&provenance=incoming` to add denial
+without uploading bytes, including after local eviction. Downloads carry
+`X-Vault-Asset-Incoming` so an on-demand refill checks denial even between sync
+rounds. Neither mechanism grants manual intent or clears a mark. A failed
+metadata update fails the sync round and is retried on a later round.
+
+This reconciliation requires updated apps and server. Offline replicas keep
+their previous state until they sync or refill. Missing or unknown list/header
+metadata makes the updated device persist denial, even for a formerly manual
+file. It sends metadata-only updates only when the server lists an explicit
+`incoming: false`. Old apps do not reconcile later denial, but their uploads
+remain incoming on updated servers. Old-server safety assumes the TV-156
+default-incoming policy, not a downgrade to a server predating it.
