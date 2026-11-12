@@ -1191,7 +1191,14 @@ fn device_upload_provenance_matrix_and_sticky_retry() {
                     .body("bytes")
                     .send()
                     .unwrap();
-                assert_eq!(res.status().as_u16(), if bearer == agent_token && !manual { 403 } else { 200 });
+                assert_eq!(
+                    res.status().as_u16(),
+                    if bearer == agent_token && !manual {
+                        403
+                    } else {
+                        200
+                    }
+                );
                 assert_eq!(read(id), if manual { 200 } else { 403 });
             }
             // Denial arriving later dominates a previously successful manual upload.
