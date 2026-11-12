@@ -904,6 +904,14 @@ describe("the Permissions tab", () => {
 });
 
 describe("the Triggers tab", () => {
+  it("lists read-only mail recommendations separately from editable triggers", async () => {
+    agentRuns.mockResolvedValue({ tools: [], triggers: [{ name: "mail-triage", kind: "recommendation", runs: [{ id: 99, thread: "recommendation-thread", started: 1000, ended: 2000, outcome: "succeeded", message: null, log: "" }] }] });
+    await open("/agents/inbox_triage/settings/triggers");
+    const section = within(await screen.findByRole("region", { name: "Mail backlog recommendations" }));
+    expect(section.getByText(/Read-only summaries/)).toBeTruthy();
+    expect(section.getByRole("link", { name: "Open thread" })).toHaveAttribute("href", "/agents/inbox_triage?thread=recommendation-thread");
+    expect(section.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
   it("previews a backfill count before confirming the selected newest notes", async () => {
     const a = triage();
     a.triggers = [{ name: "opened", kind: "event", on: ["create"], type: ["email"], where: null, prompt: "File." }];

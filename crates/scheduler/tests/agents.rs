@@ -229,14 +229,20 @@ fn user() -> Author {
 
 fn mail_triage_rig() -> (Rig, Vec<String>) {
     let r = Rig::new();
-    r.writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    r.writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
     r.writer.activate_agent_safety().unwrap();
     r.agent("reader", "label = \"Reader\"\n");
     let mut ids = Vec::new();
     for i in 0..20 {
         let n = r.writer.create("email", &Input::Json(json!({"fields":{"title":format!("Fixture {i}"),"sent":"2000-01-01T00:00:00Z"}})), &user()).unwrap();
         let safety = r.writer.agent_safety(&n.id).unwrap();
-        assert!(r.writer.release_agent_safety(&n.id, &safety.fingerprint, &user()).unwrap());
+        assert!(
+            r.writer
+                .release_agent_safety(&n.id, &safety.fingerprint, &user())
+                .unwrap()
+        );
         ids.push(n.id);
     }
     (r, ids)
@@ -245,15 +251,26 @@ fn mail_triage_rig() -> (Rig, Vec<String>) {
 #[test]
 fn mail_triage_is_one_read_scoped_durable_job_and_success_is_not_selected_again() {
     let (r, ids) = mail_triage_rig();
-    assert_eq!(r.scheduler.mail_triage_candidates("reader").unwrap().len(), 20);
+    assert_eq!(
+        r.scheduler.mail_triage_candidates("reader").unwrap().len(),
+        20
+    );
     assert!(r.scheduler.mail_triage_enqueue("reader", &ids).unwrap());
     assert!(r.scheduler.mail_triage_enqueue("reader", &ids).is_err());
     assert!(r.fake.turns().is_empty());
     r.advance(1);
     assert_eq!(r.fake.turns().len(), 1);
-    assert_eq!(*r.fake.scopes.lock().unwrap(), vec![Some(state::Scope::Read)]);
+    assert_eq!(
+        *r.fake.scopes.lock().unwrap(),
+        vec![Some(state::Scope::Read)]
+    );
     assert_eq!(r.fake.threads.lock().unwrap()[0].1, "mail-triage");
-    assert!(r.scheduler.mail_triage_candidates("reader").unwrap().is_empty());
+    assert!(
+        r.scheduler
+            .mail_triage_candidates("reader")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -263,13 +280,27 @@ fn mail_triage_rechecks_gate_and_processed_at_execution() {
         assert!(r.scheduler.mail_triage_enqueue("reader", &ids).unwrap());
         let n = r.writer.read(&ids[0]).unwrap();
         let mut doc = writer::doc_to_json(&n.doc);
-        if hold { doc["fields"]["title"] = json!("Changed untrusted content"); }
-        else { doc["fields"]["processed"] = json!(true); }
-        r.writer.update(&ids[0], &Input::Json(doc), Some(&n.version), &user()).unwrap();
-        if hold { assert!(!r.writer.agent_may_read(&ids[0])); }
+        if hold {
+            doc["fields"]["title"] = json!("Changed untrusted content");
+        } else {
+            doc["fields"]["processed"] = json!(true);
+        }
+        r.writer
+            .update(&ids[0], &Input::Json(doc), Some(&n.version), &user())
+            .unwrap();
+        if hold {
+            assert!(!r.writer.agent_may_read(&ids[0]));
+        }
         r.advance(1);
         assert!(r.fake.turns().is_empty());
-        assert_eq!(r.writer.state().trigger_queue_stats("reader").unwrap().waiting, 0);
+        assert_eq!(
+            r.writer
+                .state()
+                .trigger_queue_stats("reader")
+                .unwrap()
+                .waiting,
+            0
+        );
     }
 }
 
@@ -283,7 +314,10 @@ fn mail_triage_transient_failure_retries_one_batch_not_twenty_triggers() {
     *r.fake.fail.lock().unwrap() = None;
     r.advance(61);
     assert_eq!(r.fake.turns().len(), 2);
-    assert_eq!(*r.fake.scopes.lock().unwrap(), vec![Some(state::Scope::Read); 2]);
+    assert_eq!(
+        *r.fake.scopes.lock().unwrap(),
+        vec![Some(state::Scope::Read); 2]
+    );
 }
 
 const NIGHTLY: &str = r#"label = "Night owl"

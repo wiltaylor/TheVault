@@ -33,6 +33,6 @@ export function MailTriage() {
     <button disabled={busy() || !agent()} onClick={() => void act(false)}>Preview recommendation batch</button>
     <Show when={preview()}>{p => <p>{p().selected} selected from {p().count} eligible messages. Preview makes no model calls. <button disabled={busy()} onClick={() => void act(true)}>Queue {p().selected} recommendations as one summary</button></p>}</Show>
     <p role="status">{message()}</p>
-    <Show when={agent()}><a href={`/agents/${encodeURIComponent(agent())}/triggers`}>Agent runs</a></Show>
+    <Show when={agent()}><a href={`/agents/${encodeURIComponent(agent())}/settings/triggers`}>Agent runs</a></Show>
   </details>;
 }

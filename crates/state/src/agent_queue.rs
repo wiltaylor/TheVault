@@ -97,7 +97,10 @@ mod tests {
         let path = dir.path().join("state.db");
         let s = State::open(&path, None).unwrap();
         let payload = r#"{"op":"mail-triage","source_notes":["a","b"]}"#;
-        let id = s.enqueue_backfill("reader", "mail-triage", Some("batch"), payload, 0).unwrap().unwrap();
+        let id = s
+            .enqueue_backfill("reader", "mail-triage", Some("batch"), payload, 0)
+            .unwrap()
+            .unwrap();
         assert_eq!(s.mail_triage_notes("reader").unwrap(), vec!["a", "b"]);
         assert!(s.mail_triage_notes("other").unwrap().is_empty());
         s.claim_trigger_job(id).unwrap();
@@ -108,7 +111,16 @@ mod tests {
         assert_eq!(s.mail_triage_notes("reader").unwrap(), vec!["a", "b"]);
         s.finish_trigger_job(id, "succeeded", None).unwrap();
         assert_eq!(s.mail_triage_notes("reader").unwrap(), vec!["a", "b"]);
-        let id = s.enqueue_backfill("reader", "mail-triage", Some("failed-batch"), r#"{"source_notes":["c"]}"#, 0).unwrap().unwrap();
+        let id = s
+            .enqueue_backfill(
+                "reader",
+                "mail-triage",
+                Some("failed-batch"),
+                r#"{"source_notes":["c"]}"#,
+                0,
+            )
+            .unwrap()
+            .unwrap();
         s.finish_trigger_job(id, "failed", None).unwrap();
         assert_eq!(s.mail_triage_notes("reader").unwrap(), vec!["a", "b"]);
     }
