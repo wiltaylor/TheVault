@@ -378,7 +378,12 @@ mod tests {
         assert_eq!(bodies.lock().unwrap().len(), 1);
         let mut moved = proposal;
         moved["origin"] = json!("https://old.example");
-        assert!(authorized(&b, &state, &agent, &moved).await.content.contains("origin_changed"));
+        assert!(
+            authorized(&b, &state, &agent, &moved)
+                .await
+                .content
+                .contains("origin_changed")
+        );
         let mut unsafe_input = input.clone();
         unsafe_input["target"] = json!(format!("#{password}"));
         let unsafe_out = call(&b, &state, &agent, "unsafe", &unsafe_input, false, true).await;

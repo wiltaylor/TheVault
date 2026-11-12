@@ -141,22 +141,55 @@ fn browser_secret_foreground_proposal_apply_and_revocation_are_value_free() {
     assert_eq!(status, StatusCode::OK, "{done}");
     assert_eq!(done["status"], "filled");
     assert!(!done.to_string().contains(password));
-    let saved_after = api.get(&format!("/api/agents/driver/threads/{}", thread["id"].as_str().unwrap()));
+    let saved_after = api.get(&format!(
+        "/api/agents/driver/threads/{}",
+        thread["id"].as_str().unwrap()
+    ));
     assert!(!saved_after.to_string().contains(password));
     assert!(saved_after.to_string().contains("applied"));
-    let token: Value = api.client.post(api.server.url("/api/tokens")).bearer_auth(api.token())
-        .json(&json!({"name":"limited","scope":"write"})).send().unwrap().error_for_status().unwrap().json().unwrap();
-    let denied = api.client.post(api.server.url("/api/ai/apply")).bearer_auth(token["secret"].as_str().unwrap())
-        .json(&proposal).send().unwrap();
+    let token: Value = api
+        .client
+        .post(api.server.url("/api/tokens"))
+        .bearer_auth(api.token())
+        .json(&json!({"name":"limited","scope":"write"}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let denied = api
+        .client
+        .post(api.server.url("/api/ai/apply"))
+        .bearer_auth(token["secret"].as_str().unwrap())
+        .json(&proposal)
+        .send()
+        .unwrap();
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
-    let device: Value = api.client.post(api.server.url("/api/devices/pair"))
-        .json(&json!({"password":testkit::PASSWORD,"name":"Fixture","platform":"android"})).send().unwrap().error_for_status().unwrap().json().unwrap();
-    let denied = api.client.post(api.server.url("/api/ai/apply")).bearer_auth(device["token"].as_str().unwrap())
-        .json(&proposal).send().unwrap();
+    let device: Value = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
+        .json(&json!({"password":testkit::PASSWORD,"name":"Fixture","platform":"android"}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let denied = api
+        .client
+        .post(api.server.url("/api/ai/apply"))
+        .bearer_auth(device["token"].as_str().unwrap())
+        .json(&proposal)
+        .send()
+        .unwrap();
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
     api.agent("driver", DRIVER);
     let (status, _) = api.apply(&proposal);
-    assert!(!status.is_success(), "revoked agent grant must refuse Apply");
+    assert!(
+        !status.is_success(),
+        "revoked agent grant must refuse Apply"
+    );
     assert_eq!(
         browser
             .requests()
@@ -203,8 +236,16 @@ fn browser_secret_implicit_assistant_proposal_can_be_applied() {
         .bearer_auth(api.token())
         .json(&json!({"kind":"login","username":"fixture-user","password":"fabricated-TV164-assistant","origins":[]}))
         .send().unwrap().error_for_status().unwrap();
-    api.agent("assistant", "permissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n");
-    let events = api.call(&fake, None, "browser_fill_secret", json!({"secret":"login","field":"password","target":"#password","session":"default"}));
+    api.agent(
+        "assistant",
+        "permissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n",
+    );
+    let events = api.call(
+        &fake,
+        None,
+        "browser_fill_secret",
+        json!({"secret":"login","field":"password","target":"#password","session":"default"}),
+    );
     let proposal = last(&events, "proposal");
     assert_eq!(proposal["agent"], "assistant");
     assert_eq!(api.apply(proposal).0, StatusCode::OK);

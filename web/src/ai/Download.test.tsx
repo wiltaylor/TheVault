@@ -78,6 +78,17 @@ describe("web steps", () => {
     await waitFor(() => expect(card).toHaveTextContent("Filled."));
   });
 
+  it("discards a secret proposal without filling", async () => {
+    const m = render(() => <ChatPanel noteId={() => ""} />);
+    await ask(m);
+    live!.onEvent({ event: "proposal", data: { id: "fill2", op: "browser_secret", secret: "login", field: "password", target: "#password", session: "default", origin: "https://fixture.example", unrestricted_origin: false } });
+    const card = await m.findByRole("region", { name: "Proposed secret fill" });
+    expect(card).not.toHaveTextContent("no origin restrictions");
+    fireEvent.click(card.querySelectorAll("button")[1]);
+    await waitFor(() => expect(card).toHaveTextContent("Discarded."));
+    expect(aiApply).not.toHaveBeenCalled();
+  });
+
   it("labels the read and download steps by host", () => {
     expect(stepLabel("fetch_url", { url: "https://example.com/a/b?c=1" })).toBe("Read example.com");
     expect(stepLabel("download_asset", { url: "https://files.example.org/x.pdf", filename: null })).toBe("Download from files.example.org");
