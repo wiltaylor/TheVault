@@ -1589,7 +1589,7 @@ fn setup(
             .browser
             .then(crate::ai_browser::BrowserBox::from_env)
             .flatten()
-            .map(|b| w.browser_profile(&agent.name).map(|id| b.with_profile(id)))
+            .map(|b| w.browser_profile(&agent.name).map(|id| b.with_profile(id).with_secret_browser(!agent.permissions.browser_secrets.is_empty())))
             .transpose()
             .map_err(|e| AiError::new(ErrorKind::Unavailable, e.to_string()))?,
     })
@@ -2640,6 +2640,7 @@ impl Turn {
         images_sent: usize,
     ) -> crate::ai_browser::BrowserOut {
         match call.name.as_str() {
+            "browser_fill_secret" => crate::ai_browser::secret_fill::confirmation_required(self.writer.state(), &setup.agent, &call.input),
             "browser_run" => crate::ai_browser::run(b, &call.input, self.writer.state()).await,
             "browser_capture" => {
                 let direct = setup.direct.downloads;

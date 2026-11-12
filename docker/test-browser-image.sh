@@ -261,6 +261,8 @@ if [ -z "${BOX_URL:-}" ]; then
 r=$(run_cmd 'playwright-cli -s=headless open about:blank && playwright-cli -s=headless snapshot' 180)
 check "a headless session opens too" jqe '.exit == 0 and .timed_out == false' <<< "$r"
 run_cmd 'playwright-cli close-all' > /dev/null || true
+docker cp docker/browser-secret-image.test.cjs "$run:/tmp/browser-secret-image.test.cjs"
+check "secret fill endpoint and memory-only bridge" docker exec "$run" node --test /tmp/browser-secret-image.test.cjs
 fi
 
 # 5. A timeout.
