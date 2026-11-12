@@ -28,9 +28,24 @@ pub(crate) fn writable_type(type_name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-pub(crate) fn writable_note(w: &Writer, id: &str) -> Result<(), ApiError> {
+pub(crate) fn agent_may_write(author: &Author, type_name: &str) -> Result<(), ApiError> {
+    if type_name == crate::agent_memory::MEMORY_TYPE {
+        crate::auth::require_in_app_agent_caller(author)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn writable_note(w: &Writer, id: &str, author: &Author) -> Result<(), ApiError> {
     if let Ok(note) = w.read(id) {
         writable_type(&note.type_name)?;
+        agent_may_write(author, &note.type_name)?;
+    }
+    Ok(())
+}
+
+fn agent_may_write_note(w: &Writer, id: &str, author: &Author) -> Result<(), ApiError> {
+    if let Ok(note) = w.read(id) {
+        agent_may_write(author, &note.type_name)?;
     }
     Ok(())
 }
@@ -213,7 +228,12 @@ fn saved_response(status: StatusCode, headers: &HeaderMap, s: Saved) -> Response
     )
 }
 
-pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
+pub async fn list(
+    State(w): Shared,
+    Caller(author): Caller,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let agent = crate::auth::is_agent_token(&author);
     let archived = crate::query::archived_param(q.archived.as_deref())?;
     let notes = blocking(w, move |w| {
         if let Some(t) = &q.type_name
@@ -221,7 +241,11 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
         {
             return Err(writer::Error::UnknownType(t.clone()));
         }
-        w.list_with(q.type_name.as_deref(), archived)
+        let mut notes = w.list_with(q.type_name.as_deref(), archived)?;
+        if agent {
+            notes.retain(|n| w.agent_may_read(&n.id));
+        }
+        Ok(notes)
     })
     .await?;
     let notes: Vec<Value> = notes
@@ -239,7 +263,11 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
             })
         })
         .collect();
-    Ok(Json(json!({ "notes": notes })))
+    let mut result = json!({ "notes": notes });
+    if agent {
+        result["notice"] = json!("some notes may be held");
+    }
+    Ok(Json(result))
 }
 
 pub async fn create(
@@ -260,16 +288,34 @@ pub async fn create(
         (None, None) => return Err(ApiError::bad_request("name the note's type with ?type=")),
     };
     writable_type(&type_name)?;
+    agent_may_write(&author, &type_name)?;
     let saved = blocking(w, move |w| w.create(&type_name, &sub.input, &author)).await?;
     Ok(saved_response(StatusCode::CREATED, &headers, saved))
 }
 
 pub async fn read(
     State(w): Shared,
+    Caller(author): Caller,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    let note = blocking(w, move |w| w.read(&id)).await?;
+    if crate::auth::is_agent_token(&author) && !w.agent_may_read(&id) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "held",
+            "Note is unavailable to agents",
+        ));
+    }
+    let (note, safety) = blocking(w, move |w| {
+        let note = w.read(&id)?;
+        let safety = if w.state().meta("agent_safety.activation_ms")?.is_some() {
+            json!({"agent_safety": w.agent_safety_doc(&id, &note.type_name, &note.doc)?})
+        } else {
+            json!({})
+        };
+        Ok::<_, writer::Error>((note, safety))
+    })
+    .await?;
     Ok(note_response(
         StatusCode::OK,
         &headers,
@@ -277,8 +323,85 @@ pub async fn read(
         &note.type_name,
         &note.version,
         note.wcl,
-        json!({}),
+        safety,
     ))
+}
+
+#[derive(Deserialize)]
+pub struct SafetyRelease {
+    fingerprint: String,
+}
+
+#[derive(Deserialize)]
+pub struct HeldNotesQuery {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    reason: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+pub async fn held_agent_notes(
+    State(w): Shared,
+    Caller(author): Caller,
+    Query(q): Query<HeldNotesQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(author, Author::Session(_)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "Only the signed-in user may list held notes",
+        ));
+    }
+    for date in [&q.since, &q.until].into_iter().flatten() {
+        chrono::DateTime::parse_from_rfc3339(date)
+            .map_err(|_| ApiError::bad_request("since and until must be RFC3339 dates"))?;
+    }
+    blocking(w, move |w| {
+        let notes = w.held_agent_notes(
+            q.kind.as_deref(),
+            q.since.as_deref(),
+            q.until.as_deref(),
+            q.reason.as_deref(),
+        )?;
+        let total = notes.len();
+        let notes: Vec<_> = notes
+            .into_iter()
+            .skip(q.offset.unwrap_or(0))
+            .take(q.limit.unwrap_or(100).clamp(1, 500))
+            .collect();
+        Ok::<_, ApiError>(Json(json!({"notes":notes,"total":total})))
+    })
+    .await
+}
+
+pub async fn release_agent_safety(
+    State(w): Shared,
+    Caller(author): Caller,
+    Path(id): Path<String>,
+    Json(input): Json<SafetyRelease>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(author, Author::Session(_)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "Only the signed-in user may release a held note",
+        ));
+    }
+    blocking(w, move |w| {
+        if !w.release_agent_safety(&id, &input.fingerprint, &author)? {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "content_changed",
+                "The note changed. Review it again before release.",
+            ));
+        }
+        tracing::info!(target: "ai", "agent_safety release note={id} actor=session");
+        Ok(Json(json!({"agent_safety": w.agent_safety(&id)?})))
+    })
+    .await
 }
 
 /// Whether the request carries `If-None-Match: *`: write only if the note does not exist.
@@ -315,6 +438,7 @@ pub async fn update(
             }
         };
         writable_type(&type_name)?;
+        agent_may_write(&author, &type_name)?;
         let saved = blocking(w, move |w| {
             w.create_with_id(&id, &type_name, &sub.input, &author)
         })
@@ -322,7 +446,9 @@ pub async fn update(
         return Ok(saved_response(StatusCode::CREATED, &headers, saved));
     }
     let saved = blocking(w, move |w| {
+        agent_may_write_note(w, &id, &author)?;
         w.update(&id, &sub.input, sub.base.as_deref(), &author)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
@@ -336,7 +462,12 @@ pub async fn delete(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
-    let saved = blocking(w, move |w| w.delete(&id, base.as_deref(), &author)).await?;
+    let saved = blocking(w, move |w| {
+        agent_may_write_note(w, &id, &author)?;
+        w.delete(&id, base.as_deref(), &author)
+            .map_err(ApiError::from)
+    })
+    .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
 }
 
@@ -372,7 +503,9 @@ async fn set_archived(
 ) -> Result<Response, ApiError> {
     let base = q.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
+        agent_may_write_note(w, &id, &author)?;
         w.set_archived(&id, archived, base.as_deref(), &author)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
@@ -434,7 +567,9 @@ pub async fn restore_version(
 ) -> Result<Response, ApiError> {
     let base = body.base_version.or_else(|| if_match(&headers));
     let saved = blocking(w, move |w| {
+        agent_may_write_note(w, &id, &author)?;
         w.restore_version(&id, &body.version, base.as_deref(), &author)
+            .map_err(ApiError::from)
     })
     .await?;
     Ok(saved_response(StatusCode::OK, &headers, saved))
@@ -466,11 +601,23 @@ fn graph_node(n: &writer::GraphNode, direction: &str) -> Value {
 /// the trash are left out.
 pub async fn graph(
     State(w): Shared,
+    Caller(author): Caller,
     Path(id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let limit = q.limit.unwrap_or(GRAPH_LIMIT).min(GRAPH_MAX);
-    let g = blocking(w, move |w| w.graph(&id, limit)).await?;
+    let agent = crate::auth::is_agent_token(&author);
+    let g = blocking(w, move |w| {
+        let mut graph = w.graph(&id, limit)?;
+        if agent {
+            graph.neighbours.retain(|n| w.agent_may_read(&n.id));
+            graph
+                .edges
+                .retain(|e| w.agent_may_read(&e.from) && w.agent_may_read(&e.to));
+        }
+        Ok::<_, writer::Error>(graph)
+    })
+    .await?;
     let c = &g.center.id;
     let direction = |n: &str| {
         let out = g.edges.iter().any(|e| &e.from == c && e.to == n);
@@ -488,12 +635,16 @@ pub async fn graph(
         .iter()
         .map(|e| json!({ "from": e.from, "to": e.to, "via": e.via, "field": e.field }))
         .collect();
-    Ok(Json(json!({
+    let mut result = json!({
         "id": g.center.id,
         "nodes": nodes,
         "edges": edges,
         "truncated": g.truncated,
-    })))
+    });
+    if agent {
+        result["notice"] = json!("some notes may be held");
+    }
+    Ok(Json(result))
 }
 
 pub async fn trash(State(w): Shared) -> Result<Json<Value>, ApiError> {
@@ -521,6 +672,9 @@ pub async fn restore_from_trash(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let saved = blocking(w, move |w| {
+        if let Some(note) = w.trash()?.iter().find(|n| n.note_id == id) {
+            agent_may_write(&author, &note.note_type)?;
+        }
         if !matches!(author, state::Author::Session(_))
             && w.trash()?
                 .iter()
@@ -568,6 +722,15 @@ pub async fn purge_from_trash(
     Caller(author): Caller,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let checked_author = author.clone();
+    let checked_id = id.clone();
+    blocking(w.clone(), move |w| {
+        if let Some(note) = w.trash()?.iter().find(|n| n.note_id == checked_id) {
+            agent_may_write(&checked_author, &note.note_type)?;
+        }
+        Ok::<_, ApiError>(())
+    })
+    .await?;
     human_only(&author)?;
     Ok(purged_json(
         blocking(w, move |w| w.purge_from_trash(&id)).await?,

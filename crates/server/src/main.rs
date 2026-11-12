@@ -160,6 +160,8 @@ fn main() -> anyhow::Result<()> {
     // In the runtime, so agent trigger runs use it (agents G12).
     let app = {
         let _entered = runtime.enter();
+        api::recover_browser_profiles(writer.clone())
+            .context("recovering temporary browser profiles")?;
         api::router(
             writer.clone(),
             scheduler.clone(),

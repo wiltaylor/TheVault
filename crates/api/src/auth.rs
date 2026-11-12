@@ -10,12 +10,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::Json;
-use axum::extract::{FromRequestParts, Request, State};
+use axum::extract::{FromRequestParts, MatchedPath, Path, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use axum::{Json, RequestExt};
 use serde::Deserialize;
 use serde_json::json;
 use state::{Author, Scope};
@@ -129,6 +129,112 @@ pub struct GrantedScope(pub Scope);
 /// Agent-kind credentials become Agent authors at authentication, never by token name.
 pub(crate) fn is_agent_token(author: &Author) -> bool {
     matches!(author, Author::Agent(name) if name.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("agent-")))
+}
+
+/// External agent credentials confer no authority to drive an in-app agent.
+pub(crate) fn require_in_app_agent_caller(author: &Author) -> Result<(), ApiError> {
+    if is_agent_token(author) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "agent tokens cannot run in-app agents",
+        ));
+    }
+    Ok(())
+}
+
+/// Aggregates and historical representations have no content-bound clearance.
+/// Agent clients use the filtered query API and current-note reads instead.
+fn agent_unfiltered_route(route: &str) -> bool {
+    matches!(
+        route,
+        "/api/events"
+            | "/api/sync/changes"
+            | "/api/trash"
+            | "/api/flagged"
+            | "/api/pins"
+            | "/api/notifications"
+            | "/api/activity"
+            | "/api/assets"
+            | "/api/assets/trash"
+            | "/api/assets/{id}/usage"
+            | "/api/notes/{id}/history"
+            | "/api/notes/{id}/history/{version}"
+            | "/api/notes/{id}/original"
+            | "/api/notes/{id}/canvas/{name}"
+            | "/api/daily/{date}"
+            | "/api/planner/{period}/{date}"
+            | "/api/agents/{name}/threads"
+            | "/api/agents/{name}/threads/{id}"
+            | "/api/agents/{name}/memories"
+            | "/api/dispatched"
+            | "/api/agents/{name}/runs"
+            | "/api/agents/calls/{call}"
+    )
+}
+
+async fn agent_read_gate(w: Arc<Writer>, req: &mut Request) -> Result<(), ApiError> {
+    let route = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|p| p.as_str())
+        .unwrap_or("")
+        .to_owned();
+    if matches!(
+        route.as_str(),
+        "/api/assets/cleanup" | "/api/assets/trash/restore"
+    ) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "held",
+            "Attachments of incoming messages are not available to agents.",
+        ));
+    }
+    if (matches!(*req.method(), Method::GET | Method::HEAD) && agent_unfiltered_route(&route))
+        || matches!(
+            route.as_str(),
+            "/api/daily/{date}" | "/api/planner/{period}/{date}"
+        )
+    {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "held",
+            "Use filtered queries and current-note reads; some notes may be held",
+        ));
+    }
+    // Path extraction decodes ids exactly as the handler does, including escaped bytes.
+    if route.starts_with("/api/notes/{id}")
+        || route == "/api/assets/{id}"
+        || route == "/api/pins/{id}"
+        || route == "/api/trash/{id}/restore"
+    {
+        let Path(params) = req
+            .extract_parts::<Path<std::collections::HashMap<String, String>>>()
+            .await
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let id = params.get("id").cloned().unwrap_or_default();
+        let asset = route == "/api/assets/{id}";
+        let allowed = blocking(w, move |w| {
+            Ok::<_, ApiError>(if asset {
+                w.agent_may_read_asset(&id)
+            } else {
+                w.agent_may_read(&id)
+            })
+        })
+        .await?;
+        if !allowed {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "held",
+                if asset {
+                    "Attachments of incoming messages are not available to agents."
+                } else {
+                    "Note is unavailable to agents"
+                },
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Whether `path` is `/api/devices/{id}/push`, `/api/devices/{id}/bases` or
@@ -451,6 +557,11 @@ pub async fn authenticate(
             ),
         )
         .into_response();
+    }
+    if is_agent_token(&granted.author)
+        && let Err(e) = agent_read_gate(sessions.writer.clone(), &mut req).await
+    {
+        return e.into_response();
     }
     req.extensions_mut().insert(Caller(granted.author));
     req.extensions_mut().insert(GrantedScope(granted.scope));

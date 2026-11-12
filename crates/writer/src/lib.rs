@@ -34,6 +34,7 @@
 //! joins the write in progress, so it commits with it or not at all (D30).
 
 mod activity;
+pub mod agent_safety;
 mod agent_threads;
 mod asset_use;
 mod assets;
@@ -156,6 +157,8 @@ pub struct TypeCheck {
 /// Errors from the write path.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Note is unavailable to agents")]
+    AgentHeld,
     /// The submitted WCL does not parse.
     #[error("{file}: {message}")]
     Parse { file: String, message: String },
@@ -237,6 +240,8 @@ pub enum Error {
     /// Agent transcripts are writable only through the dedicated server runtime capability.
     #[error("Agent threads can only be written through the agent runtime.")]
     ServerOwnedThread,
+    #[error("agent tokens cannot run in-app agents")]
+    AgentMemoryToken,
     /// Something other than a note that the request names does not exist.
     #[error("{0}")]
     Missing(String),
@@ -533,6 +538,7 @@ pub struct Writer {
     /// [`Writer::upgrade_shipped_defaults`] with [`Upkeep::Home`]: the derived writes that must
     /// happen once, such as an event series' occurrences, happen only there.
     home: std::sync::atomic::AtomicBool,
+    safety_wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// Whether `line` of a note file is the top-level `archived = true`, which the canonical layout
@@ -567,6 +573,7 @@ impl Writer {
         if !index.is_current(&vault)? {
             recover(&vault, &state)?;
             index.rebuild(&vault)?;
+            state.set_meta("agent_safety.index_ready", "0")?;
         }
         feed::reconcile(&vault, &state)?;
         let schema = Schema::load(&vault)?;
@@ -585,6 +592,7 @@ impl Writer {
             drafts: Mutex::new(HashMap::new()),
             definitions: std::sync::atomic::AtomicU64::new(0),
             home: std::sync::atomic::AtomicBool::new(false),
+            safety_wake: Mutex::new(None),
         })
     }
 
@@ -1415,6 +1423,7 @@ impl Writer {
         computed_from: Option<&Doc>,
         runtime_thread: bool,
     ) -> Result<NoteChange> {
+        Self::check_memory_author(type_name, author)?;
         if type_name == "agent_thread" && !runtime_thread {
             return Err(Error::ServerOwnedThread);
         }
@@ -1690,6 +1699,9 @@ impl Writer {
                     acts.push((by.clone(), act, id.clone()));
                     // The version below is not recorded yet, so the head is still the note as it
                     // was before this write, as for the person and Outbox changes above.
+                    if event == Event::Update {
+                        self.carry_safety_conversion(&id, &type_name, &doc, by)?;
+                    }
                     let previous = match event {
                         Event::Update
                             if inner.schema.type_def(&type_name).is_some_and(|t| {
@@ -1748,7 +1760,38 @@ impl Writer {
             inner.index.set_schema(&schema)?;
             inner.schema = schema;
         }
-        inner.index.update(&inner.schema, &updates)?;
+        for s in &saved {
+            if s.event == Event::Create
+                && !s.restored
+                && let Ok(doc) = Doc::parse(&s.wcl, "safety member")
+            {
+                self.bind_safety_member(&s.id, &s.type_name, &doc)?;
+            }
+            if s.restored
+                && let Ok(doc) = Doc::parse(&s.wcl, "restored note")
+            {
+                let mut safety = self.agent_safety_doc(&s.id, &s.type_name, &doc)?;
+                if safety.status == "pending" {
+                    safety.status = "held".into();
+                    safety.reason = "unclassified".into();
+                    self.state.set_agent_safety_result(
+                        &s.id,
+                        &serde_json::to_string(&safety).expect("safety"),
+                        false,
+                    )?;
+                }
+            }
+            if s.event == Event::Create
+                && matches!(
+                    s.author.as_ref().unwrap_or(author),
+                    Author::Agent(_) | Author::AgentMail(_)
+                )
+            {
+                self.state
+                    .set_meta(&format!("agent_safety.delivered.{}", s.id), "1")?;
+            }
+        }
+        self.update_note_index(inner, &updates)?;
         inner.index.advance(generation)?;
         for ((by, act, id), s) in acts.iter().zip(&saved) {
             let title = match gone_titles.remove(id) {
@@ -1817,6 +1860,7 @@ impl Writer {
     /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
     /// and `updated` times and its archived state, and is put back in canonical order.
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+        Self::check_memory_author(&change.type_name, author)?;
         if change.type_name == "outbox" && change.event == Event::Delete {
             let (_, old) = self.existing(&change.id)?;
             let doc = Input::Wcl(old).parse(&note_path("outbox", &change.id))?;
@@ -1851,6 +1895,16 @@ impl Writer {
             .type_def(&change.type_name)
             .ok_or_else(|| Error::UnknownType(change.type_name.clone()))?;
         change.doc = Some(note::arrange(ty, doc, &created, &updated));
+        Ok(())
+    }
+
+    fn check_memory_author(type_name: &str, author: &Author) -> Result<()> {
+        if type_name == builtin::AGENT_MEMORY_TYPE
+            && matches!(author, Author::Agent(name) | Author::AgentMail(name)
+                if name.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("agent-")))
+        {
+            return Err(Error::AgentMemoryToken);
+        }
         Ok(())
     }
 

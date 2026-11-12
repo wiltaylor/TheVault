@@ -157,6 +157,10 @@ fn event_name(e: Event) -> &'static str {
 }
 
 fn report_response(names: &[&'static str], report: Report) -> Response {
+    let held = report
+        .items
+        .iter()
+        .any(|item| matches!(item, Err(writer::Error::AgentHeld)));
     let items: Vec<Value> = report
         .items
         .into_iter()
@@ -191,7 +195,9 @@ fn report_response(names: &[&'static str], report: Report) -> Response {
             })
         })
         .collect();
-    let status = if report.ok {
+    let status = if held {
+        StatusCode::FORBIDDEN
+    } else if report.ok {
         StatusCode::OK
     } else {
         StatusCode::UNPROCESSABLE_ENTITY
@@ -225,10 +231,11 @@ pub async fn run(
         for op in &ops {
             match op {
                 Op::Create { type_name, .. } | Op::Upsert { type_name, .. } => {
-                    crate::notes::writable_type(type_name)?
+                    crate::notes::writable_type(type_name)?;
+                    crate::notes::agent_may_write(&author, type_name)?;
                 }
                 Op::Update { id, .. } | Op::Delete { id, .. } => {
-                    crate::notes::writable_note(w, id)?
+                    crate::notes::writable_note(w, id, &author)?
                 }
             }
         }
@@ -245,6 +252,7 @@ pub async fn upsert(
     Json(body): Json<UpsertBody>,
 ) -> Result<Response, ApiError> {
     crate::notes::writable_type(&body.type_name)?;
+    crate::notes::agent_may_write(&author, &body.type_name)?;
     let input = input("upsert", body.note, body.wcl)?;
     let report = blocking(w, move |w| {
         w.upsert(

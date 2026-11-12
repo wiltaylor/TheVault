@@ -94,6 +94,7 @@ export interface AgentTabProps {
   accounts: AiAccounts | null;
   /** A prefix for element ids, unique to this screen. */
   id: string;
+  ownerActions?: boolean;
 }
 
 /**
@@ -491,6 +492,21 @@ function SubagentsSection(props: {
 }
 
 function PermissionsTab(p: AgentTabProps) {
+  const [resettingBrowser, setResettingBrowser] = createSignal(false);
+  const [browserResetMessage, setBrowserResetMessage] = createSignal("");
+  const [browserResetError, setBrowserResetError] = createSignal("");
+  async function resetBrowser() {
+    if (!window.confirm("Reset this agent's browser profile? This signs it out of every site and removes its browser files. Other agents are not affected.")) return;
+    setResettingBrowser(true);
+    setBrowserResetMessage("");
+    setBrowserResetError("");
+    try {
+      const result = await api.resetBrowserProfile(p.agent.name);
+      setBrowserResetMessage(result.cleanup_pending ? "Reset recorded. Old browser files will be removed when the browser box is available." : "Browser profile reset. The next browser action starts empty.");
+    } catch (e) {
+      setBrowserResetError(errorText(e));
+    } finally { setResettingBrowser(false); }
+  }
   const perms = () => p.draft.permissions;
   const setPerms = (patch: Partial<AgentForm["permissions"]>) =>
     p.setDraft((d) => ({ ...d, permissions: { ...d.permissions, ...patch } }));
@@ -700,9 +716,15 @@ function PermissionsTab(p: AgentTabProps) {
           </label>
           <p class="muted">{BROWSER_NOTE}</p>
           <p class="muted">
-            Whatever you are signed in to in the box's browser, this agent can reach. It needs the browser box (see
+            This agent keeps its own browser logins. Profiles stop accidental sharing, not a misled shell reaching other profiles. It needs the browser box (see
             Settings {">"} Integrations).
           </p>
+          <Show when={p.ownerActions}>
+            <button type="button" disabled={resettingBrowser()} onClick={resetBrowser}>Reset browser profile</button>
+            <p class="muted">Signs this agent out and removes only its browser files. Use this if its profile exceeds 512 MiB.</p>
+            <Show when={browserResetMessage()}><p role="status">{browserResetMessage()}</p></Show>
+            <Show when={browserResetError()}><p role="alert">{browserResetError()}</p></Show>
+          </Show>
         </div>
         <h2>Skills</h2>
         <p class="muted">
@@ -1008,6 +1030,8 @@ export function AgentScreen() {
                 <Show when={v().a.description}>
                   <p class="muted">{v().a.description}</p>
                 </Show>
+                <p class="muted">Attachments and original HTML of incoming messages are not available to agents, even after the note is allowed or released. You can still open them yourself.</p>
+                <p class="muted">Files uploaded from the phone or desktop app are also unavailable to agents for now. Agent searches do not match extracted file text.</p>
                 <div class="agent-tabs" role="tablist" aria-label="Agent settings" onKeyDown={onTabKey}>
                   <For each={AGENT_TABS}>
                     {(t) => (
@@ -1038,6 +1062,7 @@ export function AgentScreen() {
                       return dirty();
                     },
                     save: () => put(draft()!),
+                    get ownerActions() { return app.state === "ready" && app() === null; },
                     saveWcl: (wcl) => put({ wcl }),
                     get ai() {
                       return ai() ?? null;

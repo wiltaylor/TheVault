@@ -10,17 +10,569 @@ use tempfile::TempDir;
 
 const TOKEN: &str = "test-token-0123456789abcdef";
 
+#[tokio::test(flavor = "multi_thread")]
+async fn long_component_deletion_has_bounded_peak_memory() {
+    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let work = tmp.path().join("work");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir(&work).unwrap();
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = reservation.local_addr().unwrap();
+    drop(reservation);
+    let child = Child(
+        std::process::Command::new(env!("CARGO_BIN_EXE_browser-agent"))
+            .env("BROWSER_TOKEN", TOKEN)
+            .env("BROWSER_LISTEN", addr.to_string())
+            .env("BROWSER_HOME_DIR", &home)
+            .env("BROWSER_WORK_DIR", &work)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let http = reqwest::Client::new();
+    let base = format!("http://{addr}");
+    let start = Instant::now();
+    loop {
+        if http.get(format!("{base}/health")).send().await.is_ok() {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        identity(http.post(format!("{base}/run")), "test")
+            .json(&json!({"command":"true"}))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let profile = home.join("profiles/test");
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let mut fd = open(profile.join("home"), flags, Mode::empty()).unwrap();
+    let name = "d".repeat(255);
+    for _ in 0..4000 {
+        mkdirat(&fd, name.as_str(), Mode::RWXU).unwrap();
+        fd = openat(&fd, name.as_str(), flags, Mode::empty()).unwrap();
+    }
+    openat(
+        &fd,
+        "Cookies",
+        OFlags::CREATE | OFlags::WRONLY,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .unwrap();
+    drop(fd);
+    let proc = std::path::PathBuf::from(format!("/proc/{}", child.0.id()));
+    let peak = || -> u64 {
+        std::fs::read_to_string(proc.join("status"))
+            .unwrap()
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("VmHWM:")
+                    .map(|s| s.split_whitespace().next().unwrap().parse().unwrap())
+            })
+            .unwrap()
+    };
+    std::fs::write(proc.join("clear_refs"), "5").unwrap();
+    let before = peak();
+    let response = identity(http.delete(format!("{base}/profile")), "test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+    assert!(!profile.exists());
+    let growth = peak().saturating_sub(before);
+    assert!(
+        growth < 64 * 1024,
+        "4000x255 walk grew peak RSS by {growth}KiB"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deletion_repairs_root_home_and_work_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    for (part, mode) in [
+        ("home", 0),
+        ("home", 0o600),
+        ("", 0),
+        ("", 0o600),
+        ("work", 0),
+    ] {
+        let b = Agent::start().await;
+        let root = b.home.path().join("profiles/test");
+        std::fs::write(root.join("home/Cookies"), "fixture").unwrap();
+        std::fs::set_permissions(root.join(part), std::fs::Permissions::from_mode(mode)).unwrap();
+        let response = identity(b.http.delete(b.url("/profile")), "test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            200,
+            "{part} {mode:o}: {}",
+            response.text().await.unwrap()
+        );
+        assert!(!root.exists());
+        assert_eq!(b.run_status(json!({"command":"true"})).await.0, 410);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deletion_walk_is_iterative_at_thousands_of_levels() {
+    use rustix::fs::{Mode, OFlags, fchmod, mkdirat, open, openat};
+    for depth in [1000, 3000] {
+        let b = Agent::start().await;
+        let root = b.home.path().join("profiles/test");
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+        let mut fd = open(root.join("home"), flags, Mode::empty()).unwrap();
+        for _ in 0..depth {
+            mkdirat(&fd, "d", Mode::RWXU).unwrap();
+            fd = openat(&fd, "d", flags, Mode::empty()).unwrap();
+        }
+        openat(
+            &fd,
+            "Cookies",
+            OFlags::CREATE | OFlags::WRONLY,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .unwrap();
+        fchmod(&fd, Mode::empty()).unwrap();
+        drop(fd);
+        let response = identity(b.http.delete(b.url("/profile")), "test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            200,
+            "depth{depth}: {}",
+            response.text().await.unwrap()
+        );
+        assert!(!root.exists());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deletion_repairs_nonsearchable_and_long_directory_trees() {
+    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+    use std::os::unix::fs::PermissionsExt;
+    let b = Agent::start().await;
+    let root = b.home.path().join("profiles/test/home");
+    for (name, mode) in [("no-search", 0o600), ("no-access", 0o000)] {
+        let dir = root.join(name);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("Cookies"), "fixture").unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let mut fd = open(&root, flags, Mode::empty()).unwrap();
+    let component = "d".repeat(200);
+    for _ in 0..30 {
+        mkdirat(&fd, component.as_str(), Mode::RWXU).unwrap();
+        fd = openat(&fd, component.as_str(), flags, Mode::empty()).unwrap();
+    }
+    openat(
+        &fd,
+        "Cookies",
+        OFlags::CREATE | OFlags::WRONLY,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .unwrap();
+    drop(fd);
+    let response = identity(b.http.delete(b.url("/profile")), "test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+    assert!(!root.parent().unwrap().exists());
+    let (status, _) = b.run_status(json!({"command":"true"})).await;
+    assert_eq!(status, 410);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn read_only_cache_directories_do_not_block_profile_deletion() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let b = Agent::start().await;
+    let cache = b.home.path().join("profiles/test/home/.cache/go-mod/x");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("Cookies"), "fixture session").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    symlink(outside.path(), cache.join("outside")).unwrap();
+    std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let response = identity(b.http.delete(b.url("/profile")), "test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+    assert!(!cache.join("Cookies").exists());
+    assert!(!b.home.path().join("profiles/test").exists());
+    assert_eq!(
+        std::fs::metadata(outside.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o555
+    );
+    std::fs::set_permissions(outside.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_profile_stops_detached_children_and_prevents_regrowth() {
+    let b = Agent::start().await;
+    let result = b.run("setsid sh -c 'while :; do mkdir -p \"$HOME/regrow\"; sleep 0.05; done' </dev/null >/dev/null 2>&1 & printf '%s' $!").await;
+    let pid: i32 = result["stdout"].as_str().unwrap().trim().parse().unwrap();
+    let response = identity(b.http.delete(b.url("/profile")), "test")
+        .send()
+        .await
+        .unwrap();
+    // Always stop our test child even if the assertion fails on an old service.
+    let alive = std::fs::read_link(format!("/proc/{pid}/cwd")).is_ok();
+    let _ = rustix::process::kill_process(
+        rustix::process::Pid::from_raw(pid).unwrap(),
+        rustix::process::Signal::KILL,
+    );
+    assert_eq!(response.status(), 200);
+    assert!(!alive, "detached child survived DELETE");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!b.home.path().join("profiles/test").exists());
+}
+
+fn identity(r: reqwest::RequestBuilder, id: &str) -> reqwest::RequestBuilder {
+    r.bearer_auth(TOKEN).header("x-vault-agent", id).header(
+        "x-vault-agent-signature",
+        browser_agent::identity_signature(TOKEN, id),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retired_index_survives_restart_and_prunes_legacy_marker_files() {
+    let b = Agent::start().await;
+    assert_eq!(
+        identity(b.http.delete(b.url("/profile")), "test")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let markers = b.home.path().join(".retired-profiles");
+    std::fs::create_dir(&markers).unwrap();
+    std::fs::write(markers.join("legacy-retired"), "").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let config = Config {
+        token: TOKEN.into(),
+        work_dir: b._work.path().to_path_buf(),
+        home_dir: b.home.path().to_path_buf(),
+        display: ":1".into(),
+        playwright_cli: None,
+    };
+    // Construct synchronously to prove migration happened before requests are served.
+    let router = browser_agent::router(config).unwrap();
+    assert!(!markers.exists());
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    for id in ["test", "legacy-retired"] {
+        assert_eq!(
+            identity(b.http.post(format!("{base}/run")), id)
+                .json(&json!({"command":"true"}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            410
+        );
+    }
+    let ids: Vec<String> = serde_json::from_slice(
+        &std::fs::read(b.home.path().join(".retired-profile-ids.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(ids, ["legacy-retired", "test"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resetting_an_over_quota_profile_admits_an_empty_new_identity() {
+    let b = Agent::start().await;
+    std::fs::File::create(b.work().join("oversized"))
+        .unwrap()
+        .set_len(512 * 1024 * 1024 + 1)
+        .unwrap();
+    let (status, message) = b.run_status(json!({"command":"true"})).await;
+    assert_eq!(status, 507);
+    assert!(
+        message["error"]
+            .as_str()
+            .unwrap()
+            .contains("Reset browser profile")
+    );
+    assert_eq!(
+        identity(b.http.delete(b.url("/profile")), "test")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let r: Value = identity(b.http.post(b.url("/run")), "reset-new-id")
+        .json(&json!({"command":"test ! -e oversized && test ! -e storage-state.json"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(r["exit"], 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deletion_waits_for_running_commands_and_rejects_the_retired_identity() {
+    let b = Agent::start().await;
+    let request = b
+        .http
+        .post(b.url("/run"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"command":"touch started; sleep 0.2; printf finished > result"}));
+    let task = tokio::spawn(async move { request.send().await.unwrap() });
+    let began = Instant::now();
+    while !b.work().join("started").exists() {
+        assert!(began.elapsed() < Duration::from_secs(5));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let response = identity(b.http.delete(b.url("/profile")), "test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(task.await.unwrap().status(), 200);
+    assert!(!b.work().exists());
+    assert_eq!(
+        b.http
+            .post(b.url("/run"))
+            .bearer_auth(TOKEN)
+            .json(&json!({"command":"true"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        410
+    );
+    assert_eq!(b.get("/file", &[("path", "result")]).await.status(), 410);
+    assert!(b.home.path().join(".retired-profile-ids.json").is_file());
+    assert!(!b.home.path().join(".retired-profiles").exists());
+    assert_eq!(
+        identity(b.http.post(b.url("/run")), "new-incarnation")
+            .json(&json!({"command":"true"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn identities_are_required_and_cannot_be_forged() {
+    let b = Agent::start().await;
+    for route in ["/run", "/file?path=x", "/files", "/profile"] {
+        for forged in [false, true] {
+            let client = reqwest::Client::new();
+            let r = match route {
+                "/run" => client.post(b.url(route)).json(&json!({"command":"true"})),
+                "/profile" => client.delete(b.url(route)),
+                _ => client.get(b.url(route)),
+            }
+            .bearer_auth(TOKEN);
+            let r = if forged {
+                r.header("x-vault-agent", "someone-else")
+                    .header("x-vault-agent-signature", "fake")
+            } else {
+                r
+            };
+            assert_eq!(r.send().await.unwrap().status(), 401, "{route}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn profile_run_and_capture_paths_are_separate() {
+    let b = Agent::start().await;
+    let a = identity(b.http.post(b.url("/run")), "parent")
+        .json(&json!({"command":"mkdir -p captures; printf parent-cookie > captures/session.json; printf parent-storage > \"$HOME/storage.json\""}))
+        .send().await.unwrap();
+    assert_eq!(a.status(), 200);
+    for id in ["agent-b", "throwaway-fresh-run"] {
+        let r: Value = identity(b.http.post(b.url("/run")), id)
+            .json(&json!({"command":"test ! -e captures/session.json && test ! -e \"$HOME/storage.json\""}))
+            .send().await.unwrap().json().await.unwrap();
+        assert_eq!(r["exit"], 0);
+        assert_eq!(
+            identity(b.http.get(b.url("/file?path=captures/session.json")), id)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+        let sibling = b
+            .home
+            .path()
+            .join("profiles/parent/work/captures/session.json");
+        assert_eq!(
+            identity(b.http.get(b.url("/file")), id)
+                .query(&[("path", sibling)])
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+    }
+    assert_eq!(
+        identity(
+            b.http.get(b.url("/file?path=captures/session.json")),
+            "parent"
+        )
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap(),
+        "parent-cookie"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_profile_is_confined_and_does_not_follow_symlinks() {
+    let b = Agent::start().await;
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("keep"), "keep").unwrap();
+    let managed = b.home.path().join("profiles/test");
+    std::os::unix::fs::symlink(outside.path(), managed.join("link")).unwrap();
+    let response = identity(b.http.delete(b.url("/profile")), "test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(!managed.exists());
+    assert!(outside.path().join("keep").exists());
+    std::os::unix::fs::symlink(outside.path(), &managed).unwrap();
+    assert_eq!(
+        identity(b.http.delete(b.url("/profile")), "test")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert!(outside.path().join("keep").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn profile_admission_limits_have_clear_errors_and_allow_cleanup() {
+    let b = Agent::start().await;
+    std::fs::File::create(b.work().join("large"))
+        .unwrap()
+        .set_len(512 * 1024 * 1024 + 1)
+        .unwrap();
+    let r = b
+        .http
+        .post(b.url("/run"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"command":"true"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 507);
+    assert!(r.text().await.unwrap().contains("512 MiB"));
+    assert_eq!(
+        identity(b.http.delete(b.url("/profile")), "test")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let root = b.home.path().join("profiles");
+    for n in 0..64 {
+        std::fs::create_dir(root.join(format!("profile-{n}"))).unwrap();
+    }
+    let r = identity(b.http.post(b.url("/run")), "new-profile")
+        .json(&json!({"command":"true"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 507);
+    assert!(r.text().await.unwrap().contains("64"));
+    assert_eq!(std::fs::read_dir(root).unwrap().count(), 64);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_b_cannot_read_agent_a_browser_storage() {
+    let b = Agent::start().await;
+    // A storage-state export contains the same credentials as a live profile.
+    // The identity header is supplied by the server, never by the model.
+    let a = b.http.post(b.url("/run"))
+        .bearer_auth(TOKEN)
+        .header("x-vault-agent", "agent-a")
+        .header("x-vault-agent-signature", browser_agent::identity_signature(TOKEN, "agent-a"))
+        .json(&json!({"command": "printf '%s' '{\"cookies\":[{\"name\":\"session\",\"value\":\"fixture-only\"}]}' > storage-state.json"}))
+        .send().await.unwrap();
+    assert_eq!(a.status(), 200);
+    let a: Value = a.json().await.unwrap();
+    assert_eq!(a["exit"], 0);
+    let other = b
+        .http
+        .get(b.url("/file"))
+        .bearer_auth(TOKEN)
+        .header("x-vault-agent", "agent-b")
+        .header(
+            "x-vault-agent-signature",
+            browser_agent::identity_signature(TOKEN, "agent-b"),
+        )
+        .query(&[("path", "storage-state.json")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        other.status(),
+        404,
+        "agent B can read agent A's exported cookies"
+    );
+}
+
 struct Agent {
     base: String,
-    work: TempDir,
+    _work: TempDir,
     home: TempDir,
     http: reqwest::Client,
+    profile_work: std::path::PathBuf,
+    profile_home: std::path::PathBuf,
 }
 
 impl Agent {
     async fn start() -> Agent {
         let work = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
+        let profile_work = home.path().join("profiles/test/work");
+        let profile_home = home.path().join("profiles/test/home");
+        std::fs::create_dir_all(&profile_work).unwrap();
+        std::fs::create_dir_all(&profile_home).unwrap();
         let config = Config {
             token: TOKEN.into(),
             work_dir: work.path().to_path_buf(),
@@ -37,9 +589,24 @@ impl Agent {
         ));
         Agent {
             base,
-            work,
+            _work: work,
             home,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .default_headers({
+                    let mut headers = reqwest::header::HeaderMap::new();
+                    headers.insert("x-vault-agent", "test".parse().unwrap());
+                    headers.insert(
+                        "x-vault-agent-signature",
+                        browser_agent::identity_signature(TOKEN, "test")
+                            .parse()
+                            .unwrap(),
+                    );
+                    headers
+                })
+                .build()
+                .unwrap(),
+            profile_work,
+            profile_home,
         }
     }
 
@@ -77,11 +644,11 @@ impl Agent {
     }
 
     fn work(&self) -> &Path {
-        self.work.path()
+        &self.profile_work
     }
 
     fn home(&self) -> &Path {
-        self.home.path()
+        &self.profile_home
     }
 }
 

@@ -49,11 +49,11 @@ Only the lead merges. One merge job takes every card in the merge_queue column (
 
 A machine can run emulators that are not yours, such as `emulator-5554` on thevault-android. Run `just android-emulator-checks` and `just android-release-smoke` there with `EMULATOR_PORT` set to a free console port (5556, 5558, ...) and your own AVD (`THEVAULT_AVD`, `ANDROID_AVD_HOME`). The recipes then set `ANDROID_SERIAL` to that emulator and kill only it. `boot.sh --wipe` refuses a port that already has an emulator.
 
-## Only at release time
+## Release and nightly checks
 
 For slow contact check 35, set `THEVAULT_CONTACT_DIAGNOSTIC=1` to save capture/job state at 30 s and wait without a foreground nudge (diagnosis only, normal timing checks stay unchanged).
 
-These do not run per card. They run on `release/<X.Y.Z>`:
+These do not run per card. They run on `release/<X.Y.Z>` and nightly on `next`:
 
 - `just android-emulator-checks` and `just android-release-smoke` on thevault-android (about 1 hour, a shared box).
 - The full end-to-end suite, `pnpm -C web e2e`.
@@ -64,3 +64,112 @@ thevault-android has no `just` and no `pnpm`, and takes no `terrarium repo check
 - On thevault-android, run `node apps/android/emulator/checks.mjs` directly, with `THEVAULT_CHECKS` for a subset. Use your own AVD (`THEVAULT_AVD`, `ANDROID_AVD_HOME`), your own `EMULATOR_PORT`, and `ANDROID_SERIAL=emulator-<port>`.
 
 `emulator-5554` and the AVD `thevault` belong to herdr: never touch them. Record `adb devices` and its qemu pid before and after the run, and kill only your own serial.
+
+Every project emulator run, **including releases**, must hold the fixed lock
+`/home/agent/.thevault-emulator.lock` on thevault-android from before boot until
+PID-only cleanup has completed. Do not wait for it in a nightly. Exit 0 with
+`skipped: emulator busy`. Never touch PID 19. Nightlies use console port 5584 only,
+`ANDROID_SERIAL=emulator-5584`, and their own AVD/home, not the release AVD.
+
+### Nightly schedule runbook (lead side)
+
+The lead creates daily Terrarium schedules after merge: e2e at 16:00 UTC
+(02:00 Brisbane), emulator at 18:00 UTC (04:00 Brisbane). GitHub runners cannot
+reach these targets. The schedules mail the lead these steps. Targets have no
+Terrarium CLI. Do not hold a turn open for a run. End the turn after `run`, then
+continue on its result mail. No automatic retries.
+
+N1. Before each night, recreate the **one fixed checkout** from origin/next.
+Only remove these owned nightly paths after uploading the preceding evidence.
+Never remove a directory while its run is active. E2e and emulator nights use
+the same checkout sequentially, not simultaneously.
+
+```sh
+terrarium exec thevault-dev -- sh -c 'rm -rf /src/thevault-nightly'
+terrarium repo checkout thevault --target thevault-dev --branch next --path /src/thevault-nightly
+```
+
+N2. At 16:00 UTC start e2e (45 minute timeout). All builds and tests on dev take
+the heavy lock. The recipe overrides Cargo output to stay inside its checkout,
+runs Playwright once with zero retries and writes original JUnit plus logs.
+
+```sh
+terrarium run thevault-dev --name nightly-e2e --timeout 45m -- sh /src/thevault-heavy.sh sh -c 'cd /src/thevault-nightly && just nightly-e2e'
+```
+
+On the result mail, even if red, copy and upload the original report. A missing
+report is a failed infrastructure run, not a pass. Record the commit from the
+`commit` file in the card and pass it as `--commit` when uploading.
+
+```sh
+mkdir -p .scratch/nightly
+terrarium cp thevault-dev:/src/thevault-nightly/.scratch/nightly/commit .scratch/nightly/commit
+terrarium cp thevault-dev:/src/thevault-nightly/.scratch/nightly/e2e.xml .scratch/nightly/e2e.xml
+terrarium test push .scratch/nightly/e2e.xml --name nightly-e2e --branch next --label version:vnext
+terrarium cp thevault-dev:/src/thevault-nightly/.scratch/nightly/build.log .scratch/nightly/e2e.log
+```
+
+Keep the printed test run ID. Attach logs (and retained Playwright traces for
+failures) to the failure card before deleting output. After evidence upload:
+
+```sh
+terrarium exec thevault-dev -- sh -c 'rm -rf /src/thevault-nightly'
+```
+
+N3. At 18:00 UTC repeat N1, then prepare the emulator bundle on dev (90 minute
+timeout). This builds host binaries, web, x86_64 debug and two update APKs, the
+fake Messages APK and harness dependencies. No builds happen on android.
+The bundle includes `aapt2`, the harness check titles and app config. Full
+checks use the existing **rootable** Android 35 `google_apis;x86_64` image in
+`/home/agent/sdk` (read only). The device script pins both `ANDROID_HOME` and
+`ANDROID_SDK_ROOT` and the tool PATH there. Never use herdr's `/opt/android-sdk`:
+its `google_apis_playstore` user image cannot remount `/product`.
+
+```sh
+terrarium run thevault-dev --name nightly-emulator-build --timeout 90m -- sh /src/thevault-heavy.sh sh -c 'cd /src/thevault-nightly && just nightly-emulator'
+```
+
+Only after a green build result, transfer the bundle and start the device run.
+The shared lock covers extraction, boot, tests and cleanup. If skipped, do not
+upload a stale report. The exclusive directory must not exist from an earlier
+uncollected run. A port-5584 conflict fails without touching the occupant.
+
+```sh
+terrarium cp thevault-dev:/src/thevault-nightly/.scratch/nightly/device.tar.gz .scratch/nightly/device.tar.gz
+terrarium exec thevault-android -- mkdir -p /home/agent/thevault-nightly
+terrarium cp .scratch/nightly/device.tar.gz thevault-android:/home/agent/thevault-nightly/device.tar.gz
+terrarium run thevault-android --name nightly-emulator --timeout 90m -- bash -euo pipefail -c 'exec 9>/home/agent/.thevault-emulator.lock; flock -n 9 || { echo "skipped: emulator busy"; exit 0; }; cd /home/agent/thevault-nightly; mkdir run; tar -xzf device.tar.gz -C run; cd run; bash scripts/nightly/device.sh'
+```
+
+On the device result mail, upload the original TAP, copy logs, commit and
+before/after device and PID records. Do this for red runs too.
+
+```sh
+terrarium cp thevault-android:/home/agent/thevault-nightly/run/.scratch/nightly/results.tap .scratch/nightly/results.tap
+terrarium test push .scratch/nightly/results.tap --name nightly-emulator --branch next --label version:vnext
+terrarium exec thevault-android -- sh -c 'cd /home/agent/thevault-nightly/run && tar -czf ../evidence.tar.gz .scratch/nightly target/android-emulator'
+terrarium cp thevault-android:/home/agent/thevault-nightly/evidence.tar.gz .scratch/nightly/emulator-evidence.tar.gz
+```
+
+Upload evidence with `terrarium artifact push` before cleanup. A timeout may
+prevent the EXIT trap from finishing. Inspect the owner record and `/proc` start
+time before killing only that owned PID, never kill by name or serial. Wait for
+owned processes to exit before removing the AVD/run. Then remove owned output:
+
+```sh
+terrarium exec thevault-android -- sh -c 'rm -rf /home/agent/thevault-nightly'
+terrarium exec thevault-dev -- sh -c 'rm -rf /src/thevault-nightly'
+```
+
+N4. A red result mails the lead with exit code and output tail. The lead creates
+a backlog card naming the exact failing test, commit, test run IDs and logs.
+Never silently retry. Before **any** rerun, add one diagnosis comment to that
+card, consulting the state wiki flaky list (P6). Build/boot/upload failures also
+need a card. A skip due to the emulator lock is not a test pass.
+
+N5. The release train runs `just check` after dev-image, alongside desktop and
+Android builds. `publish` depends on all three gates. The check job records its
+elapsed seconds and exit code in the GitHub summary, with a 60 minute timeout.
+TV-144 measured `just check` on thevault-dev at 539 seconds (8m59s), excluding
+the heavy-lock wait. GitHub cold-run time can differ. The job runs alongside
+builds, so added train wall time depends on which job finishes last.

@@ -11,6 +11,48 @@ use state::Author;
 
 use crate::{Archived, Input, Saved, Writer, doc_to_json};
 
+thread_local! {
+    static OMITTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl Writer {
+    /// Held and unindexed notes excluded before query conditions are evaluated.
+    /// Call while holding the note index read guard.
+    pub fn agent_excluded_notes(
+        &self,
+        index: &index::Index,
+    ) -> Result<std::collections::HashSet<String>, String> {
+        let mut held = self.state().held_agent_note_ids().map_err(err)?;
+        if self
+            .state()
+            .meta("agent_safety.activation_ms")
+            .map_err(err)?
+            .is_some()
+        {
+            // Missing cache rows must fail closed too, without reading note files
+            // or evaluating the caller's condition against unreviewed content.
+            let known = serde_json::to_string(&self.state().agent_safety_index_ids().map_err(err)?)
+                .map_err(err)?;
+            let mut stmt = index
+                .connection()
+                .prepare("SELECT id FROM notes WHERE id NOT IN (SELECT value FROM json_each(?1))")
+                .map_err(err)?;
+            let rows = stmt
+                .query_map([known], |r| r.get::<_, String>(0))
+                .map_err(err)?;
+            for id in rows {
+                held.insert(id.map_err(err)?);
+            }
+        }
+        Ok(held)
+    }
+
+    /// Consume the omissions of the current synchronous agent tool call.
+    pub fn take_agent_omissions(&self) -> usize {
+        OMITTED.with(|n| n.replace(0))
+    }
+}
+
 fn err(e: impl ToString) -> String {
     e.to_string()
 }
@@ -23,26 +65,78 @@ fn syntax(e: query::ParseError) -> String {
 }
 
 fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<query::Page, String> {
-    w.read_index(|index, schema| query::run(q, &query::Context::new(index, schema), &page))
-        .map_err(err)
+    w.read_index(|index, schema| {
+        let excluded = if agent_reading() {
+            Some(w.agent_excluded_notes(index)?)
+        } else {
+            None
+        };
+        let mut ctx = query::Context::new(index, schema);
+        ctx.excluded_notes = excluded.as_ref();
+        let result = query::run(q, &ctx, &page).map_err(err)?;
+        if excluded.is_some() {
+            // Never evaluate the condition against held content, even for a count.
+            // This fixed notice signal is independent of the query and its results.
+            OMITTED.with(|n| n.set(1));
+        }
+        Ok(result)
+    })
+}
+
+pub(crate) fn agent_reading() -> bool {
+    matches!(
+        crate::activity::acting(),
+        Some(Author::Agent(_) | Author::AgentMail(_))
+    ) || script_core::run::peek(|r| matches!(r.author, Author::Agent(_) | Author::AgentMail(_)))
+        .unwrap_or(false)
+}
+
+fn check_agent_write(w: &Writer, id: &str, author: &Author) -> Result<(), String> {
+    if (agent_reading() || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
+        && !w.agent_may_read(id)
+    {
+        return Err("Note is held from agents".into());
+    }
+    Ok(())
+}
+
+fn agent_saved(w: &Writer, s: Saved, author: &Author) -> Json {
+    if (agent_reading() || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
+        && !w.agent_may_read(&s.id)
+    {
+        // A create or a content edit may itself enter the gate. Return only the receipt,
+        // not generated defaults, handler output or other unreviewed note content.
+        return json!({"id":s.id,"type":s.type_name,"version":s.version,"held":true});
+    }
+    saved(s)
 }
 
 fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
+    if agent_reading() && !w.agent_may_read(id) {
+        return Err("Note is held from agents".into());
+    }
     w.read(id).map_err(err)?;
-    w.read_index(|index, _| {
-        let mut stmt = index.connection().prepare(sql)?;
-        let rows = stmt.query_map([id], |r| {
-            Ok(json!({
-                "id": r.get::<_, String>(0)?,
-                "type": r.get::<_, Option<String>>(1)?,
-                "title": r.get::<_, Option<String>>(2)?,
-                "via": r.get::<_, String>(3)?,
-                "field": r.get::<_, String>(4)?,
-            }))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<Json>>>()
-    })
-    .map_err(err)
+    let mut rows = w
+        .read_index(|index, _| {
+            let mut stmt = index.connection().prepare(sql)?;
+            let rows = stmt.query_map([id], |r| {
+                Ok(json!({
+                    "id": r.get::<_, String>(0)?,
+                    "type": r.get::<_, Option<String>>(1)?,
+                    "title": r.get::<_, Option<String>>(2)?,
+                    "via": r.get::<_, String>(3)?,
+                    "field": r.get::<_, String>(4)?,
+                }))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<Json>>>()
+        })
+        .map_err(err)?;
+    if agent_reading() {
+        rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
+        // Never reveal whether a particular reference set contains held notes.
+        OMITTED.with(|n| n.set(1));
+    }
+    Ok(rows)
 }
 
 fn asset_json(a: &crate::Asset) -> Json {
@@ -89,6 +183,9 @@ fn grow(t: &mut Taxonomy, path: &str) -> Result<bool, String> {
 /// The write path itself: every change a script makes goes through `writer` (D30).
 impl Vault for Writer {
     fn get(&self, id: &str) -> Result<Json, String> {
+        if agent_reading() && !self.agent_may_read(id) {
+            return Err("Note is held from agents".into());
+        }
         let n = self.read(id).map_err(err)?;
         Ok(json!({
             "id": n.id,
@@ -166,13 +263,14 @@ impl Vault for Writer {
 
     fn create(&self, type_name: &str, note: Json, author: &Author) -> Result<Json, String> {
         Writer::create(self, type_name, &Input::Json(note), author)
-            .map(saved)
+            .map(|s| agent_saved(self, s, author))
             .map_err(err)
     }
 
     fn update(&self, id: &str, note: Json, version: &str, author: &Author) -> Result<Json, String> {
+        check_agent_write(self, id, author)?;
         Writer::update(self, id, &Input::Json(note), Some(version), author)
-            .map(saved)
+            .map(|s| agent_saved(self, s, author))
             .map_err(err)
     }
 
@@ -180,6 +278,7 @@ impl Vault for Writer {
     /// [`Writer::remove_sent_outbox`], which refuses an item that is not `sending`. An empty
     /// `version` takes the item as it is now.
     fn delete(&self, id: &str, version: &str, author: &Author) -> Result<Json, String> {
+        check_agent_write(self, id, author)?;
         let outbox = matches!(author, Author::Handler(_) | Author::Task(_))
             && self.locate(id).map_err(err)?.as_deref() == Some(crate::builtin::OUTBOX_TYPE);
         if outbox {
@@ -195,16 +294,20 @@ impl Vault for Writer {
     }
 
     fn restore(&self, id: &str, author: &Author) -> Result<Json, String> {
-        self.restore_from_trash(id, author).map(saved).map_err(err)
+        check_agent_write(self, id, author)?;
+        self.restore_from_trash(id, author)
+            .map(|s| agent_saved(self, s, author))
+            .map_err(err)
     }
 
     fn set_archived(&self, id: &str, archived: bool, author: &Author) -> Result<Json, String> {
+        check_agent_write(self, id, author)?;
         let version = self
             .current_version(id)
             .map_err(err)?
             .ok_or_else(|| format!("note {id} does not exist"))?;
         Writer::set_archived(self, id, archived, Some(&version), author)
-            .map(saved)
+            .map(|s| agent_saved(self, s, author))
             .map_err(err)
     }
 
@@ -230,11 +333,15 @@ impl Vault for Writer {
         Ok(Writer::assets(self)
             .map_err(err)?
             .iter()
+            .filter(|a| !agent_reading() || self.agent_may_read_asset(&a.id))
             .map(asset_json)
             .collect())
     }
 
     fn asset(&self, id: &str) -> Result<(Json, Vec<u8>), String> {
+        if agent_reading() && !self.agent_may_read_asset(id) {
+            return Err("Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.".into());
+        }
         let (a, bytes) = Writer::asset(self, id).map_err(err)?;
         Ok((asset_json(&a), bytes))
     }

@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use writer::Writer;
 
-use crate::ApiError;
+use crate::{ApiError, Caller};
 
 type Shared = State<Arc<Writer>>;
 
@@ -104,6 +104,7 @@ fn params<T>(q: Result<Query<T>, QueryRejection>) -> Result<T, ApiError> {
 /// Run one page of `q` off the async runtime.
 async fn run_page(
     w: Arc<Writer>,
+    agent: bool,
     q: query::Query,
     this: Option<String>,
     cursor: Option<String>,
@@ -115,16 +116,28 @@ async fn run_page(
     };
     let result = tokio::task::spawn_blocking(move || {
         w.read_index(|index, schema| {
+            let excluded = if agent {
+                Some(
+                    w.agent_excluded_notes(index)
+                        .map_err(ApiError::bad_request)?,
+                )
+            } else {
+                None
+            };
             let mut ctx = query::Context::new(index, schema);
+            ctx.excluded_notes = excluded.as_ref();
             ctx.this = this;
-            query::run(&q, &ctx, &page)
+            query::run(&q, &ctx, &page).map_err(ApiError::from)
         })
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
-    serde_json::to_value(result)
-        .map(Json)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))
+    let mut result = serde_json::to_value(result)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
+    if agent {
+        result["notice"] = json!("some notes may be held");
+    }
+    Ok(Json(result))
 }
 
 fn parse(text: &str) -> Result<query::Query, ApiError> {
@@ -133,25 +146,44 @@ fn parse(text: &str) -> Result<query::Query, ApiError> {
 
 pub async fn run_post(
     State(w): Shared,
+    Caller(author): Caller,
     body: Result<Json<RunBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let b = json_body(body)?;
     let q = with_archived(parse(&b.query)?, b.archived.as_deref())?;
-    run_page(w, q, b.this, b.cursor, b.page_size).await
+    run_page(
+        w,
+        crate::auth::is_agent_token(&author),
+        q,
+        b.this,
+        b.cursor,
+        b.page_size,
+    )
+    .await
 }
 
 pub async fn run_get(
     State(w): Shared,
+    Caller(author): Caller,
     p: Result<Query<RunParams>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let p = params(p)?;
     let q = with_archived(parse(&p.q)?, p.archived.as_deref())?;
-    run_page(w, q, p.this, p.cursor, p.page_size).await
+    run_page(
+        w,
+        crate::auth::is_agent_token(&author),
+        q,
+        p.this,
+        p.cursor,
+        p.page_size,
+    )
+    .await
 }
 
 /// Full-text search over every note's fields and content, best match first.
 pub async fn search(
     State(w): Shared,
+    Caller(author): Caller,
     p: Result<Query<SearchParams>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let p = params(p)?;
@@ -160,7 +192,15 @@ pub async fn search(
     }
     let archived = archived_param(p.archived.as_deref())?;
     let q = query::search_all(p.q, archived);
-    run_page(w, q, None, p.cursor, p.page_size).await
+    run_page(
+        w,
+        crate::auth::is_agent_token(&author),
+        q,
+        None,
+        p.cursor,
+        p.page_size,
+    )
+    .await
 }
 
 /// `q` with an `archived` parameter applied: `include` adds `include archived`, `only` adds

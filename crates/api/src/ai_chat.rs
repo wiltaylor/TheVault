@@ -228,6 +228,7 @@ pub async fn chat(
     Json(body): Json<ChatBody>,
 ) -> Result<impl IntoResponse, ApiError> {
     // No one stops this form of turn but the client, by going away.
+    crate::auth::require_in_app_agent_caller(&author)?;
     let (_, never) = watch::channel(false);
     let (rx, _) = start(w, author, scope, body, never).await?;
     Ok(sse(receive(rx)))
@@ -1298,6 +1299,9 @@ impl Limits {
             "get_note" | "propose_edit" | "propose_fields" | "propose_archive"
             | "propose_delete" => {
                 let id = input["id"].as_str()?.trim();
+                if !w.agent_may_read(id) {
+                    return Some(ToolOut::error(format!("Note {id} is held from agents.")));
+                }
                 let n = w.read(id).ok()?;
                 let verb = if call.name == "get_note" {
                     "read"
@@ -1496,8 +1500,10 @@ fn setup(
         system.push_str(&memories);
     }
     if let Some(id) = note_id
+        .as_deref()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
+        .filter(|id| w.agent_may_read(id))
         && let Ok(n) = w.read(&id)
     {
         let doc = doc_to_json(&n.doc);
@@ -1510,6 +1516,12 @@ fn setup(
              title {title:?}. \"This note\" means it; read it with get_note.\n",
             n.type_name
         ));
+    }
+    if note_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty() && !w.agent_may_read(id))
+    {
+        system.push_str("\nThis note is held from agents; the user can review and release it.\n");
     }
     // What the agent can do with wscript, so it opens the wscript skill first (script-tools T5).
     let scripts = if change_scope(scope, agent).allows(Scope::Write) {
@@ -1559,7 +1571,10 @@ fn setup(
             .permissions
             .browser
             .then(crate::ai_browser::BrowserBox::from_env)
-            .flatten(),
+            .flatten()
+            .map(|b| w.browser_profile(&agent.name).map(|id| b.with_profile(id)))
+            .transpose()
+            .map_err(|e| AiError::new(ErrorKind::Unavailable, e.to_string()))?,
     })
 }
 
@@ -1864,6 +1879,28 @@ impl Turn {
                 return;
             }
         };
+        crate::ai_browser::cleanup_retired(self.writer.clone());
+        let temporary_browser = if self.sub.as_ref().is_some_and(|s| s.throwaway) {
+            if let Some(b) = setup.browser.take() {
+                let id = ulid::Ulid::new().to_string();
+                if let Err(e) = self.writer.begin_temporary_browser_profile(&id) {
+                    self.failed(&AiError::new(ErrorKind::Unavailable, e.to_string()), &[])
+                        .await;
+                    return;
+                }
+                Some(crate::ai_browser::TemporaryProfile(
+                    b.with_profile(id),
+                    self.writer.clone(),
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(b) = &temporary_browser {
+            setup.browser = Some(b.0.clone());
+        }
         if crate::auth::is_agent_token(&self.owner) {
             setup.direct.agents = false;
             setup.direct.skills = false;
@@ -2390,6 +2427,9 @@ impl Turn {
                 })
                 .await
                 .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                if c.name == "propose_agent_delete" {
+                    crate::ai_browser::cleanup_retired(self.writer.clone());
+                }
                 if let Some(line) = got.summary["gmail_skipped"].as_str() {
                     self.report(|r| r.log.push(line.to_owned()));
                 }
@@ -3275,11 +3315,64 @@ fn offered_tools(web: ai::Web) -> Vec<ToolSpec> {
         .collect()
 }
 
+/// Adapt the strict tool wire format without changing the HTTP or script API.
+fn decision_tool_input(input: &Value) -> Result<ai::decisions::Input, serde_json::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Question {
+        id: String,
+        #[serde(rename = "type")]
+        kind: String,
+        instructions: String,
+        criteria: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        account: Option<String>,
+        model: Option<String>,
+        state: String,
+        questions: Vec<Question>,
+    }
+    let input: Input = serde_json::from_value(input.clone())?;
+    let mut questions = serde_json::Map::new();
+    for q in input.questions {
+        if questions.contains_key(&q.id) {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "Duplicate question id",
+            ));
+        }
+        let mut question = json!({
+            "type": q.kind,
+            "instructions": serde_json::from_str::<Value>(&q.instructions)?,
+        });
+        if let Some(criteria) = q.criteria {
+            question["criteria"] = serde_json::from_str(&criteria)?;
+        }
+        questions.insert(q.id, question);
+    }
+    serde_json::from_value(json!({
+        "account": input.account,
+        "model": input.model,
+        "state": serde_json::from_str::<Value>(&input.state)?,
+        "questions": questions,
+    }))
+}
+
 pub fn tool_specs() -> Vec<ToolSpec> {
     vec![
-        tool("decide", "Ask a tool-free decision model typed questions about untrusted state. Returns typed answers and probabilities. Makes no changes. Set account and model to null to use defaults.", json!({
-            "state": {"description": "Untrusted context", "type": ["string", "object", "array"]},
-            "questions": {"type": "object", "description": "Question ids mapped to type (noul, choice, score), instructions and criteria."},
+        tool("decide", "Ask a tool-free decision model typed questions about untrusted state. Returns typed answers and probabilities. Makes no changes. Unlike the HTTP API, state is JSON text and questions is an array with unique ids. Set account and model to null to use defaults.", json!({
+            "state": {"description": "JSON text of the untrusted context (a string, object or array).", "type": "string"},
+            "questions": {"type": "array", "items": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "id": {"type": "string"},
+                    "type": {"type": "string", "enum": ["noul", "choice", "score"]},
+                    "instructions": {"type": "string", "description": "JSON text of the instructions: a JSON string, object or array."},
+                    "criteria": {"type": ["string", "null"], "description": "JSON text of the criteria object (noul or choice) or ordered array (score); null for noul defaults."}
+                },
+                "required": ["id", "type", "instructions", "criteria"]
+            }},
             "account": {"type": ["string", "null"]}, "model": {"type": ["string", "null"]}
         })),
         tool(
@@ -4014,6 +4107,8 @@ fn propose_or_read(
     agent: &Agent,
     call: &ToolCall,
 ) -> ToolOut {
+    let _acting = writer::acting_as(&Author::Agent(agent.name.clone()));
+    w.take_agent_omissions();
     if let Some(e) = &call.error {
         return ToolOut::error(e.clone());
     }
@@ -4026,7 +4121,7 @@ fn propose_or_read(
             if !agent.permissions.allows_tool("decide") {
                 return ToolOut::error("The agent's permissions.tools does not allow decide");
             }
-            serde_json::from_value::<ai::decisions::Input>(input.clone())
+            decision_tool_input(input)
                 .map_err(|_| ToolOut::error("Invalid decisions input"))
                 .and_then(|input| {
                     let (result, line) =
@@ -4049,6 +4144,7 @@ fn propose_or_read(
                 .clamp(1, SEARCH_LIMIT);
             Vault::search(w, text, limit, script_core::Archived::Exclude)
                 .map(|mut rows| {
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     rows_out(rows, left_out_of(left_out))
                 })
@@ -4058,6 +4154,7 @@ fn propose_or_read(
             Vault::query_page(w, q, QUERY_LIMIT, None)
                 .map(|page| {
                     let mut rows = page["rows"].as_array().cloned().unwrap_or_default();
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     let mut extra = left_out_of(left_out);
                     extra["total"] = page["total"].clone();
@@ -4067,6 +4164,9 @@ fn propose_or_read(
                 .map_err(|e| ToolOut::error(query_error(q, &e)))
         }),
         "get_note" => str_arg(input, "id").and_then(|id| {
+            if !w.agent_may_read(id) {
+                return Ok(ToolOut::error(format!("Note {id} is held from agents.")));
+            }
             Vault::get(w, id)
                 .map(|mut note| {
                     cut_strings(&mut note, BODY_LIMIT);
@@ -4095,6 +4195,7 @@ fn propose_or_read(
         "backlinks" => str_arg(input, "id").and_then(|id| {
             Vault::backlinks(w, id)
                 .map(|mut rows| {
+                    rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
                     let left_out = limits.keep(&mut rows);
                     rows_out(rows, left_out_of(left_out))
                 })
@@ -4159,7 +4260,23 @@ fn propose_or_read(
         }
         other => Err(ToolOut::error(format!("there is no tool {other:?}"))),
     };
-    result.unwrap_or_else(|e| e)
+    let mut out = result.unwrap_or_else(|e| e);
+    if matches!(
+        call.name.as_str(),
+        "search_notes" | "query_notes" | "backlinks"
+    ) {
+        let omitted = w.take_agent_omissions();
+        if omitted > 0
+            && let Ok(Value::Object(mut result)) = serde_json::from_str(&out.content)
+        {
+            result.insert(
+                "notice".into(),
+                json!("some notes may be held; the user can review and release them."),
+            );
+            out.content = Value::Object(result).to_string();
+        }
+    }
+    out
 }
 
 /// `propose_edit`: check the edit with a dry-run batch and hand it to the user (ai D14).
@@ -5258,12 +5375,111 @@ mod tests {
     }
 
     #[test]
+    fn decision_tool_input_preserves_values_and_rejects_bad_calls() {
+        let input = json!({
+            "account": null, "model": null, "state": "{\"text\":\"untrusted\"}",
+            "questions": [
+                {"id":"urgent", "type":"noul", "instructions":"\"Urgent?\"", "criteria":null},
+                {"id":"kind", "type":"choice", "instructions":"[\"Classify\"]", "criteria":"{\"a\":\"A\",\"b\":\"B\"}"},
+                {"id":"rank", "type":"score", "instructions":"\"Rank\"", "criteria":"[\"low\",\"high\"]"}
+            ]
+        });
+        let decoded = decision_tool_input(&input).unwrap();
+        assert_eq!(decoded.state, json!({"text":"untrusted"}));
+        assert_eq!(decoded.questions.len(), 3);
+        assert_eq!(
+            serde_json::to_value(&decoded.questions["kind"]).unwrap()["instructions"],
+            json!(["Classify"])
+        );
+        for (field, value) in [
+            ("state", json!("not JSON")),
+            (
+                "questions",
+                json!([input["questions"][0], input["questions"][0]]),
+            ),
+            (
+                "questions",
+                json!([{"id":"x", "type":"box", "instructions":"\"x\"", "criteria":null}]),
+            ),
+            ("questions", json!({"old":"shape"})),
+        ] {
+            let mut bad = input.clone();
+            bad[field] = value;
+            assert!(decision_tool_input(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn tools_are_strict_objects() {
-        for t in tool_specs() {
-            let s = &t.input_schema;
-            assert_eq!(s["additionalProperties"], false);
-            let props = s["properties"].as_object().unwrap().len();
-            assert_eq!(s["required"].as_array().unwrap().len(), props, "{}", t.name);
+        fn check(s: &Value, path: &str) {
+            let object = s["type"] == "object"
+                || s["type"]
+                    .as_array()
+                    .is_some_and(|ts| ts.contains(&json!("object")));
+            if object {
+                assert_eq!(s["additionalProperties"], false, "{path}: open object");
+                let props = s["properties"].as_object().expect("object properties");
+                let required = s["required"].as_array().expect("required properties");
+                assert_eq!(props.len(), required.len(), "{path}");
+                for name in props.keys() {
+                    assert!(required.contains(&json!(name)), "{path}/{name}: optional");
+                }
+            }
+            if let Some(props) = s["properties"].as_object() {
+                for (name, child) in props {
+                    check(child, &format!("{path}/{name}"));
+                }
+            }
+            if let Some(items) = s.get("items") {
+                check(items, &format!("{path}/items"));
+            }
+            for keyword in ["anyOf", "oneOf", "allOf"] {
+                if let Some(children) = s[keyword].as_array() {
+                    for child in children {
+                        check(child, path);
+                    }
+                }
+            }
+        }
+        let mut tools = tool_specs();
+        tools.extend(crate::ai_browser::tool_specs());
+        tools.extend(crate::ai_scripts::tool_specs());
+        tools.push(crate::ai_scripts::run_script_spec());
+        tools.extend(crate::ai_saved::specs());
+        tools.push(crate::brave::tool_spec());
+        tools.push(crate::ai_skills::install_spec());
+        tools.push(crate::ai_subagents::spec(
+            &Agent::parse("test", "label = \"Test\"\n").unwrap(),
+        ));
+        // Vault and skill tools share ScriptTool's schema generator. Cover every
+        // parameter kind, item kind and nullable form, not just built-in tools.
+        for required in [true, false] {
+            let mut params = Vec::new();
+            for kind in schema::TOOL_PARAM_KINDS {
+                for of in schema::TOOL_LIST_ITEM_KINDS {
+                    params.push(schema::ToolParam {
+                        name: format!("{kind}_{of}"),
+                        kind: kind.into(),
+                        of: (kind == "list").then(|| of.into()),
+                        description: None,
+                        required,
+                    });
+                }
+            }
+            let script = schema::ScriptTool {
+                name: "test".into(),
+                description: "Test".into(),
+                params,
+                script: "test".into(),
+                function: "main".into(),
+                allow_domains: vec![],
+                secrets: vec![],
+                timeout: 30,
+            };
+            check(&script.input_schema(), "script/skill tool");
+        }
+        for t in tools {
+            check(&t.input_schema, &t.name);
         }
     }
 }

@@ -24,6 +24,20 @@ use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
+// Device imports upload before creating their note. The protocol has no per-file source
+// provenance, so fail closed for device-uploaded files, including manual device uploads.
+fn mark_device_upload(w: &Writer, author: &state::Author, id: &str) -> writer::Result<()> {
+    if let state::Author::Token(name) = author
+        && w.state()
+            .list_tokens()?
+            .iter()
+            .any(|t| t.name == *name && t.kind == "device")
+    {
+        w.mark_incoming_asset(id)?;
+    }
+    Ok(())
+}
+
 /// The largest upload accepted, in bytes.
 pub const MAX_UPLOAD: usize = 512 * 1024 * 1024;
 
@@ -89,6 +103,7 @@ async fn incoming(w: &Arc<Writer>, body: Body) -> Result<std::path::PathBuf, Api
 /// `POST /api/assets?filename=<name>`.
 pub async fn upload(
     State(w): Shared,
+    Caller(author): Caller,
     Query(q): Query<UploadQuery>,
     body: Body,
 ) -> Result<Response, ApiError> {
@@ -96,7 +111,12 @@ pub async fn upload(
         .filename
         .ok_or_else(|| ApiError::bad_request("name the file with ?filename="))?;
     let file = incoming(&w, body).await?;
-    let asset = blocking(w, move |w| w.put_asset_file(&filename, &file)).await?;
+    let asset = blocking(w, move |w| {
+        let id = ulid::Ulid::new().to_string();
+        mark_device_upload(w, &author, &id)?;
+        w.put_asset_file_with_id(&id, &filename, &file)
+    })
+    .await?;
     Ok((StatusCode::CREATED, Json(asset_json(&asset))).into_response())
 }
 
@@ -105,6 +125,7 @@ pub async fn upload(
 /// same file again answers 200; anything else already under the id is 409 `id_taken`.
 pub async fn put(
     State(w): Shared,
+    Caller(author): Caller,
     Path(id): Path<String>,
     Query(q): Query<UploadQuery>,
     body: Body,
@@ -114,6 +135,7 @@ pub async fn put(
         .ok_or_else(|| ApiError::bad_request("name the file with ?filename="))?;
     let file = incoming(&w, body).await?;
     let (existed, asset) = blocking(w, move |w| {
+        mark_device_upload(w, &author, &id)?;
         let existed = w.asset_info(&id).is_ok();
         Ok::<_, writer::Error>((existed, w.put_asset_file_with_id(&id, &filename, &file)?))
     })

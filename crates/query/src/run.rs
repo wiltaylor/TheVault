@@ -58,6 +58,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// What a query runs against.
 pub struct Context<'a> {
+    /// Server-side exclusions apply to both roots and reference traversal.
+    pub excluded_notes: Option<&'a std::collections::HashSet<String>>,
     pub index: &'a index::Index,
     pub schema: &'a Schema,
     /// The note that holds the query, bound to `this`.
@@ -76,6 +78,7 @@ impl<'a> Context<'a> {
             .map(|d| d.as_secs_f64())
             .unwrap_or_default();
         Context {
+            excluded_notes: None,
             index,
             schema,
             this: None,
@@ -200,7 +203,7 @@ pub(crate) struct Runner<'a> {
 pub fn run(q: &Query, ctx: &Context<'_>, page: &PageRequest) -> Result<Page> {
     let types = check(q, ctx)?;
     let r = Runner::new(ctx)?;
-    if let Some(text) = plain_search(q) {
+    if let Some(text) = plain_search(q).filter(|_| ctx.excluded_notes.is_none()) {
         let only = matches!(q.from, From::Types(_)).then_some(types.as_slice());
         let archived = if q.include_archived {
             index::Archived::Include
@@ -270,11 +273,14 @@ impl<'a> Runner<'a> {
 
         let scores: Option<HashMap<String, f32>> = match &q.search {
             Some(text) => Some(
-                ctx.index
-                    .search_hits(text, Some(types))?
-                    .into_iter()
-                    .map(|h| (h.id, h.score))
-                    .collect(),
+                (if ctx.excluded_notes.is_some() {
+                    ctx.index.search_note_hits(text, Some(types))
+                } else {
+                    ctx.index.search_hits(text, Some(types))
+                })?
+                .into_iter()
+                .map(|h| (h.id, h.score))
+                .collect(),
             ),
             None => None,
         };
@@ -628,6 +634,13 @@ impl Runner<'_> {
         let mut out = Vec::new();
         for n in rows {
             let n = n?;
+            if self
+                .ctx
+                .excluded_notes
+                .is_some_and(|ids| ids.contains(&n.id))
+            {
+                continue;
+            }
             if hits.is_none_or(|h| h.contains_key(&n.id)) {
                 out.push(Rc::new(n));
             }
@@ -636,6 +649,9 @@ impl Runner<'_> {
     }
 
     pub(crate) fn note(&self, id: &str) -> Result<Option<Rc<Note>>> {
+        if self.ctx.excluded_notes.is_some_and(|ids| ids.contains(id)) {
+            return Ok(None);
+        }
         if let Some(n) = self.notes.borrow().get(id) {
             return Ok(n.clone());
         }

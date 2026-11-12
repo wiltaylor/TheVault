@@ -20,6 +20,7 @@
 //!   name.
 //! - `GET /health` answers `{ok, version, display, playwright_cli}` without a token.
 
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
@@ -33,12 +34,14 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpListener;
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedRwLockReadGuard, RwLock, Semaphore};
 
 /// The most of stdout, and of stderr, a run answers: the tail is kept.
 pub const OUTPUT_CAP: usize = 64 * 1024;
@@ -75,13 +78,17 @@ struct AppState {
     roots: Vec<PathBuf>,
     work: PathBuf,
     home: PathBuf,
-    runs: Semaphore,
+    runs: Arc<Semaphore>,
+    profiles: Arc<Mutex<()>>,
+    profile_locks: Arc<Mutex<HashMap<String, Arc<RwLock<()>>>>>,
+    retired: Arc<Mutex<BTreeSet<String>>>,
 }
 
 /// The service's routes over `config`. Fails when the work or home directory does not exist.
 pub fn router(config: Config) -> io::Result<Router> {
     let work = config.work_dir.canonicalize()?;
     let home = config.home_dir.canonicalize()?;
+    let retired = load_retired(&home)?;
     let lexical_roots = vec![
         lexical(&absolute(&config.work_dir)?),
         lexical(&absolute(&config.home_dir)?),
@@ -91,7 +98,10 @@ pub fn router(config: Config) -> io::Result<Router> {
         lexical_roots,
         work,
         home,
-        runs: Semaphore::new(MAX_RUNS),
+        runs: Arc::new(Semaphore::new(MAX_RUNS)),
+        profiles: Arc::new(Mutex::new(())),
+        profile_locks: Arc::new(Mutex::new(HashMap::new())),
+        retired: Arc::new(Mutex::new(retired)),
         config,
     };
     Ok(Router::new()
@@ -99,6 +109,7 @@ pub fn router(config: Config) -> io::Result<Router> {
         .route("/run", post(run))
         .route("/file", get(file))
         .route("/files", get(files))
+        .route("/profile", axum::routing::delete(delete_profile))
         .with_state(Arc::new(state)))
 }
 
@@ -129,6 +140,520 @@ impl IntoResponse for ApiError {
 
 type ApiResult<T> = Result<T, ApiError>;
 
+/// An authenticated server-chosen profile identity. The shell never supplies this header.
+pub fn identity_signature(token: &str, identity: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(token.as_bytes()).expect("HMAC accepts any key");
+    mac.update(b"thevault-browser-profile-v1:");
+    mac.update(identity.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn profile_id<'a>(state: &AppState, headers: &'a HeaderMap) -> ApiResult<&'a str> {
+    authorize(state, headers)?;
+    let id = headers
+        .get("x-vault-agent")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let signature = headers
+        .get("x-vault-agent-signature")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if id.is_empty()
+        || id.len() > 128
+        || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        || !constant_time_eq(
+            signature.as_bytes(),
+            identity_signature(&state.config.token, id).as_bytes(),
+        )
+    {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "a valid signed agent identity is needed",
+        ));
+    }
+    Ok(id)
+}
+
+const PROFILE_LIMIT: usize = 64;
+const PROFILE_BYTES: u64 = 512 * 1024 * 1024;
+
+const RETIRED_INDEX: &str = ".retired-profile-ids.json";
+
+fn store_retired(home: &Path, ids: &BTreeSet<String>) -> io::Result<()> {
+    let tmp = home.join(format!(
+        ".retired-profile-ids-{}.tmp",
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)?;
+    use std::io::Write;
+    file.write_all(&serde_json::to_vec(ids)?)?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, home.join(RETIRED_INDEX))?;
+    std::fs::File::open(home)?.sync_all()?;
+    Ok(())
+}
+
+fn load_retired(home: &Path) -> io::Result<BTreeSet<String>> {
+    let index = home.join(RETIRED_INDEX);
+    let mut ids = match std::fs::symlink_metadata(&index) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+            serde_json::from_slice(&std::fs::read(&index)?)?
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeSet::new(),
+        _ => {
+            return Err(io::Error::other(
+                "retired profile index is not a regular file",
+            ));
+        }
+    };
+    let markers = home.join(".retired-profiles");
+    match std::fs::symlink_metadata(&markers) {
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {
+            let entries: Vec<_> = std::fs::read_dir(&markers)?.collect::<io::Result<_>>()?;
+            for entry in &entries {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                let meta = std::fs::symlink_metadata(entry.path())?;
+                if !meta.is_file()
+                    || meta.file_type().is_symlink()
+                    || id.is_empty()
+                    || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                {
+                    return Err(io::Error::other("invalid retired profile marker"));
+                }
+                ids.insert(id);
+            }
+            store_retired(home, &ids)?;
+            // Only regular marker files were read. The index is durable before pruning.
+            for entry in entries {
+                std::fs::remove_file(entry.path())?;
+            }
+            std::fs::remove_dir(&markers)?;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        _ => {
+            return Err(io::Error::other(
+                "retired profile markers are not a real directory",
+            ));
+        }
+    }
+    Ok(ids)
+}
+
+fn profile_lock(state: &AppState, id: &str) -> Arc<RwLock<()>> {
+    state
+        .profile_locks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(id.to_owned())
+        .or_default()
+        .clone()
+}
+
+async fn profile_access(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> ApiResult<OwnedRwLockReadGuard<()>> {
+    let id = profile_id(state, headers)?;
+    let guard = profile_lock(state, id).read_owned().await;
+    if state
+        .retired
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(id)
+    {
+        return Err(ApiError::new(
+            StatusCode::GONE,
+            "this browser profile was retired",
+        ));
+    }
+    Ok(guard)
+}
+
+fn safe_dir(path: &Path) -> ApiResult<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() && !m.file_type().is_symlink() => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => std::fs::create_dir(path)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        _ => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "profile path is not a real directory",
+        )),
+    }
+}
+
+fn disk_usage(path: &Path) -> io::Result<u64> {
+    let mut bytes = 0u64;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let m = std::fs::symlink_metadata(entry.path())?;
+        bytes = bytes.saturating_add(if m.is_dir() && !m.file_type().is_symlink() {
+            disk_usage(&entry.path())?
+        } else {
+            m.len()
+        });
+        if bytes > PROFILE_BYTES {
+            break;
+        }
+    }
+    Ok(bytes)
+}
+
+fn scoped(state: &AppState, headers: &HeaderMap, admission: bool) -> ApiResult<AppState> {
+    let id = profile_id(state, headers)?;
+    let _guard = state.profiles.lock().unwrap_or_else(|e| e.into_inner());
+    let root = state.home.join("profiles");
+    safe_dir(&root)?;
+    let profile = root.join(id);
+    if !profile.exists()
+        && std::fs::read_dir(&root)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .count()
+            >= PROFILE_LIMIT
+    {
+        return Err(ApiError::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "browser profile limit (64) reached",
+        ));
+    }
+    safe_dir(&profile)?;
+    let bytes = if admission {
+        disk_usage(&profile)
+    } else {
+        Ok(0)
+    }
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if admission && bytes > PROFILE_BYTES {
+        return Err(ApiError::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "browser profile exceeds 512 MiB; use Reset browser profile on the agent's Permissions page before running commands",
+        ));
+    }
+    let home = profile.join("home");
+    let work = profile.join("work");
+    safe_dir(&home)?;
+    safe_dir(&work)?;
+    for dir in [".config", ".cache", ".runtime"] {
+        safe_dir(&home.join(dir))?;
+    }
+    Ok(AppState {
+        config: state.config.clone(),
+        lexical_roots: vec![home.clone(), work.clone()],
+        roots: vec![home.clone(), work.clone()],
+        home,
+        work,
+        runs: state.runs.clone(),
+        profiles: state.profiles.clone(),
+        profile_locks: state.profile_locks.clone(),
+        retired: state.retired.clone(),
+    })
+}
+
+async fn delete_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    let id = profile_id(&state, &headers)?;
+    let lock = profile_lock(&state, id);
+    let _exclusive = lock.write().await;
+    {
+        let mut retired = state.retired.lock().unwrap_or_else(|e| e.into_inner());
+        retired.insert(id.to_owned());
+        store_retired(&state.home, &retired)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    let root = state.home.join("profiles");
+    let path = root.join(id);
+    if root.exists() {
+        safe_dir(&root)?;
+    }
+    if path.exists() {
+        safe_dir(&path)?;
+        let owned_path = path.clone();
+        tokio::task::spawn_blocking(move || make_profile_directories_writable(&owned_path))
+            .await
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+        let profile = scoped(&state, &headers, false)?;
+        let outcome = run_command(
+            &profile,
+            "if command -v playwright-cli >/dev/null 2>&1; then playwright-cli close-all; fi",
+            &profile.work,
+            Duration::from_secs(30),
+        )
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if outcome.exit != 0 {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "could not close this profile's browser sessions",
+            ));
+        }
+    }
+    let owned_path = path.clone();
+    tokio::task::spawn_blocking(move || {
+        kill_profile_processes(&owned_path)?;
+        if owned_path.exists() {
+            make_profile_directories_writable(&owned_path)?;
+            for _ in 0..2 {
+                if !owned_path.exists() {
+                    break;
+                }
+                walk_profile_tree(&owned_path, true)?;
+            }
+        }
+        Ok::<(), ApiError>(())
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let _guard = state.profiles.lock().unwrap_or_else(|e| e.into_inner());
+    if root.exists() {
+        safe_dir(&root)?;
+    }
+    if std::fs::symlink_metadata(&path).is_ok() {
+        safe_dir(&path)?;
+    }
+    state
+        .profile_locks
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(id);
+    Ok(Json(json!({"ok": true})))
+}
+
+/// Cache tools can leave 0555 directories. Only directories in the managed tree
+/// are changed. Symlinks (including links to another profile) are never followed.
+fn make_profile_directories_writable(path: &Path) -> ApiResult<()> {
+    walk_profile_tree(path, false)
+}
+
+fn walk_error<'a>(
+    root: &Path,
+    components: impl Iterator<Item = &'a std::ffi::CStr>,
+    tail: Option<&'a std::ffi::CStr>,
+    error: impl std::fmt::Display,
+) -> io::Error {
+    // Construct labels only on failure. Retaining every full ancestor path
+    // makes a deep tree quadratic in memory even with an iterative walk.
+    let names: Vec<_> = components.chain(tail).collect();
+    let mut label = root.display().to_string();
+    for (i, name) in names.iter().enumerate() {
+        if names.len() > 8 && i >= 3 && i < names.len() - 3 {
+            if i == 3 {
+                label.push_str("/...");
+            }
+            continue;
+        }
+        label.push('/');
+        label.push_str(&name.to_string_lossy());
+    }
+    io::Error::other(format!("{label} (depth {}): {error}", names.len()))
+}
+
+fn walk_profile_tree(path: &Path, remove: bool) -> ApiResult<()> {
+    use rustix::fs::{
+        AtFlags, CWD, Dir, FileType, Mode, OFlags, chmodat, fstat, openat, statat, unlinkat,
+    };
+    use std::os::fd::AsRawFd;
+    fn prepare(
+        parent: impl rustix::fd::AsFd,
+        name: impl rustix::path::Arg,
+    ) -> io::Result<rustix::fd::OwnedFd> {
+        let pinned = openat(
+            parent,
+            name,
+            OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let mode = Mode::from_raw_mode(fstat(&pinned)?.st_mode) | Mode::RWXU;
+        chmodat(
+            CWD,
+            format!("/proc/self/fd/{}", pinned.as_raw_fd()),
+            mode,
+            AtFlags::empty(),
+        )
+        .map_err(|e| {
+            io::Error::other(format!(
+                "pinned-directory chmod requires mounted /proc/self/fd; no path-based fallback: {e}"
+            ))
+        })?;
+        let fd = openat(
+            &pinned,
+            ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        // The pinned descriptor is dropped here, before descent.
+        Ok(fd)
+    }
+    fn children(fd: &rustix::fd::OwnedFd) -> io::Result<Vec<std::ffi::CString>> {
+        let mut entries = Dir::read_from(fd)?;
+        let mut names = Vec::new();
+        while let Some(entry) = entries.read() {
+            let entry = entry?;
+            let name = entry.file_name();
+            if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                continue;
+            }
+            names.push(name.to_owned());
+        }
+        // Dir and its duplicate fd are dropped before descent.
+        Ok(names)
+    }
+    let result = (|| -> io::Result<()> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(io::Error::other("profile path is not a real directory"));
+        }
+        let mut fd = prepare(CWD, path)?;
+        let names = children(&fd)?;
+        let stat = fstat(&fd)?;
+        let mut stack = vec![(names, stat.st_dev, stat.st_ino, None::<std::ffi::CString>)];
+        while !stack.is_empty() {
+            let Some(name) = stack.last_mut().expect("current frame").0.pop() else {
+                let completed = stack.pop().expect("current frame");
+                if let Some((_, dev, ino, _)) = stack.last() {
+                    let parent = openat(
+                        &fd,
+                        "..",
+                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )?;
+                    let stat = fstat(&parent)?;
+                    if (stat.st_dev, stat.st_ino) != (*dev, *ino) {
+                        return Err(io::Error::other("profile directory moved during cleanup"));
+                    }
+                    if remove {
+                        unlinkat(
+                            &parent,
+                            completed.3.as_ref().expect("child name").as_c_str(),
+                            AtFlags::REMOVEDIR,
+                        )
+                        .map_err(|e| {
+                            walk_error(
+                                path,
+                                stack.iter().filter_map(|f| f.3.as_deref()),
+                                completed.3.as_deref(),
+                                e,
+                            )
+                        })?;
+                    }
+                    fd = parent;
+                }
+                continue;
+            };
+            let stat = statat(&fd, name.as_c_str(), AtFlags::SYMLINK_NOFOLLOW).map_err(|e| {
+                walk_error(
+                    path,
+                    stack.iter().filter_map(|f| f.3.as_deref()),
+                    Some(&name),
+                    e,
+                )
+            })?;
+            if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+                if remove {
+                    unlinkat(&fd, name.as_c_str(), AtFlags::empty()).map_err(|e| {
+                        walk_error(
+                            path,
+                            stack.iter().filter_map(|f| f.3.as_deref()),
+                            Some(&name),
+                            e,
+                        )
+                    })?;
+                }
+                continue;
+            }
+            let child = prepare(&fd, name.as_c_str()).map_err(|e| {
+                walk_error(
+                    path,
+                    stack.iter().filter_map(|f| f.3.as_deref()),
+                    Some(&name),
+                    e,
+                )
+            })?;
+            let names = children(&child).map_err(|e| {
+                walk_error(
+                    path,
+                    stack.iter().filter_map(|f| f.3.as_deref()),
+                    Some(&name),
+                    e,
+                )
+            })?;
+            let stat = fstat(&child)?;
+            fd = child;
+            stack.push((names, stat.st_dev, stat.st_ino, Some(name)));
+        }
+        if remove {
+            unlinkat(CWD, path, AtFlags::REMOVEDIR)?;
+        }
+        Ok(())
+    })();
+    result.map_err(|e| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("preparing {} for removal: {e}", path.display()),
+        )
+    })
+}
+
+/// A successful shell can leave detached children behind. Close those too before
+/// acknowledging deletion, otherwise they can recreate the retired directory.
+fn kill_profile_processes(path: &Path) -> ApiResult<()> {
+    let home = path.join("home");
+    let expected = format!("HOME={}", home.display());
+    for _ in 0..100 {
+        let mut found = false;
+        for entry in std::fs::read_dir("/proc")
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .flatten()
+        {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if pid <= 1 || pid as u32 == std::process::id() {
+                continue;
+            }
+            let owns_home = std::fs::read(entry.path().join("environ"))
+                .is_ok_and(|env| env.split(|b| *b == 0).any(|v| v == expected.as_bytes()));
+            let owns_cwd =
+                std::fs::read_link(entry.path().join("cwd")).is_ok_and(|cwd| cwd.starts_with(path));
+            if owns_home || owns_cwd {
+                found = true;
+                // Numeric pid only. Permission errors leave deletion pending.
+                let pid = rustix::process::Pid::from_raw(pid).expect("positive process id");
+                if let Err(e) = rustix::process::kill_process(pid, rustix::process::Signal::KILL)
+                    && e != rustix::io::Errno::SRCH
+                {
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        "could not stop this profile's processes",
+                    ));
+                }
+            }
+        }
+        if !found {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Err(ApiError::new(
+        StatusCode::CONFLICT,
+        "profile processes have not stopped; cleanup will retry",
+    ))
+}
+
 fn authorize(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
     let given = headers
         .get(header::AUTHORIZATION)
@@ -158,6 +683,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "display": state.config.display,
         "playwright_cli": state.config.playwright_cli,
+        "profile_protocol": 1,
     }))
 }
 
@@ -173,7 +699,8 @@ async fn run(
     headers: HeaderMap,
     body: Result<Json<RunRequest>, JsonRejection>,
 ) -> ApiResult<Json<Value>> {
-    authorize(&state, &headers)?;
+    let _profile = profile_access(&state, &headers).await?;
+    let state = scoped(&state, &headers, true)?;
     let Json(req) = body.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     if req.command.trim().is_empty() {
         return Err(ApiError::new(
@@ -315,12 +842,17 @@ async fn run_command(
 ) -> io::Result<Outcome> {
     let started = Instant::now();
     let mut child = Command::new("bash")
-        .arg("-lc")
+        .arg("-c")
         .arg(command)
         .current_dir(cwd)
         .env("DISPLAY", &state.config.display)
         .env("HOME", &state.home)
+        .env("XDG_CONFIG_HOME", state.home.join(".config"))
+        .env("XDG_CACHE_HOME", state.home.join(".cache"))
+        .env("XDG_RUNTIME_DIR", state.home.join(".runtime"))
+        .env("TMPDIR", state.home.join(".runtime"))
         .env_remove("BROWSER_TOKEN")
+        .env_remove("VAULT_BROWSER_TOKEN")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -387,8 +919,8 @@ impl AppState {
                 StatusCode::FORBIDDEN,
                 format!(
                     "{raw} is outside {} and {}",
-                    self.config.work_dir.display(),
-                    self.config.home_dir.display()
+                    self.work.display(),
+                    self.home.display()
                 ),
             )
         };
@@ -448,7 +980,8 @@ async fn file(
     headers: HeaderMap,
     query: Result<Query<FileQuery>, QueryRejection>,
 ) -> ApiResult<Response> {
-    authorize(&state, &headers)?;
+    let _profile = profile_access(&state, &headers).await?;
+    let state = scoped(&state, &headers, false)?;
     let Query(query) = query.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     let path = state.resolve(&query.path)?;
     let meta = tokio::fs::metadata(&path)
@@ -533,7 +1066,8 @@ async fn files(
     headers: HeaderMap,
     query: Result<Query<FilesQuery>, QueryRejection>,
 ) -> ApiResult<Json<Value>> {
-    authorize(&state, &headers)?;
+    let _profile = profile_access(&state, &headers).await?;
+    let state = scoped(&state, &headers, false)?;
     let Query(query) = query.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
     let dir = match query.dir.as_deref() {
         None | Some("") => state.work.clone(),
