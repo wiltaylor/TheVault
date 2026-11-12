@@ -147,11 +147,21 @@ fn limiter_diagnostic_is_owner_only_and_read_only() {
     let cookie = cookie_pair(&api.login(testkit::PASSWORD));
     for scope in ["read", "write"] {
         let token = api.token(&format!("diagnostic-{scope}"), scope);
-        assert_eq!(api.req("GET", path, Auth::Bearer(&token)).send().unwrap().status(), 403);
+        assert_eq!(
+            api.req("GET", path, Auth::Bearer(&token))
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
     }
     for auth in [api.admin(), Auth::Cookie(&cookie)] {
         for _ in 0..6 {
-            let response = api.req("GET", path, auth).header("X-Forwarded-For", "192.0.2.99").send().unwrap();
+            let response = api
+                .req("GET", path, auth)
+                .header("X-Forwarded-For", "192.0.2.99")
+                .send()
+                .unwrap();
             assert_eq!(response.status(), 200);
             assert_eq!(response.headers()["cache-control"], "no-store");
             let body: Value = response.json().unwrap();

@@ -416,9 +416,13 @@ impl Attempt {
             });
             let result = crate::blocking(limits.writer.clone(), move |w| {
                 w.state().prune_auth_failure_history()?;
-                w.state().record_activity(state::NewActivity::server(kind, "auth", "A credential check failed").detail(detail));
+                w.state().record_activity(
+                    state::NewActivity::server(kind, "auth", "A credential check failed")
+                        .detail(detail),
+                );
                 Ok::<_, state::Error>(())
-            }).await;
+            })
+            .await;
             if result.is_err() {
                 tracing::warn!("could not store authentication failure activity");
             }
