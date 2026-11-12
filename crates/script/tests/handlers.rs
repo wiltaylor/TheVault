@@ -132,11 +132,11 @@ fn interrupted_outbox_restart(kind: &str, action: &str) {
     writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
     let item = writer.create("outbox", &json_note(json!({
         "title": "Check this send", "kind": kind, "status": "ready",
-        "to": ["ann@example.com"], "event_action": action,
+        "to": ["ann@example.com"], "event_action": if action.is_empty() { None } else { Some(action) },
     })), &user()).unwrap();
     let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
     body["fields"]["status"] = json!("sending");
-    writer.update(&item.id, &Input::Json(body), None,
+    writer.update(&item.id, &Input::Json(body), Some(&item.version),
         &Author::Handler("outbox_send".into())).unwrap();
     drop(writer);
     drop(handlers);
