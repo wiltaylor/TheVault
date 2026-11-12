@@ -26,7 +26,7 @@ fn peer_note_over_thread(legacy_row: bool) {
     manifest.types.push(gitsync::DefEntry { name: "memo".into(), path: layout.type_def("memo") });
     files.insert(layout.type_def("memo"), key.seal(MEMO.as_bytes()));
     if legacy_row {
-        let state = state::State::open(&b.server.vault_path().join("state.db"), None).unwrap();
+        let state = state::State::open(&b.server.vault_path().join(".vault/state.db"), None).unwrap();
         state.gitsync_put(&state::GitsyncNote {
             note_id: id.into(), peer_vault_id: peer.into(), origin: peer.into(),
             base: s(&before["wcl"]).as_bytes().to_vec(), base_hash: hash,
@@ -55,7 +55,7 @@ fn peer_note_over_thread(legacy_row: bool) {
         assert_eq!(b.note(id).unwrap()["wcl"], before["wcl"]);
     }
     if legacy_row {
-        let state = state::State::open(&b.server.vault_path().join("state.db"), None).unwrap();
+        let state = state::State::open(&b.server.vault_path().join(".vault/state.db"), None).unwrap();
         assert!(!state.gitsync_get(id, peer).unwrap().unwrap().archived_by_sync);
     }
 }
