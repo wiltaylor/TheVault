@@ -11,6 +11,9 @@ import { once } from "node:events";
 import { randomBytes, createHmac } from "node:crypto";
 
 test("image gate HTTP checks use signed, separate and resettable profiles", { timeout: 240000 }, async (t) => {
+  // ./dev may run with a numeric uid that has no passwd entry.
+  let expectedUser = "";
+  try { expectedUser = userInfo().username; } catch { /* uid is still checked */ }
   const root = await mkdtemp(join(tmpdir(), "vault-browser-protocol-"));
   const home = join(root, "home");
   const work = join(root, "work");
@@ -38,7 +41,7 @@ test("image gate HTTP checks use signed, separate and resettable profiles", { ti
       await new Promise((done) => setTimeout(done, 20));
     }
     const { stdout } = await promisify(execFile)("bash", ["docker/test-browser-image.sh"], {
-      env: { ...process.env, BOX_URL: base, BOX_TOKEN: token, BOX_HOME_DIR: home, BOX_SERVICE_PID: String(child.pid), BOX_EXPECTED_USER: userInfo().username, BOX_EXPECTED_UID: String(process.getuid()), TMPDIR: tmp },
+      env: { ...process.env, BOX_URL: base, BOX_TOKEN: token, BOX_HOME_DIR: home, BOX_SERVICE_PID: String(child.pid), BOX_EXPECTED_USER: expectedUser, BOX_EXPECTED_UID: String(process.getuid()), TMPDIR: tmp },
       // The dev filesystem can build all4000 levels using external mkdir;
       // allow the script's180s setup budget plus its other HTTP checks.
       timeout: 210000,

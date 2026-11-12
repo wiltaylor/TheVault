@@ -40,7 +40,7 @@ failures=0
 built=
 id=browser-image-test
 profile_home=${BOX_HOME_DIR:-/home/agent}
-expected_user=${BOX_EXPECTED_USER:-agent}
+expected_user=${BOX_EXPECTED_USER-agent}
 expected_uid=${BOX_EXPECTED_UID:-1000}
 sign() { printf 'thevault-browser-profile-v1:%s' "$1" | openssl dgst -sha256 -hmac "$token" | awk '{print $NF}'; }
 
@@ -166,9 +166,9 @@ get() {
   curl -sS -H "Authorization: Bearer $token" -H "x-vault-agent: $id" -H "x-vault-agent-signature: $(sign "$id")" "$@" "$base$path"
 }
 
-r=$(run_cmd 'printf "%s|%s|%s|%s\n" "$(id -un)" "$(id -u)" "$PWD" "$HOME"')
-check "commands run as agent (uid 1000) in their profile ($(jq -c .stdout <<< "$r"))" \
-  jqe --arg home "$profile_home" --arg user "$expected_user" --arg uid "$expected_uid" --arg id "$id" '.stdout == ($user + "|" + $uid + "|" + $home + "/profiles/" + $id + "/work|" + $home + "/profiles/" + $id + "/home\n")' <<< "$r"
+r=$(run_cmd 'printf "%s|%s|%s|%s\n" "$(id -un 2>/dev/null || true)" "$(id -u)" "$PWD" "$HOME"')
+check "commands run as ${expected_user:-unnamed user} (uid $expected_uid) in their profile ($(jq -c .stdout <<< "$r"))" \
+  jqe --arg home "$profile_home" --arg user "$expected_user" --arg uid "$expected_uid" --arg id "$id" '.exit == 0 and ((.stdout | split("|")) as $parts | ($user == "" or $parts[0] == $user) and $parts[1:] == [$uid, ($home + "/profiles/" + $id + "/work"), ($home + "/profiles/" + $id + "/home\n")])' <<< "$r"
 if [ -z "${BOX_URL:-}" ]; then
 r=$(run_cmd 'playwright-cli --help')
 check "playwright-cli --help works as agent" jqe '.exit == 0 and (.stdout | contains("snapshot"))' <<< "$r"
