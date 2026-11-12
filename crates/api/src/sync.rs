@@ -62,7 +62,12 @@ pub struct ChangesQuery {
 }
 
 /// One feed entry, with the content of its note or file as it is now.
-fn entry(w: &Writer, c: &Journaled, full_conditions: bool) -> Result<Value, ApiError> {
+fn entry(
+    w: &Writer,
+    c: &Journaled,
+    full_conditions: bool,
+    full_logins: bool,
+) -> Result<Value, ApiError> {
     let state = w.state();
     match &c.key {
         ChangeKey::Note(id) => {
@@ -109,19 +114,29 @@ fn entry(w: &Writer, c: &Journaled, full_conditions: bool) -> Result<Value, ApiE
             let mut text = w.read_synced(path)?;
             let deleted = text.is_none();
             let mut hidden = false;
+            let mut logins_hidden = false;
             if kind == "agent"
-                && !full_conditions
+                && (!full_conditions || !full_logins)
                 && let Some(source) = text.as_deref()
             {
                 match schema::Agent::parse(name, source) {
                     Ok(mut agent) => {
-                        if agent.permissions.outbox.conditions.take().is_some() {
+                        let had_logins = !agent.permissions.browser_secrets.is_empty();
+                        if !full_conditions && agent.permissions.outbox.conditions.take().is_some()
+                        {
                             hidden = true;
+                        }
+                        if !full_logins {
+                            agent.permissions.browser_secrets.clear();
+                            logins_hidden = true;
+                        }
+                        if hidden || (logins_hidden && had_logins) {
                             text = Some(agent.to_wcl());
                         }
                     }
                     Err(_) => {
                         hidden = true;
+                        logins_hidden = !full_logins;
                         text = None;
                     }
                 }
@@ -132,6 +147,9 @@ fn entry(w: &Writer, c: &Journaled, full_conditions: bool) -> Result<Value, ApiE
             });
             if hidden {
                 out["conditions_hidden"] = json!(true);
+            }
+            if logins_hidden {
+                out["browser_secrets_hidden"] = json!(true);
             }
             Ok(out)
         }
@@ -170,16 +188,33 @@ pub async fn changes(
                         _ => false,
                     }));
         let page = w.state().changes_since(since, limit)?;
-        let entries = page
-            .changes
-            .iter()
-            .map(|c| entry(w, c, full_conditions))
-            .collect::<Result<Vec<_>, _>>()?;
+        let full_logins = crate::tasks::may_manage_login_secrets(w, &author)?;
+        let mut entries = Vec::new();
+        let mut bytes = 1024usize; // leave room for the page envelope
+        let mut next = since;
+        for change in &page.changes {
+            let mut value = entry(w, change, full_conditions, full_logins)?;
+            if !full_logins {
+                crate::agent_threads::redact_content(&mut value)?;
+            }
+            let size = serde_json::to_vec(&value)
+                .map_err(|_| ApiError::bad_request("sync entry could not be serialized"))?
+                .len()
+                + 1;
+            if !entries.is_empty() && bytes.saturating_add(size) > crate::query::PAGE_BYTE_BUDGET {
+                break;
+            }
+            bytes = bytes.saturating_add(size);
+            next = change.seq;
+            entries.push(value);
+        }
+        let remaining =
+            page.remaining + i64::try_from(page.changes.len() - entries.len()).unwrap_or(i64::MAX);
         Ok(json!({
             "changes": entries,
-            "next": page.next,
+            "next": next,
             "latest": page.latest,
-            "remaining": page.remaining,
+            "remaining": remaining,
         }))
     })
     .await?;

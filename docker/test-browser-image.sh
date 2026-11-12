@@ -31,7 +31,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-run="thevault-browsertest-$(date +%s)-$$"
+run=${THEVAULT_RELEASE_RUN:-"thevault-browsertest-$(date +%s)-$$"}
 token=${BOX_TOKEN:-"tok-$run-0123456789abcdef"}
 version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)"/\1/p' Cargo.toml)
 pinned=$(sed -n 's/^ARG PLAYWRIGHT_CLI_VERSION=//p' docker/browser.Dockerfile)
@@ -40,13 +40,13 @@ failures=0
 built=
 id=browser-image-test
 profile_home=${BOX_HOME_DIR:-/home/agent}
-expected_user=${BOX_EXPECTED_USER:-agent}
+expected_user=${BOX_EXPECTED_USER-agent}
 expected_uid=${BOX_EXPECTED_UID:-1000}
 sign() { printf 'thevault-browser-profile-v1:%s' "$1" | openssl dgst -sha256 -hmac "$token" | awk '{print $NF}'; }
 
 cleanup() {
   if [ -z "${BOX_URL:-}" ]; then
-    docker ps -aq --filter "label=$run" | xargs -r docker rm -f -v > /dev/null
+    docker rm -f -v "$run" "$run-no-token" > /dev/null 2>&1 || true
   fi
   if [ -n "$built" ] && [ "${KEEP_IMAGE:-}" != 1 ]; then
     docker rmi "$image" > /dev/null 2>&1 || true
@@ -98,7 +98,7 @@ fi
 
 if [ -z "${BOX_URL:-}" ]; then
 # 1. No token, no start (container-level checks only).
-out=$(docker run --rm --label "$run" "$image" 2>&1) && status=0 || status=$?
+out=$(docker run --rm --name "$run-no-token" "$image" 2>&1) && status=0 || status=$?
 check "it refuses to start without BROWSER_TOKEN (exit $status)" test "$status" -ne 0
 check "and says how to make one" grep -qF 'openssl rand -hex 32' <<< "$out"
 
@@ -108,6 +108,26 @@ docker run -d --name "$run" --label "$run" --shm-size 1g -e BROWSER_TOKEN="$toke
 port=$(docker port "$run" 7700/tcp | head -n 1 | sed 's/.*://')
 vnc=$(docker port "$run" 6080/tcp | head -n 1 | sed 's/.*://')
 base="http://127.0.0.1:$port"
+if [ "${THEVAULT_RELEASE_RELAY:-}" = 1 ]; then
+  # A relayed daemon's published ports are not on the release client. Run
+  # curl in this owned container, transferring only explicitly requested output.
+  base=http://127.0.0.1:7700
+  vnc=6080
+  curl() {
+    local arg previous='' outputs=()
+    for arg in "$@"; do
+      if [ "$previous" = -o ] || [ "$previous" = -D ]; then
+        if [ "$arg" != /dev/null ]; then outputs+=("$arg"); fi
+      fi
+      previous=$arg
+    done
+    docker exec "$run" mkdir -p "$tmp"
+    local status=0
+    docker exec "$run" curl "$@" || status=$?
+    for arg in "${outputs[@]}"; do docker cp "$run:$arg" "$arg" || return 1; done
+    return "$status"
+  }
+fi
 fi
 check "/health answers on a free port ($port)" retry 60 curl -fsS "$base/health"
 health=$(curl -fsS "$base/health" || echo '{}')
@@ -146,9 +166,9 @@ get() {
   curl -sS -H "Authorization: Bearer $token" -H "x-vault-agent: $id" -H "x-vault-agent-signature: $(sign "$id")" "$@" "$base$path"
 }
 
-r=$(run_cmd 'printf "%s|%s|%s|%s\n" "$(id -un)" "$(id -u)" "$PWD" "$HOME"')
-check "commands run as agent (uid 1000) in their profile ($(jq -c .stdout <<< "$r"))" \
-  jqe --arg home "$profile_home" --arg user "$expected_user" --arg uid "$expected_uid" --arg id "$id" '.stdout == ($user + "|" + $uid + "|" + $home + "/profiles/" + $id + "/work|" + $home + "/profiles/" + $id + "/home\n")' <<< "$r"
+r=$(run_cmd 'printf "%s|%s|%s|%s\n" "$(id -un 2>/dev/null || true)" "$(id -u)" "$PWD" "$HOME"')
+check "commands run as ${expected_user:-unnamed user} (uid $expected_uid) in their profile ($(jq -c .stdout <<< "$r"))" \
+  jqe --arg home "$profile_home" --arg user "$expected_user" --arg uid "$expected_uid" --arg id "$id" '.exit == 0 and ((.stdout | split("|")) as $parts | ($user == "" or $parts[0] == $user) and $parts[1:] == [$uid, ($home + "/profiles/" + $id + "/work"), ($home + "/profiles/" + $id + "/home\n")])' <<< "$r"
 if [ -z "${BOX_URL:-}" ]; then
 r=$(run_cmd 'playwright-cli --help')
 check "playwright-cli --help works as agent" jqe '.exit == 0 and (.stdout | contains("snapshot"))' <<< "$r"
@@ -241,6 +261,8 @@ if [ -z "${BOX_URL:-}" ]; then
 r=$(run_cmd 'playwright-cli -s=headless open about:blank && playwright-cli -s=headless snapshot' 180)
 check "a headless session opens too" jqe '.exit == 0 and .timed_out == false' <<< "$r"
 run_cmd 'playwright-cli close-all' > /dev/null || true
+docker cp docker/browser-secret-image.test.cjs "$run:/tmp/browser-secret-image.test.cjs"
+check "secret fill endpoint and memory-only bridge" docker exec "$run" node --test /tmp/browser-secret-image.test.cjs
 fi
 
 # 5. A timeout.

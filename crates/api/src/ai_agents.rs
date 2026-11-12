@@ -92,6 +92,17 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
         .map_err(|e| ToolOut::error(e.to_string()))?;
     let (agent, error) = match Agent::parse(name, &wcl) {
         Ok(mut a) => {
+            let login_count = a.permissions.browser_secrets.len();
+            a.permissions.browser_secrets.retain(|n| {
+                by.permissions.browser
+                    && by.permissions.browser_secrets.contains(n)
+                    && w.state()
+                        .browser_secret_active(&by.name, n)
+                        .unwrap_or(false)
+            });
+            if login_count != a.permissions.browser_secrets.len() {
+                wcl = a.to_wcl();
+            }
             let hidden = name != by.name && a.permissions.outbox.conditions.take().is_some();
             if hidden {
                 wcl = a.to_wcl();
@@ -125,6 +136,13 @@ pub(crate) fn get(w: &Writer, by: &Agent, input: &Value) -> Result<ToolOut, Tool
 pub fn escalation(by: &Agent, target: &Agent) -> Vec<String> {
     let (bp, tp) = (&by.permissions, &target.permissions);
     let mut problems = Vec::new();
+    if tp
+        .browser_secrets
+        .iter()
+        .any(|n| !bp.browser || !bp.browser_secrets.contains(n))
+    {
+        problems.push("it would grant Login secrets this agent does not have".to_owned());
+    }
     match (&bp.tools, &tp.tools) {
         (Some(_), None) => problems.push(
             "it would allow every tool, and this agent may use only the tools its permissions list"
@@ -286,6 +304,22 @@ fn escalation_error(name: &str, problems: &[String]) -> ToolOut {
     out
 }
 
+/// Recheck Login liveness at both proposal and Apply, not just the file's names.
+fn active_escalation(w: &Writer, by: &Agent, target: &Agent) -> Vec<String> {
+    let mut active = by.clone();
+    active.permissions.browser_secrets.retain(|name| {
+        w.state()
+            .browser_secret_active(&by.name, name)
+            .unwrap_or(false)
+    });
+    escalation(&active, target)
+}
+
+/// Redact only the client copy. Stored proposals retain their exact text for Apply.
+pub(crate) fn hide_browser_secrets(value: &mut Value) {
+    writer::hide_browser_secrets(value);
+}
+
 fn capitalise(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
@@ -318,7 +352,7 @@ pub(crate) fn propose_change(
                 "The agent was not proposed. Fix the issues and propose it again; get_agent answers the agent-file vocabulary.",
             )
         })?;
-    let problems = escalation(by, &agent);
+    let problems = active_escalation(w, by, &agent);
     if !problems.is_empty() {
         return Err(escalation_error(name, &problems));
     }
@@ -364,6 +398,24 @@ pub(crate) fn propose_change(
 
 /// Whether writing `agent` as agent `name` turns on `run_code`, which it does not have now.
 fn grants(w: &Writer, name: &str, agent: &Agent) -> bool {
+    if agent.permissions.confirm.secrets
+        != agent_named(w, name)
+            .ok()
+            .flatten()
+            .map(|a| a.permissions.confirm.secrets)
+            .unwrap_or(true)
+    {
+        return true;
+    }
+    if agent.permissions.browser_secrets
+        != agent_named(w, name)
+            .ok()
+            .flatten()
+            .map(|a| a.permissions.browser_secrets)
+            .unwrap_or_default()
+    {
+        return true;
+    }
     (agent.permissions.outbox.send_without_review
         && !agent_named(w, name)
             .ok()
@@ -502,7 +554,7 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
         .ok_or_else(|| ApplyError::Invalid("the change has no after".into()))?;
     if let Some(by) = &by {
         let (_, agent) = w.check_agent(name, after, crate::agent_files::tool_check(w))?;
-        let problems = escalation(by, &agent);
+        let problems = active_escalation(w, by, &agent);
         if !problems.is_empty() {
             return Err(ApplyError::Refused(format!(
                 "it would give agent {name} more than {} has: {}",
@@ -511,7 +563,10 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
             )));
         }
     }
-    w.put_agent(name, after, crate::agent_files::tool_check(w))?;
+    let (_, saved) = w.put_agent(name, after, crate::agent_files::tool_check(w))?;
+    w.state()
+        .narrow_browser_secrets(name, &saved.permissions.browser_secrets)
+        .map_err(writer::Error::from)?;
     let op = if before.is_some() {
         "agent_change"
     } else {
@@ -533,6 +588,29 @@ mod tests {
         let t = agent_format_text();
         assert!(t.starts_with("## Agent files"), "{}", &t[..40]);
         assert!(!t.contains("## Device files"));
+    }
+
+    #[test]
+    fn browser_secret_confirmation_cannot_be_weakened_by_an_agent() {
+        let parent = agent("");
+        let off = agent("permissions { confirm { secrets = false\n}\n}\n");
+        assert!(
+            escalation(&parent, &off)
+                .iter()
+                .any(|s| s.contains("secrets"))
+        );
+    }
+
+    #[test]
+    fn browser_secrets_client_redaction_covers_before_after_and_tool_inputs() {
+        let source = "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n";
+        let mut value = json!({"proposals":[{"kind":"agent", "name":"helper", "before":source, "after":source}], "messages":[{"name":"propose_agent_change", "input":{"name":"helper", "wcl":source}}]});
+        hide_browser_secrets(&mut value);
+        assert!(!value.to_string().contains("bank"));
+        assert_eq!(value["proposals"][0]["browser_secrets_hidden"], true);
+        let mut invalid = json!({"kind":"agent", "name":"helper", "before":"browser_secrets = [\"bank\"]", "after":null});
+        hide_browser_secrets(&mut invalid);
+        assert_eq!(invalid["before"], Value::Null);
     }
 
     #[test]
@@ -622,6 +700,15 @@ mod tests {
         assert!(p[0].contains("Browser automation"), "{p:?}");
         assert!(escalation(&driver, &driver).is_empty());
         assert!(escalation(&driver, &all).is_empty());
+    }
+
+    #[test]
+    fn escalation_refuses_login_names_the_proposer_lacks() {
+        let owner = agent("permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n");
+        let other = agent("permissions {\n browser = true\n browser_secrets = [\"mail\"]\n}\n");
+        assert!(!escalation(&other, &owner).is_empty());
+        assert!(!escalation(&agent(""), &owner).is_empty());
+        assert!(escalation(&owner, &owner).is_empty());
     }
 
     #[test]

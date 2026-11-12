@@ -824,6 +824,15 @@ fn not_connected_reason() -> string {
 // Send the vault's change to note `id`. `created` for an after_create run. Answers "" when
 // Google took a change, or why nothing was sent.
 fn push(id: string, created: bool) -> Result[string, string] {
+    // A replayed event job must not repeat an interrupted Outbox write. Keep the user's
+    // event and one-shot flag intact until an explicit Outbox retry makes it sending again.
+    let interrupted = vault::query("from outbox where kind == \"event\" && status == \"failed\"")?
+    for row in interrupted {
+        let f = row.get("fields").unwrap_or(Value::Null)
+        if (text_of(f, "event") == id || text_of(f, "result") == id) && text_of(f, "interrupted_at") != "" {
+            return Ok("")
+        }
+    }
     let note = match vault::get(id) {
         Ok(n) => n,
         Err(_) => return Ok("The event is no longer in the vault."),
@@ -957,7 +966,7 @@ fn after_update(event: Value) -> Result[(), string] {
 // The Outbox items that are sending a change to event note `id`: an `event` item whose `event`
 // or `result` is the note and whose status is `sending`.
 fn sending_items(id: string) -> List[string] {
-    let rows = match vault::query("from outbox where kind == \"event\" && status == \"sending\"") {
+    let rows = match vault::query("from outbox where kind == \"event\" && (status == \"sending\" || status == \"failed\")") {
         Ok(rows) => rows,
         Err(e) => {
             vault::log("The Outbox was not read: " + e)
@@ -967,7 +976,7 @@ fn sending_items(id: string) -> List[string] {
     let out: List[string] = []
     for row in rows {
         let f = row.get("fields").unwrap_or(Value::Null)
-        if text_of(f, "event") == id || text_of(f, "result") == id || (text_of(f, "event_action") == "delete" && text_of(f, "sent_ref") == id) {
+        if (text_of(f, "status") == "sending" || text_of(f, "interrupted_at") != "") && (text_of(f, "event") == id || text_of(f, "result") == id || (text_of(f, "event_action") == "delete" && text_of(f, "sent_ref") == id)) {
             out.push(text_of(row, "id"))
         }
     }
@@ -992,6 +1001,11 @@ fn sent_items(id: string, google_id: string) {
         let f = #{
             "sent_ref": Value::String(google_id),
             "sent_at": Value::String(now_text()),
+            "interrupted_at": Value::Null,
+        }
+        if text_of(item_fields, "status") == "failed" {
+            f["status"] = Value::String("sending")
+            f["error"] = Value::Null
         }
         match vault::get(id) {
             Ok(_) => { f["result"] = Value::String(id) },
@@ -1029,6 +1043,11 @@ fn failed_items(id: string, message: string) -> int {
 
 // Delete the note's event, or its one occurrence, in Google (D9).
 fn after_delete(event: Value) -> Result[(), string] {
+    // Outbox deletes have already succeeded at Google before the local write.
+    let author = event.get("author").unwrap_or(Value::Null)
+    if text_of(author, "kind") == "handler" && text_of(author, "name") == "outbox_send" {
+        return Ok(())
+    }
     let fields = event.get("note").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
     let google_ref = text_of(fields, "google_ref")
     if google_ref == "" {

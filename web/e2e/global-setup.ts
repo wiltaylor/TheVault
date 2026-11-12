@@ -2,7 +2,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
@@ -31,7 +31,8 @@ const web = fileURLToPath(new URL("..", import.meta.url));
 const repo = join(web, "..");
 
 function binary(env: string, name: string): string {
-  const path = process.env[env] ?? join(repo, "target", "debug", name);
+  const target = resolve(repo, process.env.CARGO_TARGET_DIR ?? "target");
+  const path = process.env[env] ?? join(target, "debug", name);
   if (!existsSync(path)) {
     throw new Error(`${path} is missing. Run \`cargo build -p server -p testkit --bins\`, or set ${env}.`);
   }

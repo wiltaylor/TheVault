@@ -43,7 +43,7 @@ use crate::{Error, Event, Input, NoteChange, Result, Saved, Writer, first, note_
 pub const DRAFTED_BY_USER: &str = "user";
 
 /// The fields the send handlers and the syncs write.
-pub const SEND_FIELDS: [&str; 4] = ["sent_ref", "result", "error", "sent_at"];
+pub const SEND_FIELDS: [&str; 5] = ["sent_ref", "result", "error", "sent_at", "interrupted_at"];
 
 /// The fields every write may change, which the writer keeps itself.
 const KEPT: [&str; 3] = ["created", "updated", "archived"];
@@ -494,7 +494,7 @@ impl Writer {
         &self,
         ty: &TypeDef,
         path: &str,
-        doc: &Doc,
+        doc: &mut Doc,
         old: Option<&Doc>,
         author: &Author,
     ) -> Result<()> {
@@ -502,7 +502,16 @@ impl Writer {
             return Ok(());
         }
         match outbox_rule(doc, old, author, &|name| self.may_send_without_review(name)) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // The user retries without writing the handler-owned marker themselves.
+                if matches!(author, Author::Session(_) | Author::Token(_))
+                    && text(doc, "status") == Some("ready")
+                    && old.is_some_and(|d| text(d, "status") == Some("failed"))
+                {
+                    doc.fields.retain(|(name, _)| name != "interrupted_at");
+                }
+                Ok(())
+            }
             Err(message) => Err(Error::Invalid(Invalid {
                 file: path.to_owned(),
                 issues: vec![Issue::new("status", message)],
@@ -633,7 +642,12 @@ fn outbox_rule(
     let status = text(doc, "status").unwrap_or("");
     let was = old.map(|o| text(o, "status").unwrap_or("")).unwrap_or("");
     match author {
-        Author::Session(_) | Author::Token(_) => Ok(()),
+        Author::Session(_) | Author::Token(_) => {
+            if doc.field("interrupted_at") != old.and_then(|d| d.field("interrupted_at")) {
+                return Err("only the send handlers may write interrupted_at".to_owned());
+            }
+            Ok(())
+        }
         Author::Agent(name) | Author::AgentMail(name) => {
             let label = format!("agent {name}");
             match old {
@@ -709,7 +723,13 @@ fn outbox_rule(
                     "{label} may not create Outbox items: the user or an agent drafts them"
                 ));
             };
-            if was != status && !SEND_TRANSITIONS.contains(&(was, status)) {
+            let late_confirmation = name == "outbox_send" || name == "google_event";
+            let late_confirmation = late_confirmation
+                && was == "failed"
+                && status == "sending"
+                && text(old, "interrupted_at").is_some_and(|s| !s.is_empty())
+                && text(doc, "sent_at").is_some_and(|s| !s.is_empty());
+            if was != status && !SEND_TRANSITIONS.contains(&(was, status)) && !late_confirmation {
                 return Err(format!(
                     "{label} may move an Outbox item only from ready to sending, and from \
                      sending to failed, not from {was} to {status}"

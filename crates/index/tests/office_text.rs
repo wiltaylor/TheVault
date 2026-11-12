@@ -5,6 +5,50 @@ use index::{Extracted, MAX_UNZIPPED_BYTES, TextKind, extract_text};
 
 use crate::support::{office, when_free};
 
+#[test]
+fn bound_extraction_revision_failure_and_replacement_are_fail_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(dir.path()).unwrap();
+    let mut idx = index::Index::open(&vault).unwrap();
+    let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    assert!(index::bound_asset_text(&vault, id).is_none());
+    let hash = index::text_digest(b"source");
+    idx.set_bound_asset_text(id, &hash, &Extracted::Text("text".into()))
+        .unwrap();
+    let first = index::bound_asset_text(&vault, id).unwrap();
+    assert_eq!(first["source_hash"], hash);
+    assert_eq!(first["text"], "text");
+    std::fs::write(
+        vault.server_dir().join(format!("asset-text/v1/{id}.txt")),
+        "changed",
+    )
+    .unwrap();
+    assert!(
+        index::bound_asset_text(&vault, id).is_none(),
+        "text hash was not checked"
+    );
+    idx.set_bound_asset_text(id, &hash, &Extracted::Text("text".into()))
+        .unwrap();
+    assert_ne!(
+        index::bound_asset_text(&vault, id).unwrap()["revision"],
+        first["revision"]
+    );
+    idx.set_asset_text(id, &Extracted::Text("replacement".into()))
+        .unwrap();
+    assert!(index::bound_asset_text(&vault, id).is_none());
+    idx.set_bound_asset_text(id, &hash, &Extracted::Failed("bad input".into()))
+        .unwrap();
+    assert!(index::bound_asset_text(&vault, id).is_none());
+    idx.set_bound_asset_text(id, &hash, &Extracted::Text("recovered".into()))
+        .unwrap();
+    assert_eq!(
+        index::bound_asset_text(&vault, id).unwrap()["text"],
+        "recovered"
+    );
+    idx.forget_asset_text(id);
+    assert!(index::bound_asset_text(&vault, id).is_none());
+}
+
 fn text(kind: TextKind, bytes: Vec<u8>) -> String {
     match when_free(|| extract_text(kind, bytes.clone())) {
         Extracted::Text(t) => t,

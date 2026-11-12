@@ -359,7 +359,9 @@ Event: create of note 01JB8Z0Q6W4ZK3V9T1M5XH7N2C (type email, title "Invoice 42"
 
 A run starts once the note has been quiet for 30 seconds: several changes to one note within that time make one run, with the last change. A condition that no longer matches by then, or a note gone by then, starts nothing. A trigger with no `type` does not fire for `agent_thread` or `agent_memory` notes; name the type to watch threads or memories.
 
-Note events fire on the home server only, after the change is written. A change made in the desktop or Android app fires when it reaches the server by sync. The apps themselves never run triggers.
+Note events fire on the home server only, after the change is written. A change made in the desktop or Android app fires when it reaches the server by sync. The apps themselves never run triggers. These autonomous triggers keep the agent's unattended scope, including when a paired device's note write fires them.
+
+Mention runs instead carry the scope recorded when their call id was issued. Paired device calls cap direct changes at write, even with confirmations off: admin-level changes stay proposals and require an admin or session to apply. Session-issued calls keep the agent's scope. Older device call ids also default to write.
 
 ### Calls from notes
 

@@ -40,6 +40,7 @@ import { MemoryProposalCard, memoryHref } from "./MemoryProposalCard";
 import { accountChoiceLabel, accountFor, usedPercent } from "./accounts";
 import { blockLines, lineDiff } from "./diff";
 import { DownloadCard } from "./DownloadCard";
+import { SecretCard } from "./SecretCard";
 import { Markdown } from "./markdown";
 import { NewReplyMark, RunningMark } from "./RunningMark";
 import { TaxonomyProposalCard } from "./TaxonomyProposalCard";
@@ -1530,6 +1531,7 @@ function PartView(props: { part: Part; parts: readonly Part[]; turn: number; ind
         <Match when={props.part.kind === "task_proposal" && props.part}>{(p) => <TaskProposalCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "applied" && props.part}>{(p) => <AppliedCard applied={p().applied} />}</Match>
         <Match when={props.part.kind === "download" && props.part}>{(p) => <DownloadCard part={p()} turn={props.turn} index={props.index} />}</Match>
+        <Match when={props.part.kind === "browser_secret" && props.part}>{(p) => <SecretCard part={p()} turn={props.turn} index={props.index} />}</Match>
         <Match when={props.part.kind === "notice" && props.part}>{(p) => <Notice part={p()} />}</Match>
         <Match when={props.part.kind === "compaction" && props.part}>
           {(p) => (

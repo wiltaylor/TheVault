@@ -102,6 +102,7 @@ mod auth;
 mod batch;
 mod brave;
 mod browser;
+mod browser_redaction;
 pub mod classifiers;
 mod defs;
 mod devices;
@@ -249,6 +250,7 @@ fn build() -> Built {
         .get("/api/schema", inspect::schema)
         .get("/api/notes", notes::list)
         .get("/api/agent-safety/held", notes::held_agent_notes)
+        .get("/api/agent-safety/evidence/{id}", notes::safety_evidence)
         .post("/api/notes", notes::create)
         .get("/api/notes/{id}", notes::read)
         .put("/api/notes/{id}", notes::update)

@@ -167,7 +167,7 @@ fn after_update(note: Value) -> Result[(), string] {
     let previous = note.get("previous").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
     // Reference unlinking happens before the deleted event's after_delete handler runs.
     // Catch a pending update here while the old target is still in the payload.
-    if text_of(fields, "kind") == "event" && text_of(fields, "status") == "sending" && text_of(fields, "event_action") != "delete" &&
+    if text_of(fields, "kind") == "event" && (text_of(fields, "status") == "sending" || (text_of(fields, "status") == "failed" && text_of(fields, "interrupted_at") != "")) && text_of(fields, "event_action") != "delete" &&
         ((text_of(previous, "event") != "" && text_of(fields, "event") == "") ||
          (text_of(previous, "result") != "" && text_of(fields, "result") == "")) {
         vault::patch(text_of(note, "id"), Value::Map(#{ "status": Value::String("failed"), "error": Value::String("The event was deleted before this change was sent.") }), "")?
@@ -179,6 +179,9 @@ fn after_update(note: Value) -> Result[(), string] {
 fn handle(note: Value) -> Result[(), string] {
     let status = text_of(fields_of(note), "status")
     if status == "sending" {
+        if text_of(fields_of(note), "kind") == "event" && text_of(fields_of(note), "event_action") == "delete" {
+            return reconcile_delete(note)
+        }
         return settle(text_of(note, "id"))
     }
     if status != "ready" {
@@ -194,7 +197,7 @@ fn handle(note: Value) -> Result[(), string] {
         return Ok(())
     }
     // Claim the item against the version read, so it is sent once.
-    let claim = Value::Map(#{ "status": Value::String("sending"), "error": Value::Null })
+    let claim = Value::Map(#{ "status": Value::String("sending"), "error": Value::Null, "interrupted_at": Value::Null })
     match vault::patch(id, claim, text_of(item, "version")) {
         Ok(_) => {},
         Err(e) => {
@@ -224,6 +227,34 @@ fn handle(note: Value) -> Result[(), string] {
 
 // Remove item `id` once it was sent and its copy is linked (outbox X14). An item already gone,
 // or changed since it was read, is left: a later run, or the sweep, removes it.
+// Recovery never calls a provider write. A Gmail id confirms a completed send, but an SMS
+// command id only confirms handoff to the phone. Event confirmation is written by write-back.
+fn reconcile_send(payload: Value) -> Result[(), string] {
+    let id = text_of(payload, "id")
+    let item = match vault::get(id) {
+        Ok(n) => n,
+        Err(_) => return Ok(()),
+    }
+    let f = fields_of(item)
+    if text_of(f, "status") != "sending" { return Ok(()) }
+    let kind = text_of(f, "kind")
+    if text_of(f, "sent_at") != "" {
+        return settle(id)
+    }
+    if kind == "email" && text_of(f, "sent_ref") != "" {
+        vault::patch(id, Value::Map(#{ "sent_at": Value::String(rfc3339(vault::now())) }), text_of(item, "version"))?
+        return settle(id)
+    }
+    let target = text_of(f, "title")
+    if kind == "sms" { target = text_of(f, "phone") }
+    if kind == "email" {
+        target = fmt("{}", f.get("to").unwrap_or(Value::Null))
+    }
+    let error = "The " + kind + " send to " + target + " was interrupted; check before retrying."
+    vault::patch(id, Value::Map(#{ "status": Value::String("failed"), "error": Value::String(error), "interrupted_at": Value::String(rfc3339(vault::now())) }), text_of(item, "version"))?
+    Ok(())
+}
+
 fn settle(id: string) -> Result[(), string] {
     let item = match vault::get(id) {
         Ok(n) => n,
@@ -328,8 +359,36 @@ fn send_event(item: Value) -> Result[Sent, string] {
     }
     if text_of(fields, "event_action") == "delete" {
         vault::patch(text_of(item, "id"), Value::Map(#{ "sent_ref": Value::String(target) }), "")?
+        // Keep the note (and the retry target) until Google confirms the deletion.
+        let event_fields = fields_of(event)
+        let google_ref = text_of(event_fields, "google_ref")
+        if google_ref != "" {
+            match secrets::get("google_refresh_token") {
+                Ok(_) => {},
+                Err(_) => return Err("Google Calendar is not connected."),
+            }
+            let settings = secret_json("google_settings")
+            let endpoints = settings.get("endpoints").unwrap_or(Value::Null)
+            let token = access_token(endpoint(endpoints, "token", "https://oauth2.googleapis.com/token"))?
+            let calendar = text_of(event_fields, "calendar")
+            if calendar == "" {
+                calendar = text_of(settings, "default_calendar")
+            }
+            if calendar == "" {
+                calendar = "primary"
+            }
+            let url = endpoint(endpoints, "calendar", "https://www.googleapis.com/calendar/v3") +
+                "/calendars/" + encode(calendar) + "/events/" + encode(google_ref) + "?sendUpdates=all"
+            let reply = http::request("DELETE", url, #{ "authorization": "Bearer " + token, "accept": "application/json" }, "")?
+            if reply.status != 200 && reply.status != 204 && reply.status != 404 && reply.status != 410 {
+                let body = json::parse(reply.body).unwrap_or(Value::Null)
+                return Err(fmt("Google Calendar events.delete of {} answered {}: {}", google_ref, reply.status, text_of(body.get("error").unwrap_or(Value::Null), "message")))
+            }
+        }
+        // Persist confirmation before trash so a restart resumes only local work.
+        vault::patch(text_of(item, "id"), Value::Map(#{ "sent_at": Value::String(rfc3339(vault::now())) }), "")?
         vault::delete(target, text_of(event, "version"))?
-        return Ok(Sent { done: false, sent_ref: "", result: "" })
+        return Ok(Sent { done: true, sent_ref: target, result: "" })
     }
     let body = event.get("note").unwrap_or(Value::Null)
     let f: Map[string, Value] = match body.get("fields") {
@@ -425,6 +484,64 @@ fn send_sms(item: Value) -> Result[Sent, string] {
 }
 
 // ---- email (outbox X4) ----------------------------------------------------------------------
+
+// Recovery never sends DELETE. Only a user's ready transition may do that.
+fn reconcile_delete(payload: Value) -> Result[(), string] {
+    let id = text_of(payload, "id")
+    let item = match vault::get(id) {
+        Ok(n) => n,
+        Err(_) => return Ok(()),
+    }
+    let f = fields_of(item)
+    if text_of(f, "status") != "sending" || text_of(f, "kind") != "event" || text_of(f, "event_action") != "delete" {
+        return Ok(())
+    }
+    match recover_delete(item, payload.get("target_trashed").unwrap_or(Value::Bool(false))) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            vault::patch(id, Value::Map(#{ "status": Value::String("failed"), "error": Value::String("The delete was interrupted; retry. " + e) }), "")?
+            Ok(())
+        },
+    }
+}
+
+fn recover_delete(item: Value, trashed: Value) -> Result[(), string] {
+    let f = fields_of(item)
+    let target = text_of(f, "sent_ref")
+    if target == "" { target = text_of(f, "event") }
+    if target == "" { target = text_of(f, "result") }
+    if target == "" { return Err("The event target is missing.") }
+    let id = text_of(item, "id")
+    if trashed == Value::Bool(true) {
+        vault::patch(id, Value::Map(#{ "sent_ref": Value::String(target), "sent_at": Value::String(rfc3339(vault::now())) }), "")?
+        return settle(id)
+    }
+    let event = vault::get(target)?
+    let ef = fields_of(event)
+    if text_of(f, "sent_at") == "" && text_of(ef, "google_ref") != "" {
+        match secrets::get("google_refresh_token") {
+            Ok(_) => {},
+            Err(_) => return Err("Google Calendar is not connected."),
+        }
+        let settings = secret_json("google_settings")
+        let endpoints = settings.get("endpoints").unwrap_or(Value::Null)
+        let token = access_token(endpoint(endpoints, "token", "https://oauth2.googleapis.com/token"))?
+        let calendar = text_of(ef, "calendar")
+        if calendar == "" { calendar = text_of(settings, "default_calendar") }
+        if calendar == "" { calendar = "primary" }
+        let url = endpoint(endpoints, "calendar", "https://www.googleapis.com/calendar/v3") + "/calendars/" + encode(calendar) + "/events/" + encode(text_of(ef, "google_ref"))
+        let reply = http::request("GET", url, #{ "authorization": "Bearer " + token, "accept": "application/json" }, "")?
+        let body = json::parse(reply.body).unwrap_or(Value::Null)
+        if reply.status != 404 && reply.status != 410 && !(reply.status == 200 && text_of(body, "status") == "cancelled") {
+            return Err(fmt("Google Calendar has not confirmed deletion ({}).", reply.status))
+        }
+    } else if text_of(f, "sent_at") == "" {
+        return Err("The local deletion was not confirmed.")
+    }
+    vault::patch(id, Value::Map(#{ "sent_ref": Value::String(target), "sent_at": Value::String(rfc3339(vault::now())) }), "")?
+    vault::delete(target, text_of(event, "version"))?
+    settle(id)
+}
 
 fn endpoint(endpoints: Value, key: string, fallback: string) -> string {
     let url = text_of(endpoints, key)

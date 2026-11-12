@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -38,11 +38,10 @@ test('cleanup requires recorded PID identity, start time, home and serial', () =
   assert.match(script, /trap cleanup EXIT/);
 });
 
-test('publish requires the check job', () => {
-  const workflow = read('.github/workflows/release-train.yml');
-  assert.match(workflow, /publish:\n    needs: \[version, check, desktop, android\]/);
-  assert.match(workflow, /\.\/dev just check \|\| status=\$\?/);
-  assert.match(workflow, /exit "\$status"/);
+test('GitHub train is removed and local release requires the cut evidence', () => {
+  assert.equal(existsSync('.github/workflows/release-train.yml'), false);
+  assert.match(read('scripts/release/release.py'), /tested-at-cut must name the frozen SHA/);
+  assert.match(read('.just/release/mod.just'), /gate-dev:\n\tjust check/);
 });
 
 test('device bundle includes the harness data files and badging tool', () => {
@@ -51,10 +50,12 @@ test('device bundle includes the harness data files and badging tool', () => {
   assert.match(script, /cp "\$tools\/aapt2"/);
 });
 
-test('schedule runbook takes a nonblocking device lock and forbids silent retries', () => {
+test('cut runbook preserves the device lock and disables nightly schedules', () => {
   const docs = read('AGENTS.md');
-  assert.match(docs, /flock -n 9/);
+  assert.match(docs, /The nightly schedules are off/);
+  assert.match(docs, /\/home\/agent\/\.thevault-emulator.lock/);
   assert.match(docs, /skipped: emulator busy/);
-  assert.match(docs, /Never silently retry/);
+  assert.match(docs, /A skipped release check is not a passed cut/);
   assert.match(docs, /diagnosis comment/);
+  assert.doesNotMatch(docs, /Nightly schedule runbook/);
 });

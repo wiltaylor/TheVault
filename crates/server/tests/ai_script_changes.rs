@@ -69,6 +69,10 @@ fn existing_tool_rebindings_wait_for_apply() {
     api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
     api.ok("PUT", "/api/scripts/copy", json!({"source": STAMP}));
     api.ok("PUT", "/api/tools/echo", json!({"wcl": ECHO}));
+    let before = api.get("/api/tools/echo")["wcl"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     api.ok(
         "PUT",
         "/api/integrations/ai/settings",
@@ -78,6 +82,7 @@ fn existing_tool_rebindings_wait_for_apply() {
         ECHO.replace("stamp", "copy"),
         ECHO.replace("call", "run"),
         ECHO.replace("echo.example.com", "other.example.com"),
+        format!("{ECHO}secrets = [\"user_key\"]\n"),
     ] {
         let events = api.one(
             &fake,
@@ -86,7 +91,17 @@ fn existing_tool_rebindings_wait_for_apply() {
         );
         assert!(find(&events, "applied").is_none(), "{events:?}");
         assert!(find(&events, "tool_proposal").is_some(), "{events:?}");
+        assert_eq!(api.get("/api/tools/echo")["wcl"], before);
     }
+
+    let edited = before.replace("Echo the parameters.", "Updated description.");
+    let events = api.one(
+        &fake,
+        "propose_tool_change",
+        json!({"name": "echo", "wcl": edited, "script_source": null}),
+    );
+    assert!(find(&events, "applied").is_some(), "{events:?}");
+    assert_eq!(api.get("/api/tools/echo")["wcl"], edited);
 }
 
 #[test]

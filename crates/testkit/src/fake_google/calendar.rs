@@ -374,6 +374,7 @@ pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
                 reply
             }
             "DELETE" => match cal.find(c, id) {
+                _ if cal.write_error.is_some() => write_refusal(&cal, request).unwrap(),
                 None => super::error(404, "NOT_FOUND", "Not Found"),
                 Some(e) if e["status"] == "cancelled" => {
                     super::error(410, "GONE", "Resource has been deleted")

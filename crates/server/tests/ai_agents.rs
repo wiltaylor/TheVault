@@ -437,6 +437,36 @@ fn agent_tools_list_read_and_propose_create_change_and_delete_that_apply() {
 }
 
 #[test]
+fn browser_secret_switch_changes_always_wait_for_owner_apply() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    let free = "permissions { confirm { agents = false\n secrets = false\n}\n}\n";
+    api.put_agent("clerk", free);
+    api.put_agent("helper", "");
+    let events = api.one(
+        &fake,
+        Some("clerk"),
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":free}),
+    );
+    let proposal = last(&events, "agent_proposal");
+    assert_eq!(proposal["grants_run_code"], true);
+    assert!(!api.agent_wcl("helper").unwrap().contains("secrets"));
+    let token = api.token_of("agent-clerk", "admin");
+    assert_eq!(api.apply_as(&token, proposal).0, StatusCode::FORBIDDEN);
+    assert_eq!(api.apply(proposal).0, StatusCode::OK);
+    assert!(api.agent_wcl("helper").unwrap().contains("secrets"));
+    let events = api.one(
+        &fake,
+        Some("helper"),
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":free}),
+    );
+    assert!(!events.iter().any(|(event, _)| event == "agent_proposal"));
+}
+
+#[test]
 fn an_agent_cannot_give_another_agent_more_than_it_has_or_change_itself() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
@@ -577,6 +607,437 @@ fn agent_proposal_apply_rechecks_change_permission_escalation() {
     let (status, result) = api.apply(&proposal);
     assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
     assert!(api.agent_wcl("helper").is_none());
+}
+
+#[test]
+fn browser_secret_proposal_apply_rechecks_active_names() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    let response = api
+        .client
+        .put(api.server.url("/api/secrets/bank"))
+        .bearer_auth(api.token())
+        .json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    api.put_agent(
+        "clerk",
+        &CLERK.replace(
+            "tools = [",
+            "browser = true\n browser_secrets = [\"bank\"]\n tools = [",
+        ),
+    );
+    let helper = HELPER.replace(
+        "tools = [",
+        "browser = true\n browser_secrets = [\"bank\"]\n tools = [",
+    );
+    let events = api.one(
+        &fake,
+        Some("clerk"),
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":helper}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    let response = api
+        .client
+        .delete(api.server.url("/api/secrets/bank"))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (status, result) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
+    assert!(api.agent_wcl("helper").is_none());
+}
+
+#[test]
+fn browser_secrets_apply_narrowing_revokes_removed_confirmations() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    for name in ["bank", "mail"] {
+        let response = api
+            .client
+            .put(api.server.url(&format!("/api/secrets/{name}")))
+            .bearer_auth(api.token())
+            .json(&json!({"kind":"login", "username":"test", "password":"made-up", "origins":[]}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    api.put_agent(
+        "clerk",
+        &CLERK.replace(
+            "tools = [",
+            "browser = true\n browser_secrets = [\"bank\"]\n tools = [",
+        ),
+    );
+    let broad = HELPER.replace(
+        "tools = [",
+        "browser = true\n browser_secrets = [\"bank\", \"mail\"]\n tools = [",
+    );
+    let narrow = broad.replace("[\"bank\", \"mail\"]", "[\"bank\"]");
+    api.put_agent("helper", &broad);
+    let events = api.one(
+        &fake,
+        Some("clerk"),
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":narrow}),
+    );
+    let (status, result) = api.apply(last(&events, "agent_proposal"));
+    assert_eq!(status, StatusCode::OK, "{result}");
+    std::fs::write(api.server.vault_path().join("agents/helper.wcl"), broad).unwrap();
+    let response = api
+        .client
+        .get(api.server.url("/api/agents/helper"))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.json::<Value>().unwrap()["browser_secrets_inactive"],
+        json!(["mail"])
+    );
+}
+
+#[test]
+fn browser_secrets_proposal_events_and_thread_reads_hide_files_for_non_managers() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    api.put_agent("clerk", CLERK);
+    api.put_agent(
+        "helper",
+        &HELPER.replace(
+            "tools = [",
+            "browser = true\n browser_secrets = [\"bank\"]\n tools = [",
+        ),
+    );
+    let write = api.token_of("writer", "write");
+    let read = api.token_of("reader", "read");
+    for tool in ["propose_agent_delete", "propose_agent_change"] {
+        let response = api
+            .client
+            .post(api.server.url("/api/agents/clerk/threads"))
+            .bearer_auth(&write)
+            .json(&json!({}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let thread = response.json::<Value>().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let input = if tool == "propose_agent_delete" {
+            json!({"name":"helper"})
+        } else {
+            json!({"name":"helper", "wcl":HELPER})
+        };
+        fake.push(AnthropicMessage::new().tool_use("toolu_x", tool, input));
+        fake.push(AnthropicMessage::text("Done."));
+        let response = api
+            .client
+            .post(api.server.url("/api/ai/chat"))
+            .bearer_auth(&write)
+            .json(&json!({"agent":"clerk", "thread":thread, "messages":[user("Do it.")]}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let events = read_events(response);
+        let proposal = last(&events, "agent_proposal");
+        assert!(!proposal["before"].as_str().unwrap().contains("bank"));
+        assert_eq!(proposal["browser_secrets_hidden"], true);
+        let path = format!("/api/agents/clerk/threads/{thread}");
+        let response = api
+            .client
+            .get(api.server.url(&path))
+            .bearer_auth(&read)
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let data = response.json::<Value>().unwrap();
+        assert_eq!(data["id"], thread);
+        assert_eq!(data["proposals"].as_array().unwrap().len(), 1);
+        assert!(
+            !data["proposals"][0]["data"]["before"]
+                .as_str()
+                .unwrap()
+                .contains("bank")
+        );
+        assert_eq!(data["proposals"][0]["data"]["browser_secrets_hidden"], true);
+        let response = api
+            .client
+            .get(api.server.url(&path))
+            .bearer_auth(api.token())
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.json::<Value>().unwrap()["proposals"][0]["data"]["before"]
+                .as_str()
+                .unwrap()
+                .contains("bank")
+        );
+    }
+}
+
+#[test]
+fn browser_secrets_thread_note_routes_and_events_hide_raw_transcripts() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    api.put_agent("clerk", CLERK);
+    api.put_agent(
+        "helper",
+        &HELPER.replace(
+            "tools = [",
+            "browser = true\n browser_secrets = [\"bank\"]\n tools = [",
+        ),
+    );
+    let write = api.token_of("writer", "write");
+    let read = api.token_of("reader", "read");
+    let external = api.token_of("agent-probe", "write");
+    let response = api
+        .client
+        .post(api.server.url("/api/agents/clerk/threads"))
+        .bearer_auth(&write)
+        .json(&json!({}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let thread = response.json::<Value>().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_x",
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":HELPER}),
+    ));
+    fake.push(AnthropicMessage::text("Done."));
+    let response = api
+        .client
+        .post(api.server.url("/api/ai/chat"))
+        .bearer_auth(&write)
+        .json(&json!({"agent":"clerk", "thread":thread, "messages":[user("Do it.")]}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!response.text().unwrap().contains("bank"));
+    let path = format!("/api/notes/{thread}");
+    let response = api
+        .client
+        .get(api.server.url(&path))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.text().unwrap().contains("bank"));
+    let history: Value = api
+        .client
+        .get(api.server.url(&format!("{path}/history")))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let mut leaks = Vec::new();
+    for (label, token) in [("read", &read), ("write", &write), ("agent", &external)] {
+        let mut paths = vec![
+            path.clone(),
+            "/api/sync/changes?since=0&limit=5000".to_owned(),
+            "/api/query?q=from%20agent_thread".to_owned(),
+        ];
+        for version in history["versions"].as_array().unwrap() {
+            paths.push(format!(
+                "{path}/history/{}",
+                version["version"].as_str().unwrap()
+            ));
+        }
+        for route in paths {
+            let response = api
+                .client
+                .get(api.server.url(&route))
+                .bearer_auth(token)
+                .send()
+                .unwrap();
+            if label == "agent" && (route.contains("/history/") || route.starts_with("/api/sync/"))
+            {
+                assert_eq!(response.status(), StatusCode::FORBIDDEN);
+                continue;
+            }
+            assert_eq!(response.status(), StatusCode::OK, "{label} {route}");
+            if response.text().unwrap().contains("bank") {
+                leaks.push(format!("{label} {route}"));
+            }
+        }
+    }
+    // The model's get_note tool must not recover the private proposal from the same note.
+    api.put_agent(
+        "clerk",
+        &CLERK.replace("types = [\"memo\"]", "types = [\"memo\", \"agent_thread\"]"),
+    );
+    fake.push(AnthropicMessage::new().tool_use("toolu_read", "get_note", json!({"id":thread})));
+    fake.push(AnthropicMessage::text("Read."));
+    api.chat_as(&write, Some("clerk"));
+    let requests = fake.message_requests();
+    let last = requests.last().unwrap().json();
+    assert!(last.to_string().contains(&thread));
+    if last.to_string().contains("bank") {
+        leaks.push("agent get_note".to_owned());
+    }
+    assert!(leaks.is_empty(), "Login names leaked through {leaks:?}");
+}
+
+#[test]
+fn browser_secrets_query_filter_oracle_cannot_recover_hidden_names() {
+    let mut api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    let clerk = CLERK
+        .replace("\"get_note\",", "\"query_notes\", \"get_note\",")
+        .replace("types = [\"memo\"]", "types = [\"memo\", \"agent_thread\"]");
+    api.put_agent("clerk", &clerk);
+    api.put_agent(
+        "helper",
+        &HELPER.replace(
+            "tools = [",
+            "browser = true\n browser_secrets = [\"bank\"]\n tools = [",
+        ),
+    );
+    let writer = api.token_of("writer", "write");
+    let reader = api.token_of("reader", "read");
+    let external = api.token_of("agent-oracle", "write");
+    let made: Value = api
+        .client
+        .post(api.server.url("/api/agents/clerk/threads"))
+        .bearer_auth(&writer)
+        .json(&json!({}))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let thread = made["id"].as_str().unwrap();
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_p",
+        "propose_agent_change",
+        json!({"name":"helper","wcl":HELPER}),
+    ));
+    fake.push(AnthropicMessage::text("Done."));
+    let response = api
+        .client
+        .post(api.server.url("/api/ai/chat"))
+        .bearer_auth(&writer)
+        .json(&json!({"agent":"clerk","thread":thread,"messages":[user("Do it.")]}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    read_events(response);
+    let mut leaks = Vec::new();
+    for token in [&reader, &writer, &external] {
+        for suffix in ["", " sort transcript", " group by transcript"] {
+            let mut counts = Vec::new();
+            for needle in ["bank", "zzqxv"] {
+                let query = format!(
+                    "from agent_thread where contains(transcript, {}){suffix}",
+                    json!(needle)
+                );
+                let response = api
+                    .client
+                    .get(api.server.url("/api/query"))
+                    .bearer_auth(token)
+                    .query(&[("q", query)])
+                    .send()
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                counts.push(response.json::<Value>().unwrap()["total"].clone());
+            }
+            if counts[0] != counts[1] {
+                leaks.push(format!("query {suffix}"));
+            }
+        }
+        let mut counts = Vec::new();
+        for needle in ["bank", "zzqxv"] {
+            let response = api
+                .client
+                .get(api.server.url("/api/search"))
+                .bearer_auth(token)
+                .query(&[("q", needle)])
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            counts.push(response.json::<Value>().unwrap()["total"].clone());
+        }
+        if counts[0] != counts[1] {
+            leaks.push("search".to_owned());
+        }
+    }
+    for needle in ["bank", "zzqxv"] {
+        let query = format!(
+            "from agent_thread where contains(transcript, {})",
+            json!(needle)
+        );
+        let events = api.one(&fake, Some("clerk"), "query_notes", json!({"query":query}));
+        if !last(&events, "tool_result")["summary"]["notes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+        {
+            leaks.push(format!("query_notes {needle}"));
+        }
+    }
+    let prefix = "browser_secrets = [\\\"b";
+    let response: Value = api
+        .client
+        .get(api.server.url("/api/query"))
+        .bearer_auth(&reader)
+        .query(&[(
+            "q",
+            format!(
+                "from agent_thread where contains(transcript, {})",
+                json!(prefix)
+            ),
+        )])
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    if response["total"] != 0 {
+        leaks.push("prefix extraction".to_owned());
+    }
+    assert!(leaks.is_empty(), "hidden-name oracle: {leaks:?}");
+    let raw = api
+        .client
+        .get(api.server.url(&format!("/api/notes/{thread}")))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap();
+    let raw: Value = raw.json().unwrap();
+    assert!(raw.to_string().contains("bank"));
+    // Simulate a pre-upgrade index retaining the raw field at the current generation.
+    let db = api.server.vault_path().join(".vault/index.db");
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.busy_timeout(Duration::from_secs(10)).unwrap();
+        conn.execute(
+            "UPDATE notes SET data=?1 WHERE id=?2",
+            rusqlite::params![raw["note"]["fields"].to_string(), thread],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 5).unwrap();
+    }
+    api.server.restart();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 6);
+    let data: String = conn
+        .query_row("SELECT data FROM notes WHERE id=?1", [thread], |r| r.get(0))
+        .unwrap();
+    assert!(!data.contains("bank"));
 }
 
 #[test]

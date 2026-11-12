@@ -203,6 +203,7 @@ fn safety_rest_read_route_inventory() {
     let expected = [
         "/agent/install.sh",
         "/api/activity",
+        "/api/agent-safety/evidence/{id}",
         "/api/agent-safety/held",
         "/api/agents",
         "/api/agents/calls/{call}",
@@ -1241,6 +1242,239 @@ fn incoming_assets_allowed_email_rest_denies_html_and_attachment() {
 }
 
 #[test]
+fn attachment_envelope_provider_receives_text_and_aggregate_cap_skips_call() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    for (text, expected) in [
+        ("amount\n17\n".to_owned(), "allowed"),
+        ("x".repeat(128 * 1024), "held"),
+    ] {
+        let asset: Value = api
+            .client
+            .post(api.server.url("/api/assets?filename=invoice.csv"))
+            .bearer_auth(api.server.admin_token())
+            .body(text.clone())
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        decisions.push(safety_reply("allow"));
+        let note = api.send(
+            "POST",
+            "/api/notes?type=email",
+            json!({"note":{"fields":{
+                "title":"Invoice", "attachments":[asset["id"]], "sent":"2000-01-01T00:00:00Z"
+            }}}),
+        );
+        let visible = safety_wait(&api, note["id"].as_str().unwrap());
+        assert_eq!(visible["agent_safety"]["status"], expected);
+        let evidence = api.get(&format!(
+            "/api/agent-safety/evidence/{}",
+            note["id"].as_str().unwrap()
+        ));
+        assert_eq!(evidence["bytes"], evidence["envelope"].to_string().len());
+        assert_eq!(evidence["limit"], 131072);
+        assert_eq!(
+            evidence["estimated_input_tokens"],
+            evidence["envelope"].to_string().len().div_ceil(4)
+        );
+        assert_eq!(evidence["decision_current"], true);
+        assert_eq!(evidence["envelope"]["attachments"][0]["text"], text);
+        if expected == "held" {
+            assert_eq!(evidence["omissions"][0]["reason"], "over cap");
+        }
+        assert_eq!(decisions.requests().len(), 1);
+        let request: Value = serde_json::from_slice(&decisions.requests()[0].body).unwrap();
+        assert_eq!(request["state"]["envelope_version"], 1);
+        assert!(request["state"].to_string().contains("amount\\n17\\n"));
+        if expected == "allowed" {
+            assert_eq!(
+                visible["agent_safety"]["fingerprint"],
+                writer::agent_safety::envelope_fingerprint(&request["state"])
+            );
+        }
+        if expected == "held" {
+            assert_eq!(visible["agent_safety"]["reason"], "too_large");
+        }
+    }
+}
+
+#[test]
+fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    api.agent("reader", "label = \"Reader\"\nenabled = false\n");
+    let mut ids = Vec::new();
+    for (name, text) in [
+        ("invoice.csv", "amount\nCLEARED_INVOICE_17\n"),
+        ("original.html", "<p>WITHHELD_RAW_HTML_17</p>"),
+    ] {
+        let asset: Value = api
+            .client
+            .post(api.server.url(&format!("/api/assets?filename={name}")))
+            .bearer_auth(api.server.admin_token())
+            .body(text)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        ids.push(asset["id"].as_str().unwrap().to_owned());
+    }
+    decisions.push(safety_reply("allow"));
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Invoice", "attachments":[ids[0]], "html":ids[1], "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
+    assert_eq!(
+        safety_wait(&api, note["id"].as_str().unwrap())["agent_safety"]["status"],
+        "allowed"
+    );
+    let request: Value = serde_json::from_slice(&decisions.requests()[0].body).unwrap();
+    assert!(
+        !request["state"]
+            .to_string()
+            .contains("WITHHELD_RAW_HTML_17")
+    );
+    let token = api.external_agent_token();
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let evidence_url = api.server.url(&format!(
+        "/api/agent-safety/evidence/{}",
+        note["id"].as_str().unwrap()
+    ));
+    let owner_evidence: Value = api
+        .client
+        .get(&evidence_url)
+        .header("cookie", cookie)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(owner_evidence["decision_current"], true);
+    assert_eq!(
+        owner_evidence["omissions"][0]["reason"],
+        "HTML stays withheld"
+    );
+    assert!(owner_evidence.to_string().contains("CLEARED_INVOICE_17"));
+    assert!(!owner_evidence.to_string().contains("WITHHELD_RAW_HTML_17"));
+    assert_eq!(
+        api.client
+            .get(&evidence_url)
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
+    for scope in ["read", "write"] {
+        let limited = api.send(
+            "POST",
+            "/api/tokens",
+            json!({"name":format!("evidence-{scope}"),"scope":scope}),
+        );
+        assert_eq!(
+            api.client
+                .get(&evidence_url)
+                .bearer_auth(limited["secret"].as_str().unwrap())
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+    }
+    for id in &ids {
+        let url = api.server.url(&format!("/api/assets/{id}"));
+        assert_eq!(
+            api.client
+                .get(&url)
+                .bearer_auth(token["secret"].as_str().unwrap())
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+        assert!(
+            api.client
+                .get(&url)
+                .bearer_auth(api.server.admin_token())
+                .send()
+                .unwrap()
+                .status()
+                .is_success()
+        );
+        assert!(
+            api.client
+                .get(&url)
+                .header("cookie", cookie)
+                .send()
+                .unwrap()
+                .status()
+                .is_success()
+        );
+    }
+    api.agent("text_auditor", "label = \"Text auditor\"\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Read assets.\" }\n");
+    chat.push(
+        AnthropicMessage::new()
+            .tool_use("text_read", "read_asset", json!({"id":ids[0]}))
+            .tool_use("html_read", "read_asset", json!({"id":ids[1]})),
+    );
+    chat.push(AnthropicMessage::text("Done."));
+    api.memo("Text audit", "open");
+    api.advance("PT35S");
+    let requests = chat.message_requests();
+    assert_eq!(requests.len(), 2);
+    let delivered = requests[1].json().to_string();
+    assert!(delivered.contains("CLEARED_INVOICE_17"), "{delivered}");
+    assert!(!delivered.contains("WITHHELD_RAW_HTML_17"), "{delivered}");
+    assert!(!delivered.contains("image/png"), "{delivered}");
+}
+
+#[test]
+fn attachment_envelope_cap_is_aggregate_not_per_asset() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let asset: Value = api
+            .client
+            .post(api.server.url("/api/assets?filename=large.csv"))
+            .bearer_auth(api.server.admin_token())
+            .body("x".repeat(70 * 1024))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        ids.push(asset["id"].clone());
+    }
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Large attachments", "attachments":ids, "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
+    let visible = safety_wait(&api, note["id"].as_str().unwrap());
+    assert_eq!(visible["agent_safety"]["reason"], "too_large");
+    assert!(decisions.requests().is_empty());
+}
+
+#[test]
 fn incoming_assets_allowed_email_tools_and_script_deny_text() {
     let decisions = testkit::FakeDecisions::start();
     let chat = FakeAnthropic::start();
@@ -1524,6 +1758,30 @@ fn safety_only_session_can_release_reviewed_fingerprint_and_list_held() {
     let visible = safety_wait(&api, id);
     assert_eq!(visible["agent_safety"]["reason"], "prompt_injection");
     let release = format!("/api/notes/{id}/agent-safety/release");
+    let agent = api.external_agent_token();
+    let read = api.send(
+        "POST",
+        "/api/tokens",
+        json!({"name":"held-review-read", "scope":"read"}),
+    );
+    for token in [&agent, &read] {
+        for (method, path) in [
+            ("GET", "/api/agent-safety/held"),
+            ("POST", release.as_str()),
+        ] {
+            let response = api
+                .client
+                .request(method.parse().unwrap(), api.server.url(path))
+                .bearer_auth(token["secret"].as_str().unwrap())
+                .json(&json!({"fingerprint":visible["agent_safety"]["fingerprint"]}))
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), 403);
+            let body = response.text().unwrap();
+            assert!(!body.contains("Untrusted safety fixture"));
+            assert!(!body.contains(visible["agent_safety"]["fingerprint"].as_str().unwrap()));
+        }
+    }
     assert_eq!(
         api.request(
             "POST",

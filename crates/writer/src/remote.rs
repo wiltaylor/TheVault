@@ -352,7 +352,7 @@ impl Writer {
             }
             Err(_) => false,
         };
-        self.announce_definitions(&direct);
+        self.announce_definitions(&direct)?;
         Ok(loaded)
     }
 }

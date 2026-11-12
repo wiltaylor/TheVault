@@ -714,12 +714,17 @@ fn spawn_turn(
         prepared.log.as_ref().map(|l| l.id.clone()),
         &cfg.origin,
     );
+    let full_logins = crate::tasks::may_manage_login_secrets(&w, &cfg.owner).unwrap_or(false);
     let turn = Turn {
         writer: w,
         author: cfg.author,
         owner: cfg.owner,
         scope: cfg.scope,
-        out: Out { tx, stop },
+        out: Out {
+            tx,
+            stop,
+            full_logins,
+        },
         images: ai_assets::Images::default(),
         agent_name: cfg.agent_name,
         log: prepared.log.map(std::sync::Mutex::new),
@@ -1072,15 +1077,19 @@ pub(crate) fn receive(
 
 /// Where the events go. A send fails once the client has gone or the turn was stopped.
 struct Out {
+    full_logins: bool,
     tx: mpsc::Sender<Sent>,
     /// Turns true when the turn is stopped (`DELETE /api/ai/chat/turns/{turn}`).
     stop: watch::Receiver<bool>,
 }
 
 impl Out {
-    async fn send(&self, name: &str, data: Value) -> bool {
+    async fn send(&self, name: &str, mut data: Value) -> bool {
         if self.gone() {
             return false;
+        }
+        if !self.full_logins {
+            crate::ai_agents::hide_browser_secrets(&mut data);
         }
         let e = Sent {
             name: name.to_owned(),
@@ -1460,6 +1469,14 @@ fn setup(
     asks: bool,
 ) -> Result<Setup, AiError> {
     let state = w.state();
+    let mut effective_agent = agent.clone();
+    effective_agent.permissions.browser_secrets.retain(|name| {
+        agent.permissions.browser
+            && state
+                .browser_secret_active(&agent.name, name)
+                .unwrap_or(false)
+    });
+    let agent = &effective_agent;
     let settings = Settings::load(state)?;
     // The request's choice, made in the chat box, wins; without one the agent's account and
     // model, and then the default account and its model (agents G1, accounts A5). A model alone
@@ -1572,7 +1589,12 @@ fn setup(
             .browser
             .then(crate::ai_browser::BrowserBox::from_env)
             .flatten()
-            .map(|b| w.browser_profile(&agent.name).map(|id| b.with_profile(id)))
+            .map(|b| {
+                w.browser_profile(&agent.name).map(|id| {
+                    b.with_profile(id)
+                        .with_secret_browser(!agent.permissions.browser_secrets.is_empty())
+                })
+            })
             .transpose()
             .map_err(|e| AiError::new(ErrorKind::Unavailable, e.to_string()))?,
     })
@@ -2181,7 +2203,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2251,7 +2273,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2292,7 +2314,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: got.parts,
                     });
@@ -2324,7 +2346,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: got.parts,
                     });
@@ -2395,7 +2417,7 @@ impl Turn {
                     }
                     results.push(Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     });
@@ -2449,7 +2471,7 @@ impl Turn {
                 }
                 results.push(Content::ToolResult {
                     id: c.id,
-                    content: cut(&got.content, RESULT_LIMIT),
+                    content: got.content,
                     is_error: got.is_error,
                     parts: Vec::new(),
                 });
@@ -2467,13 +2489,27 @@ impl Turn {
                     }
                     results[at] = Content::ToolResult {
                         id: c.id,
-                        content: cut(&got.content, RESULT_LIMIT),
+                        content: got.content,
                         is_error: got.is_error,
                         parts: Vec::new(),
                     };
                 }
                 if self.out.gone() {
                     return;
+                }
+            }
+            for result in &mut results {
+                if let Content::ToolResult {
+                    content, is_error, ..
+                } = result
+                {
+                    match agent_threads::redact_tool_content(content) {
+                        Ok(redacted) => *content = cut(&redacted, RESULT_LIMIT),
+                        Err(_) => {
+                            *content = "The private transcript could not be redacted.".to_owned();
+                            *is_error = true;
+                        }
+                    }
                 }
             }
             added.push(Message::tool_results(results));
@@ -2609,7 +2645,19 @@ impl Turn {
         images_sent: usize,
     ) -> crate::ai_browser::BrowserOut {
         match call.name.as_str() {
-            "browser_run" => crate::ai_browser::run(b, &call.input).await,
+            "browser_fill_secret" => {
+                crate::ai_browser::secret_fill::call(
+                    b,
+                    self.writer.state(),
+                    &setup.agent,
+                    &call.id,
+                    &call.input,
+                    self.unattended,
+                    self.scope.allows(Scope::Write),
+                )
+                .await
+            }
+            "browser_run" => crate::ai_browser::run(b, &call.input, self.writer.state()).await,
             "browser_capture" => {
                 let direct = setup.direct.downloads;
                 crate::ai_browser::capture(self.writer.clone(), b, direct, &call.id, &call.input)
@@ -2617,7 +2665,15 @@ impl Turn {
             }
             "browser_file" => {
                 let may_send = images_sent < ai_assets::IMAGE_LIMIT;
-                crate::ai_browser::file(b, &call.id, &call.input, may_send, &self.images).await
+                crate::ai_browser::file(
+                    b,
+                    &call.id,
+                    &call.input,
+                    may_send,
+                    &self.images,
+                    self.writer.state(),
+                )
+                .await
             }
             _ => {
                 let direct = setup.direct.downloads;
@@ -3395,7 +3451,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "read_asset",
-            "Read an attached file by its asset id. An image (PNG, JPEG, GIF, WebP) comes back as the image itself, scaled down when large; a PDF, Word document (docx), spreadsheet (xlsx, xls, ods, csv) or text file as its text, cut at 40000 characters; anything else as its id, filename, media type and size. At most 8 images per question.",
+            "Read an attached file by its asset id. Incoming attachments return only extracted text cleared together with their note, never original files or images. Original HTML and uncleared attachments stay withheld. For local files, an image (PNG, JPEG, GIF, WebP) comes back as the image itself, scaled down when large; a PDF, Word document (docx), spreadsheet (xlsx, xls, ods, csv) or text file as its text, cut at 40000 characters; anything else as its id, filename, media type and size. At most 8 images per question.",
             json!({ "id": { "type": "string", "description": "The asset's 26-character id." } }),
         ),
         tool(
@@ -3958,7 +4014,7 @@ pub(crate) fn authorize_proposal(
             }
             _ => None,
         })
-        .or_else(|| p["agent"].as_str());
+        .or_else(|| p["agent"].as_str().filter(|s| !s.is_empty()));
     if let Some(name) = proposer {
         let agent = crate::ai_agents::agent_named(w, name)?.ok_or_else(|| {
             ApplyError::Refused(format!("The proposing agent {name} no longer exists."))
@@ -4056,6 +4112,9 @@ pub(crate) fn apply_change_with_admin(
         return Err(ApplyError::Invalid(format!("{event:?} is not a change")));
     }
     let op = p["op"].as_str().unwrap_or("update");
+    if op == "browser_secret" {
+        return crate::ai_browser::secret_fill::apply(w, author, p);
+    }
     if op == "download" && p["source"] == "browser" {
         return crate::ai_browser::apply_save(w, author, p);
     }
@@ -4169,6 +4228,9 @@ fn propose_or_read(
             }
             Vault::get(w, id)
                 .map(|mut note| {
+                    if agent_threads::redact_content(&mut note).is_err() {
+                        return ToolOut::error("The private transcript could not be redacted.");
+                    }
                     cut_strings(&mut note, BODY_LIMIT);
                     note["assets"] = json!(ai_assets::note_assets(w, &note["note"]));
                     let summary = json!({ "notes": [{
@@ -4786,8 +4848,7 @@ fn block_format() -> ToolOut {
     type_out(json!({ "format": block_format_text() }), Vec::new(), None)
 }
 
-/// Handler bindings are code grants, not ordinary type edits. Recompute from the WCL rather
-/// than trusting a flag in the proposal body.
+/// Compare parsed tool code bindings and grants rather than trusting a proposal flag.
 fn tool_binding_changed(p: &Value) -> bool {
     if p["op"] == "delete" {
         return false;
@@ -4808,6 +4869,8 @@ fn tool_binding_changed(p: &Value) -> bool {
         || before.allow_domains != after.allow_domains
 }
 
+/// Handler bindings are code grants, not ordinary type edits. Recompute from the WCL rather
+/// than trusting a flag in the proposal body.
 fn type_handlers_changed(p: &Value) -> bool {
     if p["op"] == "delete" {
         return false;
@@ -5017,6 +5080,39 @@ pub fn diff(before: &Value, after: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn email_apply_without_agent_or_proposer_rechecks_agentmail_author() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(
+            &vault.server_dir().join("state.db"),
+            Some(state::SecretKey::generate()),
+        )
+        .unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        w.put_agent(
+            "reader",
+            "label = \"Reader\"\nenabled = false\n",
+            |_| vec![],
+        )
+        .unwrap();
+        let proposal = json!({
+            "name": "fresh", "before": null,
+            "after": "label = \"Fresh\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n", "op": "create"
+        });
+        let result = apply_change(
+            &w,
+            &Author::AgentMail("reader".into()),
+            "type_proposal",
+            &proposal,
+        );
+        assert!(
+            matches!(result, Err(ApplyError::Refused(ref message)) if message.contains("disabled")),
+            "{result:?}"
+        );
+        assert!(w.read_type("fresh").is_err());
+    }
 
     #[test]
     fn direct_scope_is_capped_by_caller_and_agent() {

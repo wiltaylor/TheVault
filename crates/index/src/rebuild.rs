@@ -125,6 +125,7 @@ fn extract_missing(index: &mut Index, vault: &store::Vault) -> Result<()> {
         let too_big = file
             .metadata()
             .is_ok_and(|m| m.len() > asset_text::MAX_EXTRACT_BYTES as u64);
+        let mut source_hash = String::new();
         let extracted = if too_big {
             asset_text::Extracted::Failed(format!(
                 "larger than {} bytes",
@@ -132,11 +133,14 @@ fn extract_missing(index: &mut Index, vault: &store::Vault) -> Result<()> {
             ))
         } else {
             match std::fs::read(file.path()) {
-                Ok(bytes) => asset_text::extract_text(kind, bytes),
+                Ok(bytes) => {
+                    source_hash = asset_text::text_digest(&bytes);
+                    asset_text::extract_text(kind, bytes)
+                }
                 Err(_) => continue,
             }
         };
-        index.set_asset_text(&id, &extracted)?;
+        index.set_bound_asset_text(&id, &source_hash, &extracted)?;
     }
     Ok(())
 }

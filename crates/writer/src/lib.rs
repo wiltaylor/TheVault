@@ -80,6 +80,7 @@ pub use agent_threads::AgentThreadRuntime;
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
+pub use schema::{hide_browser_secrets, redact_agent_content, redact_agent_note};
 
 /// A single note write whose authorization must be checked under the write lock.
 pub enum CheckedNoteWrite<'a> {
@@ -569,6 +570,8 @@ impl Writer {
     /// files edited outside the server are not watched (D28), so `vault reindex` is how to pick
     /// them up. The change feed is brought up to the synced files on disk either way (D20).
     pub fn open(vault: Vault, state: State) -> Result<Writer> {
+        state
+            .revoke_missing_browser_secrets(|name| vault.root().join(agent_path(name)).is_file())?;
         let mut index = Index::open(&vault)?;
         if !index.is_current(&vault)? {
             recover(&vault, &state)?;
@@ -1460,7 +1463,7 @@ impl Writer {
         }
         if outbox {
             self.limit_outbox(id, &mut doc, old_doc.as_ref(), author)?;
-            self.check_outbox(ty, &path, &doc, old_doc.as_ref(), author)?;
+            self.check_outbox(ty, &path, &mut doc, old_doc.as_ref(), author)?;
         }
         let archived = archived.unwrap_or_else(|| old_doc.as_ref().is_some_and(note::is_archived));
         note::set_archived(&mut doc, archived);
@@ -1940,6 +1943,7 @@ impl Writer {
             |doc: Option<&schema::Doc>, name: &str| doc.and_then(|d| d.field(name)).cloned();
         let sender = matches!(author, Author::Handler(name) if name == "outbox_send");
         if matches!(author, Author::Agent(_) | Author::AgentMail(_))
+            && next.is_some()
             && field(next, "send_updates") != field(old.as_ref(), "send_updates")
         {
             return Err(Error::Rejected("agents may not change send_updates".into()));

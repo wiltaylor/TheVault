@@ -237,7 +237,7 @@ fn restore_mail(id: string) -> Result[(), string] {
     }
     let gmail = connect()?
     if !gmail.ok {
-        return Err("Reconnect Google with gmail.modify to restore this message in Gmail. Its trash still expires after 30 days.")
+        return Err("Reconnect Google with gmail.modify to restore this message if it reached Gmail trash. Gmail trash expires after 30 days.")
     }
     act(gmail, id, "untrash", "")?
     let refs = match secret_json("google_gmail_trashed") {
@@ -319,7 +319,8 @@ fn reported(note: Value, verb: string, on: string, result: Result[(), string]) -
         Ok(_) => Ok(()),
         Err(e) => {
             let title = "Gmail did not " + verb + " an email"
-            let body = sentence(clip(e, 600)) + about(note) + " Nothing retries it: " + verb + " the message in Gmail."
+            let condition = if verb == "untrash" { " if it reached Gmail trash" } else { "" }
+            let body = sentence(clip(e, 600)) + about(note) + " Nothing retries it: " + verb + " the message in Gmail" + condition + "."
             notice(title, body, on)
             Err(e)
         },
