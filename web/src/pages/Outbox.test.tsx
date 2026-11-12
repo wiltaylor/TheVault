@@ -102,6 +102,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -117,6 +118,35 @@ async function openTab(name: string) {
 }
 
 describe("the Outbox page", () => {
+  it("counts down the server deadline beside Cancel send and removes it at the deadline", async () => {
+    const now = Date.now();
+    Object.assign(items["01READY"]!, { send_deadline_ms: now + 120_000 });
+    render(() => <Outbox />);
+    await openTab("Ready");
+    await screen.findByRole("link", { name: "Hello" });
+    expect(await within(card("Hello")).findByText("Sends in 2 minutes")).toBeTruthy();
+    expect(within(card("Hello")).getByRole("button", { name: "Cancel send" })).toBeTruthy();
+    vi.useFakeTimers();
+    vi.setSystemTime(now + 61_000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(within(card("Hello")).getByText("Sends in 1 minute")).toBeTruthy();
+    vi.setSystemTime(now + 120_000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(within(card("Hello")).queryByText(/Sends in/)).toBeNull();
+    cleanup();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not count down missing or invalid deadlines or sending items", async () => {
+    Object.assign(items["01READY"]!, { send_deadline_ms: "invalid" });
+    Object.assign(items["01SMS"]!, { send_deadline_ms: Date.now() + 300_000 });
+    render(() => <Outbox />);
+    await openTab("Ready");
+    await screen.findByRole("link", { name: "Hello" });
+    expect(screen.queryByText(/Sends in/)).toBeNull();
+    expect(within(card("SMS to Cy")).queryByRole("button", { name: "Cancel send" })).toBeNull();
+  });
+
   it("has three tabs, Draft, Ready and Error, each listing its items", async () => {
     render(() => <Outbox />);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Draft", "Ready", "Error"]);
@@ -153,6 +183,7 @@ describe("the Outbox page", () => {
   });
 
   it("cancels a ready item back to draft before dispatch", async () => {
+    Object.assign(items["01READY"]!, { send_deadline_ms: Date.now() + 300_000 });
     render(() => <Outbox />);
     await openTab("Ready");
     await screen.findByRole("link", { name: "Hello" });
