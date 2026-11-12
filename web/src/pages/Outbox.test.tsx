@@ -119,6 +119,7 @@ async function openTab(name: string) {
 
 describe("the Outbox page", () => {
   it("counts down the server deadline beside Cancel send and removes it at the deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const now = Date.now();
     Object.assign(items["01READY"]!, { send_deadline_ms: now + 120_000 });
     render(() => <Outbox />);
@@ -126,7 +127,6 @@ describe("the Outbox page", () => {
     await screen.findByRole("link", { name: "Hello" });
     expect(await within(card("Hello")).findByText("Sends in 2 minutes")).toBeTruthy();
     expect(within(card("Hello")).getByRole("button", { name: "Cancel send" })).toBeTruthy();
-    vi.useFakeTimers();
     vi.setSystemTime(now + 61_000);
     await vi.advanceTimersByTimeAsync(1000);
     expect(within(card("Hello")).getByText("Sends in 1 minute")).toBeTruthy();

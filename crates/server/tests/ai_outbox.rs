@@ -427,7 +427,12 @@ fn newly_enabled_bare_sender_keeps_items_in_review() {
 fn ready_deadline_is_server_metadata_and_cancel_removes_it() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    api.one(&fake, Some("sender"), "draft_email", email_input(json!(["ann@example.com"])));
+    api.one(
+        &fake,
+        Some("sender"),
+        "draft_email",
+        email_input(json!(["ann@example.com"])),
+    );
     let result = last_result(&fake, false);
     let id = result["id"].as_str().unwrap();
     let ready = api.note_json(id);
@@ -436,7 +441,11 @@ fn ready_deadline_is_server_metadata_and_cancel_removes_it() {
     assert!(ready["note"]["fields"].get("send_deadline_ms").is_none());
     let mut doc = ready["note"].clone();
     doc["fields"]["status"] = json!("draft");
-    api.send("PUT", &format!("/api/notes/{id}"), json!({"base_version": ready["version"], "note": doc}));
+    api.send(
+        "PUT",
+        &format!("/api/notes/{id}"),
+        json!({"base_version": ready["version"], "note": doc}),
+    );
     let cancelled = api.note_json(id);
     assert_eq!(cancelled["note"]["fields"]["status"], "draft");
     assert!(cancelled.get("send_deadline_ms").is_none());
