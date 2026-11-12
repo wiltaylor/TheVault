@@ -347,17 +347,26 @@ fn attachment_envelope_unreadable_cleared_note_stays_held_in_queries() {
 #[test]
 fn attachment_envelope_legacy_release_remains_note_only() {
     let (_dir, w) = attachment_fixture();
-    let asset = w.put_asset("invoice.csv", b"amount\n17\n".to_vec()).unwrap();
+    let asset = w
+        .put_asset("invoice.csv", b"amount\n17\n".to_vec())
+        .unwrap();
     let note = attachment_note(&w, &[&asset.id]);
     let read = w.read(&note.id).unwrap();
     let hash = writer::agent_safety::fingerprint(&read.type_name, &read.doc);
     let legacy = writer::agent_safety::Safety {
-        status: "held".into(), reason: "scam".into(), fingerprint: hash.clone(),
+        status: "held".into(),
+        reason: "scam".into(),
+        fingerprint: hash.clone(),
     };
-    w.state().set_agent_safety_result(&note.id, &serde_json::to_string(&legacy).unwrap(), false).unwrap();
+    w.state()
+        .set_agent_safety_result(&note.id, &serde_json::to_string(&legacy).unwrap(), false)
+        .unwrap();
     assert_eq!(w.agent_safety(&note.id).unwrap().fingerprint, hash);
-    assert!(w.release_agent_safety(&note.id, &hash, &Author::Session("owner".into())).unwrap(),
-        "the owner cannot release a legacy held note using its displayed fingerprint");
+    assert!(
+        w.release_agent_safety(&note.id, &hash, &Author::Session("owner".into()))
+            .unwrap(),
+        "the owner cannot release a legacy held note using its displayed fingerprint"
+    );
     assert!(w.agent_may_read(&note.id));
     assert!(w.agent_attachment_text(&asset.id).is_none());
 }

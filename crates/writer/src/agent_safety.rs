@@ -917,7 +917,9 @@ impl Writer {
         // silently upgraded to attachment clearance.
         let legacy_release = status == "released"
             && hash == fingerprint(&note.type_name, &note.doc)
-            && self.state().meta(&format!("agent_safety.note.{id}"))?
+            && self
+                .state()
+                .meta(&format!("agent_safety.note.{id}"))?
                 .and_then(|raw| serde_json::from_str::<Safety>(&raw).ok())
                 .is_some_and(|s| s.fingerprint == hash);
         let current = if legacy_release {
