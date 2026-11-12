@@ -4007,7 +4007,7 @@ pub(crate) fn authorize_proposal(
             }
             _ => None,
         })
-        .or_else(|| p["agent"].as_str());
+        .or_else(|| p["agent"].as_str().filter(|s| !s.is_empty()));
     if let Some(name) = proposer {
         let agent = crate::ai_agents::agent_named(w, name)?.ok_or_else(|| {
             ApplyError::Refused(format!("The proposing agent {name} no longer exists."))
@@ -5070,6 +5070,26 @@ pub fn diff(before: &Value, after: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn email_apply_without_agent_or_proposer_rechecks_agentmail_author() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(
+            &vault.server_dir().join("state.db"),
+            Some(state::SecretKey::generate()),
+        )
+        .unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        w.put_agent("reader", "label = \"Reader\"\nenabled = false\n", |_| vec![]).unwrap();
+        let proposal = json!({
+            "name": "fresh", "before": null,
+            "after": "label = \"Fresh\"\n", "op": "create"
+        });
+        let result = apply_change(&w, &Author::AgentMail("reader".into()), "type_proposal", &proposal);
+        assert!(matches!(result, Err(ApplyError::Refused(ref message)) if message.contains("disabled")), "{result:?}");
+        assert!(w.read_type("fresh").is_err());
+    }
 
     #[test]
     fn direct_scope_is_capped_by_caller_and_agent() {

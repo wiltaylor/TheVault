@@ -782,6 +782,52 @@ fn legacy_type_permissions_keep_definition_operations() {
 }
 
 #[test]
+fn apply_refuses_a_deleted_proposer_without_changing_the_note() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", "label = \"Reader\"\n");
+    let (memo, version) = api.note("memo", "Original");
+    fake.push(AnthropicMessage::new().tool_use("toolu_t", "propose_fields", json!({ "id": memo, "base_version": version, "fields": json!({ "title": "Changed" }).to_string() })));
+    fake.push(AnthropicMessage::text("Done."));
+    let events = api.chat(json!({ "agent": "reader", "messages": [user("Go.")] }));
+    let mut proposal = events_named(&events, "proposal")[0].clone();
+    assert_eq!(proposal["proposer"], "reader");
+    // Reach the proposer check, not apply_as_agent's earlier author lookup.
+    proposal.as_object_mut().unwrap().remove("agent");
+    std::fs::remove_file(api.server.vault_path().join("agents/reader.wcl")).unwrap();
+    let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(response.text().unwrap().contains("proposing agent reader no longer exists"));
+    assert_eq!(api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["title"], "Original");
+}
+
+#[test]
+fn limited_agents_cannot_apply_type_create_delete_or_taxonomy_delete() {
+    for restriction in ["change_types = []", "change_fields = { log: [] fresh: [] }"] {
+        for (tool, input, event, path) in [
+            ("propose_type_change", json!({"name": "fresh", "wcl": LOG}), "type_proposal", "types/fresh.wcl"),
+            ("propose_type_delete", json!({"name": "log"}), "type_proposal", "types/log.wcl"),
+            ("propose_taxonomy_delete", json!({"name": "unused"}), "taxonomy_proposal", "taxonomies/unused.wcl"),
+        ] {
+            let fake = FakeAnthropic::start();
+            let api = Api::start(&fake);
+            api.send("PUT", "/api/taxonomies/unused", json!({"wcl": "label = \"Unused\"\nterm \"One\"\n"}));
+            api.agent("reader", "label = \"Reader\"\n");
+            fake.push(AnthropicMessage::new().tool_use("toolu_t", tool, input));
+            fake.push(AnthropicMessage::text("Done."));
+            let events = api.chat(json!({"agent": "reader", "messages": [user("Go.")]}));
+            let proposal = events_named(&events, event)[0].clone();
+            let file = api.server.vault_path().join(path);
+            let before = std::fs::read(&file).ok();
+            api.agent("reader", &format!("permissions {{ {restriction} }}\n"));
+            let response = api.request_as(&api.token(), "POST", "/api/ai/apply", Some(proposal));
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{tool}, {restriction}: {}", response.text().unwrap());
+            assert_eq!(std::fs::read(&file).ok(), before, "{tool}, {restriction}");
+        }
+    }
+}
+
+#[test]
 fn apply_with_empty_agent_and_no_proposer_uses_the_caller() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
