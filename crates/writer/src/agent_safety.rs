@@ -193,6 +193,11 @@ fn same_image_rendering(old: &serde_json::Value, next: &serde_json::Value) -> bo
 }
 
 impl Writer {
+    /// Owner-only diagnostic metadata, never part of the agent envelope.
+    pub fn asset_extraction_failure(&self, id: &str) -> Option<serde_json::Value> {
+        index::asset_text_failure(&self.vault, id)
+    }
+
     /// No inner-index lock: note writes call this while holding that lock. The bound
     /// extraction is an immutable snapshot, verified against both source and text hashes.
     pub fn agent_safety_envelope(&self, kind: &str, doc: &Doc) -> serde_json::Value {

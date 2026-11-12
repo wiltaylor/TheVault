@@ -1444,6 +1444,62 @@ fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
 }
 
 #[test]
+fn attachment_envelope_failed_asset_owner_diagnostic_stays_withheld() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    let asset: Value = api
+        .client
+        .post(api.server.url("/api/assets?filename=broken.docx"))
+        .bearer_auth(api.server.admin_token())
+        .body("broken")
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let id = asset["id"].as_str().unwrap();
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Broken attachment", "attachments":[id], "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
+    let evidence = api.send(
+        "GET",
+        &format!(
+            "/api/agent-safety/evidence/{}",
+            note["id"].as_str().unwrap()
+        ),
+        json!(null),
+    );
+    assert_eq!(evidence["envelope"]["attachments"][0]["status"], "failed");
+    assert!(evidence["envelope"]["attachments"][0].get("text").is_none());
+    assert!(
+        evidence["extraction_failures"][id]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no zip header")
+    );
+    assert!(
+        evidence["extraction_failures"][id]["at_ms"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let token = api.external_agent_token();
+    assert_eq!(
+        api.client
+            .get(api.server.url(&format!("/api/assets/{id}")))
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
+}
+
+#[test]
 fn attachment_envelope_cap_is_aggregate_not_per_asset() {
     let chat = FakeAnthropic::start();
     let decisions = testkit::FakeDecisions::start();

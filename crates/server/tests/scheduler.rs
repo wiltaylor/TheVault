@@ -478,6 +478,45 @@ fn login_spaced_seed_is_accepted_and_never_returned() {
 }
 
 #[test]
+fn login_totp_uri_validation_is_write_only() {
+    let api = Api::start();
+    for algorithm in ["SHA1", "SHA256", "SHA512"] {
+        let mut body = login_body();
+        let uri = format!(
+            "otpauth://totp/Fabricated?secret=JBSWY3DPEHPK3PXP&algorithm={algorithm}&digits=8&period=60"
+        );
+        body["totp_seed"] = json!(uri);
+        let saved = expect(
+            api.put("/api/secrets/site").json(&body).send().unwrap(),
+            200,
+        );
+        assert_eq!(saved["has_totp"], true);
+        for path in ["/api/secrets", "/api/secrets/site"] {
+            let output = api.get(path).send().unwrap().text().unwrap();
+            assert!(!output.contains("JBSW"));
+            assert!(!output.contains("otpauth"));
+        }
+    }
+    for suffix in [
+        "&algorithm=MD5",
+        "&period=0",
+        "&digits=9",
+        "&secret=MY",
+        "&digits=6&digits=8",
+    ] {
+        let mut body = login_body();
+        body["totp_seed"] = json!(format!(
+            "otpauth://totp/test?secret=JBSWY3DPEHPK3PXP{suffix}"
+        ));
+        let error = expect(
+            api.put("/api/secrets/site").json(&body).send().unwrap(),
+            400,
+        );
+        assert!(!error.to_string().contains("JBSW"));
+    }
+}
+
+#[test]
 fn login_secrets_are_write_only_and_isolated_from_script_reads_and_debug_logs() {
     let server = TestServer::start_with_env(seed, &[("RUST_LOG", "debug")]);
     let api = Api {

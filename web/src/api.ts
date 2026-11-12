@@ -36,6 +36,7 @@ export interface AgentSafety {
 }
 
 export interface SafetyEvidence {
+  extraction_failures?: Record<string, { reason: string; at_ms: number | null }>;
   envelope: { envelope_version: number; attachments: Array<{ id: string; filename?: string; status: string; text?: string }> };
   fingerprint: string;
   decision_current: boolean;
