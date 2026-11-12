@@ -83,8 +83,10 @@ pub async fn issue_call(
         }
         let call = ulid::Ulid::new().to_string();
         let (kind, name) = author.parts();
-        w.state()
-            .issue_agent_call(&call, note, agent, &format!("{kind}:{name}"))?;
+        let ceiling = (!matches!(author, state::Author::Session(_))).then_some(scope);
+        w.state().issue_agent_call_scoped(
+            &call, note, agent, &format!("{kind}:{name}"), ceiling,
+        )?;
         Ok(Json(json!({ "call": call })))
     })
     .await

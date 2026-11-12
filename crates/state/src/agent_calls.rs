@@ -27,11 +27,38 @@ impl State {
         agent: &str,
         principal: &str,
     ) -> Result<()> {
+        let scope = (!principal.starts_with("session:")).then_some(crate::Scope::Write);
+        self.issue_agent_call_scoped(call, note, agent, principal, scope)
+    }
+
+    /// Persist the issuing principal's ceiling. Sessions have no additional ceiling.
+    pub fn issue_agent_call_scoped(
+        &self,
+        call: &str,
+        note: &str,
+        agent: &str,
+        principal: &str,
+        scope: Option<crate::Scope>,
+    ) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO agent_call_ids (call,note,agent,principal,expires_ms) VALUES (?1,?2,?3,?4,?5)",
-            params![call, note, agent, principal, self.now() + 86_400_000],
+            "INSERT INTO agent_call_ids (call,note,agent,principal,expires_ms,scope) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![call, note, agent, principal, self.now() + 86_400_000, scope.map(crate::Scope::as_str)],
         )?;
         Ok(())
+    }
+
+    /// The stored ceiling, failing closed for an unscoped non-session capability.
+    pub fn agent_call_scope(&self, call: &str) -> Result<Option<crate::Scope>> {
+        let (principal, scope): (String, Option<String>) = self.conn().query_row(
+            "SELECT principal,scope FROM agent_call_ids WHERE call=?1",
+            [call],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        match scope {
+            Some(scope) => Ok(Some(scope.parse()?)),
+            None if principal.starts_with("session:") => Ok(None),
+            None => Ok(Some(crate::Scope::Write)),
+        }
     }
 
     /// The persisted issuance boundary and principal for a note's reserved call.
@@ -179,6 +206,28 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_call_scopes_migrate_without_widening_devices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let s = State::open(&path, None).unwrap();
+        s.issue_agent_call("DEVICE", "NOTE", "clerk", "token:device").unwrap();
+        s.issue_agent_call("SESSION", "NOTE", "clerk", "session:owner").unwrap();
+        s.conn().execute_batch("ALTER TABLE agent_call_ids DROP COLUMN scope; PRAGMA user_version=25;").unwrap();
+        drop(s);
+        let s = State::open(&path, None).unwrap();
+        assert_eq!(s.agent_call_scope("DEVICE").unwrap(), Some(crate::Scope::Write));
+        assert_eq!(s.agent_call_scope("SESSION").unwrap(), None);
+    }
+
+    #[test]
+    fn issued_scope_is_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        s.issue_agent_call_scoped("CALL", "NOTE", "clerk", "token:device", Some(crate::Scope::Read)).unwrap();
+        assert_eq!(s.agent_call_scope("CALL").unwrap(), Some(crate::Scope::Read));
+    }
 
     #[test]
     fn issued_calls_are_bound_and_single_use() {

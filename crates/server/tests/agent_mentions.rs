@@ -512,6 +512,20 @@ fn a_device_mention_cannot_make_admin_changes_even_with_confirmation_off() {
 }
 
 #[test]
+fn a_session_mention_keeps_the_agents_admin_scope() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("keeper", "label = \"Keeper\"\npermissions {\n  confirm {\n    types = false\n  }\n}\n");
+    api.called_note("Roof", "@Keeper change the tab", "keeper", &[]);
+    fake.push(AnthropicMessage::new().tool_use("toolu_type", "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") })));
+    fake.push(AnthropicMessage::text("Changed."));
+    api.advance("PT1S");
+    assert_eq!(api.threads("keeper").len(), 1);
+    assert!(api.get("/api/types/memo")["wcl"].as_str().unwrap().contains("tab \"Details\""));
+}
+
+#[test]
 fn issued_calls_are_note_and_agent_bound_and_expire() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
