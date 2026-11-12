@@ -1,15 +1,26 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { api, type SafetyEvidence } from "../api";
 
-export function AttachmentEvidence(props: { id: string }) {
+export function AttachmentEvidence(props: { id: string; fingerprint?: string }) {
   const [evidence, setEvidence] = createSignal<SafetyEvidence>();
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  createEffect(() => {
+    void props.id;
+    void props.fingerprint;
+    setEvidence(undefined);
+    setError("");
+  });
   async function load() {
+    const id = props.id;
+    const fingerprint = props.fingerprint;
     setBusy(true);
     setEvidence(undefined);
     setError("");
-    try { setEvidence(await api.safetyEvidence(props.id)); }
+    try {
+      const result = await api.safetyEvidence(id);
+      if (props.id === id && props.fingerprint === fingerprint) setEvidence(result);
+    }
     catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }

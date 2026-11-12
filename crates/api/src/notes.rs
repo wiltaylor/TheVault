@@ -349,7 +349,11 @@ pub async fn safety_evidence(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     if !matches!(author, Author::Session(_) | Author::Token(_)) {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden", "Owner access required"));
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "Owner access required",
+        ));
     }
     blocking(w, move |w| {
         let note = w.read(&id)?;

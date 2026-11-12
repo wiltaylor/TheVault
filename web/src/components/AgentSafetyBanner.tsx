@@ -43,7 +43,7 @@ export function AgentSafetyBanner(props: { id: string; safety?: AgentSafety }) {
     finally { setBusy(false); }
   }
   return <>
-    <Show when={props.safety}><AttachmentEvidence id={props.id} /></Show>
+    <Show when={props.safety}><AttachmentEvidence id={props.id} fingerprint={safety()?.fingerprint} /></Show>
     <Show when={held()}>
     <aside role="status" class="agent-safety-banner">
       <strong>Held from agents</strong>
