@@ -243,9 +243,9 @@ test("Convert to a task keeps the title and body, opens the task and trashes the
   // is pending. Reopen that row if needed, and wait for the rendered choice, not time.
   await expect(async () => {
     if (!(await box.isVisible())) await item.getByRole("button", { name: "Convert to…" }).click();
-    await expect(box).toBeFocused();
+    await expect(box).toBeFocused({ timeout: 1_000 });
     await box.fill("Task");
-    await expect(taskOption).toBeVisible();
+    await expect(taskOption).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
   await taskOption.click();
   await expect(page).toHaveURL(/\/notes\/[0-9A-HJKMNP-TV-Z]{26}$/);
