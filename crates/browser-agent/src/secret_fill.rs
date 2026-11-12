@@ -93,7 +93,7 @@ async fn execute(
     let result = tokio::time::timeout(Duration::from_secs(15), async {
         let mut child = Command::new("node")
             .arg("-e")
-            .arg(include_str!("../../../docker/browser/secret-bridge.cjs"))
+                .arg(include_str!("secret-bridge.cjs"))
             .env_clear()
             .env("PATH", "/usr/local/bin:/usr/bin:/bin")
             .env("HOME", &state.home)
