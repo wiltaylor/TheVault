@@ -75,8 +75,6 @@ function cards() {
   return within(screen.getByRole("list", { name: "Skills" })).getAllByRole("listitem");
 }
 
-const inApp = { app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" };
-
 describe("the Skills page", () => {
   it("lists every skill by name with its description, files, size and license", async () => {
     list = [skill("pdf-forms", { files: 3, size: 2048, license: "MIT" }), skill("notes-helper")];
