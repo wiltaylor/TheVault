@@ -110,8 +110,19 @@ def client_env(runtime):
 def github(runtime, *args, check=True):
     if not os.environ.get("GH_TOKEN"):
         raise ReleaseError("missing GH_TOKEN from release-github")
-    return command(["gh", *args], env=client_env(runtime) | {
-        "GH_TOKEN": os.environ["GH_TOKEN"], "GH_PROMPT_DISABLED": "1"}, check=check)
+    result = command(["gh", *args], env=client_env(runtime) | {
+        "GH_TOKEN": os.environ["GH_TOKEN"], "GH_PROMPT_DISABLED": "1"}, check=False)
+    if result.returncode:
+        message = result.stderr.decode("utf-8", errors="replace")
+        for name in ("GH_TOKEN", "GHCR_TOKEN"):
+            token = os.environ.get(name)
+            if token:
+                message = message.replace(token, "[redacted]")
+        message = re.sub(r"(?:ghp_|gho_|github_pat_)[A-Za-z0-9_]+", "[redacted]", message)
+        print("gh stderr: " + message[:2048], file=sys.stderr, flush=True)
+        if check:
+            raise ReleaseError(f"gh failed (exit {result.returncode})")
+    return result
 
 
 def find_release(gh, tag, tagged_sha=None, *, required=True):

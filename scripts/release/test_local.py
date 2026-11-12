@@ -29,6 +29,22 @@ class LocalReleaseTests(unittest.TestCase):
         for name in local.assets(self.release["version"]):
             (self.root / name).write_bytes(name.encode())
 
+    def test_failed_gh_reports_redacted_bounded_stderr(self):
+        error = ("HTTP 403: denied custom-token registry-token ghp_example123 "
+                 "gho_example456 github_pat_example789 " + "x" * 3000).encode()
+        result = subprocess.CompletedProcess([], 1, b"", error)
+        output = io.StringIO()
+        with patch.dict("os.environ", {"GH_TOKEN": "custom-token", "GHCR_TOKEN": "registry-token"}), \
+                patch.object(coordinator, "command", return_value=result), contextlib.redirect_stderr(output):
+            with self.assertRaisesRegex(local.ReleaseError, "gh failed"):
+                coordinator.github(self.root, "api", "fixture")
+        message = output.getvalue()
+        self.assertIn("HTTP 403: denied", message)
+        self.assertEqual(message.count("[redacted]"), 5)
+        for secret in ("custom-token", "registry-token", "ghp_example123", "gho_example456", "github_pat_example789"):
+            self.assertNotIn(secret, message)
+        self.assertLessEqual(len(message), 2060)
+
     def test_stable_identity(self):
         self.assertEqual(local.identity("b" * 40, "1.2.3", "release/1.2.3", "release")["kind"], "release")
 
