@@ -141,11 +141,47 @@ fn browser_secret_foreground_proposal_apply_and_revocation_are_value_free() {
     assert_eq!(status, StatusCode::OK, "{done}");
     assert_eq!(done["status"], "filled");
     assert!(!done.to_string().contains(password));
-    assert_eq!(browser.requests().iter().filter(|r| r.route() == "/secret/fill").count(), 1);
-    api.client.delete(api.server.url("/api/secrets/login")).bearer_auth(api.token()).send().unwrap().error_for_status().unwrap();
+    let saved_after = api.get(&format!("/api/agents/driver/threads/{}", thread["id"].as_str().unwrap()));
+    assert!(!saved_after.to_string().contains(password));
+    assert!(saved_after.to_string().contains("applied"));
+    let token: Value = api.client.post(api.server.url("/api/tokens")).bearer_auth(api.token())
+        .json(&json!({"name":"limited","scope":"write"})).send().unwrap().error_for_status().unwrap().json().unwrap();
+    let denied = api.client.post(api.server.url("/api/ai/apply")).bearer_auth(token["secret"].as_str().unwrap())
+        .json(&proposal).send().unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let device: Value = api.client.post(api.server.url("/api/devices/pair"))
+        .json(&json!({"password":testkit::PASSWORD,"name":"Fixture","platform":"android"})).send().unwrap().error_for_status().unwrap().json().unwrap();
+    let denied = api.client.post(api.server.url("/api/ai/apply")).bearer_auth(device["token"].as_str().unwrap())
+        .json(&proposal).send().unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    api.agent("driver", DRIVER);
+    let (status, _) = api.apply(&proposal);
+    assert!(!status.is_success(), "revoked agent grant must refuse Apply");
+    assert_eq!(
+        browser
+            .requests()
+            .iter()
+            .filter(|r| r.route() == "/secret/fill")
+            .count(),
+        1
+    );
+    api.client
+        .delete(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     let (status, _) = api.apply(&proposal);
     assert!(!status.is_success());
-    assert_eq!(browser.requests().iter().filter(|r| r.route() == "/secret/fill").count(), 1);
+    assert_eq!(
+        browser
+            .requests()
+            .iter()
+            .filter(|r| r.route() == "/secret/fill")
+            .count(),
+        1
+    );
     let lines = api
         .server
         .stderr_lines_when(|lines| lines.iter().any(|l| l.starts_with("browser_secret:")));
@@ -242,8 +278,19 @@ fn unattended_secret(confirm: bool) {
         "/api/agents/driver/threads/{}",
         run["thread"].as_str().unwrap()
     ));
-    assert!(thread.to_string().contains(if confirm { "confirmation_required" } else { "filled" }));
-    assert_eq!(browser.requests().iter().filter(|r| r.route() == "/secret/fill").count(), if confirm { 0 } else { 1 });
+    assert!(thread.to_string().contains(if confirm {
+        "confirmation_required"
+    } else {
+        "filled"
+    }));
+    assert_eq!(
+        browser
+            .requests()
+            .iter()
+            .filter(|r| r.route() == "/secret/fill")
+            .count(),
+        if confirm { 0 } else { 1 }
+    );
     assert!(!thread.to_string().contains(password));
     assert!(browser.commands().is_empty());
     let lines = api.server.stderr_lines();

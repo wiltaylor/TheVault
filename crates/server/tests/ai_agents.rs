@@ -437,6 +437,26 @@ fn agent_tools_list_read_and_propose_create_change_and_delete_that_apply() {
 }
 
 #[test]
+fn browser_secret_switch_changes_always_wait_for_owner_apply() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    let free = "permissions { confirm { agents = false\n secrets = false\n}\n}\n";
+    api.put_agent("clerk", free);
+    api.put_agent("helper", "");
+    let events = api.one(&fake, Some("clerk"), "propose_agent_change", json!({"name":"helper", "wcl":free}));
+    let proposal = last(&events, "agent_proposal");
+    assert_eq!(proposal["grants_run_code"], true);
+    assert!(!api.agent_wcl("helper").unwrap().contains("secrets"));
+    let token = api.token_of("agent-clerk", "admin");
+    assert_eq!(api.apply_as(&token, proposal).0, StatusCode::FORBIDDEN);
+    assert_eq!(api.apply(proposal).0, StatusCode::OK);
+    assert!(api.agent_wcl("helper").unwrap().contains("secrets"));
+    let events = api.one(&fake, Some("helper"), "propose_agent_change", json!({"name":"helper", "wcl":free}));
+    assert!(!events.iter().any(|(event, _)| event == "agent_proposal"));
+}
+
+#[test]
 fn an_agent_cannot_give_another_agent_more_than_it_has_or_change_itself() {
     let api = Api::start();
     let fake = FakeAnthropic::start();

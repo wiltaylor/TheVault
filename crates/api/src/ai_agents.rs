@@ -399,8 +399,11 @@ pub(crate) fn propose_change(
 /// Whether writing `agent` as agent `name` turns on `run_code`, which it does not have now.
 fn grants(w: &Writer, name: &str, agent: &Agent) -> bool {
     if agent.permissions.confirm.secrets
-        != agent_named(w, name).ok().flatten()
-            .map(|a| a.permissions.confirm.secrets).unwrap_or(true)
+        != agent_named(w, name)
+            .ok()
+            .flatten()
+            .map(|a| a.permissions.confirm.secrets)
+            .unwrap_or(true)
     {
         return true;
     }
@@ -591,7 +594,11 @@ mod tests {
     fn browser_secret_confirmation_cannot_be_weakened_by_an_agent() {
         let parent = agent("");
         let off = agent("permissions { confirm { secrets = false\n}\n}\n");
-        assert!(escalation(&parent, &off).iter().any(|s| s.contains("secrets")));
+        assert!(
+            escalation(&parent, &off)
+                .iter()
+                .any(|s| s.contains("secrets"))
+        );
     }
 
     #[test]

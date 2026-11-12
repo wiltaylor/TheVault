@@ -585,7 +585,11 @@ pub async fn apply(
     if change["op"] == "browser_secret"
         && !crate::tasks::may_manage_login_secrets(&a.writer, &author)?
     {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_owner", "Secret fills need an owner session or admin user token."));
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "needs_owner",
+            "Secret fills need an owner session or admin user token.",
+        ));
     }
     // A taxonomy or agent proposal says so in `kind` (ai D31, agents G20), as does a type delete; a
     // type proposal's `after` is the type file's WCL text; a note proposal's is a note.

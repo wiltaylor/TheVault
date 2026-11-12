@@ -2645,10 +2645,18 @@ impl Turn {
         images_sent: usize,
     ) -> crate::ai_browser::BrowserOut {
         match call.name.as_str() {
-            "browser_fill_secret" => crate::ai_browser::secret_fill::call(
-                b, self.writer.state(), &setup.agent, &call.id, &call.input,
-                self.unattended, self.scope.allows(Scope::Write),
-            ).await,
+            "browser_fill_secret" => {
+                crate::ai_browser::secret_fill::call(
+                    b,
+                    self.writer.state(),
+                    &setup.agent,
+                    &call.id,
+                    &call.input,
+                    self.unattended,
+                    self.scope.allows(Scope::Write),
+                )
+                .await
+            }
             "browser_run" => crate::ai_browser::run(b, &call.input, self.writer.state()).await,
             "browser_capture" => {
                 let direct = setup.direct.downloads;
