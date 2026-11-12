@@ -663,7 +663,9 @@ async fn run_inner(
         Err(e) => return fail(e),
     };
     let mut body = json!({ "command": command, "timeout_s": timeout });
-    if b.secret_browser { body["secret_browser"] = json!(true); }
+    if b.secret_browser {
+        body["secret_browser"] = json!(true);
+    }
     let sent = b
         .auth(http().post(url))
         .timeout(Duration::from_secs(timeout + 30))

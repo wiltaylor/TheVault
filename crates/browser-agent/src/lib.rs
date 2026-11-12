@@ -854,7 +854,10 @@ async fn run_command(
         .env("XDG_CACHE_HOME", state.home.join(".cache"))
         .env("XDG_RUNTIME_DIR", state.home.join(".runtime"))
         .env("TMPDIR", state.home.join(".runtime"))
-        .env("PWTEST_CLI_GLOBAL_CONFIG", state.home.join(".secret-browser"))
+        .env(
+            "PWTEST_CLI_GLOBAL_CONFIG",
+            state.home.join(".secret-browser"),
+        )
         .env_remove("BROWSER_TOKEN")
         .env_remove("VAULT_BROWSER_TOKEN")
         .stdin(Stdio::null())

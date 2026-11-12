@@ -2,11 +2,21 @@
 use super::*;
 
 /// Deliberately unconditional until TV-164 supplies an owner Apply route.
-pub(crate) fn confirmation_required(state: &state::State, agent: &schema::Agent, input: &Value) -> BrowserOut {
+pub(crate) fn confirmation_required(
+    state: &state::State,
+    agent: &schema::Agent,
+    input: &Value,
+) -> BrowserOut {
     outcome(state, agent, input, "", "confirmation_required")
 }
 
-fn outcome(state: &state::State, agent: &schema::Agent, input: &Value, origin: &str, status: &str) -> BrowserOut {
+fn outcome(
+    state: &state::State,
+    agent: &schema::Agent,
+    input: &Value,
+    origin: &str,
+    status: &str,
+) -> BrowserOut {
     let mut out = if status == "filled" {
         BrowserOut::done("filled".into(), json!({"status":"filled"}))
     } else {
@@ -38,53 +48,119 @@ pub(crate) async fn authorized(
     input: &Value,
 ) -> BrowserOut {
     let mut origin = String::new();
-    let status = fill(b, state, agent, input, &mut origin).await.unwrap_or_else(|reason| reason);
+    let status = fill(b, state, agent, input, &mut origin)
+        .await
+        .unwrap_or_else(|reason| reason);
     outcome(state, agent, input, &origin, status)
 }
 
 async fn request(b: &BrowserBox, path: &str, body: Value) -> Result<Value, &'static str> {
     let url = b.url(path, &[]).map_err(|_| "browser_unavailable")?;
-    let mut response = b.auth(http().post(url)).json(&body).timeout(Duration::from_secs(20))
-        .send().await.map_err(|_| "browser_unavailable")?;
-    if !response.status().is_success() { return Err("browser_refused"); }
+    let mut response = b
+        .auth(http().post(url))
+        .json(&body)
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|_| "browser_unavailable")?;
+    if !response.status().is_success() {
+        return Err("browser_refused");
+    }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| "browser_unavailable")? {
-        if bytes.len() + chunk.len() > 4096 { return Err("browser_refused"); }
+        if bytes.len() + chunk.len() > 4096 {
+            return Err("browser_refused");
+        }
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| "browser_refused")
 }
 
-async fn fill(b: &BrowserBox, state: &state::State, agent: &schema::Agent, input: &Value, origin: &mut String) -> Result<&'static str, &'static str> {
+async fn fill(
+    b: &BrowserBox,
+    state: &state::State,
+    agent: &schema::Agent,
+    input: &Value,
+    origin: &mut String,
+) -> Result<&'static str, &'static str> {
     let name = input["secret"].as_str().ok_or("invalid_request")?;
     let field = input["field"].as_str().ok_or("invalid_request")?;
-    let target = input["target"].as_str().filter(|s| !s.is_empty() && s.len() <= 1024).ok_or("invalid_request")?;
-    let session = input["session"].as_str().filter(|s| !s.is_empty() && s.len() <= 80 && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')).ok_or("invalid_request")?;
-    if !matches!(field, "username" | "password" | "otp") { return Err("invalid_field"); }
+    let target = input["target"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 1024)
+        .ok_or("invalid_request")?;
+    let session = input["session"]
+        .as_str()
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 80
+                && s.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+        })
+        .ok_or("invalid_request")?;
+    if !matches!(field, "username" | "password" | "otp") {
+        return Err("invalid_field");
+    }
     if !agent.permissions.browser || !agent.permissions.browser_secrets.iter().any(|s| s == name) {
         return Err("secret_not_allowed");
     }
-    if !state.is_login_secret(name).map_err(|_| "secret_unavailable")? { return Err("unknown_secret"); }
-    if !state.browser_secret_active(&agent.name, name).map_err(|_| "secret_unavailable")? {
+    if !state
+        .is_login_secret(name)
+        .map_err(|_| "secret_unavailable")?
+    {
+        return Err("unknown_secret");
+    }
+    if !state
+        .browser_secret_active(&agent.name, name)
+        .map_err(|_| "secret_unavailable")?
+    {
         return Err("secret_not_allowed");
     }
-    let page = request(b, "/secret/origin", json!({"session":session,"target":target})).await?;
-    *origin = state::canonical_origin(page["origin"].as_str().ok_or("invalid_origin")?).ok_or("invalid_origin")?;
-    let login = state.get_login_secret(name).map_err(|_| "secret_unavailable")?.ok_or("unknown_secret")?;
+    let page = request(
+        b,
+        "/secret/origin",
+        json!({"session":session,"target":target}),
+    )
+    .await?;
+    *origin = state::canonical_origin(page["origin"].as_str().ok_or("invalid_origin")?)
+        .ok_or("invalid_origin")?;
+    let login = state
+        .get_login_secret(name)
+        .map_err(|_| "secret_unavailable")?
+        .ok_or("unknown_secret")?;
     if !login.origins.is_empty() && !login.origins.iter().any(|allowed| allowed == origin) {
         return Err("origin_mismatch");
     }
     // Recheck after the network await: deletion/recreation or revocation invalidates the grant.
-    if !state.browser_secret_active(&agent.name, name).map_err(|_| "secret_unavailable")? { return Err("secret_not_allowed"); }
+    if !state
+        .browser_secret_active(&agent.name, name)
+        .map_err(|_| "secret_unavailable")?
+    {
+        return Err("secret_not_allowed");
+    }
     let value = match field {
         "username" => login.username,
         "password" => login.password,
         _ => {
-            let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "otp_unavailable")?.as_secs();
-            crate::browser_redaction::totp(login.totp_seed.as_deref().ok_or("otp_unavailable")?, seconds, 6, 30).ok_or("otp_unavailable")?
+            let seconds = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| "otp_unavailable")?
+                .as_secs();
+            crate::browser_redaction::totp(
+                login.totp_seed.as_deref().ok_or("otp_unavailable")?,
+                seconds,
+                6,
+                30,
+            )
+            .ok_or("otp_unavailable")?
         }
     };
-    let result = request(b, "/secret/fill", json!({"session":session,"target":target,"origin":origin,"value":value})).await?;
+    let result = request(
+        b,
+        "/secret/fill",
+        json!({"session":session,"target":target,"origin":origin,"value":value}),
+    )
+    .await?;
     match result["status"].as_str() {
         Some("filled") => Ok("filled"),
         Some("origin_mismatch") => Err("origin_mismatch"),
@@ -100,38 +176,73 @@ mod tests {
     #[tokio::test]
     async fn authorized_fill_is_body_only_and_outputs_are_value_free() {
         let dir = tempfile::tempdir().unwrap();
-        let state = state::State::open(&dir.path().join("state.db"), Some(state::SecretKey::generate())).unwrap();
+        let state = state::State::open(
+            &dir.path().join("state.db"),
+            Some(state::SecretKey::generate()),
+        )
+        .unwrap();
         let password = "fabricated-TV162-password-only";
-        state.set_login_secret("login", &state::LoginSecret {
-            username: "fabricated-user".into(), password: password.into(), totp_seed: None,
-            origins: vec!["https://example.com".into()],
-        }).unwrap();
-        state.confirm_browser_secrets("tester", &["login".into()]).unwrap();
+        state
+            .set_login_secret(
+                "login",
+                &state::LoginSecret {
+                    username: "fabricated-user".into(),
+                    password: password.into(),
+                    totp_seed: None,
+                    origins: vec!["https://example.com".into()],
+                },
+            )
+            .unwrap();
+        state
+            .confirm_browser_secrets("tester", &["login".into()])
+            .unwrap();
         let agent = schema::Agent::parse("tester", "label = \"Tester\"\npermissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n").unwrap();
         let bodies = Arc::new(Mutex::new(Vec::new()));
         let received = bodies.clone();
         let app = axum::Router::new()
-            .route("/secret/origin", axum::routing::post(|| async { axum::Json(json!({"origin":"https://example.com"})) }))
-            .route("/secret/fill", axum::routing::post(move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
-                let received = received.clone();
-                async move {
-                    assert!(headers.contains_key("x-vault-agent-signature"));
-                    assert_eq!(headers["x-vault-agent"], "tester");
-                    received.lock().unwrap().push(body);
-                    axum::Json(json!({"status":"filled"}))
-                }
-            }));
+            .route(
+                "/secret/origin",
+                axum::routing::post(|| async {
+                    axum::Json(json!({"origin":"https://example.com"}))
+                }),
+            )
+            .route(
+                "/secret/fill",
+                axum::routing::post(
+                    move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
+                        let received = received.clone();
+                        async move {
+                            assert!(headers.contains_key("x-vault-agent-signature"));
+                            assert_eq!(headers["x-vault-agent"], "tester");
+                            received.lock().unwrap().push(body);
+                            axum::Json(json!({"status":"filled"}))
+                        }
+                    },
+                ),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let b = BrowserBox { secret_browser: true, base: format!("http://{}", listener.local_addr().unwrap()), token:"fake-token".into(), profile:Some("tester".into()) };
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
-        let input = json!({"secret":"login","field":"password","target":"#password","session":"default"});
+        let b = BrowserBox {
+            secret_browser: true,
+            base: format!("http://{}", listener.local_addr().unwrap()),
+            token: "fake-token".into(),
+            profile: Some("tester".into()),
+        };
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let input =
+            json!({"secret":"login","field":"password","target":"#password","session":"default"});
         let out = authorized(&b, &state, &agent, &input).await;
         assert_eq!(out.content, "filled");
         assert!(!out.is_error);
         assert_eq!(bodies.lock().unwrap().len(), 1);
         assert_eq!(bodies.lock().unwrap()[0]["value"], password);
         assert_eq!(bodies.lock().unwrap()[0]["origin"], "https://example.com");
-        for output in [&out.content, &out.summary.to_string(), out.trail.as_ref().unwrap()] {
+        for output in [
+            &out.content,
+            &out.summary.to_string(),
+            out.trail.as_ref().unwrap(),
+        ] {
             assert!(!output.contains(password));
         }
         assert_eq!(out.trail.as_ref().unwrap().lines().count(), 1);
@@ -141,10 +252,17 @@ mod tests {
         assert!(authorized(&b, &state, &denied, &input).await.is_error);
         let missing = json!({"secret":"missing", "field":"password", "target":"#password", "session":"default"});
         assert!(authorized(&b, &state, &agent, &missing).await.is_error);
-        state.set_login_secret("login", &state::LoginSecret {
-            username: "fabricated-user".into(), password: password.into(), totp_seed: None,
-            origins: vec!["https://other.example".into()],
-        }).unwrap();
+        state
+            .set_login_secret(
+                "login",
+                &state::LoginSecret {
+                    username: "fabricated-user".into(),
+                    password: password.into(),
+                    totp_seed: None,
+                    origins: vec!["https://other.example".into()],
+                },
+            )
+            .unwrap();
         assert!(authorized(&b, &state, &agent, &input).await.is_error);
         assert_eq!(bodies.lock().unwrap().len(), 1);
         server.abort();

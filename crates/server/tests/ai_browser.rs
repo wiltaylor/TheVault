@@ -70,19 +70,50 @@ fn browser_secret_confirmation_is_unconditional_and_value_free() {
     let browser = FakeBrowser::start();
     let api = Api::start(&fake, Some(&browser));
     let password = "fabricated-secret-TV162-confirmation";
-    let response = api.client.put(api.server.url("/api/secrets/login"))
-        .bearer_auth(api.token()).json(&json!({"kind":"login", "username":"fixture-user", "password":password, "origins":[]})).send().unwrap();
+    let response = api
+        .client
+        .put(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token())
+        .json(
+            &json!({"kind":"login", "username":"fixture-user", "password":password, "origins":[]}),
+        )
+        .send()
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    api.agent("driver", "label = \"Driver\"\npermissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n");
+    api.agent(
+        "driver",
+        "label = \"Driver\"\npermissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n",
+    );
     let input = json!({"secret":"login","field":"password","target":"#password","session":"default","confirmed":true});
     let events = api.call(&fake, Some("driver"), "browser_fill_secret", input);
     assert!(result_text(&result(&fake, 0)).contains("confirmation_required"));
     assert!(!serde_json::to_string(&events).unwrap().contains(password));
-    assert!(!fake.message_requests().last().unwrap().json().to_string().contains(password));
+    assert!(
+        !fake
+            .message_requests()
+            .last()
+            .unwrap()
+            .json()
+            .to_string()
+            .contains(password)
+    );
     assert!(browser.commands().is_empty());
-    assert!(!browser.requests().iter().any(|r| r.path.starts_with("/secret/")));
-    let lines = api.server.stderr_lines_when(|lines| lines.iter().any(|l| l.starts_with("browser_secret:")));
-    assert_eq!(lines.iter().filter(|l| l.starts_with("browser_secret:")).count(), 1);
+    assert!(
+        !browser
+            .requests()
+            .iter()
+            .any(|r| r.path.starts_with("/secret/"))
+    );
+    let lines = api
+        .server
+        .stderr_lines_when(|lines| lines.iter().any(|l| l.starts_with("browser_secret:")));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("browser_secret:"))
+            .count(),
+        1
+    );
     assert!(!lines.join("\n").contains(password));
     assert!(lines.iter().any(|l| l.contains("refused")));
 }
