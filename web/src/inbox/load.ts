@@ -30,5 +30,26 @@ export async function loadInbox(filter: Filter, withProcessed: boolean, limit: n
 
 /** How many items wait in the All view: what the sidebar badge shows. */
 export async function countInbox(): Promise<number> {
-  return (await loadInbox("all", false, 1)).total;
+  const held = new Set<string>();
+  let offset = 0;
+  while (true) {
+    const page = await api.heldAgentNotes(offset);
+    for (const note of page.notes) held.add(note.id);
+    offset += page.notes.length;
+    if (!page.notes.length || offset >= page.total) break;
+  }
+  if (!held.size) return (await loadInbox("all", false, 1)).total;
+  const counts = await Promise.allSettled(sourcesOf("all").map(async (source) => {
+    let count = 0;
+    let cursor: string | null = null;
+    do {
+      const page = await api.query(sourceQuery(source, false), cursor, 500);
+      count += page.rows.filter((row) => !held.has(row.id)).length;
+      cursor = page.next;
+    } while (cursor);
+    return count;
+  }));
+  const ok = counts.filter((r) => r.status === "fulfilled");
+  if (!ok.length) throw (counts[0] as PromiseRejectedResult).reason;
+  return ok.reduce((n, r) => n + r.value, 0);
 }
