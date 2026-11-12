@@ -30,6 +30,7 @@ import urllib.request
 from local import (Journal, ReleaseError, STAGES, assets, atomic_json, compare_baseline,
                    digest, identity, manifest, release_lock,
                    stage_plan, verify_manifest, safe_extract)
+from preflight import check_tools
 
 ROOT = Path(__file__).resolve().parents[2]
 REPO = "wiltaylor/TheVault"
@@ -89,6 +90,8 @@ def source_digest(source):
 
 def client_env(runtime):
     env = {key: os.environ[key] for key in BASE_ENV if key in os.environ}
+    if os.environ.get("ANDROID_HOME"):
+        env["PATH"] = str(Path(os.environ["ANDROID_HOME"]) / "build-tools/36.0.0") + os.pathsep + env.get("PATH", "")
     return env | {"HOME": str(runtime), "XDG_CONFIG_HOME": str(runtime),
                   "GH_CONFIG_DIR": str(runtime / "gh"), "DOCKER_CONFIG": str(runtime / "docker")}
 
@@ -220,6 +223,8 @@ class Release:
         self.denv = self.base | {"DOCKER_HOST": os.environ.get("DOCKER_HOST") or os.environ.get("TERRARIUM_DOCKER_HOST", "")}
         if not self.denv["DOCKER_HOST"]:
             raise ReleaseError("missing daemon-provided Docker release relay")
+        if not self.denv["DOCKER_HOST"].startswith("unix:///"):
+            raise ReleaseError("release requires the daemon-provided Unix Docker relay, not a TCP port")
 
     def run(self, argv, **kwargs):
         return command(argv, env=self.base, **kwargs)
@@ -260,7 +265,7 @@ class Release:
         self.docker("version")
         if git("diff", "--name-only", "HEAD"):
             raise ReleaseError("release checkout has tracked modifications")
-        return {"relay": "available"}
+        return {"relay": "available", "client_tools": getattr(self, "tool_versions", {})}
 
     def cut(self):
         if not self.release.get("cut_runs"):
@@ -436,7 +441,7 @@ class Release:
                 if f"versionCode='{code}' versionName='{version}'" not in badging:
                     raise ReleaseError("signed APK version mismatch")
             appimage = self.dist / f"TheVault_{version}_amd64.AppImage"
-            command(["cargo", "tauri", "signer", "sign", "--app-version", version, str(appimage)], env=env)
+            command(["cargo-tauri", "signer", "sign", "--app-version", version, str(appimage)], env=env)
             pubkey = json.loads((ROOT / "apps/desktop/src-tauri/tauri.conf.json").read_text())["plugins"]["updater"]["pubkey"]
             public, signature = self.runtime / "updater.pub", self.runtime / "updater.sig"
             public.write_bytes(base64.b64decode(pubkey))
@@ -783,6 +788,7 @@ def main(argv=None):
                 raise ReleaseError("release-phase must be prepare or finish")
             state = args.state.resolve()
             with private_runtime() as runtime:
+                versions = check_tools(lambda argv, **kw: command(argv, env=client_env(runtime), **kw), os.environ.get("ANDROID_HOME"))
                 for name in ("GH_TOKEN", "GHCR_TOKEN"):
                     check_token_scopes(name, os.environ.get(name))
                 run_id = None
@@ -822,6 +828,7 @@ def main(argv=None):
                     else:
                         release = freeze(args.version, args.branch)
                 job = Release(state, release, runtime)
+                job.tool_versions = versions
                 evidence = job.out / "signed-smoke.json" if phase == "finish" else None
                 if phase == "finish" and "smoke" in job.journal.data["completed"]:
                     if job.journal.data["outputs"]["smoke"]["run_id"] != run_id:

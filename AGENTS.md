@@ -10,8 +10,8 @@ Before you move a card to review, push the branch and run the recipes below your
 
 Run them on a clean checkout of the pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then check out the branch at the pushed commit. Do not run `git -C /src/<agent> checkout <commit>` after the repo checkout: the target does not allow it.
 
-GitHub build/test CI is disabled. The nine former workflows are inert manual
-notices. One manual sign-only workflow temporarily uses the existing repository
+GitHub build/test CI is removed. The nine former workflows are deleted.
+One manual sign-only workflow temporarily uses the existing repository
 keys, as the operator requested. Releases use the local two-phase release job
 documented in `docs/releasing.md`.
 

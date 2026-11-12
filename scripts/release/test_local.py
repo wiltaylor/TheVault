@@ -15,6 +15,7 @@ import local
 import release as coordinator
 import signing
 import web_gate
+import preflight
 
 
 class LocalReleaseTests(unittest.TestCase):
@@ -311,7 +312,7 @@ class LocalReleaseTests(unittest.TestCase):
                 stdout = b"package: versionCode='101438' versionName='0.1.14-alpha.38'"
             elif argv[0] == "bash":
                 stdout = b"101438\n"
-            elif argv[0] == "cargo":
+            elif argv[0] == "cargo-tauri":
                 Path(argv[-1] + ".sig").write_bytes(base64.b64encode(b"trusted comment: app-version:0.1.14-alpha.38\n"))
             return subprocess.CompletedProcess(argv, 0, stdout, b"")
         with patch.dict("os.environ", env, clear=True), patch.object(coordinator, "android_signer", return_value="ab" * 32), patch.object(coordinator, "command", side_effect=fake_command):
@@ -534,6 +535,60 @@ class LocalReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(local.ReleaseError, "missing GHCR_TOKEN"):
                 coordinator.check_token_scopes("GHCR_TOKEN", None, opener)
             opener.assert_not_called()
+
+    def preflight_fixture(self):
+        home = self.root / "sdk"
+        tools = home / "build-tools/36.0.0"
+        tools.mkdir(parents=True)
+        (tools / "source.properties").write_text("Pkg.Revision=36.0.0\n")
+        versions = {argv: version for name, argv, version in preflight.TOOLS}
+        versions[(str(tools / "apksigner"), "--version")] = "0.9"
+        versions[(str(tools / "aapt2"), "version")] = "2.20"
+        def runner(argv, **kwargs):
+            if argv == ["docker", "buildx", "version"]:
+                return subprocess.CompletedProcess(argv, 0, b"github.com/docker/buildx v0.30.0", b"")
+            if Path(argv[0]).name == "zipalign":
+                return subprocess.CompletedProcess(argv, 2, b"", b"Zip alignment utility")
+            data = versions[tuple(argv)].encode()
+            # Java really writes its version to stderr.
+            return subprocess.CompletedProcess(argv, 0, b"" if argv[0] == "java" else data, data if argv[0] == "java" else b"")
+        return home, runner
+
+    def test_preflight_accepts_all_meta159_tool_versions_and_zipalign_help(self):
+        home, runner = self.preflight_fixture()
+        result = preflight.check_tools(runner, str(home))
+        self.assertEqual(result["tauri-cli"], "2.12.3")
+        self.assertEqual(result["Python"], "3.13.5")
+        self.assertEqual(result["Android build-tools"], "36.0.0")
+        self.assertEqual(result["zipalign"], "SDK 36.0.0")
+
+    def test_preflight_rejects_wrong_tool_version_clearly(self):
+        home, runner = self.preflight_fixture()
+        def wrong(argv, **kwargs):
+            if argv[0] == "python3": return subprocess.CompletedProcess(argv, 0, b"Python 3.11.2", b"")
+            return runner(argv, **kwargs)
+        with self.assertRaisesRegex(local.ReleaseError, "Python requires version 3.13.5"):
+            preflight.check_tools(wrong, str(home))
+
+    def test_preflight_rejects_missing_tool_clearly(self):
+        home, runner = self.preflight_fixture()
+        def missing(argv, **kwargs):
+            if argv[0] == "minisign": raise FileNotFoundError()
+            return runner(argv, **kwargs)
+        with self.assertRaisesRegex(local.ReleaseError, "missing or unusable minisign, expected 0.12"):
+            preflight.check_tools(missing, str(home))
+
+    def test_preflight_requires_pinned_android_package(self):
+        with self.assertRaisesRegex(local.ReleaseError, "ANDROID_HOME is required"):
+            preflight.check_tools(None, None)
+        home, runner = self.preflight_fixture()
+        (home / "build-tools/36.0.0/source.properties").write_text("Pkg.Revision=35.0.0\n")
+        with self.assertRaisesRegex(local.ReleaseError, "must contain Android build-tools 36.0.0"):
+            preflight.check_tools(runner, str(home))
+
+    def test_release_rejects_tcp_docker_endpoints(self):
+        with patch.dict("os.environ", {"DOCKER_HOST": "tcp://relay:2375"}, clear=True), self.assertRaisesRegex(local.ReleaseError, "Unix Docker relay"):
+            coordinator.Release(self.root / "state", self.release, self.root / "runtime")
 
 
 if __name__ == "__main__":

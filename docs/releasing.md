@@ -1,8 +1,8 @@
 # Releasing TheVault locally
 
 GitHub hosts source, tags, release downloads and ghcr packages. It runs no
-TheVault build or test jobs. The nine former workflows are inert manual
-notices. One operator-approved exception, sign-only.yml, is workflow_dispatch
+TheVault build or test jobs. The nine former workflows are deleted.
+One operator-approved exception, sign-only.yml, is workflow_dispatch
 only and uses existing repository signing secrets until the operator provides
 keys to the local custodian. It never builds or publishes anything.
 
@@ -87,13 +87,29 @@ when running rebuild.sh, not before every job. Nothing required for recovery
 may depend on surviving that rebuild: private draft checkpoints are the
 cross-job recovery store, not the client's filesystem.
 
-The client needs Python 3.11+, git, bash, jq, Docker CLI/buildx, gh, crane,
-Android build-tools (`zipalign`, `apksigner`, `aapt2`), cargo-tauri signer
-and minisign on PATH. It needs writable tmpfs at /dev/shm. It does not need a
-Rust compiler to build the application. The dev Dockerfile supplies the build
-toolchain inside the relay container. It pins cargo-tauri CLI **2.12.3** and
-Android build-tools **36.0.0**. META installs those signing tool versions on
-the client too.
+Every job, including a resume, checks the META-159 client tool contract before
+token checks or remote operations. Missing or different versions fail with the
+tool name and required version. `scripts/release/preflight.py` pins:
+
+| Tool | Version |
+|---|---|
+| cargo-tauri (standalone CLI) | 2.12.3 |
+| Android build-tools | 36.0.0, apksigner 0.9, aapt2 2.20 |
+| OpenJDK | 21.0.13 |
+| jq / minisign | 1.7.1 / 0.12 |
+| Docker CLI | 29.0.3, with usable buildx |
+| crane / cosign | 0.22.1 / 3.1.4 |
+| gh / just | 2.100.0 / 1.59.0 |
+| uv / git / Python | 0.13.0 / 2.47.3 / 3.13.5 |
+
+Set `ANDROID_HOME=/opt/android-sdk`. The script checks the SDK package metadata,
+apksigner and aapt2 versions and zipalign's help banner, then uses that SDK's
+build-tools path. META supplied no buildx version pin, so it checks availability.
+The client also needs bash and writable tmpfs at /dev/shm. Standalone cargo-tauri
+does not require cargo or a Rust compiler. Application builds use the dev
+Dockerfile on the relay. The client only needs HTTPS egress on port 443 and the
+daemon's Unix Docker socket. TCP Docker endpoints are rejected, and the script
+does not open SSH or other outbound ports from the client.
 
 | Runtime environment | Purpose |
 |---|---|
@@ -126,7 +142,11 @@ inputs and their manifest as a private draft asset, dispatches sign-only.yml
 with the bundle SHA256 and original main SHA, waits for the exact request ID,
 and downloads its signed artifact. A retry finds the same request. The workflow
 checks input hashes and requires the source SHA to be on reviewed main history.
-It has contents:read only, installs signing tools, signs and returns artifacts.
+Its sign job needs `contents: write` because GitHub draft downloads require
+push access. Workflow defaults remain `contents: read`, checkout does not
+persist credentials, and no step edits a release or publishes packages. The
+job installs signing tools, signs and returns artifacts. The broader job token
+is the temporary cost of fetching private draft assets, not a publication step.
 The client verifies returned manifest hashes, APK signatures, unchanged APK
 payloads, versions, unchanged AppImage bytes and the updater signature before
 accepting returned files. Card tests never dispatch this workflow.
@@ -288,8 +308,8 @@ node --test --test-reporter=tap scripts/release/local.test.mjs scripts/release/c
 ```
 
 The local tests use Python's built-in unittest; no pytest install is needed.
-Run actionlint against all nine inert workflows and the manual sign-only
-workflow. Upload original TAP/XML output
+Run actionlint against the sole remaining manual sign-only workflow.
+Upload original TAP/XML output
 with `terrarium test push --card TV-209`.
 
 `just release::dry-run --plan-sha <40-hex-sha> --version 0.1.14-alpha.38`

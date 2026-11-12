@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -38,10 +38,8 @@ test('cleanup requires recorded PID identity, start time, home and serial', () =
   assert.match(script, /trap cleanup EXIT/);
 });
 
-test('GitHub train is inert and local release requires the cut evidence', () => {
-  const workflow = read('.github/workflows/release-train.yml');
-  assert.match(workflow, /GitHub CI is disabled/);
-  assert.doesNotMatch(workflow, /workflow_call:|push:|secrets:/);
+test('GitHub train is removed and local release requires the cut evidence', () => {
+  assert.equal(existsSync('.github/workflows/release-train.yml'), false);
   assert.match(read('scripts/release/release.py'), /tested-at-cut must name the frozen SHA/);
   assert.match(read('.just/release/mod.just'), /gate-dev:\n\tjust check/);
 });

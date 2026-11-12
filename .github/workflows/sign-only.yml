@@ -26,6 +26,10 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sign:
+    # Draft releases require push access, even for downloading their assets.
+    # No step edits a release. Checkout does not persist this token.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
