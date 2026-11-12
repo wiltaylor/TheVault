@@ -312,7 +312,8 @@ fn writer_enforces_calendar_author_and_outbox_boundary() {
     let body = json!({ "fields": {
         "title": "Standup", "google_ref": "standup", "calendar": "primary",
         "when": { "start": "2026-04-03", "end": "2026-04-03" },
-        "attendees_raw": ["ann@example.com"], "my_response": "needs_action"
+        "attendees_raw": ["ann@example.com"], "my_response": "needs_action",
+        "attendees": [{"email": "ann@example.com", "responseStatus": "accepted"}]
     }});
     let made = w
         .create("event", &writer::Input::Json(body.clone()), &user)
