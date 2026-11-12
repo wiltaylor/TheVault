@@ -78,7 +78,7 @@ describe("the Inbox", () => {
     loadInbox.mockResolvedValueOnce({ items: [items[1], {
       ...capture, row: { ...capture.row, title: "Updated capture" },
     }], total: 2 });
-    fireEvent.click(screen.getByRole("button", { name: "Inbox", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: /^Inbox$/ }));
     await screen.findByRole("link", { name: "Updated capture" });
     expect(rowOf("Updated capture")).toBe(originalRow);
     expect(screen.getByRole("combobox")).toBe(input);
