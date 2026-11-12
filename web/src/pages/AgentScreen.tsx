@@ -879,8 +879,7 @@ export function AgentScreen() {
   const navigate = useNavigate();
   const pane = usePane();
   const uid = createUniqueId();
-  // Settings > AI, for the shipped prompt, is the web app's; in the apps the agent itself is
-  // read and saved on the home server, as in the web app.
+  // Device tokens can read agents but cannot change their files.
   const [app] = createResource(appInfo);
   const [ai] = createResource(
     () => (app.state === "ready" && app() === null ? true : null),
@@ -1065,6 +1064,10 @@ export function AgentScreen() {
                   </For>
                 </div>
                 <div id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-tab-${tab().id}`}>
+                  <Show when={app.state === "ready" && app() === null} fallback={<>
+                    <p class="muted">Edit agents and skills in the web app</p>
+                    <pre aria-label="Agent file">{v().a.wcl}</pre>
+                  </>}>
                   {tab().render({
                     get agent() {
                       return v().a;
@@ -1087,6 +1090,7 @@ export function AgentScreen() {
                     },
                     id: uid,
                   })}
+                  </Show>
                 </div>
               </div>
             </Show>
