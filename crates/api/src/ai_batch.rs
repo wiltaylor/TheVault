@@ -200,6 +200,7 @@ mod tests {
         let vault = store::Vault::init(root.path()).unwrap();
         let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
         let w = Arc::new(writer::Writer::open(vault, state).unwrap());
+        w.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
         w.put_type(
             "memo",
             "label = \"Memo\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n",

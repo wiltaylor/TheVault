@@ -3930,14 +3930,14 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
     }
 }
 
-/// Why [`apply_change`] wrote nothing.
+/// Why [`apply_change`] did not report success. A storage error can follow a committed write.
 #[derive(Debug)]
 pub enum ApplyError {
     /// The change is not one a chat proposes, or lacks a member it needs.
     Invalid(String),
     /// The type or taxonomy changed since the proposal.
     Stale(String),
-    /// The write refused it: a conflict, a validation failure, a missing note.
+    /// A writer error, including uncertain storage/bookkeeping failure after a commit.
     Write(writer::Error),
     /// A download got nothing (ai D27): the address rule, the size limit, the server.
     Fetch(ai::web::FetchError),
