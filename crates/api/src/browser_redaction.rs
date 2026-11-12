@@ -150,6 +150,52 @@ impl Redactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn assert_seed_forms_redacted(stored: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(
+            &dir.path().join("state.db"),
+            Some(state::SecretKey::generate()),
+        )
+        .unwrap();
+        state
+            .set_login_secret(
+                "fabricated",
+                &state::LoginSecret {
+                    username: "fake-user".into(),
+                    password: "fake-password".into(),
+                    totp_seed: Some(stored.into()),
+                    origins: vec![],
+                },
+            )
+            .unwrap();
+        let r = Redactor::load(&state).unwrap();
+        for displayed in [
+            stored,
+            "JBSWY3DPEHPK3PXP",
+            "jbswy3dpehpk3pxp",
+            "JBSW Y3DP EHPK 3PXP",
+            "jbsw y3dp ehpk 3pxp",
+        ] {
+            assert_eq!(r.text(displayed), "[REDACTED]");
+        }
+        assert_eq!(r.text("ordinary setup page"), "ordinary setup page");
+    }
+    #[test]
+    fn spaced_seed_redacts_normalized_forms() {
+        assert_seed_forms_redacted("JBSW Y3DP EHPK 3PXP");
+    }
+    #[test]
+    fn hyphenated_seed_redacts_normalized_forms() {
+        assert_seed_forms_redacted("JBSW-Y3DP-EHPK-3PXP");
+    }
+    #[test]
+    fn lowercase_seed_redacts_normalized_forms() {
+        assert_seed_forms_redacted("jbswy3dpehpk3pxp");
+    }
+    #[test]
+    fn uri_seed_redacts_normalized_forms() {
+        assert_seed_forms_redacted("otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&digits=8&period=60");
+    }
     #[test]
     fn normalized_seed_and_uri_parameters() {
         let seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
