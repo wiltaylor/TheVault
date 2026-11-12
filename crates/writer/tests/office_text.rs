@@ -77,6 +77,10 @@ fn words_inside_documents_and_spreadsheets_find_the_notes_that_name_them() {
     let broken = w
         .put_asset("broken.xlsx", b"PK\x03\x04 broken".to_vec())
         .unwrap();
+    let failure = w.asset_extraction_failure(&broken.id).unwrap();
+    assert!(failure["reason"].as_str().unwrap().starts_with("not a zip"));
+    assert!(failure["at_ms"].as_u64().unwrap() > 0);
+    assert!(w.asset_extraction_failure(&csv.id).is_none());
     let in_docx = note(&w, "Report", &docx.id);
     let in_xlsx = note(&w, "Budget", &xlsx.id);
     let in_csv = note(&w, "People", &csv.id);

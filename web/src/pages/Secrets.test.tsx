@@ -23,6 +23,7 @@ it("writes a Login with masked credentials and warns about unrestricted sites", 
   const seed = screen.getByLabelText("One-time-code seed (optional)") as HTMLInputElement;
   expect(password.type).toBe("password");
   expect(seed.type).toBe("password");
+  expect(screen.getByText(/otpauth:\/\//)).toBeTruthy();
   fireEvent.input(password, { target: { value: "made-up-password" } });
   fireEvent.input(seed, { target: { value: "JBSWY3DPEHPK3PXP" } });
   fireEvent.click(screen.getByRole("button", { name: "Save secret" }));
@@ -41,6 +42,18 @@ it("keeps string-secret writes unchanged", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save secret" }));
   await waitFor(() => expect(putSecret).toHaveBeenCalledWith("plain", "made-up-string"));
   expect(putLoginSecret).not.toHaveBeenCalled();
+});
+
+it("shows a fixed seed validation error from the server without a code preview", async () => {
+  putLoginSecret.mockRejectedValueOnce(new Error("Invalid one-time-code seed: use a base32 key or otpauth://totp URI."));
+  render(() => <Secrets />);
+  fireEvent.change(await screen.findByLabelText("Kind"), { target: { value: "login" } });
+  fireEvent.input(screen.getByLabelText("Name"), { target: { value: "site" } });
+  fireEvent.input(screen.getByLabelText("Password"), { target: { value: "fabricated-password" } });
+  fireEvent.input(screen.getByLabelText("One-time-code seed (optional)"), { target: { value: "invalid-fabricated-seed" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save secret" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("Invalid one-time-code seed");
+  expect(screen.queryByText("invalid-fabricated-seed")).toBeNull();
 });
 
 it("warns on an unrestricted Login in the list and replacement requires the password again", async () => {

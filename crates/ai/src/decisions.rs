@@ -126,6 +126,7 @@ pub fn call(
 ) -> (Result<Response, AiError>, String) {
     let began = std::time::Instant::now();
     let mut destination = None;
+    let mut account_id = None;
     let mut model = input
         .model
         .clone()
@@ -133,6 +134,7 @@ pub fn call(
     let result = (|| {
         let accounts = crate::Accounts::load(state)?;
         let account = accounts.pick(input.account.as_deref(), None)?;
+        account_id = Some(account.id.clone());
         if input.model.is_none() {
             model = account.decisions_model().to_owned();
         }
@@ -158,6 +160,11 @@ pub fn call(
     let outcome = result
         .as_ref()
         .map_or_else(Outcome::of_error, |_| Outcome::Ok);
+    if let Some(id) = &account_id
+        && let Err(e) = state.record_ai_usage(id, &model, "classifier", usage.input, usage.output)
+    {
+        eprintln!("ai: recording classifier usage: {e}");
+    }
     let (name, kind, host) =
         destination.unwrap_or_else(|| ("unconfigured".to_owned(), Kind::OpenAiCompatible, None));
     let line = crate::trail_line(

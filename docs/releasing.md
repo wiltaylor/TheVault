@@ -206,9 +206,51 @@ the release for review rather than publishing a likely stub or bloated package.
 
 ## Signed smoke handoff
 
-Download the draft's signed x86_64 APK and smoke-fixtures.tar.gz with the lead's
-authorized release access. Transfer them with `terrarium cp` into an owned
-run directory on thevault-android. Never transfer credentials.
+The lead needs no personal GitHub token. Terrarium currently has no release-job
+file handoff to agents, and the release Docker relay is **not** the daemon on
+thevault-docker-vm. Do not try to exec on the release client or use the build
+Docker VM to read its files. Until Terrarium provides job artifacts, META is
+the transfer custodian, using its authorized admin access to the private draft.
+The `publish_handoff` and `fetch_signed_smoke` functions in
+`scripts/release/release.py` are the replacement points for a future daemon
+transport. This is an interim META-assisted handoff, not a job-artifact feature.
+
+For both `custodian` and `github` signing modes, prepare ends by verifying these
+three private draft assets and printing their exact names and SHA256 values
+in the job tail, including on resumed prepare:
+
+- `TheVault_<version>_x86_64.apk` (the signed APK, not the unsigned checkpoint)
+- `smoke-fixtures.tar.gz`
+- `release-state.json`
+
+The capsule's `handoff.files` records the APK and fixture hashes. They must also
+equal `journal.outputs["signed-manifest"].smoke_sha256` and
+`journal.outputs.build.fixtures_sha256`. The capsule's own hash is in the job
+tail, not inside itself. `journal.release.sha` is the frozen tested SHA and
+`journal.release.tagged_sha` is the prepared main commit. Compare both to the
+release record. Never accept hashes supplied only alongside unverified files.
+
+1. Lead reads `terrarium job show <prepare-job-id>` and sends META the version,
+   exact three asset names and job-tail hashes by mail.
+2. META downloads those exact assets from that version's private draft with
+   its existing authorized access, checks all three hashes against the tail,
+   and stages only those files in an agreed, owned target directory accessible
+   to the lead through Terrarium. META replies with the exact target paths.
+   The agreed alpha.39 directory on thevault-android is `/home/agent/rel39`.
+   Use a separate `/home/agent/rel<version>` directory for each later version.
+   No token, signing key, credential file or private checkpoint is transferred.
+3. Lead retrieves them with `terrarium cp <target>:<path> <local-path>`, runs
+   `sha256sum` on all three, compares with the job tail and capsule fields above,
+   then copies the APK and fixtures into an owned run directory on
+   thevault-android. Check their SHA256 again on the destination before use.
+
+Large `terrarium cp` transfers can drop helios on Terrarium 0.61.1 (fixed in
+0.62.1). If needed, split each large file into 8 MiB parts with
+`split -b 8M -d -a 4 <file> <file>.part-`, transfer the exact numbered parts
+individually and concatenate them in numeric order in an empty owned directory.
+Require the reassembled file's SHA256 to match the job tail. A partial transfer
+or a missing part is not usable evidence. After a lost call inspect processes
+and files, wait two minutes and retry the transfer, not the release build.
 
 Extract the fixture archive into an empty owned directory, then run:
 
@@ -224,7 +266,8 @@ qemu PID, start time and command before and after. Emulator-5554 and the
 No process is killed by name or by a stale fixed PID.
 
 The harness runs the release startup smoke and checks 1, 2, 3, 7, 8, 11, 17, 29.
-Upload its original TAP report. Preserve
+Upload its original TAP report with `terrarium test push <report.tap> --card <version-card>`.
+The device script writes (do not hand-author or edit)
 `.scratch/release-smoke/signed-smoke.json`, which binds the passing result to
 the frozen SHA and signed x86_64 APK hash. This tests x86_64, not arm64 hardware.
 A timeout requires inspecting the owned owner.json record and process start
@@ -233,15 +276,28 @@ time before PID-only cleanup.
 ## Phase 2: finish
 
 After uploading the original smoke report with `terrarium test push`, the lead
-uploads the unchanged hash-bound sidecar to the draft as `signed-smoke.json`.
-Use authorized lead release access, never copy a publishing token to android.
-Add an empty main commit with these trailers:
+copies the unchanged `signed-smoke.json` out of the owned Android run directory
+with `terrarium cp`, computes its SHA256, and sends META the sidecar, hash,
+version and original test run ID through the agreed Terrarium transfer path.
+META checks the transferred hash and uploads that exact file as the private
+draft asset `signed-smoke.json`, then confirms the asset hash to the lead.
+Never copy a publishing token to the lead or Android.
+
+The finish job downloads the sidecar with its own daemon-provided `GH_TOKEN`,
+checks the asset hash and validates the passing status, frozen SHA and signed
+APK hash. The existing recovery path for an already uploaded draft sidecar
+continues to work. A missing or mismatched sidecar stops finish. Only after
+META confirms the upload, add an empty main commit with these trailers:
 
 ```text
 release-phase: finish
 release-version: 0.1.14-alpha.38
 signed-smoke: <original-test-run-id>
 ```
+
+For custodian mode, also keep `signing: custodian` on the finish commit unless
+`THEVAULT_SIGNING_MODE=custodian` is supplied by the job environment. Finish must
+use the same signing mode as prepare.
 
 Start the same recipe with
 `terrarium job release <version-card> --commit <finish-main-commit>`.

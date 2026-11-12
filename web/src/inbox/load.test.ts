@@ -4,13 +4,15 @@ import { countInbox } from "./load";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("counts allowed inbox rows, not held rows, including subsequent pages", async () => {
-  vi.spyOn(api, "heldAgentNotes").mockResolvedValue({ notes: [{ id: "held" } as never, { id: "outside" } as never], total: 2 });
-  vi.spyOn(api, "query").mockImplementation(async (query, cursor) => {
-    if (!query.startsWith("from email")) return { rows: [], next: null, total: 0 };
-    return cursor
-      ? { rows: [{ id: "allowed" } as never], next: null, total: 2 }
-      : { rows: [{ id: "held" } as never], next: "next", total: 2 };
+it("uses four filtered totals without paging rows or held notes, regardless of inbox size", async () => {
+  const held = vi.spyOn(api, "heldAgentNotes");
+  const query = vi.spyOn(api, "query").mockImplementation(async () => {
+    return { rows: [], next: "more", total: 10000 };
   });
-  expect(await countInbox()).toBe(1);
+  expect(await countInbox()).toBe(40000);
+  expect(held).not.toHaveBeenCalled();
+  expect(query).toHaveBeenCalledTimes(4);
+  for (const call of query.mock.calls) {
+    expect(call.slice(1)).toEqual([null, 1, undefined, undefined, true]);
+  }
 });

@@ -215,6 +215,8 @@ fn safety_rest_read_route_inventory() {
         "/api/ai/accounts",
         "/api/ai/chat/turns/{turn}/events",
         "/api/ai/models",
+        // TV-217 review: owner-only token counts, no held-note content or identifiers.
+        "/api/ai/usage",
         "/api/assets",
         "/api/assets/trash",
         "/api/assets/{id}",
@@ -235,6 +237,7 @@ fn safety_rest_read_route_inventory() {
         "/api/flagged",
         "/api/health",
         "/api/integrations/ai",
+        "/api/integrations/attempt-limits",
         "/api/integrations/brave",
         "/api/integrations/browser",
         "/api/integrations/gitsync",
@@ -287,24 +290,97 @@ fn safety_rest_read_route_inventory() {
 
 #[test]
 fn safety_rest_mutation_route_inventory() {
-    // Review every new non-GET route, including endpoints that return note text.
-    let source = include_str!("../../api/src/lib.rs");
-    let mut actual = Vec::new();
-    for method in ["post", "post_up_to", "put", "put_up_to", "patch"] {
-        let marker = format!(".{method}(");
-        for part in source.split(&marker).skip(1) {
-            if let Some(path) = part
-                .trim_start()
-                .strip_prefix('"')
-                .and_then(|s| s.split('"').next())
-            {
-                actual.push((method, path));
-            }
-        }
-    }
+    // Registered paths include const paths and size-limited POST/PUT routes.
+    let mut actual: Vec<_> = api::routes()
+        .into_iter()
+        .filter_map(|(method, path)| {
+            let method = match method {
+                reqwest::Method::POST => "post",
+                reqwest::Method::PUT => "put",
+                reqwest::Method::PATCH => "patch",
+                reqwest::Method::DELETE => "delete",
+                _ => return None,
+            };
+            Some((method, path))
+        })
+        .collect();
     actual.sort_unstable();
     actual.dedup();
     let reviewed = [
+        ("delete", "/api/agents/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/agents/{name}/memories/{id}",
+            "caller ownership checked",
+        ),
+        (
+            "delete",
+            "/api/agents/{name}/threads/{id}",
+            "caller ownership checked",
+        ),
+        (
+            "delete",
+            "/api/ai/chat/turns/{turn}",
+            "caller-bound turn ownership checked",
+        ),
+        ("delete", "/api/assets/{id}", "central asset id gate"),
+        (
+            "delete",
+            "/api/device-files/{platform}",
+            "admin scope required",
+        ),
+        ("delete", "/api/devices/{id}", "admin scope required"),
+        (
+            "delete",
+            "/api/integrations/ai/accounts/{id}",
+            "admin scope required",
+        ),
+        (
+            "delete",
+            "/api/integrations/gitsync",
+            "admin scope required",
+        ),
+        (
+            "delete",
+            "/api/integrations/gitsync/token",
+            "admin scope required",
+        ),
+        ("delete", "/api/notes/{id}", "central id gate"),
+        (
+            "delete",
+            "/api/notifications",
+            "caller metadata, no stored note body",
+        ),
+        (
+            "delete",
+            "/api/notifications/{id}",
+            "caller metadata, no stored note body",
+        ),
+        (
+            "delete",
+            "/api/pins/folders/{id}",
+            "caller metadata, no stored note body",
+        ),
+        ("delete", "/api/pins/{id}", "central id gate"),
+        ("delete", "/api/scripts/{name}", "admin scope required"),
+        ("delete", "/api/secrets/{name}", "admin scope required"),
+        ("delete", "/api/skills/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/skills/{name}/files/{*path}",
+            "admin scope required",
+        ),
+        ("delete", "/api/tasks/{name}", "admin scope required"),
+        ("delete", "/api/taxonomies/{name}", "admin scope required"),
+        ("delete", "/api/tokens/{name}", "admin scope required"),
+        ("delete", "/api/tools/{name}", "admin scope required"),
+        ("delete", "/api/trash/{id}", "human-only purge"),
+        ("delete", "/api/types/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/types/{name}/templates/{template}",
+            "admin scope required",
+        ),
         (
             "patch",
             "/api/agents/{name}/memories/{id}",
@@ -748,10 +824,11 @@ fn safety_rest_mutation_route_inventory() {
         ),
     ];
     assert!(reviewed.iter().all(|(_, _, review)| !review.is_empty()));
-    let expected: Vec<_> = reviewed
+    let mut expected: Vec<_> = reviewed
         .iter()
-        .map(|(method, path, _)| (*method, *path))
+        .map(|(method, path, _)| (method.strip_suffix("_up_to").unwrap_or(method), *path))
         .collect();
+    expected.sort_unstable();
     assert_eq!(
         actual, expected,
         "Review the content returned by every new write route"
@@ -939,6 +1016,39 @@ held_rest_route!(safety_rest_asset_trash, "/api/assets/trash");
 held_rest_route!(safety_rest_asset_usage, "/api/assets/{id}/usage");
 held_rest_route!(safety_rest_daily, "/api/daily/2026-11-10");
 held_rest_route!(safety_rest_planner, "/api/planner/day/2026-11-10");
+
+#[test]
+fn safety_session_query_count_can_exclude_held_notes() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("scam"));
+    let held = safety_note(&api);
+    assert_eq!(
+        safety_wait(&api, held["id"].as_str().unwrap())["agent_safety"]["status"],
+        "held"
+    );
+    decisions.push(safety_reply("allow"));
+    let allowed = safety_note(&api);
+    assert_eq!(
+        safety_wait(&api, allowed["id"].as_str().unwrap())["agent_safety"]["status"],
+        "allowed"
+    );
+    for exclude in [false, true] {
+        let result = api.send(
+            "POST",
+            "/api/query",
+            json!({
+                "query": "from email", "page_size": 1, "exclude_held": exclude
+            }),
+        );
+        assert_eq!(result["total"], if exclude { 1 } else { 2 });
+        if exclude {
+            assert_eq!(result["rows"][0]["id"], allowed["id"]);
+            assert!(result["next"].is_null());
+        }
+    }
+}
 
 #[test]
 fn safety_rest_list_and_post_query_exclude_held_notes() {
@@ -1442,6 +1552,62 @@ fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
     assert!(delivered.contains("CLEARED_INVOICE_17"), "{delivered}");
     assert!(!delivered.contains("WITHHELD_RAW_HTML_17"), "{delivered}");
     assert!(!delivered.contains("image/png"), "{delivered}");
+}
+
+#[test]
+fn attachment_envelope_failed_asset_owner_diagnostic_stays_withheld() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    let asset: Value = api
+        .client
+        .post(api.server.url("/api/assets?filename=broken.docx"))
+        .bearer_auth(api.server.admin_token())
+        .body("broken")
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let id = asset["id"].as_str().unwrap();
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Broken attachment", "attachments":[id], "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
+    let evidence = api.send(
+        "GET",
+        &format!(
+            "/api/agent-safety/evidence/{}",
+            note["id"].as_str().unwrap()
+        ),
+        json!(null),
+    );
+    assert_eq!(evidence["envelope"]["attachments"][0]["status"], "failed");
+    assert!(evidence["envelope"]["attachments"][0].get("text").is_none());
+    assert!(
+        evidence["extraction_failures"][id]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no zip header")
+    );
+    assert!(
+        evidence["extraction_failures"][id]["at_ms"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let token = api.external_agent_token();
+    assert_eq!(
+        api.client
+            .get(api.server.url(&format!("/api/assets/{id}")))
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
 }
 
 #[test]

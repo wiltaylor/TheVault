@@ -530,7 +530,13 @@ fn legacy_reserved_agent_files_warn_at_startup_and_in_settings_data() {
     assert_eq!(s, 200);
     let warnings = list["warnings"].as_array().unwrap();
     assert_eq!(warnings.len(), 3);
-    let lines = server.stderr_lines();
+    let lines = server.stderr_lines_when(|lines| {
+        ["user", "agent-old", "device-old"].iter().all(|name| {
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("warning: agent {name:?} ")))
+        })
+    });
     for name in ["user", "agent-old", "device-old"] {
         assert_eq!(
             warnings

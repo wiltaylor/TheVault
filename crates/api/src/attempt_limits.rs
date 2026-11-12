@@ -13,6 +13,8 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use serde::Serialize;
+use serde_json::json;
 use writer::Writer;
 
 const WINDOW: Duration = Duration::from_secs(60);
@@ -258,6 +260,19 @@ struct Proxy {
     header: &'static str,
 }
 
+#[derive(Clone, Serialize)]
+pub(crate) struct Diagnostic {
+    client_address: Option<String>,
+    client_address_source: &'static str,
+    trusted_proxies: Vec<serde_json::Value>,
+}
+
+pub(crate) async fn diagnostic(
+    axum::Extension(info): axum::Extension<Diagnostic>,
+) -> impl IntoResponse {
+    ([("cache-control", "no-store")], axum::Json(info))
+}
+
 pub(crate) struct Limits {
     writer: Arc<Writer>,
     counters: Mutex<Counters>,
@@ -267,6 +282,20 @@ pub(crate) struct Limits {
 impl Limits {
     pub(crate) fn from_env(writer: Arc<Writer>) -> Self {
         let value = std::env::var("VAULT_TRUSTED_PROXIES").unwrap_or_default();
+        let weak = Arc::downgrade(&writer);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let Some(writer) = weak.upgrade() else { break };
+                if crate::blocking(writer, |w| w.state().prune_auth_failure_history())
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("could not prune authentication failure history");
+                }
+            }
+        });
         Self {
             writer,
             counters: Mutex::default(),
@@ -275,9 +304,14 @@ impl Limits {
     }
 }
 
+#[cfg(test)]
 fn client_address(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> Key {
+    resolve(proxies, peer, headers).0
+}
+
+fn resolve(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> (Key, &'static str) {
     let peer = peer.map(|ip| ip.to_canonical());
-    proxies
+    let forwarded = proxies
         .iter()
         .find(|p| Some(p.address) == peer)
         .and_then(|p| {
@@ -287,15 +321,21 @@ fn client_address(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> Key {
             if values.next().is_some() {
                 return None;
             }
-            if p.header == "x-forwarded-for" {
+            let value = if p.header == "x-forwarded-for" {
                 value.rsplit(',').next()
             } else {
                 Some(value)
-            }
-        })
-        .and_then(|v| v.trim().parse::<IpAddr>().ok())
-        .or(peer)
-        .map(key)
+            }?;
+            Some((Some(key(value.trim().parse::<IpAddr>().ok()?)), p.header))
+        });
+    forwarded.unwrap_or((
+        peer.map(key),
+        if peer.is_some() {
+            "peer"
+        } else {
+            "unavailable"
+        },
+    ))
 }
 
 fn proxies(value: &str) -> Vec<Proxy> {
@@ -343,10 +383,17 @@ struct Attempt {
     key: Key,
     started: Started,
     finished: bool,
+    info: Diagnostic,
+    kind: &'static str,
+    user_agent: Option<String>,
 }
 
 impl Attempt {
     fn finish(mut self, status: StatusCode) -> Option<tokio::task::JoinHandle<()>> {
+        self.complete(status)
+    }
+
+    fn complete(&mut self, status: StatusCode) -> Option<tokio::task::JoinHandle<()>> {
         let notify = self
             .limits
             .counters
@@ -354,37 +401,52 @@ impl Attempt {
             .expect("attempt counters")
             .record(self.key, &self.started, status, Instant::now());
         self.finished = true;
-        notify.then(|| notify_owner(self.limits.clone()))
+        if status.is_success() {
+            return None;
+        }
+        let limits = self.limits.clone();
+        let info = self.info.clone();
+        let kind = self.kind;
+        let user_agent = self.user_agent.clone();
+        Some(tokio::spawn(async move {
+            let detail = json!({
+                "client_address": info.client_address,
+                "client_address_source": info.client_address_source,
+                "user_agent": user_agent,
+            });
+            let result = crate::blocking(limits.writer.clone(), move |w| {
+                w.state().prune_auth_failure_history()?;
+                w.state().record_activity(
+                    state::NewActivity::server(kind, "auth", "A credential check failed")
+                        .detail(detail),
+                );
+                Ok::<_, state::Error>(())
+            })
+            .await;
+            if result.is_err() {
+                tracing::warn!("could not store authentication failure activity");
+            }
+            if notify {
+                let _ = notify_owner(limits, info).await;
+            }
+        }))
     }
 }
 
 impl Drop for Attempt {
     fn drop(&mut self) {
         if !self.finished {
-            let notify = self
-                .limits
-                .counters
-                .lock()
-                .expect("attempt counters")
-                .record(
-                    self.key,
-                    &self.started,
-                    StatusCode::REQUEST_TIMEOUT,
-                    Instant::now(),
-                );
-            if notify {
-                drop(notify_owner(self.limits.clone()));
-            }
+            drop(self.complete(StatusCode::REQUEST_TIMEOUT));
         }
     }
 }
 
-fn notify_owner(limits: Arc<Limits>) -> tokio::task::JoinHandle<()> {
+fn notify_owner(limits: Arc<Limits>, info: Diagnostic) -> tokio::task::JoinHandle<()> {
     // Detached from the HTTP future, so disconnecting cannot suppress the notification.
     tokio::spawn(async move {
-        let result = crate::blocking(limits.writer.clone(), |w| w.notify(&state::NewNotification {
+        let result = crate::blocking(limits.writer.clone(), move |w| w.notify(&state::NewNotification {
             title: "Repeated sign-in failures".into(),
-            body: Some("Five or more password or pairing/code checks failed in one minute. Attempt limits are active.".into()),
+            body: Some(format!("Five or more password or pairing/code checks failed in one minute. Attempt limits are active. Latest key: {} ({}).", info.client_address.as_deref().unwrap_or("unavailable"), info.client_address_source)),
             source: "server:auth".into(), note_id: None, url: None,
         })).await;
         if result.is_err() {
@@ -395,9 +457,27 @@ fn notify_owner(limits: Arc<Limits>) -> tokio::task::JoinHandle<()> {
 
 pub(crate) async fn check(
     State(limits): State<Arc<Limits>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    let (address, source) = resolve(&limits.proxies, peer, request.headers());
+    let info = Diagnostic {
+        client_address: address.map(|ip| match ip {
+            IpAddr::V4(_) => ip.to_string(),
+            IpAddr::V6(_) => format!("{ip}/64"),
+        }),
+        client_address_source: source,
+        trusted_proxies: limits
+            .proxies
+            .iter()
+            .map(|p| json!({"address": p.address.to_string(), "header": p.header}))
+            .collect(),
+    };
+    request.extensions_mut().insert(info.clone());
     if request.method() != Method::POST
         || !matches!(
             request.uri().path(),
@@ -406,11 +486,16 @@ pub(crate) async fn check(
     {
         return next.run(request).await;
     }
-    let peer = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0.ip());
-    let address = client_address(&limits.proxies, peer, request.headers());
+    let kind = match request.uri().path() {
+        "/api/login" => "auth.login_failed",
+        "/api/devices/pair" => "auth.pair_failed",
+        _ => "auth.agent_code_failed",
+    };
+    let user_agent = request
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| state::one_line(v, 200));
     if let Some(seconds) = limits
         .counters
         .lock()
@@ -455,6 +540,9 @@ pub(crate) async fn check(
         key: address,
         started,
         finished: false,
+        info: info.clone(),
+        kind,
+        user_agent,
     };
     let response = next.run(Request::from_parts(parts, Body::from(body))).await;
     if let Some(notice) = attempt.finish(response.status()) {

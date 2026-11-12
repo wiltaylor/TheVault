@@ -2671,7 +2671,7 @@ fn a_plan_turn_keeps_the_plans_usage_for_its_account() {
     };
     assert_eq!(accounts(&api)["accounts"][0]["usage"], Value::Null);
     fake.set_plan_usage(Some((25.0, 60.0)));
-    fake.push(OpenAiResponse::text("Hi."));
+    fake.push(OpenAiResponse::text("Hi.").usage(123, 45));
     let events = api.chat(json!([user("Hello")]));
     assert!(events.iter().any(|(n, _)| n == "done"), "{events:?}");
     let usage = &accounts(&api)["accounts"][0]["usage"];
@@ -2688,6 +2688,50 @@ fn a_plan_turn_keeps_the_plans_usage_for_its_account() {
     // Settings > AI shows the same reading on the account.
     let status = api.ai_status();
     assert_eq!(&status["accounts"][0]["usage"], usage);
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    let rows = state.ai_usage_daily().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].purpose, "agent");
+    assert_eq!(
+        (rows[0].calls, rows[0].input_tokens, rows[0].output_tokens),
+        (1, 123, 45)
+    );
+    assert_eq!(
+        rows[0].account,
+        status["accounts"][0]["id"].as_str().unwrap()
+    );
+    let denied = api
+        .client
+        .get(api.server.url("/api/ai/usage"))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let totals: Value = api
+        .client
+        .get(api.server.url("/api/ai/usage"))
+        .header("cookie", cookie)
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(totals["items"][0]["input_tokens"], 123);
+    assert_eq!(totals["items"][0]["output_tokens"], 45);
 }
 
 #[test]

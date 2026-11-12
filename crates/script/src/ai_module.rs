@@ -381,6 +381,10 @@ fn call(
         max_tokens: opts.max_tokens,
     };
     let result = ::ai::complete_blocking(client, &cred, &req, Some(deadline));
+    let usage = result.as_ref().map_or_else(|e| e.usage, |r| r.usage);
+    if let Err(e) = state.record_ai_usage(&account.id, &model, "agent", usage.input, usage.output) {
+        eprintln!("ai: recording script usage: {e}");
+    }
     if let Ok(reply) = &result
         && let Some(usage) = &reply.plan_usage
         && let Err(e) = usage.save(state, &account.id)

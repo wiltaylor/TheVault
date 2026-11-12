@@ -3,6 +3,7 @@
 //! `cargo test -p state --test main <module>::`.
 
 mod activity;
+mod ai_usage;
 mod changes;
 mod classifiers;
 mod commands;

@@ -21,6 +21,8 @@ export interface NoteDoc {
 }
 
 export interface Note {
+  /** Server-owned Outbox not-before time, in Unix milliseconds. */
+  send_deadline_ms?: number;
   agent_safety?: AgentSafety;
   id: string;
   type: string;
@@ -36,6 +38,7 @@ export interface AgentSafety {
 }
 
 export interface SafetyEvidence {
+  extraction_failures?: Record<string, { reason: string; at_ms: number | null }>;
   envelope: { envelope_version: number; attachments: Array<{ id: string; filename?: string; status: string; text?: string }> };
   fingerprint: string;
   decision_current: boolean;
@@ -1201,6 +1204,7 @@ export interface AgentCode {
 /** An API token. Only the response that creates it carries `secret` (D11). */
 export interface Token {
   name: string;
+  kind: "user" | "device" | "agent";
   scope: Scope;
   created: number;
   last_used: number | null;
@@ -1889,7 +1893,7 @@ export const api = {
   /** Delete a taxonomy. One a field uses answers 409 `taxonomy_in_use`, listing the notes. */
   deleteTaxonomy: (name: string) => request<unknown>("DELETE", `/api/taxonomies/${enc(name)}`),
   /** One page of `query`. `thisId` is the note that holds the query, bound to `this`; `signal` cancels it. */
-  query: (query: string, cursor: string | null, pageSize: number, thisId?: string, signal?: AbortSignal) =>
+  query: (query: string, cursor: string | null, pageSize: number, thisId?: string, signal?: AbortSignal, excludeHeld = false) =>
     request<Page>(
       "POST",
       "/api/query",
@@ -1898,6 +1902,7 @@ export const api = {
         ...(thisId ? { this: thisId } : {}),
         ...(cursor ? { cursor } : {}),
         page_size: pageSize,
+        ...(excludeHeld ? { exclude_held: true } : {}),
       },
       signal,
     ),

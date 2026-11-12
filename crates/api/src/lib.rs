@@ -466,6 +466,7 @@ fn build() -> Built {
         .post("/api/integrations/gitsync/run", gitsync::run);
     let ai = Routes::new()
         .get("/api/integrations/ai", ai_settings::status)
+        .get("/api/ai/usage", ai_settings::token_usage)
         .put("/api/integrations/ai/settings", ai_settings::put_settings)
         .put("/api/integrations/ai/default", ai_settings::put_default)
         .post("/api/integrations/ai/accounts", ai_settings::create_account)
@@ -505,7 +506,12 @@ fn build() -> Built {
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
         .post("/api/ai/apply", ai_turns::apply)
         .post("/api/ai/discard", ai_turns::discard);
-    let browser = Routes::new().get("/api/integrations/browser", browser::status);
+    let browser = Routes::new()
+        .get("/api/integrations/browser", browser::status)
+        .get(
+            "/api/integrations/attempt-limits",
+            attempt_limits::diagnostic,
+        );
     Built {
         api,
         login,

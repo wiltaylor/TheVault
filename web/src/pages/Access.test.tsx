@@ -4,13 +4,27 @@ import type { AgentCode } from "../api";
 
 const createAgentCode = vi.fn();
 const copyText = vi.fn();
+const tokens = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, createAgentCode } };
+  return { ...real, api: { ...real.api, createAgentCode, tokens } };
 });
 vi.mock("../clipboard", () => ({ copyText }));
 
-const { ConnectAgent } = await import("./Access");
+const { ConnectAgent, Tokens } = await import("./Access");
+
+it("shows stored user, device and agent kinds without inferring from names", async () => {
+  tokens.mockResolvedValue(["user", "device", "agent"].map((kind, i) => ({
+    name: `plain-${i}`, kind, scope: "write", created: 1, last_used: null,
+  })));
+  render(() => <Tokens />);
+  const table = await screen.findByRole("table", { name: "Tokens" });
+  await waitFor(() => expect(table.querySelectorAll("tbody tr").length).toBe(3));
+  for (const [i, kind] of ["user", "device", "agent"].entries()) {
+    expect(table.querySelector(`[data-token="plain-${i}"]`)?.textContent).toContain(kind);
+  }
+  expect(table.querySelector(".agent-badge")?.textContent).toBe("agent");
+});
 
 const issued: AgentCode = {
   code: "K7QM-3XRT",

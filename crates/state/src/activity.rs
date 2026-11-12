@@ -414,6 +414,7 @@ impl State {
 
     /// A page of entries matching `filter`, newest first.
     pub fn activity(&self, filter: &ActivityFilter) -> Result<ActivityPage> {
+        self.prune_auth_failure_history()?;
         let limit = filter.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
         let (actor_kind, actor) = match filter.actor.as_deref().filter(|a| !a.is_empty()) {
             Some(a) => match a.split_once(':') {
@@ -463,8 +464,22 @@ impl State {
 
     /// Prune the log to [`RETENTION_MS`] and [`MAX_ENTRIES`]. Returns how many entries went.
     pub fn prune_activity(&self) -> Result<usize> {
+        self.prune_auth_failure_history()?;
+        self.prune_ai_usage()?;
         self.prune_agent_calls()?;
         self.prune_activity_to(RETENTION_MS, MAX_ENTRIES)
+    }
+
+    /// Client addresses in credential failures are personal data, retained for 24 hours only.
+    pub fn prune_auth_failure_history(&self) -> Result<()> {
+        let cutoff = self.now().saturating_sub(24 * 60 * 60 * 1000);
+        let conn = self.conn();
+        conn.execute("DELETE FROM activity WHERE at_ms <= ?1 AND kind IN ('auth.login_failed', 'auth.pair_failed', 'auth.agent_code_failed')", [cutoff])?;
+        conn.execute(
+            "DELETE FROM notifications WHERE created_ms <= ?1 AND source = 'server:auth'",
+            [cutoff],
+        )?;
+        Ok(())
     }
 
     /// Remove entries older than `max_age_ms` and beyond the newest `max_entries`. Returns how

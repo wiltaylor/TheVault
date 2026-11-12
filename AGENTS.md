@@ -32,6 +32,9 @@ Use `terrarium exec` with the same wrapper for short checks. For long runs, end 
 | Scripts | `bash -n <changed-script.sh>` and the relevant tests: `node --test scripts/release/<name>.test.mjs`, `node --test scripts/nightly/nightly.test.mjs`, or `scripts/release/test.sh` for changed release shell behavior. |
 | Docs only | Run the repository docs lint if available. There is currently no docs component in `just check`. Use `npx --yes markdownlint-cli@0.45.0 --disable MD013 MD024 MD033 MD041 -- <changed.md>` and report it separately, not as a full-suite pass. |
 
+- Any change to `crates/api` routes or `crates/api/src/openapi.rs` runs the whole `cargo test -p api --lib`. Add each new route to both review inventories: `safety_rest_read_route_inventory` in `crates/server/tests/agent_triggers.rs` and `crates/server/tests/browser_secrets_routes.txt`, with a review line on the card. A changed shipped default under `crates/writer/defaults` appends its new hash in `crates/writer/src/shipped.rs` (TV-229).
+- Tests that build deep directory trees, use `/tmp` or look up the user name must also work in Docker: the default AppArmor profile refuses paths over about 8 KB (255-byte components fail at depth 31), `./dev` mounts `/tmp` as tmpfs, and CI or release containers can run as a uid with no passwd entry (TV-220, TV-223, TV-224).
+
 A card is ready for review when its targeted checks exit 0. Explain which checks cover the changes and any assumptions. Review reads the diff and this evidence and runs no tests. Security cards still require a second reader (P8), who also reads without running tests.
 
 ### Per-worker Cargo output

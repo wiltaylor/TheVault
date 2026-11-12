@@ -110,6 +110,7 @@ function SecretsPage() {
           <Show when={kind() === "login"}>
             <label for="secret-seed">One-time-code seed (optional)</label>
             <input id="secret-seed" type="password" autocomplete="new-password" value={seed()} onInput={(e) => setSeed(e.currentTarget.value)} />
+            <p class="muted">Use a base32 key or otpauth://totp address (SHA1, SHA256 or SHA512, 6-8 digits, positive period in seconds). Codes are computed on the server and never previewed here.</p>
             <label for="secret-origins">Site origins (optional, one per line)</label>
             <textarea id="secret-origins" value={origins()} placeholder="https://example.com" onInput={(e) => setOrigins(e.currentTarget.value)} />
             <p class="muted">Replacing a Login, including its origins or seed, requires its password again. Leave the seed empty to remove it.</p>
@@ -390,6 +391,7 @@ function TokensPage() {
                 <tr>
                   <th>Name</th>
                   <th>Scope</th>
+                  <th>Kind</th>
                   <th>Created</th>
                   <th>Last used</th>
                   <th />
@@ -403,6 +405,11 @@ function TokensPage() {
                         <code>{t.name}</code>
                       </td>
                       <td>{t.scope}</td>
+                      <td>
+                        <Show when={t.kind === "agent"} fallback={t.kind}>
+                          <span class="agent-badge">agent</span>
+                        </Show>
+                      </td>
                       <td>{when(t.created)}</td>
                       <td>{t.last_used === null ? "Never" : when(t.last_used)}</td>
                       <td>
