@@ -710,7 +710,9 @@ fn outbox_rule(
                 ));
             };
             let late_confirmation = name == "outbox_send" || name == "google_event";
-            let late_confirmation = late_confirmation && was == "failed" && status == "sending"
+            let late_confirmation = late_confirmation
+                && was == "failed"
+                && status == "sending"
                 && text(old, "error").is_some_and(|e| e.contains("check before retrying"))
                 && text(doc, "sent_at").is_some_and(|s| !s.is_empty());
             if was != status && !SEND_TRANSITIONS.contains(&(was, status)) && !late_confirmation {

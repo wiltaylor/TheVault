@@ -506,7 +506,9 @@ impl Shared {
             return;
         };
         for summary in notes {
-            let Ok(note) = writer.read(&summary.id) else { continue };
+            let Ok(note) = writer.read(&summary.id) else {
+                continue;
+            };
             let body = doc_to_json(&note.doc);
             let fields = &body["fields"];
             let text = |k: &str| fields[k].as_str().unwrap_or_default();
@@ -517,7 +519,10 @@ impl Shared {
                 continue;
             }
             if text("kind") == "sms" && text("sent_at").is_empty() {
-                if let Ok(command) = writer.state().device_command(text("device"), text("sent_ref")) {
+                if let Ok(command) = writer
+                    .state()
+                    .device_command(text("device"), text("sent_ref"))
+                {
                     match command.status {
                         state::CommandStatus::Done | state::CommandStatus::Failed => {
                             if let Err(e) = writer.finish_outbox_sms(&command) {
@@ -525,14 +530,20 @@ impl Shared {
                             }
                             continue;
                         }
-                        state::CommandStatus::Pending | state::CommandStatus::Delivered if !startup => continue,
+                        state::CommandStatus::Pending | state::CommandStatus::Delivered
+                            if !startup =>
+                        {
+                            continue;
+                        }
                         _ => {}
                     }
                 }
             }
             if !startup && text("kind") == "event" && text("sent_at").is_empty() {
                 // Failure to read the queue is not evidence that a write-back was abandoned.
-                let Ok(jobs) = writer.state().queued_jobs() else { continue };
+                let Ok(jobs) = writer.state().queued_jobs() else {
+                    continue;
+                };
                 if jobs.iter().any(|job| {
                     let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
                     p["script"] == "google_event"
@@ -546,7 +557,8 @@ impl Shared {
                 "wcl": note.wcl, "event": "after_update", "script": "outbox_send",
                 "function": "reconcile_send", "allow_domains": handler.allow_domains,
                 "secrets": handler.secrets,
-            }).to_string();
+            })
+            .to_string();
             let (result, _) = self.run_job(writer, &payload);
             if let Err(e) = result {
                 eprintln!("recovering interrupted Outbox send: {e}");

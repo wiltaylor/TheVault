@@ -129,17 +129,29 @@ fn json_note(fields: serde_json::Value) -> Input {
 fn interrupted_outbox_restart(kind: &str, action: &str) {
     let dir = tempfile::tempdir().unwrap();
     let (writer, handlers) = open(dir.path(), false);
-    writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
     let mut fields = json!({
         "title": "Check this send", "kind": kind, "status": "ready",
         "to": ["ann@example.com"],
     });
-    if !action.is_empty() { fields["event_action"] = json!(action); }
-    let item = writer.create("outbox", &json_note(fields), &user()).unwrap();
+    if !action.is_empty() {
+        fields["event_action"] = json!(action);
+    }
+    let item = writer
+        .create("outbox", &json_note(fields), &user())
+        .unwrap();
     let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
     body["fields"]["status"] = json!("sending");
-    writer.update(&item.id, &Input::Json(body), Some(&item.version),
-        &Author::Handler("outbox_send".into())).unwrap();
+    writer
+        .update(
+            &item.id,
+            &Input::Json(body),
+            Some(&item.version),
+            &Author::Handler("outbox_send".into()),
+        )
+        .unwrap();
     drop(writer);
     drop(handlers);
 
@@ -149,63 +161,107 @@ fn interrupted_outbox_restart(kind: &str, action: &str) {
         let note = writer.read(&item.id).unwrap();
         let body = writer::doc_to_json(&note.doc);
         if body["fields"]["status"] == "failed" {
-            assert!(body["fields"]["error"].as_str().unwrap().contains("check before retrying"));
+            assert!(
+                body["fields"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("check before retrying")
+            );
             break;
         }
-        assert!(Instant::now() < deadline, "{kind}/{action} stayed sending: {body}");
+        assert!(
+            Instant::now() < deadline,
+            "{kind}/{action} stayed sending: {body}"
+        );
         thread::sleep(Duration::from_millis(20));
     }
 }
 
 #[test]
-fn interrupted_email_restart() { interrupted_outbox_restart("email", ""); }
+fn interrupted_email_restart() {
+    interrupted_outbox_restart("email", "");
+}
 
 #[test]
-fn interrupted_sms_restart() { interrupted_outbox_restart("sms", ""); }
+fn interrupted_sms_restart() {
+    interrupted_outbox_restart("sms", "");
+}
 
 #[test]
-fn interrupted_event_create_restart() { interrupted_outbox_restart("event", ""); }
+fn interrupted_event_create_restart() {
+    interrupted_outbox_restart("event", "");
+}
 
 #[test]
-fn interrupted_event_update_restart() { interrupted_outbox_restart("event", "update"); }
+fn interrupted_event_update_restart() {
+    interrupted_outbox_restart("event", "update");
+}
 
 fn confirmed_outbox_restart(kind: &str, action: &str, timestamp: bool) {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());
     let (writer, handlers) = open(dir.path(), false);
-    writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
-    let copy = writer.create("report", &json_note(json!({"title": "Sent copy"})), &user()).unwrap();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let copy = writer
+        .create("report", &json_note(json!({"title": "Sent copy"})), &user())
+        .unwrap();
     let mut fields = json!({"title": "Confirmed", "kind": kind, "status": "ready"});
-    if !action.is_empty() { fields["event_action"] = json!(action); }
-    let item = writer.create("outbox", &json_note(fields), &user()).unwrap();
+    if !action.is_empty() {
+        fields["event_action"] = json!(action);
+    }
+    let item = writer
+        .create("outbox", &json_note(fields), &user())
+        .unwrap();
     let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
     body["fields"]["status"] = json!("sending");
     body["fields"]["sent_ref"] = json!("provider-confirmed");
     body["fields"]["result"] = json!(copy.id);
-    if timestamp { body["fields"]["sent_at"] = json!("2026-11-12T09:00:00Z"); }
-    writer.update(&item.id, &Input::Json(body), Some(&item.version), &Author::Handler("outbox_send".into())).unwrap();
+    if timestamp {
+        body["fields"]["sent_at"] = json!("2026-11-12T09:00:00Z");
+    }
+    writer
+        .update(
+            &item.id,
+            &Input::Json(body),
+            Some(&item.version),
+            &Author::Handler("outbox_send".into()),
+        )
+        .unwrap();
     drop(writer);
     drop(handlers);
     let (writer, _handlers) = open(dir.path(), true);
     let deadline = Instant::now() + Duration::from_secs(30);
     while writer.read(&item.id).is_ok() {
-        assert!(Instant::now() < deadline, "confirmed {kind}/{action} not settled");
+        assert!(
+            Instant::now() < deadline,
+            "confirmed {kind}/{action} not settled"
+        );
         thread::sleep(Duration::from_millis(20));
     }
     assert!(writer.read(&copy.id).is_ok());
 }
 
 #[test]
-fn confirmed_email_restart() { confirmed_outbox_restart("email", "", false); }
+fn confirmed_email_restart() {
+    confirmed_outbox_restart("email", "", false);
+}
 
 #[test]
-fn confirmed_sms_restart() { confirmed_outbox_restart("sms", "", true); }
+fn confirmed_sms_restart() {
+    confirmed_outbox_restart("sms", "", true);
+}
 
 #[test]
-fn confirmed_event_create_restart() { confirmed_outbox_restart("event", "", true); }
+fn confirmed_event_create_restart() {
+    confirmed_outbox_restart("event", "", true);
+}
 
 #[test]
-fn confirmed_event_update_restart() { confirmed_outbox_restart("event", "update", true); }
+fn confirmed_event_update_restart() {
+    confirmed_outbox_restart("event", "update", true);
+}
 
 #[test]
 fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {

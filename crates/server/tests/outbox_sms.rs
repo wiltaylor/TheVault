@@ -266,17 +266,27 @@ fn restart_unconfirmed_sms_accepts_late_receipt_without_second_command() {
     let phone = api.phone();
     let id = api.create(&api.admin, "outbox", sms(json!({}), &["Check once"]));
     api.settle();
-    let cid = api.commands(&phone, "?status=pending")[0]["id"].as_str().unwrap().to_owned();
+    let cid = api.commands(&phone, "?status=pending")[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     api.report(&phone, &cid, json!({"status": "delivered"}));
     api.server.restart();
     api.settle();
     let fields = api.fields(&id);
     assert_eq!(fields["status"], "failed", "{fields}");
     let error = fields["error"].as_str().unwrap();
-    assert!(error.contains("sms") && error.contains(NUMBER) && error.contains("check before retrying"), "{error}");
+    assert!(
+        error.contains("sms") && error.contains(NUMBER) && error.contains("check before retrying"),
+        "{error}"
+    );
     assert_eq!(api.commands(&phone, "").len(), 1);
     let copy = api.copy(&phone, "sms:late", NUMBER, "Check once", NOW);
-    api.report(&phone, &cid, json!({"status": "done", "result": {"device_ref": "sms:late"}}));
+    api.report(
+        &phone,
+        &cid,
+        json!({"status": "done", "result": {"device_ref": "sms:late"}}),
+    );
     api.settle();
     assert!(api.gone(&id));
     assert_eq!(api.fields(&copy)["device_ref"], "sms:late");

@@ -129,7 +129,9 @@ impl Writer {
         let fields = &note["note"]["fields"];
         // Only the send this command made: a retry since queued a command of its own.
         let interrupted = fields["status"] == "failed"
-            && fields["error"].as_str().is_some_and(|e| e.contains("check before retrying"));
+            && fields["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("check before retrying"));
         if note["type"] != OUTBOX_TYPE
             || (fields["status"] != "sending" && !interrupted)
             || fields["sent_ref"] != command.id.as_str()
@@ -144,7 +146,9 @@ impl Writer {
             .unwrap_or_default();
         let author = Author::Handler(SENDER.to_owned());
         if command.status == CommandStatus::Failed {
-            if interrupted { return Ok(()); }
+            if interrupted {
+                return Ok(());
+            }
             let error = format!("The phone could not send the SMS: {}", failure(&result));
             self.patch(
                 item,
@@ -157,7 +161,9 @@ impl Writer {
         let now = self.now_ms();
         let device_ref = result["device_ref"].as_str().filter(|r| !r.is_empty());
         let mut set = json!({ "sent_at": time::utc(now), "error": null });
-        if interrupted { set["status"] = json!("sending"); }
+        if interrupted {
+            set["status"] = json!("sending");
+        }
         let copy = match device_ref {
             Some(r) => {
                 set["sent_ref"] = json!(r);
