@@ -52,9 +52,27 @@ pub(crate) fn check_filename(name: &str) -> Result<()> {
 }
 
 impl Writer {
+    /// Creation-time intent only. A missing marker (including pre-upgrade assets) is unknown.
+    /// Incoming provenance always wins, including after unlink, eviction or retry.
+    pub fn asset_is_manual(&self, id: &str) -> Result<bool> {
+        Ok(self.state().meta(&format!("asset.manual.{id}"))?.as_deref() == Some("1")
+            && self.state().meta(&format!("agent_safety.asset.{id}"))?.is_none())
+    }
+
+    /// The in-app picker, camera and drawing create a fresh ID. Never expose this through
+    /// the script or native import interfaces, or use it to relabel an existing asset.
+    pub fn put_manual_asset_file(&self, filename: &str, file: &std::path::Path) -> Result<Asset> {
+        let id = ulid::Ulid::new().to_string();
+        check_filename(filename)?;
+        // Persist before publication. A crash can leave an unused marker, never unmarked bytes.
+        self.state().set_meta(&format!("asset.manual.{id}"), "1")?;
+        self.put_asset_file_as(&id, filename, file, true)
+    }
+
     // Importers may store HTML/images before the corresponding incoming note exists.
     fn mark_imported_asset_upload(&self, id: &str) -> Result<()> {
-        if script_core::run::peek(|run| {
+        if self.state().meta("asset.local_device")?.as_deref() == Some("1")
+            || script_core::run::peek(|run| {
             matches!(
                 run.job.name.as_str(),
                 "google_gmail" | "google_calendar" | "google_mail"
@@ -81,6 +99,7 @@ impl Writer {
         if !schema::is_ulid(id) {
             return Err(Error::BadRequest(format!("{id:?} is not an asset id")));
         }
+        self.mark_imported_asset_upload(id)?;
         if let Some(asset) = self.find_asset(id) {
             let same = asset.filename == filename
                 && self.vault.read(&asset.path()).is_ok_and(|b| b == bytes);
@@ -102,9 +121,34 @@ impl Writer {
         filename: &str,
         file: &std::path::Path,
     ) -> Result<Asset> {
+        self.store_asset_file_with_id(id, filename, file, false)
+    }
+
+    /// Refill the device cache from its authenticated home server. This does not grant manual
+    /// intent to downloaded files, but preserves intent already recorded on this device.
+    /// Not an upload entry point for scripts, imports or API callers.
+    pub fn cache_asset_file_with_id(
+        &self,
+        id: &str,
+        filename: &str,
+        file: &std::path::Path,
+    ) -> Result<Asset> {
+        self.store_asset_file_with_id(id, filename, file, true)
+    }
+
+    fn store_asset_file_with_id(
+        &self,
+        id: &str,
+        filename: &str,
+        file: &std::path::Path,
+        cache: bool,
+    ) -> Result<Asset> {
         if !schema::is_ulid(id) {
             let _ = std::fs::remove_file(file);
             return Err(Error::BadRequest(format!("{id:?} is not an asset id")));
+        }
+        if !cache {
+            self.mark_imported_asset_upload(id)?;
         }
         if let Some(asset) = self.find_asset(id) {
             let same = asset.filename == filename
@@ -116,14 +160,14 @@ impl Writer {
                 Err(Error::IdTaken(id.to_owned()))
             };
         }
-        self.put_asset_file_as(id, filename, file)
+        self.put_asset_file_as(id, filename, file, cache)
     }
 
     /// Store the file at `file` as a new asset called `filename`, moving it into the vault
     /// rather than reading it into memory, such as a large part of a captured message. The file
     /// is gone afterwards, stored or not.
     pub fn put_asset_file(&self, filename: &str, file: &std::path::Path) -> Result<Asset> {
-        self.put_asset_file_as(&ulid::Ulid::new().to_string(), filename, file)
+        self.put_asset_file_as(&ulid::Ulid::new().to_string(), filename, file, false)
     }
 
     /// A fresh path for a file on its way into the vault, such as an asset being downloaded, on
@@ -152,8 +196,10 @@ impl Writer {
         Ok(dir.join(format!("{}.part", ulid::Ulid::new())))
     }
 
-    fn put_asset_file_as(&self, id: &str, filename: &str, file: &std::path::Path) -> Result<Asset> {
-        self.mark_imported_asset_upload(id)?;
+    fn put_asset_file_as(&self, id: &str, filename: &str, file: &std::path::Path, manual: bool) -> Result<Asset> {
+        if !manual {
+            self.mark_imported_asset_upload(id)?;
+        }
         if let Err(e) = check_filename(filename) {
             let _ = std::fs::remove_file(file);
             return Err(e);

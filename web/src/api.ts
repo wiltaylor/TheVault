@@ -2325,7 +2325,7 @@ export const api = {
   },
   /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
   uploadAsset: (file: File) =>
-    request<Asset>("POST", `/api/assets?filename=${enc(file.name)}`, file),
+    request<Asset>("POST", `/api/assets?filename=${enc(file.name)}&provenance=manual`, file),
   /**
    * Delete an asset. Notes naming it answer 409 `asset_in_use`, listing them, unless `unlink` is
    * set: then the asset is taken out of those notes in the same commit.

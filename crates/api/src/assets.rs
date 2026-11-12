@@ -24,16 +24,31 @@ use crate::{ApiError, Caller, blocking};
 
 type Shared = State<Arc<Writer>>;
 
-// Device imports upload before creating their note. The protocol has no per-file source
-// provenance, so fail closed for device-uploaded files, including manual device uploads.
-fn mark_device_upload(w: &Writer, author: &state::Author, id: &str) -> writer::Result<()> {
+// A source assertion is intent, not declassification. Authentication and a live pairing,
+// not an app version or a supplied device ID, grant this narrow exception.
+fn manual_upload(w: &Writer, author: &state::Author, provenance: Option<&str>) -> writer::Result<bool> {
+    if provenance != Some("manual") {
+        return Ok(false);
+    }
+    match author {
+        state::Author::Session(_) => Ok(true),
+        state::Author::Token(name) => Ok(w.state().list_tokens()?.iter()
+            .any(|t| t.name == *name && t.kind == "device")
+            && w.state().device_for_token(name)?.is_some()),
+        _ => Ok(false),
+    }
+}
+
+fn mark_device_upload(w: &Writer, author: &state::Author, id: &str, manual: bool) -> writer::Result<()> {
     if let state::Author::Token(name) = author
         && w.state()
             .list_tokens()?
             .iter()
             .any(|t| t.name == *name && t.kind == "device")
     {
-        w.mark_incoming_asset(id)?;
+        if !manual {
+            w.mark_incoming_asset(id)?;
+        }
     }
     Ok(())
 }
@@ -44,6 +59,7 @@ pub const MAX_UPLOAD: usize = 512 * 1024 * 1024;
 #[derive(Deserialize)]
 pub struct UploadQuery {
     filename: Option<String>,
+    provenance: Option<String>,
 }
 
 fn asset_json(a: &Asset) -> Value {
@@ -112,8 +128,12 @@ pub async fn upload(
         .ok_or_else(|| ApiError::bad_request("name the file with ?filename="))?;
     let file = incoming(&w, body).await?;
     let asset = blocking(w, move |w| {
+        let manual = manual_upload(w, &author, q.provenance.as_deref())?;
+        if manual {
+            return w.put_manual_asset_file(&filename, &file);
+        }
         let id = ulid::Ulid::new().to_string();
-        mark_device_upload(w, &author, &id)?;
+        mark_device_upload(w, &author, &id, false)?;
         w.put_asset_file_with_id(&id, &filename, &file)
     })
     .await?;
@@ -135,7 +155,8 @@ pub async fn put(
         .ok_or_else(|| ApiError::bad_request("name the file with ?filename="))?;
     let file = incoming(&w, body).await?;
     let (existed, asset) = blocking(w, move |w| {
-        mark_device_upload(w, &author, &id)?;
+        let manual = manual_upload(w, &author, q.provenance.as_deref())?;
+        mark_device_upload(w, &author, &id, manual)?;
         let existed = w.asset_info(&id).is_ok();
         Ok::<_, writer::Error>((existed, w.put_asset_file_with_id(&id, &filename, &file)?))
     })

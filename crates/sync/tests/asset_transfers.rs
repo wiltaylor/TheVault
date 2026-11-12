@@ -250,6 +250,29 @@ fn pattern(len: usize) -> Vec<u8> {
 }
 
 #[test]
+fn manual_provenance_is_relayed_from_creation_and_unknown_stays_incoming() {
+    let server = TestServer::start_seeded(seed);
+    let phone = Device::pair(&server, &server.url(""));
+    phone.engine(Timeouts::default()).sync().unwrap();
+    let manual = phone.call("POST", "/api/assets?filename=manual.bin&provenance=manual", Body::from("manual"), 201);
+    let manual = str(&manual["id"]);
+    let unknown = phone.asset("old-client.bin", b"unknown".to_vec());
+    let incoming = phone.embedded.writer().put_asset("native.bin", b"incoming".to_vec()).unwrap();
+    assert!(phone.embedded.writer().asset_is_manual(&manual).unwrap());
+    assert!(!phone.embedded.writer().asset_is_manual(&unknown).unwrap());
+    // Fresh engine/adoption must use durable creation state, not infer intent from orphans.
+    phone.engine(Timeouts::default()).adopt().unwrap();
+    assert_eq!(phone.engine(Timeouts::default()).sync().unwrap().assets_sent, 3);
+    assert_eq!(phone.engine(Timeouts::default()).sync().unwrap().assets_sent, 0);
+    // Inspect persisted server provenance independently of the sync response.
+    let state = state::State::open(&server.vault_path().join(".vault/state.db"), None).unwrap();
+    assert!(state.meta(&format!("agent_safety.asset.{manual}")).unwrap().is_none());
+    for id in [&unknown, &incoming.id] {
+        assert!(state.meta(&format!("agent_safety.asset.{id}")).unwrap().is_some());
+    }
+}
+
+#[test]
 fn a_slow_upload_that_keeps_moving_completes_however_long_it_takes() {
     let server = TestServer::start_seeded(seed);
     let proxy = Proxy::start(server.addr());

@@ -1523,7 +1523,8 @@ impl Engine {
             }
             let path = self.writer.vault().root().join(asset.path());
             let what = format!("sending asset {}", asset.id);
-            let error = match self.home.put_asset_file(&asset.id, &asset.filename, &path) {
+            let manual = self.writer.asset_is_manual(&asset.id)?;
+            let error = match self.home.put_asset_file(&asset.id, &asset.filename, &path, manual) {
                 Ok(answer) if answer.status.is_success() => None,
                 Ok(answer) if matches!(answer.status.as_u16(), 401 | 403) => {
                     answer.ok(&what)?;
@@ -1709,7 +1710,7 @@ impl Engine {
         let incoming = self.writer.incoming_file()?;
         self.home.download_asset(id, &incoming, on_bytes)?;
         self.writer
-            .put_asset_file_with_id(id, &known.filename, &incoming)?;
+            .cache_asset_file_with_id(id, &known.filename, &incoming)?;
         self.queue.touch_asset(id)?;
         Ok(())
     }

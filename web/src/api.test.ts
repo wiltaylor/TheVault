@@ -111,7 +111,7 @@ describe("api", () => {
     expect(first.length + second.length).toBe(bytes.length);
     expect([...first, ...second]).toEqual([...bytes]);
     const upload = invoke.mock.calls.at(-1)?.[1]?.request as { path: string; upload: number; text?: string };
-    expect(upload.path).toBe("/api/assets?filename=a%20b.bin");
+    expect(upload.path).toBe("/api/assets?filename=a%20b.bin&provenance=manual");
     expect(upload.upload).toBe(7);
     expect(upload.text).toBeUndefined();
 

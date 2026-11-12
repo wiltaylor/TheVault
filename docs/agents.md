@@ -175,3 +175,17 @@ Use filtered queries and current-note reads instead. These historical and
 aggregate representations do not have a content-bound clearance of their own.
 Normal user sessions retain access. Only a user session may release a held note.
 
+New attachments made with the in-app picker, camera or drawing carry manual
+intent through device sync. Only a live paired device may assert this exception
+to the server's default incoming policy. It is not a statement that the file is
+safe. Share-to-vault, MMS, call captures and script uploads remain incoming.
+Existing incoming marks always win, even after unlinking or a manual retry.
+
+Both apps and server need the provenance protocol for manual device attachments
+to become readable. Uploads add `provenance=manual|incoming` to POST/PUT, without
+changing the byte body. Missing, empty or unknown values from devices remain
+incoming. Old apps stay conservative on new servers, and old servers ignore the
+new field and keep their existing denial. Upgrading never relabels old queue
+entries or releases historical attachments. Local intent survives restart and
+cache eviction, but files downloaded from another device do not acquire it.
+

@@ -1120,6 +1120,51 @@ fn round4_agent_rest_cleanup_and_restore_are_refused() {
 }
 
 #[test]
+fn device_upload_provenance_matrix_and_sticky_retry() {
+    let chat = FakeAnthropic::start();
+    let api = Api::start(&chat);
+    let paired: Value = api.client.post(api.server.url("/api/devices/pair"))
+        .json(&json!({"password":testkit::PASSWORD, "name":"manual-phone", "platform":"android"}))
+        .send().unwrap().json().unwrap();
+    let token = paired["token"].as_str().unwrap();
+    let agent = api.external_agent_token();
+    let agent_token = agent["secret"].as_str().unwrap();
+    let read = |id: &str| api.client.get(api.server.url(&format!("/api/assets/{id}")))
+        .bearer_auth(agent_token).send().unwrap().status().as_u16();
+    for method in [reqwest::Method::POST, reqwest::Method::PUT] {
+        for (i, source) in ["", "&provenance=", "&provenance=unknown", "&provenance=incoming", "&provenance=manual"].into_iter().enumerate() {
+            let id = format!("{i:026}");
+            let path = if method == reqwest::Method::POST { "/api/assets".to_owned() } else { format!("/api/assets/{id}") };
+            let res = api.client.request(method.clone(), api.server.url(&format!("{path}?filename=part.bin{source}")))
+                .bearer_auth(token).body("bytes").send().unwrap();
+            assert_eq!(res.status(), 201);
+            let asset: Value = res.json().unwrap();
+            let id = asset["id"].as_str().unwrap();
+            let manual = source == "&provenance=manual";
+            assert_eq!(read(id), if manual { 200 } else { 403 }, "{method} {source}");
+            let path = api.server.url(&format!("/api/assets/{id}?filename=part.bin&provenance=manual"));
+            // Neither repeated manual claims nor another token can clear historical denial.
+            for bearer in [token, agent_token, api.server.admin_token()] {
+                let res = api.client.put(&path).bearer_auth(bearer).body("bytes").send().unwrap();
+                assert!(res.status().is_success());
+                assert_eq!(read(id), if manual { 200 } else { 403 });
+            }
+            // Denial arriving later dominates a previously successful manual upload.
+            let res = api.client.put(api.server.url(&format!("/api/assets/{id}?filename=part.bin")))
+                .bearer_auth(token).body("bytes").send().unwrap();
+            assert_eq!(res.status(), 200);
+            assert_eq!(read(id), 403);
+        }
+    }
+    api.send("DELETE", &format!("/api/devices/{}", paired["device_id"].as_str().unwrap()), json!(null));
+    for method in [reqwest::Method::POST, reqwest::Method::PUT] {
+        let path = if method == reqwest::Method::POST { "/api/assets".to_owned() } else { "/api/assets/01J00000000000000000000009".to_owned() };
+        assert_eq!(api.client.request(method, api.server.url(&format!("{path}?filename=revoked.bin&provenance=manual")))
+            .bearer_auth(token).body("bytes").send().unwrap().status(), 401);
+    }
+}
+
+#[test]
 fn round2_device_upload_is_denied_before_any_note_exists() {
     let chat = FakeAnthropic::start();
     let api = Api::start(&chat);
