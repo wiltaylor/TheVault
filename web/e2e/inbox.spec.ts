@@ -3,7 +3,56 @@
 // outgoing messages stay out. Done takes each row out, and the sidebar badge counts what All lists.
 
 import type { APIRequestContext, Page } from "@playwright/test";
-import { activePane, expect, logIn, test } from "./fixtures";
+import { createServer, type Server } from "node:http";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { activePane, expect, logIn, test, vaultDir } from "./fixtures";
+
+let decisions: Server;
+let originalClassifier: string;
+test.beforeAll(async ({ admin }) => {
+  decisions = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const reason = body.includes("TV231 held scam") ? "scam" : "allow";
+      const probabilities = Object.fromEntries(["allow", "prompt_injection", "sensitive_credentials", "scam", "spam", "marketing"].map((r) => [r, r === reason ? 1 : 0]));
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ id: "inbox-safety", model: "jev-1.13.0", answers: { reason: { type: "choice", choice: reason, confidence: 1, probabilities } } }));
+    });
+  });
+  await new Promise<void>((resolve) => decisions.listen(0, "127.0.0.1", resolve));
+  const port = (decisions.address() as { port: number }).port;
+  const account = await admin.post("/api/integrations/ai/accounts", { data: { name: "Inbox decisions", kind: "openai_compatible", base_url: `http://127.0.0.1:${port}/api/v1`, key: "test-decisions-key" } });
+  expect(account.ok()).toBe(true);
+  const path = join(vaultDir(), "classifiers/agent_safety.wcl");
+  originalClassifier = readFileSync(path, "utf8");
+  writeFileSync(path, `account = "Inbox decisions"\n${originalClassifier}`);
+});
+
+test("held scams stay in the held view, not the Inbox badge, and release returns them", async ({ page, admin }) => {
+  const held = await create(admin, "email", { title: unique("TV231 held scam"), from_raw: "scam@example.com", labels: ["system/INBOX"] });
+  const allowedTitle = unique("TV231 allowed mail");
+  await create(admin, "email", { title: allowedTitle, from_raw: "sam@example.com", labels: ["system/INBOX"] });
+  await logIn(page, "/inbox");
+  await expect(row(page, allowedTitle)).toBeVisible();
+  await badgeMatches(page, admin);
+  await page.getByRole("button", { name: /^Possible scams \(/ }).click();
+  const heldView = page.getByRole("region", { name: "Held items" });
+  // A labelled section is a region. Held rows are not in the normal Inbox list.
+  const heldRow = heldView.getByRole("listitem").filter({ hasText: "TV231 held scam" });
+  await expect(heldRow).toHaveCount(1);
+  await heldRow.getByRole("button", { name: "Release", exact: true }).click();
+  await expect(heldRow).toHaveCount(0);
+  await activePane(page).getByRole("navigation", { name: "Inbox views" }).getByRole("button", { name: "Inbox", exact: true }).click();
+  await expect(list(page).getByRole("link", { name: /TV231 held scam/ })).toBeVisible();
+  await badgeMatches(page, admin);
+  expect(held.id).toBeTruthy();
+});
+test.afterAll(async () => {
+  if (originalClassifier) writeFileSync(join(vaultDir(), "classifiers/agent_safety.wcl"), originalClassifier);
+  await new Promise<void>((resolve) => decisions.close(() => resolve()));
+});
 
 function unique(prefix: string): string {
   return `${prefix} ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -12,7 +61,14 @@ function unique(prefix: string): string {
 async function create(admin: APIRequestContext, type: string, fields: Record<string, unknown>) {
   const res = await admin.post(`/api/notes?type=${type}`, { data: { note: { fields, blocks: [] } } });
   expect(res.status(), await res.text()).toBe(201);
-  return (await res.json()) as { id: string };
+  const note = (await res.json()) as { id: string };
+  if (["email", "message", "call"].includes(type)) {
+    await expect.poll(async () => {
+      const response = await admin.get(`/api/notes/${note.id}`);
+      return (await response.json()).agent_safety?.status;
+    }).toBe(fields.title?.toString().includes("TV231 held scam") ? "held" : "allowed");
+  }
+  return note;
 }
 
 /** What the badge counts: the All view (src/inbox/sources.ts). */
@@ -24,10 +80,24 @@ const INBOX_QUERIES = [
 ];
 
 async function inboxTotal(admin: APIRequestContext): Promise<number> {
+  const held = new Set<string>();
+  let offset = 0;
+  while (true) {
+    const res = await admin.get(`/api/agent-safety/held?limit=500&offset=${offset}`);
+    const page = await res.json();
+    for (const note of page.notes) held.add(note.id);
+    offset += page.notes.length;
+    if (!page.notes.length || offset >= page.total) break;
+  }
   let n = 0;
   for (const query of INBOX_QUERIES) {
-    const res = await admin.post("/api/query", { data: { query, page_size: 1 } });
-    n += ((await res.json()) as { total: number }).total;
+    let cursor = null;
+    do {
+      const res = await admin.post("/api/query", { data: { query, cursor, page_size: 500 } });
+      const page = await res.json();
+      n += page.rows.filter((r: { id: string }) => !held.has(r.id)).length;
+      cursor = page.next;
+    } while (cursor);
   }
   return n;
 }
@@ -41,11 +111,11 @@ const row = (page: Page, title: string) =>
   list(page).getByRole("listitem").filter({ has: page.getByRole("link", { name: title, exact: true }) });
 
 /** Other specs write notes into the same vault in parallel, so the badge is compared, not counted. */
-async function badgeMatches(page: Page, admin: APIRequestContext) {
+async function badgeMatches(page: Page, _admin: APIRequestContext) {
   await expect
     .poll(async () => {
       const badge = (await inboxLink(page).textContent())?.replace("Inbox", "").trim();
-      return badge === String(await inboxTotal(admin));
+      return badge === String(await inboxTotal(page.request));
     })
     .toBe(true);
 }
