@@ -129,9 +129,9 @@ impl Writer {
         let fields = &note["note"]["fields"];
         // Only the send this command made: a retry since queued a command of its own.
         let interrupted = fields["status"] == "failed"
-            && fields["error"]
+            && fields["interrupted_at"]
                 .as_str()
-                .is_some_and(|e| e.contains("check before retrying"));
+                .is_some_and(|s| !s.is_empty());
         if note["type"] != OUTBOX_TYPE
             || (fields["status"] != "sending" && !interrupted)
             || fields["sent_ref"] != command.id.as_str()
@@ -160,7 +160,7 @@ impl Writer {
         }
         let now = self.now_ms();
         let device_ref = result["device_ref"].as_str().filter(|r| !r.is_empty());
-        let mut set = json!({ "sent_at": time::utc(now), "error": null });
+        let mut set = json!({ "sent_at": time::utc(now), "error": null, "interrupted_at": null });
         if interrupted {
             set["status"] = json!("sending");
         }
