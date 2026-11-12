@@ -237,11 +237,17 @@ test("Convert to a task keeps the title and body, opens the task and trashes the
   const { id } = await fleeting(admin, title, "It squeaks when it opens");
   await logIn(page, "/inbox");
   const item = inboxItem(page, title);
-  await item.getByRole("button", { name: "Convert to…" }).click();
   const box = item.getByRole("combobox", { name: "Add to Type" });
-  await expect(box).toBeFocused();
-  await box.fill("Task");
-  await item.getByRole("option", { name: "Task" }).click();
+  const taskOption = item.getByRole("option", { name: "Task", exact: true });
+  // An inbox refresh can replace the row while the picker's 120 ms suggestion debounce
+  // is pending. Reopen that row if needed, and wait for the rendered choice, not time.
+  await expect(async () => {
+    if (!(await box.isVisible())) await item.getByRole("button", { name: "Convert to…" }).click();
+    await expect(box).toBeFocused();
+    await box.fill("Task");
+    await expect(taskOption).toBeVisible();
+  }).toPass({ timeout: 10_000 });
+  await taskOption.click();
   await expect(page).toHaveURL(/\/notes\/[0-9A-HJKMNP-TV-Z]{26}$/);
   const taskId = page.url().split("/").pop()!;
   expect(taskId).not.toBe(id);
