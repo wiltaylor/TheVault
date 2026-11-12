@@ -181,12 +181,18 @@ fn interrupted_outbox_restart(kind: &str, action: &str) {
 fn error_phrase_without_marker_does_not_skip_event_chain() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());
-    let (writer, handlers) = open(dir.path(), false);
-    writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
     std::fs::write(dir.path().join("types/report.wcl"), format!(
         "label = \"Report\"\nfield review {{ kind = \"string\" }}\nhandler \"after_create\" {{ script = \"google_event\" }}\n{TEMPLATE}"
     )).unwrap();
-    std::fs::write(dir.path().join("scripts/google_event.ws"), REVIEW.replace("after_update", "after_create")).unwrap();
+    let (writer, handlers) = open(dir.path(), false);
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    std::fs::write(
+        dir.path().join("scripts/google_event.ws"),
+        REVIEW.replace("after_update", "after_create"),
+    )
+    .unwrap();
     std::fs::write(dir.path().join("scripts/outbox_send.ws"), r#"use vault
 fn after_create(note: Value) -> Result[(), string] {
     vault::create("report", Value::Map(#{ "fields": Value::Map(#{ "title": Value::String("Replay me") }) }))?
@@ -196,7 +202,13 @@ fn after_create(note: Value) -> Result[(), string] {
 fn after_update(note: Value) -> Result[(), string] { Ok(()) }
 fn reconcile_send(note: Value) -> Result[(), string] { Ok(()) }
 "#).unwrap();
-    writer.create("outbox", &json_note(json!({"title": "Failed send", "kind": "event", "status": "sending"})), &user()).unwrap();
+    writer
+        .create(
+            "outbox",
+            &json_note(json!({"title": "Failed send", "kind": "event", "status": "sending"})),
+            &user(),
+        )
+        .unwrap();
     handlers.start(&writer);
     let deadline = Instant::now() + Duration::from_secs(30);
     while !writer.state().queued_jobs().unwrap().is_empty() {
