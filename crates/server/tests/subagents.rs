@@ -670,6 +670,35 @@ fn delegated_apply_rechecks_the_current_parent_and_saved_ceiling() {
 }
 
 #[test]
+fn delegated_apply_refuses_a_deleted_parent() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let thread = api.thread("lead");
+    let mut delegation = start("toolu_0", "Make a note");
+    delegation.2["agent"] = json!("writer");
+    fake.push(calls(&[delegation]));
+    fake.push(AnthropicMessage::new().tool_use("toolu_s", "propose_create", item("From sub")));
+    fake.push(AnthropicMessage::text("Proposed."));
+    fake.push(AnthropicMessage::text("Over to you."));
+    let events = api.chat("lead", Some(&thread), "Plan");
+    let proposal = find(&events, "proposal")
+        .expect("delegated proposal")
+        .clone();
+    assert_eq!(proposal["proposer_parent"], "lead");
+    assert_eq!(proposal["proposer"], "writer");
+    std::fs::remove_file(api.server.vault_path().join("agents/lead.wcl")).unwrap();
+    let (status, result) = api.send("POST", "/api/ai/apply", Some(proposal));
+    assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
+    assert!(
+        result["message"]
+            .as_str()
+            .unwrap()
+            .contains("parent agent no longer exists"),
+        "{result}"
+    );
+}
+
+#[test]
 fn stopping_the_parent_stops_its_sub_agents_and_stopping_one_answers_the_parent() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
