@@ -3496,7 +3496,9 @@ fn approval_batch_fixture(fake: &FakeAnthropic) -> (Api, String, String, String)
 #[test]
 fn apply_kind_snapshot_session_confirmation_and_retry_never_repeat_creates() {
     let fake = FakeAnthropic::start();
-    let (api, thread, _, _) = approval_batch_fixture(&fake);
+    let (mut api, thread, _, _) = approval_batch_fixture(&fake);
+    let initial = api.get(&format!("/api/agents/reader/threads/{thread}"));
+    assert_eq!(initial["pending"], 6, "all mixed-kind fixtures must actually propose: {initial}");
     let cookie = approval_cookie(&api);
     let selection = json!({"thread":thread,"proposal":"batch_create1"});
     for token in [
@@ -3583,6 +3585,11 @@ fn apply_kind_snapshot_session_confirmation_and_retry_never_repeat_creates() {
     // A normal Apply of an already successful batch proposal also returns the original result.
     let result = api.send("POST", "/api/ai/apply", p["items"][0]["data"].clone());
     assert_eq!(result, first["results"][0]["result"]);
+    api.server.restart();
+    let result = api.send("POST", "/api/ai/apply", p["items"][0]["data"].clone());
+    assert_eq!(result, first["results"][0]["result"], "success survives restart");
+    assert_eq!(safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body).status(), 400,
+        "in-memory previews do not survive restart");
 }
 
 #[test]
