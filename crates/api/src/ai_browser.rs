@@ -427,7 +427,7 @@ pub async fn capture(
                         shell_word("el => el.currentSrc || el.src || el.href || ''"),
                         shell_word(t)
                     );
-                    let read = run(b, &json!({ "command": ask, "timeout": 60 })).await;
+                    let read = run(b, &json!({ "command": ask, "timeout": 60 }), w.state()).await;
                     if read.is_error {
                         return read;
                     }
@@ -618,7 +618,7 @@ async fn run_inner(b: &BrowserBox, input: &Value, redactor: &crate::browser_reda
     let fail = |message: String| {
         let mut out = BrowserOut::error(message.clone());
         out.summary["browser"] = json!({ "kind": "run", "command": command });
-        let mut line = trail_line("-", began.elapsed().as_millis(), false, command);
+        let mut line = trail_line("-", began.elapsed().as_millis(), false, &redactor.text(command));
         line.push_str(&format!(" error={message:?}"));
         out.trail = Some(line);
         out
@@ -1182,6 +1182,49 @@ pub fn apply_save(w: &Writer, author: &Author, p: &Value) -> Result<Value, Apply
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn login_redaction_chunked_output_and_logs() {
+        use axum::{Router, routing::{get, post}, body::Body};
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(&dir.path().join("state.db"), Some(state::SecretKey::generate())).unwrap();
+        state.set_login_secret("test", &state::LoginSecret {
+            username: "fake-user".into(), password: "fake-password".into(),
+            totp_seed: Some("JBSWY3DPEHPK3PXP".into()), origins: vec![],
+        }).unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let code = crate::browser_redaction::totp("JBSWY3DPEHPK3PXP", now, 6, 30).unwrap();
+        let text = format!("fake-user fake-password JBSWY3DPEHPK3PXP {code}");
+        let run_text = json!({"stdout":text,"stderr":text,"exit":0}).to_string();
+        let file_text = text.clone();
+        fn chunked(s: String) -> Body {
+            let chunks: Vec<Result<Vec<u8>, std::io::Error>> = s.as_bytes().chunks(3).map(|c| Ok(c.to_vec())).collect();
+            Body::from_stream(futures_util::stream::iter(chunks))
+        }
+        let app = Router::new()
+            .route("/health", get(|| async { axum::Json(json!({"profile_protocol":1})) }))
+            .route("/run", post(move || { let s = run_text.clone(); async move { chunked(s) } }))
+            .route("/file", get(move || { let s = file_text.clone(); async move { ([("content-type", "text/plain")], chunked(s)) } }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let b = BrowserBox { base: format!("http://{}", listener.local_addr().unwrap()), token:"test".into(), profile:Some("test".into()) };
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let command = format!("{}fake-password", "a".repeat(115));
+        let out = run(&b, &json!({"command":command}), &state).await;
+        assert!(!out.is_error);
+        let trail = out.trail.unwrap();
+        assert!(!trail.contains("fake-"));
+        for secret in text.split_whitespace() {
+            assert!(!out.content.contains(secret));
+            assert!(!out.summary.to_string().contains(secret));
+        }
+        let images = Default::default();
+        let out = file(&b, "test", &json!({"path":"test.txt"}), false, &images, &state).await;
+        assert!(!out.is_error);
+        for secret in text.split_whitespace() { assert!(!out.content.contains(secret)); }
+        let locked = state.with_key(None);
+        assert!(run(&b, &json!({"command":"true"}), &locked).await.is_error);
+        server.abort();
+    }
 
     #[test]
     fn output_keeps_its_tail() {
