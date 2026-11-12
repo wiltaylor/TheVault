@@ -626,15 +626,17 @@ pub async fn login(
         let ok = w.state().verify_password(&body.password)?;
         // Never the password itself (activity Y2).
         let detail = json!({ "user_agent": agent.as_deref().map(|a| state::one_line(a, 200)) });
-        if ok { w.state().record_activity(
-            state::NewActivity::new(
-                "auth.login",
-                "auth",
-                &Author::Session(OWNER_SESSION.to_owned()),
-                "Signed in with the password",
-            )
-            .detail(detail)
-        ); }
+        if ok {
+            w.state().record_activity(
+                state::NewActivity::new(
+                    "auth.login",
+                    "auth",
+                    &Author::Session(OWNER_SESSION.to_owned()),
+                    "Signed in with the password",
+                )
+                .detail(detail),
+            );
+        }
         Ok::<_, state::Error>(ok)
     })
     .await?;

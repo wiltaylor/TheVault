@@ -13,9 +13,9 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use writer::Writer;
 use serde::Serialize;
 use serde_json::json;
+use writer::Writer;
 
 const WINDOW: Duration = Duration::from_secs(60);
 const NOTICE_COOLDOWN: Duration = Duration::from_secs(900);
@@ -288,7 +288,10 @@ impl Limits {
             loop {
                 tick.tick().await;
                 let Some(writer) = weak.upgrade() else { break };
-                if crate::blocking(writer, |w| w.state().prune_auth_failure_history()).await.is_err() {
+                if crate::blocking(writer, |w| w.state().prune_auth_failure_history())
+                    .await
+                    .is_err()
+                {
                     tracing::warn!("could not prune authentication failure history");
                 }
             }
@@ -323,9 +326,16 @@ fn resolve(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> (Key, &'static 
             } else {
                 Some(value)
             }?;
-            Some((key(value.trim().parse::<IpAddr>().ok()?), p.header))
+            Some((Some(key(value.trim().parse::<IpAddr>().ok()?)), p.header))
         });
-    forwarded.unwrap_or((peer.map(key), if peer.is_some() { "peer" } else { "unavailable" }))
+    forwarded.unwrap_or((
+        peer.map(key),
+        if peer.is_some() {
+            "peer"
+        } else {
+            "unavailable"
+        },
+    ))
 }
 
 fn proxies(value: &str) -> Vec<Proxy> {
@@ -429,7 +439,10 @@ pub(crate) async fn check(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
     let (address, source) = resolve(&limits.proxies, peer, request.headers());
     let info = Diagnostic {
         client_address: address.map(|ip| match ip {
@@ -437,7 +450,11 @@ pub(crate) async fn check(
             IpAddr::V6(_) => format!("{ip}/64"),
         }),
         client_address_source: source,
-        trusted_proxies: limits.proxies.iter().map(|p| json!({"address": p.address.to_string(), "header": p.header})).collect(),
+        trusted_proxies: limits
+            .proxies
+            .iter()
+            .map(|p| json!({"address": p.address.to_string(), "header": p.header}))
+            .collect(),
     };
     request.extensions_mut().insert(info.clone());
     if request.method() != Method::POST
@@ -453,7 +470,11 @@ pub(crate) async fn check(
         "/api/devices/pair" => "auth.pair_failed",
         _ => "auth.agent_code_failed",
     };
-    let user_agent = request.headers().get("user-agent").and_then(|v| v.to_str().ok()).map(|v| state::one_line(v, 200));
+    let user_agent = request
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| state::one_line(v, 200));
     if let Some(seconds) = limits
         .counters
         .lock()
@@ -504,13 +525,18 @@ pub(crate) async fn check(
     if !response.status().is_success() {
         let _ = crate::blocking(limits.writer.clone(), move |w| {
             w.state().prune_auth_failure_history()?;
-            w.state().record_activity(state::NewActivity::server(kind, "auth", "A credential check failed").detail(json!({
-                "client_address": info.client_address,
-                "client_address_source": info.client_address_source,
-                "user_agent": user_agent,
-            })));
+            w.state().record_activity(
+                state::NewActivity::server(kind, "auth", "A credential check failed").detail(
+                    json!({
+                        "client_address": info.client_address,
+                        "client_address_source": info.client_address_source,
+                        "user_agent": user_agent,
+                    }),
+                ),
+            );
             Ok::<_, state::Error>(())
-        }).await;
+        })
+        .await;
     }
     if let Some(notice) = attempt.finish(response.status()) {
         // Dropping this JoinHandle on disconnect detaches rather than cancels the write.
