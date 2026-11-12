@@ -202,9 +202,14 @@ fn browser_secret_unattended_run_audits_refusal_without_value() {
         .error_for_status()
         .unwrap();
     let mut runs = Value::Null;
-    eventually(15, || {
+    // Note-event triggers have a 30-second debounce on the real server clock.
+    eventually(45, || {
         runs = api.get("/api/agents/driver/runs");
-        !runs["triggers"][0]["runs"][0]["ended"].is_null()
+        let ended = !runs["triggers"][0]["runs"][0]["ended"].is_null();
+        if !ended {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        ended
     });
     let run = &runs["triggers"][0]["runs"][0];
     let log = run["log"].as_str().unwrap();
