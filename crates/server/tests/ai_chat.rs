@@ -1787,17 +1787,17 @@ fn confirm_defaults_to_on_and_takes_a_partial_change() {
     let status = api.get("/api/integrations/ai");
     assert_eq!(
         status["confirm"],
-        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true, "tools": true, "secrets": true })
+        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true, "tools": true })
     );
     let status = api.confirm(json!({ "notes": false }));
     assert_eq!(
         status["confirm"],
-        json!({ "notes": false, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true, "tools": true, "secrets": true })
+        json!({ "notes": false, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true, "tools": true })
     );
     let status = api.confirm(json!({ "delete": false }));
     assert_eq!(
         status["confirm"],
-        json!({ "notes": false, "archive": true, "delete": false, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true, "tools": true, "secrets": true })
+        json!({ "notes": false, "archive": true, "delete": false, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true, "tools": true })
     );
     // The accounts are kept.
     assert_eq!(status["default"], "acct_anthropic");
@@ -2313,7 +2313,7 @@ fn get_accounts_answers_a_read_token_with_no_key_token_url_or_sign_in() {
     assert_eq!(v["accounts"][2]["configured"], false);
     assert_eq!(
         v["confirm"],
-        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true, "tools": true, "secrets": true })
+        json!({ "notes": true, "archive": true, "delete": true, "types": true, "downloads": true, "taxonomies": true, "agents": true, "skills": true, "tools": true })
     );
     for secret in [
         fake.api_key(),
