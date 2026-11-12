@@ -5,6 +5,21 @@ use sha2::{Digest, Sha256};
 
 use crate::{Archived, Result, Writer, doc_to_json};
 
+pub const ENVELOPE_LIMIT: usize = 128 * 1024;
+
+pub fn envelope_fingerprint(envelope: &serde_json::Value) -> String {
+    format!("attachment-v1:{:x}", Sha256::digest(envelope.to_string()))
+}
+
+fn attachment_ids(doc: &Doc) -> Vec<String> {
+    let note = doc_to_json(doc);
+    let mut ids: Vec<String> = note["fields"]["attachments"].as_array().into_iter().flatten()
+        .filter_map(|v| v.as_str().filter(|id| schema::is_ulid(id)).map(str::to_owned)).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Safety {
     pub status: String,
@@ -170,6 +185,87 @@ fn same_image_rendering(old: &serde_json::Value, next: &serde_json::Value) -> bo
 }
 
 impl Writer {
+    /// No inner-index lock: note writes call this while holding that lock. The bound
+    /// extraction is an immutable snapshot, verified against both source and text hashes.
+    pub fn agent_safety_envelope(&self, kind: &str, doc: &Doc) -> serde_json::Value {
+        let attachments: Vec<_> = attachment_ids(doc).into_iter().map(|id| {
+            let mut entry = serde_json::json!({"id":id,"status":"pending"});
+            let Some(asset) = self.find_asset(&id) else { return entry; };
+            entry["filename"] = serde_json::json!(asset.filename);
+            let media = match index::TextKind::of(&asset.filename) {
+                Some(index::TextKind::Pdf) => "application/pdf",
+                Some(index::TextKind::Document) => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                Some(index::TextKind::Spreadsheet) => "spreadsheet",
+                Some(index::TextKind::Csv) => "text/csv",
+                None => {
+                    entry["status"] = serde_json::json!("unsupported");
+                    return entry;
+                }
+            };
+            entry["media_type"] = serde_json::json!(media);
+            if asset.size > index::MAX_EXTRACT_BYTES as u64 {
+                entry["status"] = serde_json::json!("failed");
+                return entry;
+            }
+            let Some(mut evidence) = index::bound_asset_text(&self.vault, &id) else { return entry; };
+            let Ok((_, bytes)) = self.asset_range(&id, 0, index::MAX_EXTRACT_BYTES as u64 + 1) else { return entry; };
+            if bytes.len() > index::MAX_EXTRACT_BYTES || evidence["source_hash"] != index::text_digest(&bytes) {
+                return entry;
+            }
+            // The extractor caps at 2 MiB. The aggregate envelope cap is much smaller,
+            // so truncated extraction never becomes readable through this gate.
+            evidence["status"] = serde_json::json!("ready");
+            entry.as_object_mut().unwrap().extend(evidence.as_object().unwrap().clone());
+            entry
+        }).collect();
+        serde_json::json!({"envelope_version":1,"type":kind,"note":classified_content(kind, doc),"attachments":attachments})
+    }
+
+    fn safety_fingerprint(&self, kind: &str, doc: &Doc) -> String {
+        envelope_fingerprint(&self.agent_safety_envelope(kind, doc))
+    }
+
+    /// Extraction publication and eviction invalidate the materialized note gate too,
+    /// so query/search cannot continue using an old allowed row.
+    pub(crate) fn invalidate_asset_safety(&self, id: &str) -> Result<()> {
+        if self.state().meta("agent_safety.activation_ms")?.is_none() { return Ok(()); }
+        if let Some(raw) = self.state().meta(&format!("agent_safety.asset_owners.{id}"))? {
+            for owner in serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default() {
+                if let Some(hash) = self.state().indexed_agent_safety_hash(&owner)? {
+                    self.state().index_agent_safety(&owner, &hash, true)?;
+                    self.refresh_safety_parents(&owner)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The only incoming-asset read permission: a checked text snapshot, never bytes.
+    /// Keep the commit lock until the value has been copied for the caller.
+    pub fn agent_attachment_text(&self, id: &str) -> Option<serde_json::Value> {
+        let _guard = self.write_lock();
+        let raw = self.state().meta(&format!("agent_safety.asset_owners.{id}")).ok()??;
+        let owners: Vec<String> = serde_json::from_str(&raw).ok()?;
+        if owners.is_empty() { return None; }
+        let mut result = None;
+        for owner in owners {
+            let note = self.read(&owner).ok()?;
+            if !attachment_ids(&note.doc).iter().any(|a| a == id)
+                || doc_to_json(&note.doc)["fields"]["html"] == id { return None; }
+            let envelope = self.agent_safety_envelope(&note.type_name, &note.doc);
+            if envelope.to_string().len() > ENVELOPE_LIMIT { return None; }
+            let safety = self.agent_safety_doc(&owner, &note.type_name, &note.doc).ok()?;
+            if !matches!(safety.status.as_str(), "allowed" | "released")
+                || safety.fingerprint != envelope_fingerprint(&envelope) { return None; }
+            let attachments = envelope["attachments"].as_array()?;
+            if attachments.iter().any(|a| a["status"] != "ready") { return None; }
+            let attachment = attachments.iter().find(|a| a["id"] == id)?.clone();
+            if result.as_ref().is_some_and(|old| old != &attachment) { return None; }
+            result = Some(attachment);
+        }
+        result
+    }
+
     pub fn incoming_agent_note(&self, kind: &str, doc: &Doc) -> bool {
         if matches!(kind, "event" | "event_series")
             && let Some(organiser) = doc.field("organiser").and_then(schema::Value::as_str)
@@ -273,8 +369,10 @@ impl Writer {
         if !same_image_rendering(&without_rendering(&old), &without_rendering(next)) {
             return Ok(());
         }
-        let before = fingerprint(kind, &old);
-        let after = fingerprint(kind, next);
+        // Rendering equivalence does not authorize adding/removing/changing attachments.
+        if attachment_ids(&old) != attachment_ids(next) { return Ok(()); }
+        let before = self.safety_fingerprint(kind, &old);
+        let after = self.safety_fingerprint(kind, next);
         if before == after {
             return Ok(());
         }
@@ -513,7 +611,7 @@ impl Writer {
                     let safety = Safety {
                         status: "held".into(),
                         reason: "predates_activation".into(),
-                        fingerprint: fingerprint(&note.type_name, &note.doc),
+                        fingerprint: self.safety_fingerprint(&note.type_name, &note.doc),
                     };
                     self.state().set_agent_safety_result(
                         &id,
@@ -540,7 +638,7 @@ impl Writer {
     }
 
     pub fn agent_safety_doc(&self, id: &str, kind: &str, doc: &Doc) -> Result<Safety> {
-        let hash = fingerprint(kind, doc);
+        let hash = self.safety_fingerprint(kind, doc);
         let result = |status: &str, reason: &str| Safety {
             status: status.into(),
             reason: reason.into(),
@@ -573,7 +671,8 @@ impl Writer {
         }
         if let Some(stored) = stored {
             if let Ok(safety) = serde_json::from_str::<Safety>(&stored) {
-                if safety.fingerprint == hash {
+                // Legacy decisions still cover the note projection, never attachments.
+                if safety.fingerprint == hash || safety.fingerprint == fingerprint(kind, doc) {
                     if matches!(kind, "email_thread" | "conversation")
                         && safety.status == "allowed"
                         && !self.safety_member_cleared(id)?
@@ -643,8 +742,7 @@ impl Writer {
 
     /// Sticky provenance. Unlinking, deleting or purging a note never releases its files.
     pub fn mark_incoming_asset(&self, id: &str) -> Result<()> {
-        self.state()
-            .set_meta(&format!("agent_safety.asset.{id}"), "1")?;
+        self.state().mark_incoming_asset(id, None)?;
         Ok(())
     }
 
@@ -655,26 +753,26 @@ impl Writer {
                 .meta(&format!("agent_safety.note.{id}"))?
                 .is_some()
         {
-            fn walk(w: &Writer, value: &serde_json::Value) -> Result<()> {
+            fn walk(w: &Writer, owner: &str, value: &serde_json::Value) -> Result<()> {
                 match value {
                     serde_json::Value::String(s) if schema::is_ulid(s) => {
-                        w.mark_incoming_asset(s)?
+                        w.state().mark_incoming_asset(s, Some(owner))?;
                     }
                     serde_json::Value::Array(a) => {
                         for v in a {
-                            walk(w, v)?;
+                            walk(w, owner, v)?;
                         }
                     }
                     serde_json::Value::Object(o) => {
                         for v in o.values() {
-                            walk(w, v)?;
+                            walk(w, owner, v)?;
                         }
                     }
                     _ => {}
                 }
                 Ok(())
             }
-            walk(self, &crate::doc_to_json(doc))?;
+            walk(self, id, &crate::doc_to_json(doc))?;
         }
         Ok(())
     }
@@ -692,7 +790,7 @@ impl Writer {
             let safety = Safety {
                 status: "pending".into(),
                 reason: "awaiting_decision".into(),
-                fingerprint: fingerprint(kind, doc),
+                fingerprint: self.safety_fingerprint(kind, doc),
             };
             self.state().set_agent_safety_result(
                 id,
@@ -713,7 +811,7 @@ impl Writer {
     ) -> Result<bool> {
         let _guard = self.write_lock();
         let note = self.read(id)?;
-        let current = fingerprint(&note.type_name, &note.doc);
+        let current = self.safety_fingerprint(&note.type_name, &note.doc);
         let mut equivalent = hash.to_owned();
         // Bound corrupt state/chains. Only the trusted conversion path records these edges.
         for _ in 0..32 {

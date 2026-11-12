@@ -41,12 +41,126 @@ fn attachment_envelope_replacement_invalidates_note_clearance() {
     let hash = w.agent_safety(&note.id).unwrap().fingerprint;
     assert!(w.finish_agent_safety(&note.id, &hash, "allowed", "allow").unwrap());
     assert!(w.agent_may_read(&note.id));
+    assert!(w.agent_attachment_text(&asset.id).is_some());
     w.evict_asset(&asset.id).unwrap();
     assert!(!w.agent_may_read(&note.id), "evicted evidence kept clearance");
+    assert!(w.state().held_agent_note_ids().unwrap().contains(&note.id));
+    assert!(w.agent_attachment_text(&asset.id).is_none());
     w.put_asset_with_id(&asset.id, "invoice.csv", b"amount\n999\n".to_vec()).unwrap();
     assert_ne!(w.agent_safety(&note.id).unwrap().fingerprint, hash);
     assert!(!w.finish_agent_safety(&note.id, &hash, "allowed", "allow").unwrap());
     assert!(!w.release_agent_safety(&note.id, &hash, &owner).unwrap());
+}
+
+fn attachment_fixture() -> (tempfile::TempDir, Writer) {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.put_type("email", "label = \"Email\"\nfield attachments { kind = \"list\" items = \"asset\" }\nfield html { kind = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    w.activate_agent_safety().unwrap();
+    (dir, w)
+}
+
+fn attachment_note(w: &Writer, ids: &[&str]) -> writer::Saved {
+    w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Invoice","attachments":ids}})), &Author::Session("owner".into())).unwrap()
+}
+
+fn allow_attachment_note(w: &Writer, id: &str) {
+    let hash = w.agent_safety(id).unwrap().fingerprint;
+    assert!(w.finish_agent_safety(id, &hash, "allowed", "allow").unwrap());
+}
+
+#[test]
+fn attachment_envelope_shared_unlinked_deleted_and_unknown_owners_deny() {
+    for action in ["shared", "unlinked", "deleted", "unknown"] {
+        let (_dir, w) = attachment_fixture();
+        let asset = w.put_asset("invoice.csv", b"amount\n17\n".to_vec()).unwrap();
+        if action == "unknown" {
+            // A pre-envelope sticky mark has no trustworthy owner history.
+            w.state().set_meta(&format!("agent_safety.asset.{}", asset.id), "1").unwrap();
+        }
+        let note = attachment_note(&w, &[&asset.id]);
+        allow_attachment_note(&w, &note.id);
+        if action != "unknown" { assert!(w.agent_attachment_text(&asset.id).is_some()); }
+        match action {
+            "shared" => {
+                let other = attachment_note(&w, &[&asset.id]);
+                assert!(w.agent_attachment_text(&asset.id).is_none());
+                allow_attachment_note(&w, &other.id);
+                assert!(w.agent_attachment_text(&asset.id).is_some());
+                w.delete(&other.id, None, &Author::Session("owner".into())).unwrap();
+            }
+            "unlinked" => {
+                w.update(&note.id, &Input::Json(serde_json::json!({"fields":{"title":"Detached","attachments":[]}})), None, &Author::Session("owner".into())).unwrap();
+            }
+            "deleted" => {
+                w.delete(&note.id, None, &Author::Session("owner".into())).unwrap();
+                w.purge_from_trash(&note.id).unwrap();
+            }
+            _ => {}
+        }
+        assert!(w.agent_attachment_text(&asset.id).is_none(), "{action}");
+        assert!(!w.agent_may_read_asset(&asset.id));
+        assert!(w.asset(&asset.id).is_ok(), "owner access changed");
+    }
+}
+
+#[test]
+fn attachment_envelope_pending_failed_html_legacy_and_cap_deny_text() {
+    for case in ["pending", "failed", "html", "image", "legacy_allow", "legacy_release", "cap"] {
+        let (_dir, w) = attachment_fixture();
+        let (name, bytes) = match case {
+            "failed" => ("bad.pdf", b"not a PDF".to_vec()),
+            "html" => ("original.html", b"<p>secret</p>".to_vec()),
+            "image" => ("image.png", b"not an image".to_vec()),
+            "cap" => ("big.csv", vec![b'x'; 128 * 1024]),
+            _ => ("invoice.csv", b"amount\n17\n".to_vec()),
+        };
+        let asset = w.put_asset(name, bytes).unwrap();
+        if case == "pending" {
+            std::fs::remove_file(w.vault().server_dir().join(format!("asset-text/v1/{}.evidence", asset.id))).unwrap();
+        }
+        let note = attachment_note(&w, &[&asset.id]);
+        allow_attachment_note(&w, &note.id);
+        if case.starts_with("legacy") {
+            let read = w.read(&note.id).unwrap();
+            let safety = writer::agent_safety::Safety {
+                status: if case == "legacy_allow" { "allowed" } else { "released" }.into(),
+                reason: "old_decision".into(),
+                fingerprint: writer::agent_safety::fingerprint(&read.type_name, &read.doc),
+            };
+            w.state().set_agent_safety_result(&note.id, &serde_json::to_string(&safety).unwrap(), true).unwrap();
+            assert!(w.agent_may_read(&note.id), "legacy note behavior changed");
+        }
+        assert!(w.agent_attachment_text(&asset.id).is_none(), "{case}");
+        assert!(!w.agent_may_read_asset(&asset.id));
+        assert!(w.asset(&asset.id).is_ok());
+    }
+}
+
+#[test]
+fn attachment_envelope_is_sorted_and_late_extraction_and_rename_invalidate() {
+    let (_dir, w) = attachment_fixture();
+    let a = w.put_asset("a.csv", b"amount\n17\n".to_vec()).unwrap();
+    let b = w.put_asset("b.csv", b"amount\n18\n".to_vec()).unwrap();
+    let note = attachment_note(&w, &[&b.id, &a.id]);
+    let read = w.read(&note.id).unwrap();
+    let envelope = w.agent_safety_envelope(&read.type_name, &read.doc);
+    assert_eq!(envelope["attachments"][0]["id"], a.id.min(b.id.clone()));
+    assert_eq!(writer::agent_safety::envelope_fingerprint(&envelope), w.agent_safety(&note.id).unwrap().fingerprint);
+    let path = w.vault().server_dir().join(format!("asset-text/v1/{}.evidence", b.id));
+    let evidence = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    allow_attachment_note(&w, &note.id);
+    let pending_hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    assert!(w.agent_attachment_text(&b.id).is_none());
+    std::fs::write(path, evidence).unwrap();
+    assert!(!w.finish_agent_safety(&note.id, &pending_hash, "allowed", "allow").unwrap());
+    assert!(w.agent_attachment_text(&b.id).is_none());
+    allow_attachment_note(&w, &note.id);
+    assert!(w.agent_attachment_text(&b.id).is_some());
+    w.rename_asset(&b.id, "changed.csv").unwrap();
+    assert!(w.agent_attachment_text(&b.id).is_none());
+    assert!(w.state().held_agent_note_ids().unwrap().contains(&note.id));
 }
 
 #[test]

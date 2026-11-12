@@ -47,7 +47,7 @@ use schema::{Doc, NoteReport, Schema};
 
 pub use asset_text::{
     EXTRACT_TIMEOUT, Extracted, MAX_EXTRACT_BYTES, MAX_RUNNING, MAX_TEXT, StoredText, TextKind,
-    extract_pdf_text, extract_text, is_pdf,
+    extract_pdf_text, extract_text, is_pdf, bound_asset_text, text_digest,
 };
 pub use graph::{Graph, GraphEdge, GraphNode};
 pub use office::MAX_UNZIPPED_BYTES;
@@ -169,6 +169,7 @@ impl Index {
     /// kept as unreadable, is logged in one line on standard error, once, since it is kept and
     /// not tried again.
     pub fn set_asset_text(&mut self, id: &str, extracted: &Extracted) -> Result<()> {
+        self.assets.forget_binding(id);
         match extracted {
             Extracted::Text(t) => self.assets.set(id, t),
             Extracted::Recovered { text, reason } => {
@@ -181,6 +182,15 @@ impl Index {
             }
             Extracted::Busy => Ok(()),
         }
+    }
+
+    /// Bind a successful representation to the exact input bytes and a fresh extraction revision.
+    pub fn set_bound_asset_text(&mut self, id: &str, source_hash: &str, extracted: &Extracted) -> Result<()> {
+        self.set_asset_text(id, extracted)?;
+        if matches!(extracted, Extracted::Text(_) | Extracted::Recovered { .. }) {
+            self.assets.bind(id, source_hash)?;
+        }
+        Ok(())
     }
 
     /// Forget the text of asset `id`, which has been deleted.

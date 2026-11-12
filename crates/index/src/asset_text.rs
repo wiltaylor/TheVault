@@ -35,6 +35,7 @@ use std::sync::{Once, mpsc};
 use std::time::Duration;
 
 use schema::{Doc, Value};
+use sha2::{Digest, Sha256};
 
 use crate::office::{self, OLE_MAGIC, ZIP_MAGIC};
 use crate::{Result, io_err, pdf_repair};
@@ -55,6 +56,32 @@ static RUNNING: AtomicUsize = AtomicUsize::new(0);
 
 /// The name of the threads extraction runs on, whose panics the hook keeps quiet.
 const THREAD: &str = "asset-text";
+
+/// Identity of the bytes actually passed to extraction (not the later file at that ID).
+pub fn text_digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Read a bound extraction without taking the note index lock. The writer serializes
+/// publication with its commit lock. Missing, old or partially published evidence fails closed.
+pub fn bound_asset_text(vault: &store::Vault, id: &str) -> Option<serde_json::Value> {
+    if !schema::is_ulid(id) {
+        return None;
+    }
+    let dir = vault.server_dir().join("asset-text/v1");
+    let mut evidence: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(dir.join(format!("{id}.evidence"))).ok()?,
+    ).ok()?;
+    if dir.join(format!("{id}.unreadable")).exists() {
+        return None;
+    }
+    let text = std::fs::read_to_string(dir.join(format!("{id}.txt"))).ok()?;
+    if evidence["text_hash"] != text_digest(text.as_bytes()) {
+        return None;
+    }
+    evidence["text"] = serde_json::json!(text);
+    Some(evidence)
+}
 
 /// What extracting a file's text came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,6 +405,21 @@ pub(crate) struct AssetTexts {
 }
 
 impl AssetTexts {
+    pub fn forget_binding(&self, id: &str) {
+        let _ = std::fs::remove_file(self.dir.join(format!("{id}.evidence")));
+    }
+
+    pub fn bind(&self, id: &str, source_hash: &str) -> Result<()> {
+        let StoredText::Text(text) = self.stored(id) else { return Ok(()); };
+        let path = self.dir.join(format!("{id}.evidence"));
+        let evidence = serde_json::json!({
+            "extraction_version": 1,
+            "revision": ulid::Ulid::new().to_string(),
+            "source_hash": source_hash,
+            "text_hash": text_digest(text.as_bytes()),
+        });
+        std::fs::write(&path, evidence.to_string()).map_err(io_err(path))
+    }
     /// Open the folder, creating it when it is missing.
     pub fn open(dir: &Path) -> Result<AssetTexts> {
         std::fs::create_dir_all(dir).map_err(io_err(dir))?;
@@ -409,6 +451,8 @@ impl AssetTexts {
 
     /// Keep `text` as asset `id`'s text. Empty text records that the asset has none.
     pub fn set(&mut self, id: &str, text: &str) -> Result<()> {
+        self.forget_binding(id);
+        let _ = std::fs::remove_file(self.dir.join(format!("{id}.unreadable")));
         let path = self.path(id);
         let tmp = self.dir.join(format!("{id}.tmp"));
         std::fs::write(&tmp, text).map_err(io_err(&tmp))?;
@@ -419,9 +463,10 @@ impl AssetTexts {
 
     /// Keep asset `id` as having no text because it could not be read, for `reason`.
     pub fn set_unreadable(&mut self, id: &str, reason: &str) -> Result<()> {
+        self.set(id, "")?;
         let path = self.dir.join(format!("{id}.unreadable"));
         std::fs::write(&path, format!("{reason}\n")).map_err(io_err(&path))?;
-        self.set(id, "")
+        Ok(())
     }
 
     /// Asset `id`'s stored text, or why it has none.
@@ -448,6 +493,7 @@ impl AssetTexts {
 
     /// Forget asset `id`'s text.
     pub fn forget(&mut self, id: &str) {
+        self.forget_binding(id);
         if self.known.remove(id).is_some() {
             let _ = std::fs::remove_file(self.path(id));
             let _ = std::fs::remove_file(self.dir.join(format!("{id}.unreadable")));
