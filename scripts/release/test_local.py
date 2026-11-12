@@ -181,6 +181,7 @@ class LocalReleaseTests(unittest.TestCase):
 
     def handoff_job(self):
         self.release["signing_mode"] = "custodian"
+        self.release["tagged_sha"] = "b" * 40
         job = self.job()
         job.smoke_apk().parent.mkdir()
         job.smoke_apk().write_bytes(b"signed-apk")
@@ -193,20 +194,23 @@ class LocalReleaseTests(unittest.TestCase):
             "build": {"fixtures_sha256": local.digest(fixtures), "dev_image": job.prefix + "-dev:build"}}
         return job
 
-    def handoff_docker(self, job, storage, calls, corrupt=False):
-        def docker(*args, **kwargs):
+    def handoff_github(self, job, storage, calls, corrupt=False):
+        def gh(*args, **kwargs):
             calls.append(args)
-            if args[:2] == ("container", "inspect"):
-                info = [{"Config": {"Labels": {"org.thevault.smoke-handoff": job.prefix}},
-                         "State": {"Status": "created"}}]
-                return subprocess.CompletedProcess(args, 0 if storage else 1, json.dumps(info).encode(), b"")
-            if args[0] == "cp":
-                if args[1].startswith(job.prefix + "-smoke-handoff:"):
-                    Path(args[2]).write_bytes(b"corrupt" if corrupt else storage[Path(args[1]).name])
-                else:
-                    storage.update({p.name: p.read_bytes() for p in Path(args[1]).iterdir()})
+            if args[0] == "api":
+                info = {"draft": True, "target_commitish": job.release["tagged_sha"], "assets": [
+                    {"name": name, "size": len(data), "digest": "sha256:" + coordinator.hashlib.sha256(data).hexdigest()}
+                    for name, data in storage.items()]}
+                return subprocess.CompletedProcess(args, 0, json.dumps(info).encode(), b"")
+            if args[:2] == ("release", "upload"):
+                path = Path(args[-1])
+                storage[path.name] = b"corrupt" if corrupt else path.read_bytes()
+            if args[:2] == ("release", "download"):
+                name = args[args.index("--pattern") + 1]
+                directory = Path(args[args.index("--dir") + 1])
+                (directory / name).write_bytes(b"corrupt" if corrupt else storage[name])
             return subprocess.CompletedProcess(args, 0, b"", b"")
-        return docker
+        return gh
 
     def test_custodian_handoff_hashes_capsule_tail_allowlist_and_resume(self):
         job = self.handoff_job()
@@ -215,8 +219,8 @@ class LocalReleaseTests(unittest.TestCase):
         storage, calls, tail = {}, [], io.StringIO()
         with patch.dict("os.environ", {key: sentinel for key in (*coordinator.SIGN_ENV, "GH_TOKEN", "GHCR_TOKEN")}), \
                 patch.object(job, "check_assets"), \
-                patch.object(job, "gh", return_value=subprocess.CompletedProcess([], 0, b'{"draft":true}', b"")), \
-                patch.object(job, "docker", side_effect=self.handoff_docker(job, storage, calls)), \
+                patch.object(job, "gh", side_effect=self.handoff_github(job, storage, calls)), \
+                patch.object(job, "docker") as docker, \
                 contextlib.redirect_stdout(tail):
             self.assertIn("await signed smoke", job.execute())
             self.assertEqual(set(storage), {job.smoke_apk().name, "smoke-fixtures.tar.gz", "release-state.json"})
@@ -224,16 +228,15 @@ class LocalReleaseTests(unittest.TestCase):
             self.assertEqual(capsule["handoff"], job.handoff_metadata())
             for name, data in storage.items():
                 hashed = coordinator.hashlib.sha256(data).hexdigest()
-                self.assertIn(hashed + "  /handoff/" + name, tail.getvalue())
+                self.assertIn(hashed + "  " + name, tail.getvalue())
                 if name != "release-state.json":
                     self.assertEqual(capsule["handoff"]["files"][name], hashed)
             storage["signed-smoke.json"] = b"returned-sidecar"
             job.execute()
+            docker.assert_not_called()
         self.assertEqual(storage["signed-smoke.json"], b"returned-sidecar")
-        self.assertEqual(sum(call[0] == "create" for call in calls), 1)
-        self.assertNotIn("start", [call[0] for call in calls])
+        self.assertEqual(sum(call[:2] == ("release", "upload") and call[-1].endswith(".apk") for call in calls), 1)
         self.assertNotIn(sentinel, repr(storage) + repr(calls) + tail.getvalue())
-        self.assertNotIn("--env", repr(calls))
 
     def test_handoff_rejects_changed_input_before_copy(self):
         job = self.handoff_job()
@@ -245,40 +248,69 @@ class LocalReleaseTests(unittest.TestCase):
                 job.prepare_handoff()
         self.assertFalse(any(call.args[0] == "cp" for call in docker.call_args_list))
 
-    def test_handoff_rejects_corrupted_relay_copy(self):
+    def test_handoff_rejects_corrupted_draft_upload(self):
         job = self.handoff_job()
         with patch.object(job, "check_assets"), \
-                patch.object(job, "gh", return_value=subprocess.CompletedProcess([], 0, b'{"draft":true}', b"")), \
-                patch.object(job, "docker", side_effect=self.handoff_docker(job, {}, [], corrupt=True)):
-            with self.assertRaisesRegex(local.ReleaseError, "relay hash mismatch"):
+                patch.object(job, "gh", side_effect=self.handoff_github(job, {}, [], corrupt=True)):
+            with self.assertRaisesRegex(local.ReleaseError, "draft hash mismatch"):
                 job.prepare_handoff()
 
-    def test_handoff_rejects_other_container_owner(self):
+    def test_handoff_rejects_other_draft_target(self):
         job = self.handoff_job()
-        info = b'[{"Config":{"Labels":{}},"State":{"Status":"created"}}]'
+        info = b'{"draft":true,"target_commitish":"wrong","assets":[]}'
         with patch.object(job, "check_assets"), \
-                patch.object(job, "gh", return_value=subprocess.CompletedProcess([], 0, b'{"draft":true}', b"")), \
-                patch.object(job, "docker", return_value=subprocess.CompletedProcess([], 0, info, b"")):
-            with self.assertRaisesRegex(local.ReleaseError, "ownership or state"):
+                patch.object(job, "gh", return_value=subprocess.CompletedProcess([], 0, info, b"")):
+            with self.assertRaisesRegex(local.ReleaseError, "prepared private draft"):
                 job.prepare_handoff()
 
-    def test_finish_reads_relay_sidecar_and_uploads_only_valid_evidence(self):
+    def test_finish_reads_draft_sidecar_and_rejects_invalid_evidence(self):
         job = self.handoff_job()
         evidence = job.out / "signed-smoke.json"
         report = {"status": "pass", "sha": self.release["sha"], "apk_sha256": local.digest(job.smoke_apk())}
         storage = {"signed-smoke.json": json.dumps(report).encode()}
-        with patch.object(job, "check_assets"), patch.object(job, "gh") as gh, \
-                patch.object(job, "docker", side_effect=self.handoff_docker(job, storage, [])):
+        calls = []
+        with patch.object(job, "check_assets"), \
+                patch.object(job, "gh", side_effect=self.handoff_github(job, storage, calls)):
             result = job.smoke(evidence, "TEST-234")
             self.assertEqual(result["sha256"], local.digest(evidence))
-            gh.assert_called_once_with("release", "upload", "v" + self.release["version"], "--repo", coordinator.REPO,
-                                       "--clobber", str(evidence))
-            gh.reset_mock()
+            self.assertTrue(any(call[:2] == ("release", "download") for call in calls))
+            calls.clear()
+            self.assertEqual(job.smoke(evidence, "TEST-234"), result)
+            self.assertEqual(calls, [])  # existing recovery/download path still works
             report["apk_sha256"] = "wrong"
             evidence.write_text(json.dumps(report))
             with self.assertRaisesRegex(local.ReleaseError, "does not match"):
                 job.smoke(evidence, "TEST-234")
-            gh.assert_not_called()
+            self.assertEqual(calls, [])
+
+    def test_finish_rejects_missing_or_corrupt_draft_sidecar(self):
+        job = self.handoff_job()
+        evidence = job.out / "signed-smoke.json"
+        with patch.object(job, "gh", side_effect=self.handoff_github(job, {}, [])):
+            with self.assertRaisesRegex(local.ReleaseError, "waiting for META"):
+                job.fetch_signed_smoke(evidence)
+        with patch.object(job, "gh", side_effect=self.handoff_github(job, {"signed-smoke.json": b"{}"}, [], corrupt=True)):
+            with self.assertRaisesRegex(local.ReleaseError, "asset hash mismatch"):
+                job.fetch_signed_smoke(evidence)
+
+    def test_handoff_existing_wrong_asset_is_not_overwritten(self):
+        job = self.handoff_job()
+        storage, calls = {job.smoke_apk().name: b"wrong"}, []
+        with patch.object(job, "check_assets"), patch.object(job, "gh", side_effect=self.handoff_github(job, storage, calls)):
+            with self.assertRaisesRegex(local.ReleaseError, "draft hash mismatch"):
+                job.prepare_handoff()
+        self.assertEqual(storage[job.smoke_apk().name], b"wrong")
+
+    def test_github_mode_uses_same_private_draft_handoff(self):
+        job = self.handoff_job()
+        job.mode = "github"
+        job.release["signing_mode"] = "github"
+        storage = {}
+        with patch.object(job, "check_assets"), contextlib.redirect_stdout(io.StringIO()), \
+                patch.object(job, "gh", side_effect=self.handoff_github(job, storage, [])):
+            job.prepare_handoff()
+        self.assertEqual(storage[job.smoke_apk().name], b"signed-apk")
+        self.assertEqual(json.loads(storage["release-state.json"])["journal"]["release"]["signing_mode"], "github")
 
     def test_unsigned_smoke_evidence_rejected(self):
         job = self.job()
