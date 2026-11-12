@@ -2640,7 +2640,7 @@ impl Turn {
         images_sent: usize,
     ) -> crate::ai_browser::BrowserOut {
         match call.name.as_str() {
-            "browser_run" => crate::ai_browser::run(b, &call.input).await,
+            "browser_run" => crate::ai_browser::run(b, &call.input, self.writer.state()).await,
             "browser_capture" => {
                 let direct = setup.direct.downloads;
                 crate::ai_browser::capture(self.writer.clone(), b, direct, &call.id, &call.input)
@@ -2648,7 +2648,7 @@ impl Turn {
             }
             "browser_file" => {
                 let may_send = images_sent < ai_assets::IMAGE_LIMIT;
-                crate::ai_browser::file(b, &call.id, &call.input, may_send, &self.images).await
+                crate::ai_browser::file(b, &call.id, &call.input, may_send, &self.images, self.writer.state()).await
             }
             _ => {
                 let direct = setup.direct.downloads;

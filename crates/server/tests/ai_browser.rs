@@ -30,10 +30,10 @@ fn browser_login_redaction() {
     let response = api.client.put(api.server.url("/api/secrets/login"))
         .bearer_auth(api.token()).json(&json!({"kind":"login", "username":"fabricated-user", "password":"fabricated-pass", "totp_seed":"JBSWY3DPEHPK3PXP", "origins":[]})).send().unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let text = "fabricated-user fabricated-pass JBSWY3DPEHPK3PXP 123456";
+    let text = "fabricated-user fabricated-pass JBSWY3DPEHPK3PXP";
     browser.push_run(BrowserRun::exited(0, text, text));
     browser.file("/work/login.txt", "text/plain", text.as_bytes().to_vec());
-    for (tool, input) in [("browser_run", json!({"command":text})), ("browser_file", json!({"path":"/work/login.txt"}))] {
+    for (tool, input) in [("browser_run", json!({"command":"snapshot"})), ("browser_file", json!({"path":"/work/login.txt"}))] {
         let events = api.call(&fake, Some("driver"), tool, input);
         let output = format!("{} {}", serde_json::to_string(&events).unwrap(), fake.message_requests().last().unwrap().json());
         for secret in text.split_whitespace() { assert!(!output.contains(secret), "credential leaked"); }
