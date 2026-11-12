@@ -348,10 +348,17 @@ fn restart_confirmed_delete(phase: u8) {
         "        vault::delete(target, text_of(event, \"version\"))?"
     };
     assert!(source.contains(line));
-    let barrier = format!("        http::request(\"GET\", \"{}\", #{{}}, \"\")?", pause.url("/pause"));
+    let barrier = format!(
+        "        http::request(\"GET\", \"{}\", #{{}}, \"\")?",
+        pause.url("/pause")
+    );
     let instrumented = source.replace(
         line,
-        &if phase == 2 { format!("{line}\n{barrier}") } else { format!("{barrier}\n{line}") },
+        &if phase == 2 {
+            format!("{line}\n{barrier}")
+        } else {
+            format!("{barrier}\n{line}")
+        },
     );
     std::fs::write(
         api.server.vault_path().join("scripts/outbox_send.ws"),
@@ -381,9 +388,15 @@ fn restart_confirmed_delete(phase: u8) {
     );
     assert_eq!(api.fields(&item)["status"], "sending");
     assert_eq!(api.fields(&item)["sent_ref"], id);
-    let confirmed = api.fields(&item)["sent_at"].as_str().is_some_and(|s| !s.is_empty());
+    let confirmed = api.fields(&item)["sent_at"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty());
     assert_eq!(confirmed, phase != 0);
-    std::fs::write(api.server.vault_path().join("scripts/outbox_send.ws"), source).unwrap();
+    std::fs::write(
+        api.server.vault_path().join("scripts/outbox_send.ws"),
+        source,
+    )
+    .unwrap();
     api.server.restart();
     api.server.settle_handlers();
     assert!(
