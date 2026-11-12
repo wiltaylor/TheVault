@@ -431,10 +431,16 @@ fn the_first_run_imports_single_events_all_day_as_dates_and_timed_with_offsets()
 fn adversarial_import_markup_calendar_plain_and_html() {
     use crate::import_markup::{TEXT, assert_literal};
     let api = Api::start();
-    for (id, description) in [("literal", TEXT.to_owned()), ("html", format!("<p>{TEXT}</p>"))] {
-        api.google.put_event("primary", json!({ "id": id, "summary": TEXT,
+    for (id, description) in [
+        ("literal", TEXT.to_owned()),
+        ("html", format!("<p>{TEXT}</p>")),
+    ] {
+        api.google.put_event(
+            "primary",
+            json!({ "id": id, "summary": TEXT,
             "description": description, "start": { "date": "2026-03-10" },
-            "end": { "date": "2026-03-11" } }));
+            "end": { "date": "2026-03-11" } }),
+        );
     }
     api.sync();
     for id in ["literal", "html"] {

@@ -193,8 +193,8 @@ fn every_message_import_escapes_inline_markup() {
         let note = Vault::get(&**d.writer(), message["id"].as_str().unwrap()).unwrap();
         assert_eq!(body_text(&note["note"]), [escaped]);
         for text in body_text(&note["note"]) {
-            assert!(schema::inline::agent_calls(&text).is_empty());
-            assert_eq!(schema::inline::unescape_markup(&text), text_of_import());
+            assert!(schema::agent_calls(&text).is_empty());
+            assert_eq!(schema::unescape_markup(&text), text_of_import());
         }
     }
 }
@@ -207,16 +207,16 @@ fn text_of_import() -> &'static str {
 fn adversarial_import_markup_device_share() {
     let d = Device::open();
     let text = text_of_import();
-    assert_eq!(schema::inline::agent_calls(text).len(), 1);
+    assert_eq!(schema::agent_calls(text).len(), 1);
     let (data, _, _) = share(&d, text);
     d.send("share_received", data);
     let rows = d.query("from fleeting");
     assert_eq!(rows.len(), 1);
     let note = Vault::get(&**d.writer(), rows[0]["id"].as_str().unwrap()).unwrap();
     let texts = body_text(&note["note"]);
-    assert_eq!(schema::inline::unescape_markup(&texts[0]), text);
+    assert_eq!(schema::unescape_markup(&texts[0]), text);
     for text in texts {
-        assert!(schema::inline::agent_calls(&text).is_empty());
+        assert!(schema::agent_calls(&text).is_empty());
     }
 }
 

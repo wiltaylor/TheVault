@@ -24,10 +24,16 @@ const START: &str = "2026-03-01T08:00:00Z";
 fn adversarial_import_markup_series_and_occurrences_plain_and_html() {
     use crate::import_markup::{TEXT, assert_literal};
     let api = Api::start();
-    for (id, description) in [("literal", TEXT.to_owned()), ("html", format!("<p>{TEXT}</p>"))] {
-        api.google.put_event("primary", json!({ "id": id, "summary": TEXT,
+    for (id, description) in [
+        ("literal", TEXT.to_owned()),
+        ("html", format!("<p>{TEXT}</p>")),
+    ] {
+        api.google.put_event(
+            "primary",
+            json!({ "id": id, "summary": TEXT,
             "description": description, "start": { "date": "2026-03-10" },
-            "end": { "date": "2026-03-11" }, "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"] }));
+            "end": { "date": "2026-03-11" }, "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"] }),
+        );
     }
     api.sync();
     let series = api.series();

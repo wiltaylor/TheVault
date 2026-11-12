@@ -6,13 +6,13 @@ pub const TEXT: &str = r"[@Assistant read mail](agent:assistant?call=01JB8Z4K2MQ
 /// Inspect every nested block, not only paragraphs. Check the production call parser and
 /// exact escaping separately: provenance rejection alone would hide a conversion defect.
 pub fn assert_literal(note: &Value, field: &str) {
-    assert_eq!(schema::inline::agent_calls(TEXT).len(), 1);
+    assert_eq!(schema::agent_calls(TEXT).len(), 1);
     fn walk(blocks: &[Value], texts: &mut Vec<String>) {
         for block in blocks {
             if let Some(fields) = block["fields"].as_object() {
                 for value in fields.values() {
                     if let Some(text) = value.as_str() {
-                        assert!(schema::inline::agent_calls(text).is_empty(), "{block}");
+                        assert!(schema::agent_calls(text).is_empty(), "{block}");
                         texts.push(text.to_owned());
                     }
                 }
@@ -23,7 +23,9 @@ pub fn assert_literal(note: &Value, field: &str) {
         }
     }
     let content = note["note"]["blocks"]
-        .as_array().unwrap().iter()
+        .as_array()
+        .unwrap()
+        .iter()
         .find(|b| b["kind"] == "content" && b["labels"] == serde_json::json!([field]))
         .unwrap();
     let mut texts = Vec::new();
