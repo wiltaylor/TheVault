@@ -69,7 +69,10 @@ fn existing_tool_rebindings_wait_for_apply() {
     api.ok("PUT", "/api/scripts/stamp", json!({"source": STAMP}));
     api.ok("PUT", "/api/scripts/copy", json!({"source": STAMP}));
     api.ok("PUT", "/api/tools/echo", json!({"wcl": ECHO}));
-    let before = api.get("/api/tools/echo")["wcl"].as_str().unwrap().to_owned();
+    let before = api.get("/api/tools/echo")["wcl"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     api.ok(
         "PUT",
         "/api/integrations/ai/settings",
