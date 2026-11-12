@@ -114,17 +114,31 @@ def github(runtime, *args, check=True):
         "GH_TOKEN": os.environ["GH_TOKEN"], "GH_PROMPT_DISABLED": "1"}, check=check)
 
 
+def find_release(gh, tag, tagged_sha=None, *, required=True):
+    """List all pages because the tag endpoint does not expose private drafts."""
+    result = gh("api", f"repos/{REPO}/releases", "--paginate", "--slurp")
+    matches = [item for page in json.loads(result.stdout) for item in page
+               if item["tag_name"] == tag]
+    if len(matches) > 1:
+        raise ReleaseError("multiple releases found for " + tag)
+    if not matches:
+        if required:
+            raise ReleaseError("release not found: " + tag)
+        return None
+    value = matches[0]
+    if value["draft"] and tagged_sha is not None and value["target_commitish"] != tagged_sha:
+        raise ReleaseError("draft targets another commit: " + tag)
+    return value
+
+
 def restore_remote(state, version, runtime):
     """Restore only hash-verified files from this version's authenticated draft."""
     # Validate before using a version in a path or tag.
     identity("0" * 40, version, "release/" + version.split("-")[0], "pre-release" if "-" in version else "release")
     tag = "v" + version
-    result = github(runtime, "api", f"repos/{REPO}/releases/tags/{tag}", check=False)
-    if result.returncode:
-        if b"404" in result.stderr:
-            return None
-        raise ReleaseError("cannot inspect remote release recovery state")
-    remote = json.loads(result.stdout)
+    remote = find_release(lambda *a: github(runtime, *a), tag, required=False)
+    if remote is None:
+        return None
     items = {item["name"]: item for item in remote["assets"]}
     out = state / version
     out.mkdir(parents=True, exist_ok=True)
@@ -573,14 +587,11 @@ class Release:
             raise ReleaseError("tag already exists before draft preparation")
         elif b"404" not in ref.stderr:
             raise ReleaseError("cannot establish release tag absence")
-        existing = self.gh("api", f"repos/{REPO}/releases/tags/{tag}", check=False)
-        if existing.returncode == 0:
-            value = json.loads(existing.stdout)
+        value = find_release(self.gh, tag, self.release["tagged_sha"], required=False)
+        if value is not None:
             if not value["draft"] or value["target_commitish"] != self.release["tagged_sha"]:
                 raise ReleaseError("existing release is published or targets another commit")
         else:
-            if b"404" not in existing.stderr:
-                raise ReleaseError("cannot establish draft absence")
             self.gh("release", "create", tag, "--repo", REPO, "--draft", "--target", self.release["tagged_sha"],
                     "--title", "TheVault " + tag, "--generate-notes", "--latest=false",
                     "--prerelease=" + str(self.release["kind"] == "pre-release").lower(),
@@ -667,7 +678,7 @@ class Release:
         tag = "v" + self.release["version"]
         # Recheck every uploaded byte before making the draft visible. A remote
         # draft edited between phases must not be published by this run.
-        value = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
+        value = find_release(self.gh, tag, self.release["tagged_sha"])
         if value["target_commitish"] != self.release["tagged_sha"]:
             raise ReleaseError("draft target changed after prepare")
         by_name = {asset["name"]: asset for asset in value["assets"] if not CHECKPOINT.fullmatch(asset["name"]) and not SIGN_INPUT.fullmatch(asset["name"])}
@@ -709,7 +720,7 @@ class Release:
 
     def verify(self):
         tag = "v" + self.release["version"]
-        value = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
+        value = find_release(self.gh, tag, self.release["tagged_sha"])
         if value["draft"] or value["prerelease"] != (self.release["kind"] == "pre-release"):
             raise ReleaseError("GitHub release visibility/kind mismatch")
         ref = json.loads(self.gh("api", f"repos/{REPO}/git/ref/tags/{tag}").stdout)
@@ -736,7 +747,7 @@ class Release:
     def save_capsule(self):
         capsule = self.out / "release-state.json"
         atomic_json(capsule, {"journal": self.journal.data, "run": json.loads((self.out / "run.json").read_text())})
-        remote = json.loads(self.gh("api", f'repos/{REPO}/releases/tags/v{self.release["version"]}').stdout)
+        remote = find_release(self.gh, "v" + self.release["version"], self.release["tagged_sha"])
         if not remote["draft"]:
             existing = next((a for a in remote["assets"] if a["name"] == capsule.name), {})
             if existing.get("digest") != "sha256:" + digest(capsule):
@@ -769,7 +780,7 @@ class Release:
         # New immutable checkpoint first, delete old owned checkpoints only
         # after its successful upload. An interrupted upload retains the old one.
         self.gh("release", "upload", tag, "--repo", REPO, str(named))
-        value = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
+        value = find_release(self.gh, tag, self.release["tagged_sha"])
         if not any(a["name"] == name and a.get("digest") == "sha256:" + digest(named) for a in value["assets"]):
             raise ReleaseError("uploaded checkpoint digest mismatch")
         for asset in value["assets"]:

@@ -369,9 +369,12 @@ class LocalReleaseTests(unittest.TestCase):
                 directory = Path(args[args.index("--dir") + 1])
                 (directory / name).write_bytes(uploaded[name])
                 data = b""
+            elif args[0] == "api" and "/releases/tags/" in args[1]:
+                return subprocess.CompletedProcess(args, 1, b"", b"HTTP 404")
             else:
                 rows = [{"name": name, "size": len(data), "digest": "sha256:" + coordinator.hashlib.sha256(data).hexdigest()} for name, data in uploaded.items()]
-                data = json.dumps({"draft": True, "target_commitish": "b" * 40, "assets": rows}).encode()
+                self.assertEqual(args, ("api", f"repos/{coordinator.REPO}/releases", "--paginate", "--slurp"))
+                data = json.dumps([[], [{"tag_name": "v" + job.release["version"], "draft": True, "target_commitish": "b" * 40, "assets": rows}]]).encode()
             return subprocess.CompletedProcess(args, 0, data, b"")
         with patch.object(job, "gh", side_effect=fake_gh):
             job.checkpoint()
@@ -383,6 +386,37 @@ class LocalReleaseTests(unittest.TestCase):
             restored = coordinator.restore_remote(fresh, job.release["version"], self.root / "ram")
         self.assertEqual(restored, job.release)
         self.assertEqual(json.loads((fresh / job.release["version"] / "journal.json").read_text())["completed"], ["preflight", "cut"])
+
+    def test_existing_private_draft_is_reused(self):
+        self.release["tagged_sha"] = "b" * 40
+        job = self.job()
+        tag = "v" + job.release["version"]
+        draft = {"tag_name": tag, "draft": True, "target_commitish": "b" * 40, "assets": []}
+        def gh(*args, **kwargs):
+            if args[:2] == ("api", f"repos/{coordinator.REPO}/releases"):
+                self.assertEqual(args[2:], ("--paginate", "--slurp"))
+                return subprocess.CompletedProcess(args, 0, json.dumps([[], [draft]]).encode(), b"")
+            if args[0] == "api":
+                return subprocess.CompletedProcess(args, 1, b"", b"HTTP 404")
+            self.fail("unexpected draft mutation: " + str(args))
+        with patch.object(job, "gh", side_effect=gh):
+            self.assertEqual(job.ensure_draft(), draft)
+
+    def test_release_lookup_rejects_duplicates_wrong_commit_and_missing(self):
+        tag = "v" + self.release["version"]
+        draft = {"tag_name": tag, "draft": True, "target_commitish": "b" * 40}
+        for pages, expected in (([[draft], [draft]], "multiple releases"),
+                                ([[draft]], "another commit"), ([[]], "not found")):
+            with self.subTest(expected=expected):
+                gh = lambda *a: subprocess.CompletedProcess(a, 0, json.dumps(pages).encode(), b"")
+                with self.assertRaisesRegex(local.ReleaseError, expected):
+                    coordinator.find_release(gh, tag, "a" * 40)
+
+    def test_release_lookup_does_not_treat_api_failure_as_absence(self):
+        def gh(*args):
+            raise local.ReleaseError("gh failed (exit 1)")
+        with self.assertRaisesRegex(local.ReleaseError, "gh failed"):
+            coordinator.find_release(gh, "v" + self.release["version"], required=False)
 
     def test_failed_checkpoint_upload_does_not_delete_previous_checkpoint(self):
         job = self.job()
@@ -648,6 +682,8 @@ class LocalReleaseTests(unittest.TestCase):
         self.release.update(signing_mode="none", tagged_sha="b" * 40)
         job = self.job()
         def gh(*args, **kwargs):
+            if args[:2] == ("api", f"repos/{coordinator.REPO}/releases"):
+                return subprocess.CompletedProcess(args, 0, b"[[]]", b"")
             return subprocess.CompletedProcess(args, 1 if args[0] == "api" else 0, b"", b"404")
         with patch.object(job, "gh", side_effect=gh) as remote:
             job.ensure_draft()
@@ -697,12 +733,12 @@ class LocalReleaseTests(unittest.TestCase):
             path.write_bytes(b"fixture")
         rows = [{"name": p.name, "digest": "sha256:" + local.digest(p)} for p in job.upload_files()]
         rows.append({"name": "release-state.json"})
-        remote = {"target_commitish": "b" * 40, "assets": rows, "body": coordinator.NO_APPS_NOTES}
+        remote = {"tag_name": "v" + job.release["version"], "draft": True, "target_commitish": "b" * 40, "assets": rows, "body": coordinator.NO_APPS_NOTES}
         job.journal.data["outputs"]["push"] = {name: {"ref": "registry/" + name, "digest": "sha256:test"} for name in ("thevault", "thevault-browser")}
         def gh(*args, **kwargs):
             if args[0] == "api" and "/git/ref/" in args[1]:
                 return subprocess.CompletedProcess(args, 1, b"", b"404")
-            return subprocess.CompletedProcess(args, 0, json.dumps(remote).encode(), b"")
+            return subprocess.CompletedProcess(args, 0, json.dumps([[remote]]).encode(), b"")
         with patch.object(job, "check_assets"), patch.object(job, "save_capsule"), patch.object(job, "gh", side_effect=gh) as api, patch.object(job, "crane", return_value=subprocess.CompletedProcess([], 0, b"sha256:test", b"")) as crane:
             job.publish()
             edits = [c.args for c in api.call_args_list if c.args[:2] == ("release", "edit")]
