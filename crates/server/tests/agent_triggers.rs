@@ -3511,7 +3511,8 @@ fn apply_kind_partial_stale_and_revoked_permissions_are_rechecked() {
     let p: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/preview",
         json!({"thread":thread,"proposal":"batch_edit1"})).error_for_status().unwrap().json().unwrap();
     assert_eq!(p["count"], 2);
-    api.send("PUT", &format!("/api/notes/{id}"), json!({"fields":{"title":"Changed after preview"}}));
+    let note = api.get(&format!("/api/notes/{id}"));
+    api.send("PUT", &format!("/api/notes/{id}"), json!({"base_version":note["version"], "note":{"fields":{"title":"Changed after preview"}}}));
     let body = json!({"preview":p["preview"],"confirmed":true});
     let first: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body.clone()).error_for_status().unwrap().json().unwrap();
     assert_eq!(first["results"][0]["ok"], false, "{first}");
