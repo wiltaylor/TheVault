@@ -53,6 +53,9 @@ fn budgeted_query(
 #[serde(deny_unknown_fields)]
 pub struct RunBody {
     query: String,
+    /// Omit held notes before filtering, pagination and totals, also for session callers.
+    #[serde(default)]
+    exclude_held: bool,
     /// `include` or `only` to read archived notes; see [`with_archived`].
     archived: Option<String>,
     /// The note that holds the query, bound to `this`.
@@ -65,6 +68,8 @@ pub struct RunBody {
 #[serde(deny_unknown_fields)]
 pub struct RunParams {
     q: String,
+    #[serde(default)]
+    exclude_held: bool,
     archived: Option<String>,
     this: Option<String>,
     cursor: Option<String>,
@@ -137,6 +142,7 @@ async fn run_page(
     this: Option<String>,
     cursor: Option<String>,
     page_size: Option<usize>,
+    exclude_held: bool,
 ) -> Result<Json<Value>, ApiError> {
     let agent = crate::auth::is_agent_token(&author);
     let page = query::PageRequest {
@@ -151,6 +157,10 @@ async fn run_page(
                     w.agent_excluded_notes(index)
                         .map_err(ApiError::bad_request)?,
                 )
+            } else if exclude_held {
+                Some(w.state().held_agent_note_ids().map_err(|e| {
+                    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+                })?)
             } else {
                 None
             };
@@ -181,7 +191,7 @@ pub async fn run_post(
 ) -> Result<Json<Value>, ApiError> {
     let b = json_body(body)?;
     let q = with_archived(parse(&b.query)?, b.archived.as_deref())?;
-    run_page(w, author, q, b.this, b.cursor, b.page_size).await
+    run_page(w, author, q, b.this, b.cursor, b.page_size, b.exclude_held).await
 }
 
 pub async fn run_get(
@@ -191,7 +201,7 @@ pub async fn run_get(
 ) -> Result<Json<Value>, ApiError> {
     let p = params(p)?;
     let q = with_archived(parse(&p.q)?, p.archived.as_deref())?;
-    run_page(w, author, q, p.this, p.cursor, p.page_size).await
+    run_page(w, author, q, p.this, p.cursor, p.page_size, p.exclude_held).await
 }
 
 /// Full-text search over every note's fields and content, best match first.
@@ -206,7 +216,7 @@ pub async fn search(
     }
     let archived = archived_param(p.archived.as_deref())?;
     let q = query::search_all(p.q, archived);
-    run_page(w, author, q, None, p.cursor, p.page_size).await
+    run_page(w, author, q, None, p.cursor, p.page_size, false).await
 }
 
 /// `q` with an `archived` parameter applied: `include` adds `include archived`, `only` adds
