@@ -45,9 +45,14 @@ HTTP chunks are assembled before scanning. Stdout and stderr are separate.
 
 For each seed, the server computes RFC 6238 SHA-1 codes for the current step
 and two steps either side at redaction time. These exact codes match whole
-tokens. Login seeds currently use six digits and a 30-second period. The helper
-also supports seven/eight digits and other periods for future callers.
-Codes older than about 60 seconds at redaction time are not masked (expired).
+tokens. Raw seeds use six digits and a 30-second period. Whitespace and hyphens
+are removed and letters uppercased for computing codes. An `otpauth://totp`
+URI supplies its `secret`, `digits` and `period` (defaults six and 30).
+Only SHA-1 is supported. Invalid seed/configuration skips that Login's computed
+codes and logs its name, never its value. Its raw seed, user name and password
+are still masked. State read errors still fail closed.
+Codes older than about two periods (normally 60 seconds) at redaction time are
+not masked (expired).
 
 Limits: this is raw exact-value matching, not URL/base64 decoding, OCR or
 protection against deliberate encoding, arbitrary splitting or indirect

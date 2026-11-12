@@ -3,11 +3,31 @@ use hmac::{Hmac, Mac};
 
 pub(crate) struct Redactor(Vec<(String, bool)>);
 
-/// RFC 6238 SHA-1 TOTP. Login seeds currently use six digits and 30 seconds.
-pub(crate) fn totp(seed: &str, seconds: u64, digits: u32, period: u64) -> Option<String> {
-    if !(6..=8).contains(&digits) || period == 0 {
-        return None;
+fn seed_parameters(input: &str, mut digits: u32, mut period: u64) -> Option<(String, u32, u64)> {
+    let mut seed = input.to_owned();
+    if input.trim().to_ascii_lowercase().starts_with("otpauth://") {
+        let uri = reqwest::Url::parse(input.trim()).ok()?;
+        if uri.scheme() != "otpauth" || uri.host_str() != Some("totp") { return None; }
+        let mut secret = None;
+        for (key, value) in uri.query_pairs() {
+            match key.as_ref() {
+                "secret" => { if secret.is_some() { return None; } secret = Some(value.into_owned()); }
+                "digits" => digits = value.parse().ok()?,
+                "period" => period = value.parse().ok()?,
+                "algorithm" if !value.eq_ignore_ascii_case("SHA1") => return None,
+                _ => {}
+            }
+        }
+        seed = secret?;
     }
+    let seed = seed.chars().filter(|c| !c.is_whitespace() && *c != '-').collect::<String>().to_ascii_uppercase();
+    if !(6..=8).contains(&digits) || period == 0 || period > i64::MAX as u64 / 2 { return None; }
+    Some((seed, digits, period))
+}
+
+/// RFC 6238 SHA-1 TOTP. Raw seeds default to the supplied digits and period.
+pub(crate) fn totp(seed: &str, seconds: u64, digits: u32, period: u64) -> Option<String> {
+    let (seed, digits, period) = seed_parameters(seed, digits, period)?;
     let mut key = Vec::new();
     let (mut bits, mut count) = (0u32, 0u32);
     for c in seed.bytes().take_while(|c| *c != b'=') {
@@ -52,9 +72,13 @@ impl Redactor {
                 .map_err(|_| ())?
                 .ok_or(())?;
             if let Some(seed) = &login.totp_seed {
-                for step in -2i64..=2 {
-                    let at = now.saturating_add_signed(step * 30);
-                    patterns.push((totp(seed, at, 6, 30).ok_or(())?, true));
+                let codes = seed_parameters(seed, 6, 30).and_then(|(seed, digits, period)| {
+                    (-2i64..=2).map(|step| totp(&seed, now.saturating_add_signed(step * period as i64), digits, period)).collect::<Option<Vec<_>>>()
+                });
+                if let Some(codes) = codes {
+                    patterns.extend(codes.into_iter().map(|code| (code, true)));
+                } else {
+                    eprintln!("browser: computed-code redaction skipped for Login {:?}: invalid TOTP configuration", info.name);
                 }
             }
             for value in [Some(login.username), Some(login.password), login.totp_seed]
