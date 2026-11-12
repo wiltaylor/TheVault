@@ -1506,7 +1506,15 @@ impl Writer {
         extra_files: Vec<Change>,
         dry_run: bool,
     ) -> Result<Vec<Saved>> {
-        self.apply_with_catch_up(inner, changes, check_base, author, extra_files, dry_run, false)
+        self.apply_with_catch_up(
+            inner,
+            changes,
+            check_base,
+            author,
+            extra_files,
+            dry_run,
+            false,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1823,7 +1831,11 @@ impl Writer {
         });
         // Internal hook provenance only. Versions and audit retain the real caller.
         // Catch-up must not start agents, even for custom update triggers or mentions.
-        let hook_author = if catch_up { Author::Handler("inbox-catch-up".into()) } else { author.clone() };
+        let hook_author = if catch_up {
+            Author::Handler("inbox-catch-up".into())
+        } else {
+            author.clone()
+        };
         self.hooks.after(&saved, &hook_author, &inner.schema);
         self.people_to_contacts(&people);
         self.outbox_notifications(&items);

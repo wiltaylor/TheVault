@@ -644,7 +644,11 @@ async fn start_with(
         scope: if recommendation { Scope::Read } else { scope },
         agent_name: named.then(|| prepared.agent.name.clone()),
         unattended: report.is_some(),
-        held: if recommendation { Held::Recommend } else { Held::of(report.is_some(), &origin) },
+        held: if recommendation {
+            Held::Recommend
+        } else {
+            Held::of(report.is_some(), &origin)
+        },
         asks,
         retry,
         sub: None,

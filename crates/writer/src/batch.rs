@@ -127,7 +127,13 @@ impl Writer {
         self.batch_catch_up(ops, dry_run, author, false)
     }
 
-    pub(crate) fn batch_catch_up(&self, ops: Vec<Op>, dry_run: bool, author: &Author, catch_up: bool) -> Result<Report> {
+    pub(crate) fn batch_catch_up(
+        &self,
+        ops: Vec<Op>,
+        dry_run: bool,
+        author: &Author,
+        catch_up: bool,
+    ) -> Result<Report> {
         let _w = self.write_lock();
         let inner = self.lock();
         let mut prepared: Vec<Result<Prepared>> = ops
@@ -193,7 +199,15 @@ impl Writer {
         let result = if changes.is_empty() {
             Ok(Vec::new())
         } else {
-            self.apply_with_catch_up(inner, changes, &|| Ok(()), author, Vec::new(), dry_run, catch_up)
+            self.apply_with_catch_up(
+                inner,
+                changes,
+                &|| Ok(()),
+                author,
+                Vec::new(),
+                dry_run,
+                catch_up,
+            )
         };
 
         match result {

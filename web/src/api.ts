@@ -817,7 +817,7 @@ export interface AgentCallInfo {
 export interface AgentRuns {
   queue?: { waiting: number; failed: number; expired: number; dropped: number };
   tools: string[];
-  triggers: { name: string; kind: AgentTrigger["kind"]; runs: AgentRun[] }[];
+  triggers: { name: string; kind: AgentTrigger["kind"] | "recommendation"; runs: AgentRun[] }[];
 }
 
 /** A cron schedule in words and the next times it fires, as the scheduler reads it. */

@@ -27,7 +27,11 @@ pub async fn triage(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     let state::Author::Session(principal) = author else {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "session_required", "Sign in to preview mail triage"));
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "Sign in to preview mail triage",
+        ));
     };
     blocking(w, move |w| {
         let bad = |s: String| ApiError::bad_request(s);
