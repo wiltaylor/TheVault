@@ -127,17 +127,20 @@ impl Writer {
         let generation = self.vault.commit(files)?;
         self.state.journal_files(&synced)?;
         self.record_definitions(&existed);
-        self.announce_definitions(&synced);
+        self.announce_definitions(&synced)?;
         Ok(generation)
     }
 
     /// Tell open clients which synced files changed, and count them for
     /// [`Writer::definition_changes`]. `synced` is `(path, exists)` of each.
-    pub(crate) fn announce_definitions(&self, synced: &[(String, bool)]) {
+    pub(crate) fn announce_definitions(&self, synced: &[(String, bool)]) -> Result<()> {
         for (path, exists) in synced {
             let Some((kind, name)) = synced_file(path) else {
                 continue;
             };
+            if kind == "agent" && !exists {
+                self.state.revoke_browser_secrets(name)?;
+            }
             self.definitions
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.state
@@ -148,6 +151,7 @@ impl Writer {
                     deleted: !exists,
                 });
         }
+        Ok(())
     }
 
     /// How many synced files besides notes (types, taxonomies, scripts, tasks, device files,
@@ -184,7 +188,7 @@ impl Writer {
         let generation = self.vault.commit_with_hook(files, hook)?;
         self.state.journal_files(&synced)?;
         self.record_definitions(&existed);
-        self.announce_definitions(&synced);
+        self.announce_definitions(&synced)?;
         Ok(generation)
     }
 }

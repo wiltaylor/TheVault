@@ -149,7 +149,7 @@ pub fn find_assets(w: &Writer, input: &Value) -> Read {
         if total == 1 { "" } else { "s" }
     );
     Read {
-        content: json!({ "assets": assets, "total": total, "notice": "Attachments and original HTML of incoming messages are not available to agents. Do not retry." }).to_string(),
+        content: json!({ "assets": assets, "total": total, "notice": "Incoming attachments are omitted from file listings. read_asset can return their classified extracted text by id. Original files, images and raw HTML stay withheld." }).to_string(),
         is_error: false,
         parts: Vec::new(),
         summary: json!({ "notes": [], "assets": assets, "total": total, "message": message }),
@@ -166,6 +166,19 @@ pub fn read_asset(w: &Writer, input: &Value, may_send_image: bool, images: &Imag
         return Read::error("id must be a non-empty string");
     };
     if !w.agent_may_read_asset(id) {
+        if let Some(attachment) = w.agent_attachment_text(id) {
+            return Read {
+                content: json!({
+                    "id": id, "filename": attachment["filename"],
+                    "media_type": attachment["media_type"],
+                    "text": attachment["text"],
+                    "note": "Classified extracted text only. Original files and images remain withheld.",
+                }).to_string(),
+                is_error: false,
+                parts: Vec::new(),
+                summary: json!({"notes":[],"asset":{"id":id,"kind":"text"}}),
+            };
+        }
         return Read::error(
             "Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.",
         );

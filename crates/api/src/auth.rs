@@ -98,7 +98,8 @@ fn agent_memories_path(path: &str) -> bool {
 
 /// Paths that need `admin` even to read, because they disclose or hand out credentials, or, the
 /// activity log, show everything that happens in the vault (activity Y3).
-const ADMIN_PATHS: [&str; 4] = [
+const ADMIN_PATHS: [&str; 5] = [
+    "/api/agent-safety/evidence",
     "/api/tokens",
     "/api/secrets",
     "/api/integrations",
@@ -563,9 +564,19 @@ pub async fn authenticate(
     {
         return e.into_response();
     }
+    let response_author = granted.author.clone();
+    let response_path = req.uri().path().to_owned();
     req.extensions_mut().insert(Caller(granted.author));
     req.extensions_mut().insert(GrantedScope(granted.scope));
     let mut res = next.run(req).await;
+    res = crate::agent_threads::redact_response(
+        &sessions.writer,
+        &response_author,
+        &response_path,
+        res,
+    )
+    .await
+    .unwrap_or_else(IntoResponse::into_response);
     // A renewed session's cookie goes out again with a fresh Max-Age, so the browser keeps it as
     // long as the server does. A response that sets the cookie itself, such as logout, wins.
     if let Some(id) = granted.renewed

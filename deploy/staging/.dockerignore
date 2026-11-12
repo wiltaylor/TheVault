@@ -1,0 +1,5 @@
+*
+!Dockerfile
+!staging.py
+!bin/
+!bin/*

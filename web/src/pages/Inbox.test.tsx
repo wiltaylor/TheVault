@@ -10,7 +10,7 @@ import type { Item } from "../inbox/sources";
 const { dispatched, dispatch, agents, loadInbox } = vi.hoisted(() => ({ dispatched: vi.fn(), dispatch: vi.fn(), agents: vi.fn(), loadInbox: vi.fn() }));
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, dispatched, dispatch, agents, app: vi.fn().mockResolvedValue(null), note: vi.fn().mockRejectedValue(new Error("no")) } };
+  return { ...real, api: { ...real.api, dispatched, dispatch, agents, heldAgentNotes: vi.fn().mockResolvedValue({ notes: [], total: 0 }), app: vi.fn().mockResolvedValue(null), note: vi.fn().mockRejectedValue(new Error("no")) } };
 });
 vi.mock("../inbox/load", () => ({ loadInbox, countInbox: vi.fn().mockResolvedValue(0) }));
 vi.mock("@solidjs/router", () => ({ useNavigate: () => vi.fn() }));
@@ -66,6 +66,42 @@ afterEach(() => {
 const rowOf = (title: string) => screen.getByRole("link", { name: title }).closest("li")!;
 
 describe("the Inbox", () => {
+  it("keeps a convert picker and its input across refreshed and reordered rows", async () => {
+    const capture = { ...items[0], source: SOURCES.find((s) => s.key === "captures")! };
+    loadInbox.mockResolvedValueOnce({ items: [capture], total: 1 });
+    render(() => <Inbox />);
+    await screen.findByRole("link", { name: "Roof quote" });
+    const originalRow = rowOf("Roof quote");
+    fireEvent.click(within(originalRow).getByRole("button", { name: "Convert to…" }));
+    const input = await screen.findByRole("combobox");
+    fireEvent.input(input, { target: { value: "Ta" } });
+    loadInbox.mockResolvedValueOnce({ items: [items[1], {
+      ...capture, row: { ...capture.row, title: "Updated capture" },
+    }], total: 2 });
+    fireEvent.click(screen.getByRole("button", { name: /^Inbox$/ }));
+    await screen.findByRole("link", { name: "Updated capture" });
+    expect(rowOf("Updated capture")).toBe(originalRow);
+    expect(screen.getByRole("combobox")).toBe(input);
+    expect(input).toHaveValue("Ta");
+    fireEvent.input(input, { target: { value: "Task" } });
+    expect(input).toHaveValue("Task");
+    expect(within(originalRow).getByRole("button", { name: "Convert to…" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("shows held counts and separates scams from other holds", async () => {
+    vi.mocked(api.heldAgentNotes).mockResolvedValueOnce({ notes: [
+      { id: "scam", type: "email", created: null, agent_safety: { status: "held", reason: "scam", fingerprint: "a" } },
+      { id: "other", type: "email", created: null, agent_safety: { status: "held", reason: "prompt_injection", fingerprint: "b" } },
+    ], total: 2 });
+    render(() => <Inbox />);
+    fireEvent.click(await screen.findByText("Possible scams (1)"));
+    await screen.findByText("Reason: scam");
+    expect(screen.queryByText("Reason: prompt_injection")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Roof quote" })).toBeNull();
+    fireEvent.click(screen.getByText("Other held (1)"));
+    await screen.findByText("Reason: prompt_injection");
+    expect(screen.queryByText("Reason: scam")).toBeNull();
+  });
   it("sends a single card through its robot action", async () => {
     dispatch.mockResolvedValue({ thread: { id: "01NEW" } });
     render(() => <Inbox />);

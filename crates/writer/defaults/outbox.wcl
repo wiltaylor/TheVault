@@ -35,6 +35,13 @@ field sent_at {
   label = "Sent at"
 }
 
+field interrupted_at {
+  kind        = "datetime"
+  label       = "Interrupted at"
+  description = "Handler-owned marker for an unconfirmed send recovered after interruption."
+  hidden      = true
+}
+
 field sent_ref {
   kind        = "string"
   label       = "Sent reference"

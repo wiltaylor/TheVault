@@ -6,6 +6,33 @@ use schema::{
 };
 
 #[test]
+fn browser_secret_confirmation_defaults_on_and_round_trips() {
+    for source in ["", "permissions { confirm { notes = false\n}\n}\n"] {
+        let agent = Agent::parse("driver", source).unwrap();
+        assert_eq!(
+            agent
+                .permissions
+                .confirm
+                .switches()
+                .into_iter()
+                .find(|(name, _)| *name == "secrets"),
+            Some(("secrets", true))
+        );
+    }
+    let agent = Agent::parse("driver", "permissions { confirm { secrets = false\n}\n}\n").unwrap();
+    let saved = Agent::parse("driver", &agent.to_wcl()).unwrap();
+    assert_eq!(
+        saved
+            .permissions
+            .confirm
+            .switches()
+            .into_iter()
+            .find(|(name, _)| *name == "secrets"),
+        Some(("secrets", false))
+    );
+}
+
+#[test]
 fn gmail_actions_are_opt_in_and_round_trip() {
     let off = Agent::parse("clerk", "label = \"Clerk\"\n").unwrap();
     assert!(!off.permissions.gmail_actions);
@@ -16,6 +43,30 @@ fn gmail_actions_are_opt_in_and_round_trip() {
     .unwrap();
     assert!(on.permissions.gmail_actions);
     assert!(on.to_wcl().contains("gmail_actions"));
+}
+
+#[test]
+fn browser_secrets_round_trip_only_with_browser_enabled() {
+    let source = "permissions {\n browser = true\n browser_secrets = [\"example_login\"]\n}\n";
+    let agent = Agent::parse("clerk", source).unwrap();
+    assert!(
+        agent
+            .to_wcl()
+            .contains("browser_secrets = [\"example_login\"]")
+    );
+    assert!(
+        Agent::parse(
+            "clerk",
+            "permissions {\n browser_secrets = [\"example_login\"]\n}\n"
+        )
+        .is_err()
+    );
+    assert!(
+        !Agent::parse("clerk", "")
+            .unwrap()
+            .to_wcl()
+            .contains("browser_secrets")
+    );
 }
 
 const FULL: &str = r#"label         = "Inbox triage"

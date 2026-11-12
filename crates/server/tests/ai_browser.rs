@@ -21,6 +21,38 @@ const MODEL: &str = "claude-opus-5";
 /// An agent with browser automation and every other default.
 const DRIVER: &str = "label = \"Driver\"\n\npermissions {\n  browser = true\n}\n";
 
+#[test]
+fn browser_login_redaction() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    let api = Api::start(&fake, Some(&browser));
+    api.agent("driver", DRIVER);
+    let response = api.client.put(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token()).json(&json!({"kind":"login", "username":"fabricated-user", "password":"fabricated-pass", "totp_seed":"JBSWY3DPEHPK3PXP", "origins":[]})).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = "fabricated-user fabricated-pass JBSWY3DPEHPK3PXP";
+    browser.push_run(BrowserRun::exited(0, text, text));
+    browser.file("/work/login.txt", "text/plain", text.as_bytes().to_vec());
+    for (tool, input) in [
+        ("browser_run", json!({"command":"snapshot"})),
+        ("browser_file", json!({"path":"/work/login.txt"})),
+    ] {
+        let events = api.call(&fake, Some("driver"), tool, input);
+        let output = format!(
+            "{} {}",
+            serde_json::to_string(&events).unwrap(),
+            fake.message_requests().last().unwrap().json()
+        );
+        for secret in text.split_whitespace() {
+            assert!(!output.contains(secret), "credential leaked");
+        }
+    }
+    let lines = api
+        .server
+        .stderr_lines_when(|lines| lines.iter().any(|l| l.contains("browser: exit=")));
+    assert!(!lines.join("\n").contains("fabricated-"));
+}
+
 fn eventually(timeout: u64, mut condition: impl FnMut() -> bool) {
     let started = std::time::Instant::now();
     while !condition() {
@@ -30,6 +62,303 @@ fn eventually(timeout: u64, mut condition: impl FnMut() -> bool) {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+fn browser_secret_foreground_proposal_apply_and_revocation_are_value_free() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    let api = Api::start(&fake, Some(&browser));
+    let password = "fabricated-secret-TV162-confirmation";
+    let response = api
+        .client
+        .put(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token())
+        .json(
+            &json!({"kind":"login", "username":"fixture-user", "password":password, "origins":[]}),
+        )
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    api.agent(
+        "driver",
+        "label = \"Driver\"\npermissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n",
+    );
+    let input =
+        json!({"secret":"login","field":"password","target":"#password","session":"default"});
+    let thread: Value = api
+        .client
+        .post(api.server.url("/api/agents/driver/threads"))
+        .bearer_auth(api.token())
+        .json(&json!({}))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    fake.push(AnthropicMessage::new().tool_use("fill", "browser_fill_secret", input));
+    fake.push(AnthropicMessage::text("Done."));
+    let response = api
+        .client
+        .post(api.server.url("/api/ai/chat"))
+        .bearer_auth(api.token())
+        .json(&json!({"agent":"driver","thread":thread["id"],
+            "messages":[{"role":"user","content":[{"type":"text","text":"Go."}]}]}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let events = read_events(response);
+    let proposal = last(&events, "proposal").clone();
+    assert_eq!(proposal["op"], "browser_secret");
+    assert_eq!(proposal["secret"], "login");
+    assert_eq!(proposal["field"], "password");
+    assert_eq!(proposal["target"], "#password");
+    assert_eq!(proposal["origin"], "https://fixture.example");
+    assert_eq!(proposal["unrestricted_origin"], true);
+    assert!(!serde_json::to_string(&events).unwrap().contains(password));
+    let saved = api.get(&format!(
+        "/api/agents/driver/threads/{}",
+        thread["id"].as_str().unwrap()
+    ));
+    assert!(saved.to_string().contains("browser_secret"));
+    assert!(!saved.to_string().contains(password));
+    assert!(
+        !fake
+            .message_requests()
+            .last()
+            .unwrap()
+            .json()
+            .to_string()
+            .contains(password)
+    );
+    assert!(browser.commands().is_empty());
+    assert!(
+        !browser
+            .requests()
+            .iter()
+            .any(|r| r.route() == "/secret/fill")
+    );
+    let (status, done) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "filled");
+    assert!(!done.to_string().contains(password));
+    let saved_after = api.get(&format!(
+        "/api/agents/driver/threads/{}",
+        thread["id"].as_str().unwrap()
+    ));
+    assert!(!saved_after.to_string().contains(password));
+    assert!(saved_after.to_string().contains("applied"));
+    let token: Value = api
+        .client
+        .post(api.server.url("/api/tokens"))
+        .bearer_auth(api.token())
+        .json(&json!({"name":"limited","scope":"write"}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let denied = api
+        .client
+        .post(api.server.url("/api/ai/apply"))
+        .bearer_auth(token["secret"].as_str().unwrap())
+        .json(&proposal)
+        .send()
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let device: Value = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
+        .json(&json!({"password":testkit::PASSWORD,"name":"Fixture","platform":"android"}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let denied = api
+        .client
+        .post(api.server.url("/api/ai/apply"))
+        .bearer_auth(device["token"].as_str().unwrap())
+        .json(&proposal)
+        .send()
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    api.agent("driver", DRIVER);
+    let (status, _) = api.apply(&proposal);
+    assert!(
+        !status.is_success(),
+        "revoked agent grant must refuse Apply"
+    );
+    assert_eq!(
+        browser
+            .requests()
+            .iter()
+            .filter(|r| r.route() == "/secret/fill")
+            .count(),
+        1
+    );
+    api.client
+        .delete(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token())
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let (status, _) = api.apply(&proposal);
+    assert!(!status.is_success());
+    assert_eq!(
+        browser
+            .requests()
+            .iter()
+            .filter(|r| r.route() == "/secret/fill")
+            .count(),
+        1
+    );
+    let lines = api
+        .server
+        .stderr_lines_when(|lines| lines.iter().any(|l| l.starts_with("browser_secret:")));
+    assert!(!lines.join("\n").contains(password));
+    assert!(lines.iter().any(|l| l.contains("allowed")));
+}
+
+#[test]
+fn browser_secret_unattended_run_audits_refusal_without_value() {
+    unattended_secret(true);
+}
+
+#[test]
+fn browser_secret_implicit_assistant_proposal_can_be_applied() {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    let api = Api::start(&fake, Some(&browser));
+    api.client.put(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token())
+        .json(&json!({"kind":"login","username":"fixture-user","password":"fabricated-TV164-assistant","origins":[]}))
+        .send().unwrap().error_for_status().unwrap();
+    api.agent(
+        "assistant",
+        "permissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n",
+    );
+    let events = api.call(
+        &fake,
+        None,
+        "browser_fill_secret",
+        json!({"secret":"login","field":"password","target":"#password","session":"default"}),
+    );
+    let proposal = last(&events, "proposal");
+    assert_eq!(proposal["agent"], "assistant");
+    assert_eq!(api.apply(proposal).0, StatusCode::OK);
+}
+
+#[test]
+fn browser_secret_unattended_off_fills_without_value() {
+    unattended_secret(false);
+}
+
+fn unattended_secret(confirm: bool) {
+    let fake = FakeAnthropic::start();
+    let browser = FakeBrowser::start();
+    let url = browser.base_url();
+    let server = TestServer::start_with_env(
+        |vault| {
+            std::fs::create_dir_all(vault.join("types")).unwrap();
+            std::fs::write(
+                vault.join("types/fillfixture.wcl"),
+                "label = \"Fill fixture\"\ntemplate default {\n tab \"Main\" {\n slot \"title\"\n }\n}\n",
+            )
+            .unwrap();
+        },
+        &[
+            ("VAULT_BROWSER_URL", url.as_str()),
+            ("VAULT_BROWSER_TOKEN", testkit::DEFAULT_BROWSER_TOKEN),
+        ],
+    );
+    let api = Api {
+        server,
+        client: Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap(),
+    };
+    for (name, value) in AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model(MODEL))
+        .secrets()
+    {
+        api.secret(&name, &value);
+    }
+    let password = "fabricated-unattended-secret-TV162";
+    api.client
+        .put(api.server.url("/api/secrets/login"))
+        .bearer_auth(api.token())
+        .json(&json!({"kind":"login","username":"fixture-user","password":password,"origins":[]}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    api.agent("driver", &format!("label = \"Driver\"\npermissions {{\n browser = true\n browser_secrets = [\"login\"]\n confirm {{ secrets = {confirm}\n }}\n}}\ntrigger fill {{\n on = [\"create\"]\n type = \"fillfixture\"\n prompt = \"Fill the fixture.\"\n}}\n"));
+    fake.push(AnthropicMessage::new().tool_use(
+        "fill",
+        "browser_fill_secret",
+        json!({"secret":"login","field":"password","target":"#password","session":"default"}),
+    ));
+    fake.push(AnthropicMessage::text("Done."));
+    api.client
+        .post(api.server.url("/api/notes?type=fillfixture"))
+        .bearer_auth(api.token())
+        .json(&json!({"note":{"fields":{"title":"Fill fixture"}}}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let mut runs = Value::Null;
+    // Note-event triggers have a 30-second debounce on the real server clock.
+    eventually(45, || {
+        runs = api.get("/api/agents/driver/runs");
+        let ended = !runs["triggers"][0]["runs"][0]["ended"].is_null();
+        if !ended {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        ended
+    });
+    let run = &runs["triggers"][0]["runs"][0];
+    let log = run["log"].as_str().unwrap();
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.starts_with("browser_secret:"))
+            .count(),
+        1
+    );
+    assert!(log.contains(if confirm { "refused" } else { "allowed" }));
+    assert!(!runs.to_string().contains(password));
+    let thread = api.get(&format!(
+        "/api/agents/driver/threads/{}",
+        run["thread"].as_str().unwrap()
+    ));
+    assert!(thread.to_string().contains(if confirm {
+        "confirmation_required"
+    } else {
+        "filled"
+    }));
+    assert_eq!(
+        browser
+            .requests()
+            .iter()
+            .filter(|r| r.route() == "/secret/fill")
+            .count(),
+        if confirm { 0 } else { 1 }
+    );
+    assert!(!thread.to_string().contains(password));
+    assert!(browser.commands().is_empty());
+    let lines = api.server.stderr_lines();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("browser_secret:"))
+            .count(),
+        1
+    );
+    assert!(!lines.join("\n").contains(password));
 }
 
 #[test]
@@ -822,7 +1151,8 @@ fn png(width: u32, height: u32) -> Vec<u8> {
     out.into_inner()
 }
 
-const BROWSER_TOOLS: [&str; 4] = [
+const BROWSER_TOOLS: [&str; 5] = [
+    "browser_fill_secret",
     "browser_run",
     "browser_file",
     "browser_save",
@@ -881,6 +1211,7 @@ fn the_tools_need_a_browser_box_and_the_permission() {
                     [
                         "browser_capture",
                         "browser_file",
+                        "browser_fill_secret",
                         "browser_run",
                         "browser_save",
                         "get_note"

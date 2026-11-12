@@ -168,7 +168,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 26;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -687,7 +687,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=23 => {
+        0..=25 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -797,6 +797,19 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             if version <= 22 {
                 tx.execute_batch(agent_queue::SCHEMA)?;
                 agent_queue::seed_legacy(&tx)?;
+            }
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS browser_secret_events (kind TEXT NOT NULL, name TEXT NOT NULL, time_ms INTEGER NOT NULL, PRIMARY KEY(kind,name));")?;
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS browser_secret_grants (agent TEXT NOT NULL, name TEXT NOT NULL, time_ms INTEGER NOT NULL, PRIMARY KEY(agent,name));")?;
+            let has_call_scope: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_call_ids') WHERE name='scope')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_call_scope {
+                tx.execute_batch(
+                    "ALTER TABLE agent_call_ids ADD COLUMN scope TEXT;
+                    UPDATE agent_call_ids SET scope='write' WHERE principal NOT LIKE 'session:%';",
+                )?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

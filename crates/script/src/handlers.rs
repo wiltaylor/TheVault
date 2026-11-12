@@ -401,6 +401,10 @@ impl Shared {
 
     /// The queue thread: run queued jobs, oldest first, until the writer is gone.
     fn run_queue(&self) {
+        if let Ok(writer) = self.writer() {
+            self.recover_sends(&writer, true);
+            self.recover_deletes(&writer);
+        }
         loop {
             let Ok(writer) = self.writer() else {
                 return;
@@ -421,8 +425,44 @@ impl Shared {
                                 _ => {}
                             }
                         }
+                        if payload["type"] == "outbox"
+                            && payload["script"] == "outbox_send"
+                            && let Some(id) = payload["id"].as_str()
+                            && let Ok(note) = writer.read(id)
+                            && doc_to_json(&note.doc)["fields"]["status"] == "ready"
+                        {
+                            self.recover_sends(&writer, false);
+                            self.recover_deletes(&writer);
+                        }
                         let (outcome, log) = self.run_job(&writer, &job.payload);
                         if let Err(message) = &outcome {
+                            // A deadline faults the script before it can record its normal
+                            // Outbox error. Preserve the delete target and expose manual retry.
+                            if payload["type"] == "outbox"
+                                && payload["script"] == "outbox_send"
+                                && let Some(id) = payload["id"].as_str()
+                                && let Ok(note) = writer.read(id)
+                            {
+                                let body = doc_to_json(&note.doc);
+                                let fields = &body["fields"];
+                                if fields["kind"] == "event"
+                                    && fields["event_action"] == "delete"
+                                    && fields["status"] == "sending"
+                                    && fields["sent_at"].as_str().unwrap_or_default().is_empty()
+                                {
+                                    let mut body = body;
+                                    body["fields"]["status"] = json!("failed");
+                                    body["fields"]["error"] = json!(message);
+                                    if let Err(e) = writer.update(
+                                        id,
+                                        &Input::Json(body),
+                                        Some(&note.version),
+                                        &Author::Handler("outbox_send".into()),
+                                    ) {
+                                        eprintln!("recording failed Outbox deletion: {e}");
+                                    }
+                                }
+                            }
                             eprintln!("after_* handler job {} failed: {message}", job.id);
                             let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
                             let s = |k: &str| p[k].as_str().unwrap_or_default().to_owned();
@@ -455,10 +495,160 @@ impl Shared {
         }
     }
 
+    // The queue is serial, but SMS receipts and event write-back jobs are asynchronous.
+    // Preserve those live waits before a claim, not across a server restart.
+    fn recover_sends(&self, writer: &Writer, startup: bool) {
+        let Ok(notes) = writer.list_with(Some("outbox"), writer::Archived::Include) else {
+            return;
+        };
+        let handlers = writer.read_index(|_, schema| handlers_of(schema, "outbox", "after_update"));
+        let Some(handler) = handlers.iter().find(|h| h.script == "outbox_send") else {
+            return;
+        };
+        for summary in notes {
+            let Ok(note) = writer.read(&summary.id) else {
+                continue;
+            };
+            let body = doc_to_json(&note.doc);
+            let fields = &body["fields"];
+            let text = |k: &str| fields[k].as_str().unwrap_or_default();
+            if text("status") != "sending"
+                || !matches!(text("kind"), "email" | "sms" | "event")
+                || (text("kind") == "event" && text("event_action") == "delete")
+            {
+                continue;
+            }
+            if text("kind") == "sms" && text("sent_at").is_empty() {
+                // The handler may auto-select the phone without storing it in `device`.
+                let command = writer.state().list_devices().ok().and_then(|devices| {
+                    devices.iter().find_map(|device| {
+                        writer
+                            .state()
+                            .device_command(&device.id, text("sent_ref"))
+                            .ok()
+                    })
+                });
+                if let Some(command) = command {
+                    match command.status {
+                        state::CommandStatus::Done | state::CommandStatus::Failed => {
+                            if let Err(e) = writer.finish_outbox_sms(&command) {
+                                eprintln!("recovering SMS receipt: {e}");
+                            }
+                            continue;
+                        }
+                        state::CommandStatus::Pending | state::CommandStatus::Delivered
+                            if !startup =>
+                        {
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if !startup && text("kind") == "event" && text("sent_at").is_empty() {
+                // Failure to read the queue is not evidence that a write-back was abandoned.
+                let Ok(jobs) = writer.state().queued_jobs() else {
+                    continue;
+                };
+                if jobs.iter().any(|job| {
+                    let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
+                    p["script"] == "google_event"
+                        && (p["id"] == fields["event"] || p["id"] == fields["result"])
+                }) {
+                    continue;
+                }
+            }
+            let payload = json!({
+                "type": "outbox", "id": note.id, "version": note.version,
+                "wcl": note.wcl, "event": "after_update", "script": "outbox_send",
+                "function": "reconcile_send", "allow_domains": handler.allow_domains,
+                "secrets": handler.secrets,
+            })
+            .to_string();
+            let (result, _) = self.run_job(writer, &payload);
+            if let Err(e) = result {
+                eprintln!("recovering interrupted Outbox send: {e}");
+            }
+        }
+    }
+
+    // Runs before replay and before a new claim, on the single queue thread. Recovery
+    // reads Google but never repeats DELETE without a user's ready transition.
+    fn recover_deletes(&self, writer: &Writer) {
+        let Ok(notes) = writer.list_with(Some("outbox"), writer::Archived::Include) else {
+            return;
+        };
+        let handlers = writer.read_index(|_, schema| handlers_of(schema, "outbox", "after_update"));
+        let Some(handler) = handlers.iter().find(|h| h.script == "outbox_send") else {
+            return;
+        };
+        for summary in notes {
+            let Ok(note) = writer.read(&summary.id) else {
+                continue;
+            };
+            let body = doc_to_json(&note.doc);
+            let fields = &body["fields"];
+            if fields["status"] != "sending"
+                || fields["kind"] != "event"
+                || fields["event_action"] != "delete"
+            {
+                continue;
+            }
+            let payload = json!({
+                "type": "outbox", "id": note.id, "version": note.version,
+                "wcl": note.wcl, "event": "after_update", "script": "outbox_send",
+                "function": "reconcile_delete", "allow_domains": handler.allow_domains,
+                "secrets": handler.secrets,
+            })
+            .to_string();
+            let (result, _) = self.run_job(writer, &payload);
+            if let Err(error) = result {
+                // A host deadline bypasses script Result handling.
+                if let Ok(current) = writer.read(&note.id) {
+                    let mut body = doc_to_json(&current.doc);
+                    if body["fields"]["status"] == "sending" {
+                        body["fields"]["status"] = json!("failed");
+                        body["fields"]["error"] =
+                            json!(format!("The delete was interrupted; retry. {error}"));
+                        if let Err(e) = writer.update(
+                            &note.id,
+                            &Input::Json(body),
+                            Some(&current.version),
+                            &Author::Handler("outbox_send".into()),
+                        ) {
+                            eprintln!("recording interrupted Outbox deletion: {e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Run one queued `after_*` job.
     fn run_job(&self, writer: &Writer, payload: &str) -> (Result<(), String>, String) {
         let job = (|| {
             let p: Json = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            // A crash can happen after creating the event but before linking `result` on
+            // its Outbox item. The durable chain still identifies that interrupted send.
+            if p["script"] == "google_event"
+                && p["chain"].as_array().is_some_and(|chain| {
+                    chain.iter().any(|link| {
+                        link["type"] == "outbox"
+                            && link["id"]
+                                .as_str()
+                                .and_then(|id| writer.read(id).ok())
+                                .is_some_and(|note| {
+                                    let body = doc_to_json(&note.doc);
+                                    body["fields"]["status"] == "failed"
+                                        && body["fields"]["interrupted_at"]
+                                            .as_str()
+                                            .is_some_and(|s| !s.is_empty())
+                                })
+                    })
+                })
+            {
+                return Ok(None);
+            }
             let text = |n: &str| {
                 p.get(n)
                     .and_then(Json::as_str)
@@ -490,6 +680,19 @@ impl Shared {
             };
             let script = text("script");
             let source = script_source(writer, &script)?;
+            let target_trashed = if type_name == "outbox" && script == "outbox_send" {
+                writer.read(&id).ok().is_some_and(|current| {
+                    let body = doc_to_json(&current.doc);
+                    let fields = &body["fields"];
+                    let target = ["sent_ref", "event", "result"]
+                        .iter()
+                        .filter_map(|key| fields[*key].as_str())
+                        .find(|id| !id.is_empty());
+                    target.is_some_and(|id| writer.state().trash_entry(id).ok().flatten().is_some())
+                })
+            } else {
+                false
+            };
             let mut job = Job::new(Kind::After, &script, &source, &text("function"));
             job.args = vec![json!({
                 "id": id,
@@ -500,6 +703,7 @@ impl Shared {
                 "previous": previous,
                 "restored": p.get("restored").cloned().unwrap_or(Json::Bool(false)),
                 "author": p.get("author").cloned().unwrap_or(Json::Null),
+                "target_trashed": target_trashed,
             })];
             job.allow_domains = list("allow_domains");
             job.secrets = list("secrets");
@@ -508,13 +712,14 @@ impl Shared {
                 .find(|(name, _)| *name == script)
                 .map(|(_, limit)| *limit);
             job.context = json!({ "chain": p.get("chain").cloned().unwrap_or_default() });
-            Ok::<_, String>(job)
+            Ok::<_, String>(Some(job))
         })();
         match job {
-            Ok(job) => {
+            Ok(Some(job)) => {
                 let out = self.after.run(job);
                 (out.result.map(|_| ()).map_err(|e| e.to_string()), out.log)
             }
+            Ok(None) => (Ok(()), String::new()),
             Err(message) => (Err(message), String::new()),
         }
     }

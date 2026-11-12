@@ -13,6 +13,34 @@ const NOTE_B: &str = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[test]
+fn agent_call_history_filters_old_rows_but_keeps_raw_ids_after_clock_rollback() {
+    let dir = TempDir::new().unwrap();
+    let clock = TestClock::new(1_000);
+    let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
+    let foreign = Author::Token("writer".into());
+    state
+        .record_version(NOTE_A, "memo", &foreign, "unrelated old text")
+        .unwrap();
+    clock.advance(100);
+    state
+        .issue_agent_call("first", NOTE_A, "clerk", "session:owner")
+        .unwrap();
+    state
+        .issue_agent_call("second", NOTE_A, "clerk", "session:owner")
+        .unwrap();
+    clock.advance(-200);
+    let raw = state
+        .record_version(NOTE_A, "memo", &foreign, "first second")
+        .unwrap();
+    clock.advance(300);
+    let recent = state
+        .record_version(NOTE_A, "memo", &Author::Session("owner".into()), "recent")
+        .unwrap();
+    assert_eq!(state.agent_call_history(NOTE_A).unwrap(), vec![raw, recent]);
+    assert!(state.agent_call_history(NOTE_B).unwrap().is_empty());
+}
+
+#[test]
 fn token_kinds_migrate_from_19_20_22_and_23_without_losing_credentials() {
     for version in [19, 20, 22, 23] {
         let dir = TempDir::new().unwrap();
@@ -123,6 +151,39 @@ fn open_with_key(dir: &TempDir, key: SecretKey) -> State {
 }
 
 #[test]
+fn browser_secret_deletion_requires_owner_reconfirmation_even_in_same_millisecond() {
+    let dir = TempDir::new().unwrap();
+    let state = State::open_with_clock(
+        &dir.path().join("state.db"),
+        Some(SecretKey::generate()),
+        TestClock::new(1000),
+    )
+    .unwrap();
+    let login = state::LoginSecret {
+        username: "test".into(),
+        password: "made-up".into(),
+        origins: vec![],
+        totp_seed: None,
+    };
+    state.set_login_secret("bank", &login).unwrap();
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
+    assert!(state.browser_secret_active("clerk", "bank").unwrap());
+    state.delete_login_secret("bank").unwrap();
+    state.set_login_secret("bank", &login).unwrap();
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
+    drop(state);
+    let state = open(&dir);
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
+    assert!(state.browser_secret_active("clerk", "bank").unwrap());
+}
+
+#[test]
 fn history_returns_every_version_in_order_with_authors() {
     let dir = TempDir::new().unwrap();
     let clock = TestClock::new(1_000);
@@ -198,6 +259,73 @@ fn history_returns_every_version_in_order_with_authors() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn browser_secret_confirmation_replaces_exact_names_and_revokes_on_delete() {
+    let dir = TempDir::new().unwrap();
+    let state = open_with_key(&dir, SecretKey::generate());
+    let login = state::LoginSecret {
+        username: "test".into(),
+        password: "made-up".into(),
+        origins: vec![],
+        totp_seed: None,
+    };
+    for name in ["bank", "mail"] {
+        state.set_login_secret(name, &login).unwrap();
+    }
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
+    assert!(state.browser_secret_active("clerk", "bank").unwrap());
+    assert!(!state.browser_secret_active("clerk", "mail").unwrap());
+    state
+        .confirm_browser_secrets("clerk", &["mail".into()])
+        .unwrap();
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
+    assert!(state.browser_secret_active("clerk", "mail").unwrap());
+    state
+        .confirm_browser_secrets("other", &["bank".into()])
+        .unwrap();
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
+    state.revoke_browser_secrets("clerk").unwrap();
+    assert!(!state.browser_secret_active("clerk", "mail").unwrap());
+    assert!(state.browser_secret_active("other", "bank").unwrap());
+    state.confirm_browser_secrets("other", &[]).unwrap();
+    assert!(!state.browser_secret_active("other", "bank").unwrap());
+}
+
+#[test]
+fn browser_secrets_narrowing_never_adds_or_refreshes_confirmations() {
+    let dir = TempDir::new().unwrap();
+    let state = open_with_key(&dir, SecretKey::generate());
+    let login = state::LoginSecret {
+        username: "test".into(),
+        password: "made-up".into(),
+        origins: vec![],
+        totp_seed: None,
+    };
+    for name in ["bank", "mail"] {
+        state.set_login_secret(name, &login).unwrap();
+    }
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
+    state
+        .narrow_browser_secrets("clerk", &["bank".into(), "mail".into()])
+        .unwrap();
+    assert!(!state.browser_secret_active("clerk", "mail").unwrap());
+    state.delete_login_secret("bank").unwrap();
+    state.set_login_secret("bank", &login).unwrap();
+    state
+        .narrow_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
+    state
+        .confirm_browser_secrets("clerk", &["bank".into()])
+        .unwrap();
+    state.narrow_browser_secrets("clerk", &[]).unwrap();
+    assert!(!state.browser_secret_active("clerk", "bank").unwrap());
 }
 
 #[test]
@@ -1373,7 +1501,7 @@ fn a_version_6_state_db_gains_notifications() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 24);
+    assert_eq!(version, 26);
 }
 
 /// Every event waiting on `sub`, in order, with their sequence numbers.

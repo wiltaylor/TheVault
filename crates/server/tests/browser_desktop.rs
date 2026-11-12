@@ -234,11 +234,25 @@ fn the_status_reads_the_exec_service_health() {
 
 #[test]
 fn the_status_says_when_the_box_does_not_answer() {
-    // A port nothing listens on: bind one, then let it go.
-    let gone = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        format!("http://{}", l.local_addr().unwrap())
-    };
+    // Keep the port reserved: releasing it here lets a parallel test take it.
+    // Close each connection without answering HTTP, so failure is prompt.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let gone = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    let refuse = std::thread::spawn(move || {
+        loop {
+            match listener.accept() {
+                Ok((connection, _)) => drop(connection),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("unavailable-box listener: {error}"),
+            }
+            match stopped.recv_timeout(std::time::Duration::from_millis(10)) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                _ => break,
+            }
+        }
+    });
     let api = Api::start(&[
         ("VAULT_BROWSER_URL", &gone),
         ("VAULT_BROWSER_DESKTOP_URL", &gone),
@@ -261,4 +275,6 @@ fn the_status_says_when_the_box_does_not_answer() {
     )
     .unwrap();
     assert_eq!(ws.status, 502);
+    drop(stop);
+    refuse.join().unwrap();
 }

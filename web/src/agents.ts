@@ -184,6 +184,7 @@ export function agentForm(a: Agent): AgentForm {
       outbox: { ...a.permissions.outbox, send_without_review: a.permissions.outbox?.send_without_review ?? false },
       // Sent only when on, as the agent file holds it only then (browser B6).
       ...(a.permissions.browser ? { browser: true } : {}),
+      ...(a.permissions.browser_secrets?.length ? { browser_secrets: [...a.permissions.browser_secrets] } : {}),
       ...(a.permissions.gmail_actions ? { gmail_actions: true } : {}),
       // Likewise only when the agent has a list (skills S6).
       ...(a.permissions.skills ? { skills: [...a.permissions.skills] } : {}),
@@ -377,6 +378,7 @@ export function toolGroups(tools: readonly string[]): { group: string; tools: { 
 
 /** The confirmation switches, in order, with their labels (ai D22). */
 export const CONFIRM_SWITCHES: { key: keyof AiConfirm; label: string }[] = [
+  { key: "secrets", label: "Ask before entering a secret" },
   { key: "notes", label: "Ask before creating and editing notes" },
   { key: "archive", label: "Ask before archiving notes" },
   { key: "delete", label: "Ask before moving notes to the trash" },

@@ -10,7 +10,7 @@ use crate::rebuild::Failure;
 
 /// Bump when the tables change. An index of another version is dropped and recreated empty, and
 /// the next rebuild fills it.
-const VERSION: i64 = 5;
+const VERSION: i64 = 6;
 
 const TABLES: &str = "
 CREATE TABLE notes (

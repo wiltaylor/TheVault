@@ -876,6 +876,19 @@ impl Scheduler {
         match state.due_trigger_jobs(now) {
             Ok(queued) => {
                 for row in queued {
+                    // Check before admission, which charges the hourly start budget.
+                    // On a state read error leave the job durable and try next tick.
+                    match state.trigger_note_running(&row.agent, row.note.as_deref(), now) {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            let _ = state.retry_trigger_job(row.id, now, None);
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("checking running trigger note: {e}");
+                            continue;
+                        }
+                    }
                     let Ok(payload) = serde_json::from_str::<serde_json::Value>(&row.payload)
                     else {
                         let _ = state.finish_trigger_job(
@@ -1124,6 +1137,7 @@ impl Scheduler {
             .unwrap_or("")
             .to_owned();
         let mut admits = Vec::new();
+        let history = std::cell::LazyCell::new(|| state.agent_call_history(id));
         for f in found {
             let call = &f.call;
             match state.agent_call(&call.call) {
@@ -1152,7 +1166,7 @@ impl Scheduler {
             }
             if held
                 || matches!(version.author, Author::Agent(_))
-                || !self.call_versions_trusted(id, &call.call, &call.agent)
+                || !self.call_versions_trusted(id, &call.call, &call.agent, &history)
                 || !state
                     .consume_agent_call(&call.call, id, &call.agent, &version.author)
                     .unwrap_or(false)
@@ -1169,6 +1183,14 @@ impl Scheduler {
                 continue;
             };
             let request = mentions::request(&call.label, agent);
+            let scope = match state.agent_call_scope(&call.call) {
+                Ok(scope) => scope,
+                Err(e) => {
+                    eprintln!("call {}: reading issued scope: {e}", call.call);
+                    record(None);
+                    continue;
+                }
+            };
             let context =
                 (f.context != call.label.trim()).then(|| format!("Context: {}", f.context));
             let prompt = [
@@ -1198,7 +1220,7 @@ impl Scheduler {
                 ),
                 thread: None,
                 origin: Some(MENTION_ORIGIN),
-                scope: None,
+                scope,
                 caller: None,
             };
             if self.plan().agents.over_limit(&agent.name, now) {
@@ -1274,30 +1296,21 @@ impl Scheduler {
 
     /// A later issuer save cannot launder an earlier foreign write. Use persisted
     /// history rather than pending scans, which are coalesced and lost on restart.
-    fn call_versions_trusted(&self, note: &str, call: &str, agent: &str) -> bool {
+    fn call_versions_trusted(
+        &self,
+        note: &str,
+        call: &str,
+        agent: &str,
+        versions: &std::cell::LazyCell<
+            state::Result<Vec<state::Version>>,
+            impl FnOnce() -> state::Result<Vec<state::Version>>,
+        >,
+    ) -> bool {
         let state = self.writer.state();
-        let Ok(Some((issued_ms, principal))) = state.agent_call_issuance(call, note, agent) else {
+        let Ok(Some((_, principal))) = state.agent_call_issuance(call, note, agent) else {
             return false;
         };
-        let Ok(versions) = state.history(note) else {
-            return false;
-        };
-        for version in versions.into_iter().filter(|v| v.at_ms >= issued_ms) {
-            let (kind, name) = version.author.parts();
-            if format!("{kind}:{name}") == principal {
-                continue;
-            }
-            let Ok(doc) = schema::Doc::parse(&version.content, note) else {
-                return false;
-            };
-            if mentions::calls(&doc)
-                .iter()
-                .any(|found| found.call.call == call)
-            {
-                return false;
-            }
-        }
-        true
+        trusted_call_history(versions, &principal, call)
     }
 
     /// Run notes sent to `agent` (TV-77 D1): open a thread of origin [`DISPATCH_ORIGIN`] about
@@ -1500,7 +1513,7 @@ impl Scheduler {
             eprintln!("agent {:?}: recording the run's end: {e}", agent.name);
         }
         if let Some(queued) = job.durable {
-            let result = match &outcome {
+            let finish = || match &outcome {
                 AgentRunOutcome::Succeeded => state.finish_trigger_job(queued, "succeeded", None),
                 AgentRunOutcome::Failed(message) if no_side_effects => {
                     state.retry_trigger_job(queued, self.clock.now_ms(), Some(message))
@@ -1510,8 +1523,11 @@ impl Scheduler {
                 }
                 AgentRunOutcome::Running => unreachable!(),
             };
-            if let Err(e) = result {
-                eprintln!("finishing trigger queue job: {e}");
+            if let Err(e) = finish() {
+                eprintln!("finishing trigger queue job (retrying once): {e}");
+                if let Err(e) = finish() {
+                    eprintln!("finishing trigger queue job: {e}");
+                }
             }
         }
         let (word, message) = match &outcome {
@@ -1626,6 +1642,41 @@ impl Scheduler {
                 job.agent
             );
         }
+    }
+}
+
+fn trusted_call_history(
+    history: &std::cell::LazyCell<
+        state::Result<Vec<state::Version>>,
+        impl FnOnce() -> state::Result<Vec<state::Version>>,
+    >,
+    principal: &str,
+    call: &str,
+) -> bool {
+    let Ok(versions) = &**history else {
+        return false;
+    };
+    versions.iter().all(|version| {
+        let (kind, name) = version.author.parts();
+        format!("{kind}:{name}") == principal || !version.content.contains(call)
+    })
+}
+
+#[cfg(test)]
+mod call_history_tests {
+    use super::*;
+
+    #[test]
+    fn multiple_calls_load_scan_history_once() {
+        let reads = std::cell::Cell::new(0);
+        let history = std::cell::LazyCell::new(|| {
+            reads.set(reads.get() + 1);
+            Ok(Vec::new())
+        });
+        assert_eq!(reads.get(), 0);
+        assert!(trusted_call_history(&history, "session:owner", "first"));
+        assert!(trusted_call_history(&history, "session:owner", "second"));
+        assert_eq!(reads.get(), 1);
     }
 }
 

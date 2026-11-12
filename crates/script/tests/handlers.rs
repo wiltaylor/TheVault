@@ -126,6 +126,188 @@ fn json_note(fields: serde_json::Value) -> Input {
     Input::Json(json!({ "fields": fields }))
 }
 
+fn interrupted_outbox_restart(kind: &str, action: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let (writer, handlers) = open(dir.path(), false);
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let mut fields = json!({
+        "title": "Check this send", "kind": kind, "status": "ready",
+        "to": ["ann@example.com"],
+    });
+    if !action.is_empty() {
+        fields["event_action"] = json!(action);
+    }
+    let item = writer
+        .create("outbox", &json_note(fields), &user())
+        .unwrap();
+    let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    body["fields"]["status"] = json!("sending");
+    writer
+        .update(
+            &item.id,
+            &Input::Json(body),
+            Some(&item.version),
+            &Author::Handler("outbox_send".into()),
+        )
+        .unwrap();
+    drop(writer);
+    drop(handlers);
+
+    let (writer, _handlers) = open(dir.path(), true);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let note = writer.read(&item.id).unwrap();
+        let body = writer::doc_to_json(&note.doc);
+        if body["fields"]["status"] == "failed" {
+            assert!(
+                body["fields"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("check before retrying")
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{kind}/{action} stayed sending: {body}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn error_phrase_without_marker_does_not_skip_event_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    std::fs::write(dir.path().join("types/report.wcl"), format!(
+        "label = \"Report\"\nfield review {{ kind = \"string\" }}\nhandler \"after_create\" {{ script = \"google_event\" }}\n{TEMPLATE}"
+    )).unwrap();
+    let (writer, handlers) = open(dir.path(), false);
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    std::fs::write(
+        dir.path().join("scripts/google_event.ws"),
+        REVIEW.replace("after_update", "after_create"),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("scripts/outbox_send.ws"), r#"use vault
+fn after_create(note: Value) -> Result[(), string] {
+    vault::create("report", Value::Map(#{ "fields": Value::Map(#{ "title": Value::String("Replay me") }) }))?
+    vault::patch(note.get("id").unwrap().as_string().unwrap(), Value::Map(#{ "status": Value::String("failed"), "error": Value::String("Provider says check before retrying") }), "")?
+    Ok(())
+}
+fn after_update(note: Value) -> Result[(), string] { Ok(()) }
+fn reconcile_send(note: Value) -> Result[(), string] { Ok(()) }
+"#).unwrap();
+    writer
+        .create(
+            "outbox",
+            &json_note(json!({"title": "Failed send", "kind": "event", "status": "sending"})),
+            &user(),
+        )
+        .unwrap();
+    handlers.start(&writer);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !writer.state().queued_jobs().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "queue did not empty");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(writer.state().failed_jobs().unwrap().is_empty());
+    let reports = writer.list(Some("report")).unwrap();
+    assert_eq!(reports.len(), 1);
+    let report = writer.read(&reports[0].id).unwrap();
+    assert_eq!(writer::doc_to_json(&report.doc)["fields"]["review"], "seen");
+}
+
+#[test]
+fn interrupted_email_restart() {
+    interrupted_outbox_restart("email", "");
+}
+
+#[test]
+fn interrupted_sms_restart() {
+    interrupted_outbox_restart("sms", "");
+}
+
+#[test]
+fn interrupted_event_create_restart() {
+    interrupted_outbox_restart("event", "");
+}
+
+#[test]
+fn interrupted_event_update_restart() {
+    interrupted_outbox_restart("event", "update");
+}
+
+fn confirmed_outbox_restart(kind: &str, action: &str, timestamp: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let (writer, handlers) = open(dir.path(), false);
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let copy = writer
+        .create("report", &json_note(json!({"title": "Sent copy"})), &user())
+        .unwrap();
+    let mut fields = json!({"title": "Confirmed", "kind": kind, "status": "ready"});
+    if !action.is_empty() {
+        fields["event_action"] = json!(action);
+    }
+    let item = writer
+        .create("outbox", &json_note(fields), &user())
+        .unwrap();
+    let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    body["fields"]["status"] = json!("sending");
+    body["fields"]["sent_ref"] = json!("provider-confirmed");
+    body["fields"]["result"] = json!(copy.id);
+    if timestamp {
+        body["fields"]["sent_at"] = json!("2026-11-12T09:00:00Z");
+    }
+    writer
+        .update(
+            &item.id,
+            &Input::Json(body),
+            Some(&item.version),
+            &Author::Handler("outbox_send".into()),
+        )
+        .unwrap();
+    drop(writer);
+    drop(handlers);
+    let (writer, _handlers) = open(dir.path(), true);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while writer.read(&item.id).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "confirmed {kind}/{action} not settled"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(writer.read(&copy.id).is_ok());
+}
+
+#[test]
+fn confirmed_email_restart() {
+    confirmed_outbox_restart("email", "", false);
+}
+
+#[test]
+fn confirmed_sms_restart() {
+    confirmed_outbox_restart("sms", "", true);
+}
+
+#[test]
+fn confirmed_event_create_restart() {
+    confirmed_outbox_restart("event", "", true);
+}
+
+#[test]
+fn confirmed_event_update_restart() {
+    confirmed_outbox_restart("event", "update", true);
+}
+
 #[test]
 fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
     let dir = tempfile::tempdir().unwrap();

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 const read = (path) => readFileSync(path, 'utf8');
@@ -42,15 +42,18 @@ test('cache paths exclude signing and runtime locations', () => {
   assert.match(read('dev'), /THEVAULT_PNPM_CACHE:-thevault-pnpm/);
 });
 
-test('branch dispatch has no secrets or publishing and exercises reusable jobs', () => {
-  const workflow = read('.github/workflows/release-cache-check.yml');
+test('only the manual signing workflow remains', () => {
+  assert.deepEqual(readdirSync('.github/workflows').sort(), ['sign-only.yml']);
+});
+
+test('signing accepts manual hash-bound inputs with draft read access and no publication steps', () => {
+  const workflow = read('.github/workflows/sign-only.yml');
   assert.match(workflow, /workflow_dispatch:/);
-  assert.doesNotMatch(workflow, /^\s*(secrets:|packages: write|contents: write)/m);
-  assert.equal((workflow.match(/compile-only: true/g) || []).length, 2);
-  for (const [file, lane] of [['release.yml', 'desktop'], ['android-release.yml', 'android-arm64'], ['android-smoke-reusable.yml', 'android-x86_64']]) {
-    const source = read(`.github/workflows/${file}`);
-    assert.match(source, new RegExp(`lane: ${lane}`));
-    assert.ok(source.indexOf('actions/release-cache') < source.indexOf('Write the version'));
-    assert.match(source, /compile-only:/);
-  }
+  assert.match(workflow, /contents: read/);
+  assert.match(workflow, /sign:\n(?:    #[^\n]*\n)*    permissions:\n      contents: write/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /--bundle-sha/);
+  assert.match(workflow, /git merge-base --is-ancestor/);
+  assert.doesNotMatch(workflow, /workflow_call:|push:|packages: write|cargo build|tauri build|gh release (create|edit|upload)|docker push/);
+  assert.match(workflow, /actions\/upload-artifact@v6/);
 });

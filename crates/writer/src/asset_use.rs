@@ -359,6 +359,7 @@ impl Writer {
         if asset.filename == filename {
             return Ok(asset);
         }
+        self.invalidate_asset_safety(id)?;
         let bytes = self.vault.read(&asset.path())?;
         let renamed = Asset {
             filename: filename.to_owned(),

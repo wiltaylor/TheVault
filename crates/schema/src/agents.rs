@@ -42,12 +42,13 @@ pub const AGENT_PROVIDERS: [&str; 3] = ["anthropic", "openai", "chatgpt"];
 pub const AGENT_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// The confirmation switches of `permissions.confirm` (ai D22).
-pub const CONFIRM_SWITCHES: [&str; 9] = [
+pub const CONFIRM_SWITCHES: [&str; 10] = [
     "notes",
     "archive",
     "delete",
     "types",
     "downloads",
+    "secrets",
     "taxonomies",
     "agents",
     "skills",
@@ -141,6 +142,8 @@ pub struct Permissions {
     /// tools, offered when the server has a browser box. Absent means `false`, and it is
     /// independent of `tools`: an absent tools list does not include the browser tools.
     pub browser: bool,
+    /// Login names available to browser automation. Empty denies all.
+    pub browser_secrets: Vec<String>,
     /// The skills the agent is offered (skills S6), by name; `None` is every valid skill.
     /// Written only when set: an app from before skills refuses a permission it does not know.
     pub skills: Option<Vec<String>>,
@@ -186,6 +189,8 @@ pub struct Confirm {
     pub delete: bool,
     pub types: bool,
     pub downloads: bool,
+    /// Entering a Login field in the browser. Absent means ask first.
+    pub secrets: bool,
     pub taxonomies: bool,
     /// Agent creates, changes and deletes (agents G20).
     pub agents: bool,
@@ -204,6 +209,7 @@ impl Default for Confirm {
             delete: true,
             types: true,
             downloads: true,
+            secrets: true,
             taxonomies: true,
             agents: true,
             skills: true,
@@ -214,13 +220,14 @@ impl Default for Confirm {
 
 impl Confirm {
     /// The switches in [`CONFIRM_SWITCHES`] order.
-    pub fn switches(&self) -> [(&'static str, bool); 9] {
+    pub fn switches(&self) -> [(&'static str, bool); 10] {
         [
             ("notes", self.notes),
             ("archive", self.archive),
             ("delete", self.delete),
             ("types", self.types),
             ("downloads", self.downloads),
+            ("secrets", self.secrets),
             ("taxonomies", self.taxonomies),
             ("agents", self.agents),
             ("skills", self.skills),
@@ -236,6 +243,7 @@ impl Confirm {
             "delete" => &mut self.delete,
             "types" => &mut self.types,
             "downloads" => &mut self.downloads,
+            "secrets" => &mut self.secrets,
             "taxonomies" => &mut self.taxonomies,
             "agents" => &mut self.agents,
             "skills" => &mut self.skills,
@@ -878,6 +886,9 @@ impl Agent {
             if p.browser {
                 field(&mut out, "  ", "browser", "true");
             }
+            if !p.browser_secrets.is_empty() {
+                field(&mut out, "  ", "browser_secrets", &list(&p.browser_secrets));
+            }
             if p.gmail_actions {
                 field(&mut out, "  ", "gmail_actions", "true");
             }
@@ -1140,9 +1151,23 @@ impl Reader<'_> {
         let mut seen = HashSet::new();
         for i in &items {
             if !valid(i) {
-                self.c.fail(at, format!("{i:?} is not a {what} name"));
+                self.c.fail(
+                    at,
+                    if what == "secret" {
+                        "an entry is not a valid secret name".to_owned()
+                    } else {
+                        format!("{i:?} is not a {what} name")
+                    },
+                );
             } else if !seen.insert(i.as_str()) {
-                self.c.fail(at, format!("{i:?} appears more than once"));
+                self.c.fail(
+                    at,
+                    if what == "secret" {
+                        "a secret name appears more than once".to_owned()
+                    } else {
+                        format!("{i:?} appears more than once")
+                    },
+                );
             }
         }
         (self.c.errors() == before).then_some(items)
@@ -1151,7 +1176,7 @@ impl Reader<'_> {
     fn permissions(&mut self, d: &Doc) -> Permissions {
         self.known(
             d,
-            &["tools", "types", "change_types", "change_fields", "browser", "skills", "gmail_actions"],
+            &["tools", "types", "change_types", "change_fields", "browser", "browser_secrets", "skills", "gmail_actions"],
             "permissions.",
             "is not a permission: use tools, types, browser, skills, confirm { ... }, web { ... }, outbox { ... }, scripts { ... } or subagents { ... }",
         );
@@ -1174,6 +1199,20 @@ impl Reader<'_> {
             ),
             ..Permissions::default()
         };
+        p.browser_secrets = self
+            .names(
+                d,
+                "browser_secrets",
+                "permissions.browser_secrets",
+                "secret",
+            )
+            .unwrap_or_default();
+        if !p.browser && !p.browser_secrets.is_empty() {
+            self.c.fail(
+                "permissions.browser_secrets",
+                "requires Browser automation (browser = true)",
+            );
+        }
         if let Some(value) = d.field("change_fields") {
             match value {
                 Value::Record(entries) => {

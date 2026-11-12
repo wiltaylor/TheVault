@@ -1,0 +1,91 @@
+# Temporary operator-approved key custodian. No builds, tests or publication.
+name: sign-only
+run-name: Sign-only ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        required: true
+      source_sha:
+        type: string
+        required: true
+      bundle_asset:
+        type: string
+        required: true
+      bundle_sha:
+        type: string
+        required: true
+      request_id:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: sign-only-${{ inputs.request_id }}
+  cancel-in-progress: false
+jobs:
+  sign:
+    # Draft releases require push access, even for downloading their assets.
+    # No step edits a release. Checkout does not persist this token.
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ inputs.version }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      BUNDLE_ASSET: ${{ inputs.bundle_asset }}
+      BUNDLE_SHA: ${{ inputs.bundle_sha }}
+      REQUEST_ID: ${{ inputs.request_id }}
+    steps:
+      - name: Validate identifiers before checkout or secret access
+        run: |
+          python3 - <<'PY'
+          import os,re
+          rules = {'VERSION': r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-alpha\.[1-9][0-9]?)?',
+                   'SOURCE_SHA': r'[0-9a-f]{40}', 'BUNDLE_SHA': r'[0-9a-f]{64}', 'REQUEST_ID': r'[0-9a-f]{32}'}
+          for name, pattern in rules.items():
+              if not re.fullmatch(pattern, os.environ[name]): raise SystemExit('invalid signing identifier: ' + name)
+          if os.environ['BUNDLE_ASSET'] != 'thevault-sign-input-' + os.environ['REQUEST_ID'] + '.tar.gz':
+              raise SystemExit('invalid signing bundle name')
+          PY
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the reviewed main history
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main
+      - name: Install only signing tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tauri" --ignore-scripts --no-audit --no-fund @tauri-apps/cli@2.12.3
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;36.0.0'
+          echo "$ANDROID_HOME/build-tools/36.0.0" >> "$GITHUB_PATH"
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends minisign
+      - name: Download unsigned inputs from the private draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$BUNDLE_ASSET" --dir "$RUNNER_TEMP/unsigned"
+      - name: Verify input hashes and sign without building
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          python3 scripts/release/signing.py --bundle "$RUNNER_TEMP/unsigned/$BUNDLE_ASSET" \
+            --bundle-sha "$BUNDLE_SHA" --version "$VERSION" --sha "$SOURCE_SHA" \
+            --out "$RUNNER_TEMP/signed" --tauri-bin "$RUNNER_TEMP/tauri/node_modules/.bin/tauri"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: thevault-signing-${{ inputs.request_id }}
+          path: ${{ runner.temp }}/signed/*
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true

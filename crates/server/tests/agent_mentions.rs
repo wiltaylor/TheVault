@@ -90,6 +90,10 @@ impl Api {
             },
             &[OsStr::new("--test-clock"), OsStr::new(START)],
         );
+        Self::from_server(fake, server)
+    }
+
+    fn from_server(fake: &FakeAnthropic, server: TestServer) -> Api {
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -245,6 +249,73 @@ impl Api {
     /// Move the test clock on, which runs whatever is due and waits for it.
     fn advance(&self, by: &str) {
         self.send("POST", "/api/test/clock", json!({ "advance": by }));
+    }
+}
+
+#[test]
+fn browser_secret_mentions_refuse_when_on_and_fill_when_off() {
+    for confirm in [true, false] {
+        let fake = FakeAnthropic::start();
+        let browser = testkit::FakeBrowser::start();
+        let url = browser.base_url();
+        let server = TestServer::start_with_env(
+            |vault| {
+                std::fs::create_dir_all(vault.join("types")).unwrap();
+                std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
+            },
+            &[
+                ("VAULT_BROWSER_URL", url.as_str()),
+                ("VAULT_BROWSER_TOKEN", testkit::DEFAULT_BROWSER_TOKEN),
+            ],
+        );
+        let api = Api::from_server(&fake, server);
+        let password = "fabricated-TV164-mention-password";
+        api.send(
+            "PUT",
+            "/api/secrets/login",
+            json!({"kind":"login","username":"fixture-user","password":password,"origins":[]}),
+        );
+        api.agent("driver", &format!("permissions {{\n browser = true\n browser_secrets = [\"login\"]\n confirm {{ secrets = {confirm}\n }}\n}}\n"));
+        fake.push(AnthropicMessage::new().tool_use(
+            "fill",
+            "browser_fill_secret",
+            json!({"secret":"login","field":"password","target":"#password","session":"default"}),
+        ));
+        fake.push(AnthropicMessage::text("Done."));
+        api.called_note("Fixture", "@Driver fill", "driver", &[]);
+        let started = std::time::Instant::now();
+        let stored = loop {
+            let threads = api.threads("driver");
+            if let Some(thread) = threads.first() {
+                let stored = api.get(&format!(
+                    "/api/agents/driver/threads/{}",
+                    thread["id"].as_str().unwrap()
+                ));
+                if stored.to_string().contains(if confirm {
+                    "confirmation_required"
+                } else {
+                    "filled"
+                }) {
+                    break stored;
+                }
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(45),
+                "mention did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        assert!(!stored.to_string().contains(password));
+        assert!(stored["proposals"].as_array().unwrap().is_empty());
+        assert_eq!(
+            browser
+                .requests()
+                .iter()
+                .filter(|r| r.route() == "/secret/fill")
+                .count(),
+            if confirm { 0 } else { 1 }
+        );
+        assert!(!api.server.stderr_lines().join("\n").contains(password));
     }
 }
 
@@ -474,6 +545,112 @@ fn only_sessions_and_paired_device_write_tokens_can_issue_calls() {
     api.save(&id, "App editor changed", &[&asked]);
     api.advance("PT1S");
     assert_eq!(fake.message_requests().len(), 1);
+}
+
+#[test]
+fn a_device_mention_cannot_make_admin_changes_even_with_confirmation_off() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "keeper",
+        "label = \"Keeper\"\npermissions {\n  confirm {\n    types = false\n  }\n}\n",
+    );
+    let id = api.note("memo", "Roof", &[]);
+    let paired: Value = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
+        .json(&json!({ "password": testkit::PASSWORD, "name": "Phone", "platform": "android" }))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let token = paired["token"].as_str().unwrap();
+    let issued: Value = api
+        .client
+        .post(api.server.url("/api/agents/calls"))
+        .bearer_auth(token)
+        .json(&json!({ "note": id, "agent": "keeper" }))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let asked = call(
+        "@Keeper change the tab",
+        "keeper",
+        issued["call"].as_str().unwrap(),
+    );
+    let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
+    api.client
+        .put(api.server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(token)
+        .json(&json!({ "note": note_json("Roof", &[&asked]), "base_version": version }))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_type",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
+    ));
+    fake.push(AnthropicMessage::text("Proposed."));
+    api.advance("PT1S");
+    let threads = api.threads("keeper");
+    assert_eq!(threads.len(), 1);
+    let thread = threads[0]["id"].as_str().unwrap();
+    let stored = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+    assert!(
+        api.get("/api/types/memo")["wcl"]
+            .as_str()
+            .unwrap()
+            .contains("tab \"Main\""),
+        "{stored}"
+    );
+    assert!(
+        stored["proposals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["event"] == "type_proposal" && p["status"] == "pending"),
+        "{stored}"
+    );
+    let response = api
+        .client
+        .post(api.server.url("/api/ai/apply"))
+        .bearer_auth(token)
+        .json(&json!({ "kind": "type", "thread": thread, "name": "memo", "wcl": MEMO }))
+        .send()
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 403);
+}
+
+#[test]
+fn a_session_mention_keeps_the_agents_admin_scope() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "keeper",
+        "label = \"Keeper\"\npermissions {\n  confirm {\n    types = false\n  }\n}\n",
+    );
+    api.called_note("Roof", "@Keeper change the tab", "keeper", &[]);
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_type",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
+    ));
+    fake.push(AnthropicMessage::text("Changed."));
+    api.advance("PT1S");
+    assert_eq!(api.threads("keeper").len(), 1);
+    assert!(
+        api.get("/api/types/memo")["wcl"]
+            .as_str()
+            .unwrap()
+            .contains("tab \"Details\"")
+    );
 }
 
 #[test]
