@@ -290,24 +290,97 @@ fn safety_rest_read_route_inventory() {
 
 #[test]
 fn safety_rest_mutation_route_inventory() {
-    // Review every new non-GET route, including endpoints that return note text.
-    let source = include_str!("../../api/src/lib.rs");
-    let mut actual = Vec::new();
-    for method in ["post", "post_up_to", "put", "put_up_to", "patch"] {
-        let marker = format!(".{method}(");
-        for part in source.split(&marker).skip(1) {
-            if let Some(path) = part
-                .trim_start()
-                .strip_prefix('"')
-                .and_then(|s| s.split('"').next())
-            {
-                actual.push((method, path));
-            }
-        }
-    }
+    // Registered paths include const paths and size-limited POST/PUT routes.
+    let mut actual: Vec<_> = api::routes()
+        .into_iter()
+        .filter_map(|(method, path)| {
+            let method = match method {
+                reqwest::Method::POST => "post",
+                reqwest::Method::PUT => "put",
+                reqwest::Method::PATCH => "patch",
+                reqwest::Method::DELETE => "delete",
+                _ => return None,
+            };
+            Some((method, path))
+        })
+        .collect();
     actual.sort_unstable();
     actual.dedup();
     let reviewed = [
+        ("delete", "/api/agents/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/agents/{name}/memories/{id}",
+            "caller ownership checked",
+        ),
+        (
+            "delete",
+            "/api/agents/{name}/threads/{id}",
+            "caller ownership checked",
+        ),
+        (
+            "delete",
+            "/api/ai/chat/turns/{turn}",
+            "caller-bound turn ownership checked",
+        ),
+        ("delete", "/api/assets/{id}", "central asset id gate"),
+        (
+            "delete",
+            "/api/device-files/{platform}",
+            "admin scope required",
+        ),
+        ("delete", "/api/devices/{id}", "admin scope required"),
+        (
+            "delete",
+            "/api/integrations/ai/accounts/{id}",
+            "admin scope required",
+        ),
+        (
+            "delete",
+            "/api/integrations/gitsync",
+            "admin scope required",
+        ),
+        (
+            "delete",
+            "/api/integrations/gitsync/token",
+            "admin scope required",
+        ),
+        ("delete", "/api/notes/{id}", "central id gate"),
+        (
+            "delete",
+            "/api/notifications",
+            "caller metadata, no stored note body",
+        ),
+        (
+            "delete",
+            "/api/notifications/{id}",
+            "caller metadata, no stored note body",
+        ),
+        (
+            "delete",
+            "/api/pins/folders/{id}",
+            "caller metadata, no stored note body",
+        ),
+        ("delete", "/api/pins/{id}", "central id gate"),
+        ("delete", "/api/scripts/{name}", "admin scope required"),
+        ("delete", "/api/secrets/{name}", "admin scope required"),
+        ("delete", "/api/skills/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/skills/{name}/files/{*path}",
+            "admin scope required",
+        ),
+        ("delete", "/api/tasks/{name}", "admin scope required"),
+        ("delete", "/api/taxonomies/{name}", "admin scope required"),
+        ("delete", "/api/tokens/{name}", "admin scope required"),
+        ("delete", "/api/tools/{name}", "admin scope required"),
+        ("delete", "/api/trash/{id}", "human-only purge"),
+        ("delete", "/api/types/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/types/{name}/templates/{template}",
+            "admin scope required",
+        ),
         (
             "patch",
             "/api/agents/{name}/memories/{id}",
@@ -751,10 +824,11 @@ fn safety_rest_mutation_route_inventory() {
         ),
     ];
     assert!(reviewed.iter().all(|(_, _, review)| !review.is_empty()));
-    let expected: Vec<_> = reviewed
+    let mut expected: Vec<_> = reviewed
         .iter()
-        .map(|(method, path, _)| (*method, *path))
+        .map(|(method, path, _)| (method.strip_suffix("_up_to").unwrap_or(method), *path))
         .collect();
+    expected.sort_unstable();
     assert_eq!(
         actual, expected,
         "Review the content returned by every new write route"
