@@ -800,8 +800,10 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             tx.execute_batch("CREATE TABLE IF NOT EXISTS browser_secret_events (kind TEXT NOT NULL, name TEXT NOT NULL, time_ms INTEGER NOT NULL, PRIMARY KEY(kind,name));")?;
             tx.execute_batch("CREATE TABLE IF NOT EXISTS browser_secret_grants (agent TEXT NOT NULL, name TEXT NOT NULL, time_ms INTEGER NOT NULL, PRIMARY KEY(agent,name));")?;
-            tx.execute_batch("ALTER TABLE agent_call_ids ADD COLUMN scope TEXT;
-                UPDATE agent_call_ids SET scope='write' WHERE principal NOT LIKE 'session:%';")?;
+            tx.execute_batch(
+                "ALTER TABLE agent_call_ids ADD COLUMN scope TEXT;
+                UPDATE agent_call_ids SET scope='write' WHERE principal NOT LIKE 'session:%';",
+            )?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

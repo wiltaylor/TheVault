@@ -480,34 +480,80 @@ fn only_sessions_and_paired_device_write_tokens_can_issue_calls() {
 fn a_device_mention_cannot_make_admin_changes_even_with_confirmation_off() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    api.agent("keeper", "label = \"Keeper\"\npermissions {\n  confirm {\n    types = false\n  }\n}\n");
+    api.agent(
+        "keeper",
+        "label = \"Keeper\"\npermissions {\n  confirm {\n    types = false\n  }\n}\n",
+    );
     let id = api.note("memo", "Roof", &[]);
-    let paired: Value = api.client.post(api.server.url("/api/devices/pair"))
+    let paired: Value = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
         .json(&json!({ "password": testkit::PASSWORD, "name": "Phone", "platform": "android" }))
-        .send().unwrap().error_for_status().unwrap().json().unwrap();
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
     let token = paired["token"].as_str().unwrap();
-    let issued: Value = api.client.post(api.server.url("/api/agents/calls"))
-        .bearer_auth(token).json(&json!({ "note": id, "agent": "keeper" }))
-        .send().unwrap().error_for_status().unwrap().json().unwrap();
-    let asked = call("@Keeper change the tab", "keeper", issued["call"].as_str().unwrap());
+    let issued: Value = api
+        .client
+        .post(api.server.url("/api/agents/calls"))
+        .bearer_auth(token)
+        .json(&json!({ "note": id, "agent": "keeper" }))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let asked = call(
+        "@Keeper change the tab",
+        "keeper",
+        issued["call"].as_str().unwrap(),
+    );
     let version = api.get(&format!("/api/notes/{id}"))["version"].clone();
-    api.client.put(api.server.url(&format!("/api/notes/{id}"))).bearer_auth(token)
+    api.client
+        .put(api.server.url(&format!("/api/notes/{id}")))
+        .bearer_auth(token)
         .json(&json!({ "note": note_json("Roof", &[&asked]), "base_version": version }))
-        .send().unwrap().error_for_status().unwrap();
-    fake.push(AnthropicMessage::new().tool_use("toolu_type", "propose_type_change",
-        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") })));
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_type",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
+    ));
     fake.push(AnthropicMessage::text("Proposed."));
     api.advance("PT1S");
     let threads = api.threads("keeper");
     assert_eq!(threads.len(), 1);
     let thread = threads[0]["id"].as_str().unwrap();
     let stored = api.get(&format!("/api/agents/keeper/threads/{thread}"));
-    assert!(api.get("/api/types/memo")["wcl"].as_str().unwrap().contains("tab \"Main\""), "{stored}");
-    assert!(stored["proposals"].as_array().unwrap().iter()
-        .any(|p| p["event"] == "type_proposal" && p["status"] == "pending"), "{stored}");
-    let response = api.client.post(api.server.url("/api/ai/apply")).bearer_auth(token)
+    assert!(
+        api.get("/api/types/memo")["wcl"]
+            .as_str()
+            .unwrap()
+            .contains("tab \"Main\""),
+        "{stored}"
+    );
+    assert!(
+        stored["proposals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["event"] == "type_proposal" && p["status"] == "pending"),
+        "{stored}"
+    );
+    let response = api
+        .client
+        .post(api.server.url("/api/ai/apply"))
+        .bearer_auth(token)
         .json(&json!({ "kind": "type", "thread": thread, "name": "memo", "wcl": MEMO }))
-        .send().unwrap();
+        .send()
+        .unwrap();
     assert_eq!(response.status().as_u16(), 403);
 }
 
@@ -515,14 +561,25 @@ fn a_device_mention_cannot_make_admin_changes_even_with_confirmation_off() {
 fn a_session_mention_keeps_the_agents_admin_scope() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    api.agent("keeper", "label = \"Keeper\"\npermissions {\n  confirm {\n    types = false\n  }\n}\n");
+    api.agent(
+        "keeper",
+        "label = \"Keeper\"\npermissions {\n  confirm {\n    types = false\n  }\n}\n",
+    );
     api.called_note("Roof", "@Keeper change the tab", "keeper", &[]);
-    fake.push(AnthropicMessage::new().tool_use("toolu_type", "propose_type_change",
-        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") })));
+    fake.push(AnthropicMessage::new().tool_use(
+        "toolu_type",
+        "propose_type_change",
+        json!({ "name": "memo", "wcl": MEMO.replace("tab \"Main\"", "tab \"Details\"") }),
+    ));
     fake.push(AnthropicMessage::text("Changed."));
     api.advance("PT1S");
     assert_eq!(api.threads("keeper").len(), 1);
-    assert!(api.get("/api/types/memo")["wcl"].as_str().unwrap().contains("tab \"Details\""));
+    assert!(
+        api.get("/api/types/memo")["wcl"]
+            .as_str()
+            .unwrap()
+            .contains("tab \"Details\"")
+    );
 }
 
 #[test]

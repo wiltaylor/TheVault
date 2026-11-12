@@ -85,7 +85,11 @@ pub async fn issue_call(
         let (kind, name) = author.parts();
         let ceiling = (!matches!(author, state::Author::Session(_))).then_some(scope);
         w.state().issue_agent_call_scoped(
-            &call, note, agent, &format!("{kind}:{name}"), ceiling,
+            &call,
+            note,
+            agent,
+            &format!("{kind}:{name}"),
+            ceiling,
         )?;
         Ok(Json(json!({ "call": call })))
     })

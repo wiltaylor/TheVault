@@ -212,12 +212,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.db");
         let s = State::open(&path, None).unwrap();
-        s.issue_agent_call("DEVICE", "NOTE", "clerk", "token:device").unwrap();
-        s.issue_agent_call("SESSION", "NOTE", "clerk", "session:owner").unwrap();
-        s.conn().execute_batch("ALTER TABLE agent_call_ids DROP COLUMN scope; PRAGMA user_version=25;").unwrap();
+        s.issue_agent_call("DEVICE", "NOTE", "clerk", "token:device")
+            .unwrap();
+        s.issue_agent_call("SESSION", "NOTE", "clerk", "session:owner")
+            .unwrap();
+        s.conn()
+            .execute_batch("ALTER TABLE agent_call_ids DROP COLUMN scope; PRAGMA user_version=25;")
+            .unwrap();
         drop(s);
         let s = State::open(&path, None).unwrap();
-        assert_eq!(s.agent_call_scope("DEVICE").unwrap(), Some(crate::Scope::Write));
+        assert_eq!(
+            s.agent_call_scope("DEVICE").unwrap(),
+            Some(crate::Scope::Write)
+        );
         assert_eq!(s.agent_call_scope("SESSION").unwrap(), None);
     }
 
@@ -225,8 +232,18 @@ mod tests {
     fn issued_scope_is_persisted() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
-        s.issue_agent_call_scoped("CALL", "NOTE", "clerk", "token:device", Some(crate::Scope::Read)).unwrap();
-        assert_eq!(s.agent_call_scope("CALL").unwrap(), Some(crate::Scope::Read));
+        s.issue_agent_call_scoped(
+            "CALL",
+            "NOTE",
+            "clerk",
+            "token:device",
+            Some(crate::Scope::Read),
+        )
+        .unwrap();
+        assert_eq!(
+            s.agent_call_scope("CALL").unwrap(),
+            Some(crate::Scope::Read)
+        );
     }
 
     #[test]
