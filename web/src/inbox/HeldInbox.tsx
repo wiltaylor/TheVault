@@ -1,4 +1,5 @@
-import { For, Show, createMemo, createResource, createSignal } from "solid-js";
+import { For, Show, createResource, createSignal } from "solid-js";
+import { SafetyActions } from "./SafetyActions";
 import { api, type HeldNote } from "../api";
 import { errorText } from "../pages/TypeEditor";
 
@@ -19,14 +20,11 @@ export function HeldInbox(props: { notes: HeldNote[]; onReleased: (id: string) =
   const [selected, setSelected] = createSignal<string[]>([]);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
-  const [confirming, setConfirming] = createSignal(false);
-  const picked = createMemo(() => props.notes.filter((n) => selected().includes(n.id)));
 
   async function release(notes: HeldNote[]) {
     if (busy()) return;
     setBusy(true);
     setError("");
-    setConfirming(false);
     try {
       for (const note of notes) {
         await api.releaseAgentSafety(note.id, note.agent_safety.fingerprint);
@@ -43,14 +41,7 @@ export function HeldInbox(props: { notes: HeldNote[]; onReleased: (id: string) =
   return <section aria-label="Held items">
     <p>Held from agents until you release them. Release puts items into the Inbox and runs their matching agent triggers.</p>
     <Show when={error()}><p role="alert" class="error">{error()}</p></Show>
-    <button type="button" disabled={busy() || !picked().length} onClick={() => setConfirming(true)}>Release selected</button>
-    <Show when={confirming()}>
-      <div role="group" aria-label="Confirm release">
-        <p>Release {picked().length} items into the Inbox and run their matching agent triggers?</p>
-        <button type="button" disabled={busy()} onClick={() => void release([...picked()])}>Confirm release</button>
-        <button type="button" onClick={() => setConfirming(false)}>Cancel</button>
-      </div>
-    </Show>
+    <SafetyActions selected={selected()} onReleased={(id) => { setSelected((ids) => ids.filter((n) => n !== id)); props.onReleased(id); }} />
     <Show when={props.notes.length} fallback={<p>No held items in this view.</p>}>
       <ul class="inbox-list"><For each={props.notes}>{(held) => {
         const [loadError, setLoadError] = createSignal("");

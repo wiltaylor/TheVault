@@ -92,11 +92,17 @@ fn eligible(w: &Writer, since: &str, until: &str, classifier: &Classifier) -> Re
             && w.state().meta(&format!("agent_safety.delivered.{}", item.id))?.is_some()
             && w.incoming_agent_note(&note.type_name, &note.doc)
             && w.state().meta(&format!("agent_safety.backfill.attempt.{}", item.id))?.is_none()
+            && crate::classifiers::matches(w, &snapshot(w, &item.id)?, classifier).map_err(ai_error)?
         {
             result.push(item);
         }
     }
     Ok(result)
+}
+
+fn snapshot(w: &Writer, id: &str) -> Result<writer::Saved, ApiError> {
+    let note = w.read(id)?;
+    Ok(writer::Saved { id: note.id, type_name: note.type_name, version: note.version, wcl: note.wcl, event: writer::Event::Update, previous: None, restored: false, author: None, also: vec![] })
 }
 
 #[derive(Deserialize)]
@@ -170,8 +176,8 @@ pub async fn start(State(w): State<Arc<Writer>>, Caller(author): Caller, Json(in
         w.state().set_meta(RUN, &summary.to_string())?;
         w.state().record_activity(state::NewActivity::new("agent_safety.backfill", "notes", &author, "Approved one-time safety backfill without agent triggers"));
         std::thread::Builder::new().name("safety-backfill".into()).spawn(move || {
-            if let Err(error) = run(&worker, &p, &classifier) {
-                tracing::error!(target: "ai", "safety backfill stopped: {error}");
+            if run(&worker, &p, &classifier).is_err() {
+                tracing::error!(target: "ai", "safety backfill stopped without retry");
                 if let Ok(Some(raw)) = worker.state().meta(RUN)
                     && let Ok(mut summary) = serde_json::from_str::<Value>(&raw) {
                     summary["status"] = json!("interrupted_no_retry");
@@ -214,7 +220,8 @@ fn decide_one(w: &Writer, item: &Item, classifier: &Classifier, account: &ai::Ac
     let envelope = w.agent_safety_envelope(&note.type_name, &note.doc);
     if writer::agent_safety::envelope_fingerprint(&envelope) != item.fingerprint || w.agent_safety(&item.id)?.allowed() { return Err(stale()); }
     if envelope.to_string().len() > writer::agent_safety::ENVELOPE_LIMIT { return Ok((false, "too_large".into())); }
-    let saved = writer::Saved { id: note.id, type_name: note.type_name, version: note.version, wcl: note.wcl, event: writer::Event::Update, previous: None, restored: false, author: None, also: vec![] };
+    let saved = snapshot(w, &item.id)?;
+    if !crate::classifiers::matches(w, &saved, classifier).map_err(ai_error)? { return Err(stale()); }
     let mut request = crate::classifiers::request(&saved, classifier).map_err(ai_error)?;
     request.state = envelope;
     let credential = Credentials::resolve(w.state(), account).map_err(ai_error)?;
@@ -227,11 +234,11 @@ fn decide_one(w: &Writer, item: &Item, classifier: &Classifier, account: &ai::Ac
             _ => return Err(ApiError::bad_request("Invalid safety decision")),
         },
         Err(_) => {
-            w.finish_agent_safety(&item.id, &item.fingerprint, "held", "decision_failed")?;
+            w.finish_agent_safety_backfill(&item.id, &item.fingerprint, "held", "decision_failed")?;
             return Err(ApiError::bad_request("Decision failed, no retry"));
         }
     };
-    if !w.finish_agent_safety(&item.id, &item.fingerprint, if allowed { "allowed" } else { "held" }, &reason)? { return Err(stale()); }
+    if !w.finish_agent_safety_backfill(&item.id, &item.fingerprint, if allowed { "allowed" } else { "held" }, &reason)? { return Err(stale()); }
     Ok((allowed, reason))
 }
 
@@ -277,14 +284,15 @@ pub async fn release(State(w): State<Arc<Writer>>, Caller(author): Caller, Json(
         if !input.approve || input.preview != p.id || items(w, &p.filter)? != p.notes { return Err(stale()); }
         w.state().set_meta(RELEASE, "consumed")?;
         let mut released = 0;
+        let mut released_ids = Vec::new();
         let mut failed = 0;
         for item in p.notes {
             match w.release_agent_safety(&item.id, &item.fingerprint, &author) {
-                Ok(true) => released += 1,
+                Ok(true) => { released += 1; released_ids.push(item.id); },
                 _ => failed += 1,
             }
         }
-        let summary = json!({"released":released,"failed":failed});
+        let summary = json!({"released":released,"failed":failed,"released_ids":released_ids});
         w.state().record_activity(state::NewActivity::new("agent_safety.bulk_release", "notes", &author, summary.to_string()));
         Ok(Json(summary))
     }).await

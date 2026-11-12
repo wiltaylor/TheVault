@@ -271,7 +271,7 @@ fn classify(
     }
 }
 
-fn matches(writer: &Writer, saved: &Saved, config: &Classifier) -> Result<bool, AiError> {
+pub(crate) fn matches(writer: &Writer, saved: &Saved, config: &Classifier) -> Result<bool, AiError> {
     let Some(condition) = &config.condition else {
         return Ok(true);
     };

@@ -500,6 +500,10 @@ impl Writer {
     }
 
     pub(crate) fn refresh_safety_parents(&self, member: &str) -> Result<()> {
+        self.refresh_safety_parents_delivery(member, true)
+    }
+
+    fn refresh_safety_parents_delivery(&self, member: &str, deliver: bool) -> Result<()> {
         if self.state().meta("agent_safety.activation_ms")?.is_none() {
             return Ok(());
         }
@@ -518,7 +522,7 @@ impl Writer {
                 && (safety.status == "released" || self.safety_member_cleared(&parent)?);
             self.state().index_agent_safety(&parent, &hash, !allowed)?;
             if allowed {
-                self.state().set_agent_safety_result(&parent, &raw, true)?;
+                self.state().set_agent_safety_result_delivery(&parent, &raw, true, deliver)?;
             }
         }
         if self.state().indexed_agent_safety_hash(member)?.is_none() {
@@ -926,6 +930,15 @@ impl Writer {
         status: &str,
         reason: &str,
     ) -> Result<bool> {
+        self.finish_agent_safety_delivery(id, hash, status, reason, true)
+    }
+
+    /// Historical classification clears the gate, including parents, without agent arrivals.
+    pub fn finish_agent_safety_backfill(&self, id: &str, hash: &str, status: &str, reason: &str) -> Result<bool> {
+        self.finish_agent_safety_delivery(id, hash, status, reason, false)
+    }
+
+    fn finish_agent_safety_delivery(&self, id: &str, hash: &str, status: &str, reason: &str, deliver: bool) -> Result<bool> {
         let _guard = self.write_lock();
         let note = self.read(id)?;
         // The owner may still release a pre-envelope hold using the fingerprint
@@ -973,15 +986,16 @@ impl Writer {
             reason: reason.into(),
             fingerprint: current,
         };
-        self.state().set_agent_safety_result(
+        self.state().set_agent_safety_result_delivery(
             id,
             &serde_json::to_string(&safety).expect("safety"),
             safety.allowed()
                 && (status == "released"
                     || !matches!(note.type_name.as_str(), "email_thread" | "conversation")
                     || self.safety_member_cleared(id)?),
+            deliver,
         )?;
-        self.refresh_safety_parents(id)?;
+        self.refresh_safety_parents_delivery(id, deliver)?;
         if let Some(wake) = self
             .safety_wake
             .lock()

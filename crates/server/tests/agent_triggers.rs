@@ -411,6 +411,14 @@ fn safety_rest_mutation_route_inventory() {
         ),
         (
             "post",
+            "/api/agent-safety/backfill/approve",
+            "session-only approval, stale preview rejected, no agent tools",
+        ),
+        ("post", "/api/agent-safety/backfill/preview", "session-only estimated price configuration, no provider call"),
+        ("post", "/api/agent-safety/release/approve", "session-only reviewed fingerprints, activity trail"),
+        ("post", "/api/agent-safety/release/preview", "session-only filtered metadata"),
+        (
+            "post",
             "/api/agents/calls",
             "credentials or configuration or input-only response, scope checked",
         ),
@@ -2467,6 +2475,154 @@ fn safety_review_server_holds_preexisting_notes_by_default() {
     let note = api.get(&format!("/api/notes/{ID}"));
     assert_eq!(note["agent_safety"]["status"], "held");
     assert_eq!(note["agent_safety"]["reason"], "predates_activation");
+}
+
+const BACKFILL_IDS: [&str; 5] = [
+    "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB",
+    "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC", "01JB8Z4K2MQ7V3X9T5R6W8Y2ZD",
+    "01JB8Z4K2MQ7V3X9T5R6W8Y2ZE",
+];
+
+fn historical_safety_setup(fake: &testkit::FakeDecisions) -> (Api, String) {
+    let server = TestServer::start_with_args(|vault| {
+        for (i, kind) in ["email", "message", "call", "event", "email"].iter().enumerate() {
+            std::fs::create_dir_all(vault.join("types")).unwrap();
+            std::fs::write(vault.join(format!("types/{kind}.wcl")), format!("label = {kind:?}\ntemplate default {{ tab Main {{ slot title }} }}\n")).unwrap();
+            std::fs::create_dir_all(vault.join(format!("notes/{kind}"))).unwrap();
+            let created = if i == 4 { "2025-01-01T00:00:00Z" } else { "2026-01-01T00:00:00Z" };
+            std::fs::write(vault.join(format!("notes/{kind}/{}.wcl", BACKFILL_IDS[i])), format!("title = \"Historical fixture {i}\"\ncreated = {created:?}\n")).unwrap();
+        }
+    }, &[OsStr::new("--test-clock"), OsStr::new(START)]);
+    let api = Api { server, client: Client::new() };
+    api.send("POST", "/api/integrations/ai/accounts", json!({"name":"router", "kind":"openai_compatible", "base_url":fake.base_url(), "key":testkit::FakeDecisions::KEY}));
+    std::fs::write(api.server.vault_path().join("classifiers/agent_safety.wcl"), format!("account = \"router\"\n{}", include_str!("../../writer/defaults/classifiers/agent_safety.wcl"))).unwrap();
+    let login = api.client.post(api.server.url("/api/login")).json(&json!({"password":testkit::PASSWORD})).send().unwrap().error_for_status().unwrap();
+    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+    (api, cookie)
+}
+
+fn safety_session(api: &Api, cookie: &str, path: &str, body: Value) -> Response {
+    api.client.post(api.server.url(path)).header("cookie", cookie).json(&body).send().unwrap()
+}
+
+fn safety_preview(api: &Api, cookie: &str, price: Value) -> Value {
+    safety_session(api, cookie, "/api/agent-safety/backfill/preview", json!({"estimated_usd_per_decision":price})).error_for_status().unwrap().json().unwrap()
+}
+
+#[test]
+fn historical_safety_estimate_zero_calls_prices_and_stale_configuration() {
+    let fake = testkit::FakeDecisions::start();
+    let (api, cookie) = historical_safety_setup(&fake);
+    assert_eq!(safety_session(&api, &cookie, "/api/agent-safety/backfill/preview", json!({})).status(), 400);
+    for price in [json!(-1), json!("NaN"), json!("Infinity")] {
+        assert!(safety_session(&api, &cookie, "/api/agent-safety/backfill/preview", json!({"estimated_usd_per_decision":price})).status().is_client_error());
+    }
+    let zero = safety_preview(&api, &cookie, json!(0));
+    assert_eq!(zero["count"], 4);
+    assert_eq!(zero["estimated_usd"], 0.0);
+    let p = safety_preview(&api, &cookie, json!(0.25));
+    assert_eq!(p["count"], 4);
+    assert_eq!(p["decisions_per_note"], 1);
+    assert_eq!(p["estimated_usd"], 1.0);
+    assert!(fake.requests().is_empty());
+    let approve = |id: &Value| safety_session(&api, &cookie, "/api/agent-safety/backfill/approve", json!({"preview":id,"approve":true}));
+    assert_eq!(approve(&zero["preview"]).status(), 409);
+    assert_eq!(safety_session(&api, &cookie, "/api/agent-safety/backfill/approve", json!({"preview":p["preview"],"approve":false})).status(), 409);
+    let path = api.server.vault_path().join("classifiers/agent_safety.wcl");
+    let source = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{source}\n# changed classifier\n")).unwrap();
+    assert_eq!(approve(&p["preview"]).status(), 409);
+    assert!(fake.requests().is_empty());
+    let p = safety_preview(&api, &cookie, json!(0.25));
+    let accounts = api.get("/api/integrations/ai/accounts");
+    let id = accounts["accounts"].as_array().unwrap().iter().find(|a| a["name"] == "router").unwrap()["id"].as_str().unwrap();
+    api.send("PUT", &format!("/api/integrations/ai/accounts/{id}"), json!({"model":"changed-model"}));
+    assert_eq!(approve(&p["preview"]).status(), 409);
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn historical_safety_bounded_one_attempt_summary_no_triggers_or_restart_retry() {
+    let fake = testkit::FakeDecisions::start();
+    let (mut api, cookie) = historical_safety_setup(&fake);
+    let chat = FakeAnthropic::start();
+    api.agent("reader", "label = \"Reader\"\ntrigger arrived { on = [\"create\"] type = \"email\" prompt = \"Read\" }\n");
+    fake.push(safety_reply("allow"));
+    fake.push(safety_reply("scam"));
+    fake.push(testkit::Reply::json(500, &json!({"error":{"message":"fixture"}})));
+    fake.push(safety_reply("allow"));
+    let p = safety_preview(&api, &cookie, json!(0.1));
+    let began = std::time::Instant::now();
+    let input = json!({"preview":p["preview"],"approve":true});
+    assert_eq!(safety_session(&api, &cookie, "/api/agent-safety/backfill/approve", input.clone()).status(), 200);
+    assert_eq!(safety_session(&api, &cookie, "/api/agent-safety/backfill/approve", input.clone()).status(), 409);
+    let summary = loop {
+        let p: Value = api.client.get(api.server.url("/api/agent-safety/backfill")).header("cookie", &cookie).send().unwrap().json().unwrap();
+        if p["status"] == "complete" { break p; }
+        assert!(began.elapsed() < Duration::from_secs(20), "{p}");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(began.elapsed() >= Duration::from_secs(3));
+    assert_eq!(summary["attempted"], 4);
+    assert_eq!(summary["allowed"], 2);
+    assert_eq!(summary["held"]["scam"], 1);
+    assert_eq!(summary["failed"], 1);
+    assert_eq!(fake.requests().len(), 4);
+    assert_eq!(api.get(&format!("/api/notes/{}", BACKFILL_IDS[4]))["agent_safety"]["status"], "held");
+    assert_eq!(api.get(&format!("/api/notes/{}", BACKFILL_IDS[0]))["agent_safety"]["status"], "allowed");
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    assert!(state.agent_safety_clearances().unwrap().is_empty());
+    api.advance("PT35S");
+    assert!(api.get("/api/agents/reader/runs")["triggers"][0]["runs"].as_array().unwrap().is_empty());
+    assert!(chat.message_requests().is_empty());
+    api.server.restart();
+    assert_eq!(fake.requests().len(), 4);
+    assert_eq!(safety_session(&api, &cookie, "/api/agent-safety/backfill/approve", input).status(), 409);
+}
+
+#[test]
+fn historical_safety_all_actions_refuse_tokens_agent_and_missing_approval() {
+    let fake = testkit::FakeDecisions::start();
+    let (api, cookie) = historical_safety_setup(&fake);
+    let agent = api.external_agent_token();
+    let read = api.send("POST", "/api/tokens", json!({"name":"safety-read","scope":"read"}));
+    let write = api.send("POST", "/api/tokens", json!({"name":"safety-write","scope":"write"}));
+    for token in [api.server.admin_token(), agent["secret"].as_str().unwrap(), read["secret"].as_str().unwrap(), write["secret"].as_str().unwrap()] {
+        for path in ["/api/agent-safety/backfill/preview", "/api/agent-safety/backfill/approve", "/api/agent-safety/release/preview", "/api/agent-safety/release/approve"] {
+            let response = api.client.post(api.server.url(path)).bearer_auth(token).json(&json!({"estimated_usd_per_decision":0,"approve":true,"preview":"forged"})).send().unwrap();
+            assert_eq!(response.status(), 403, "{path}");
+        }
+        assert_eq!(api.client.get(api.server.url("/api/agent-safety/backfill")).bearer_auth(token).send().unwrap().status(), 403);
+    }
+    for path in ["/api/agent-safety/backfill/approve", "/api/agent-safety/release/approve"] {
+        assert_eq!(safety_session(&api, &cookie, path, json!({"preview":"forged","approve":true})).status(), 409);
+        assert_eq!(api.client.post(api.server.url(path)).json(&json!({"preview":"forged","approve":true})).send().unwrap().status(), 401);
+    }
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn historical_safety_bulk_filter_selection_trail_and_stale_note() {
+    let fake = testkit::FakeDecisions::start();
+    let (api, cookie) = historical_safety_setup(&fake);
+    let p: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"type":"email","since":"2024-01-01T00:00:00Z","until":"2025-01-02T00:00:00Z","reason":"predates_activation"})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(p["count"], 1);
+    let summary: Value = safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":p["preview"],"approve":true})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(summary["released"], 1);
+    assert_eq!(summary["released_ids"], json!([BACKFILL_IDS[4]]));
+    let p: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"ids":[BACKFILL_IDS[0],BACKFILL_IDS[1]]})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(p["count"], 2);
+    let summary: Value = safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":p["preview"],"approve":true})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(summary["released"], 2);
+    assert_eq!(safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":p["preview"],"approve":true})).status(), 409);
+    let estimate = safety_preview(&api, &cookie, json!(0));
+    let p: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"ids":[BACKFILL_IDS[2]]})).error_for_status().unwrap().json().unwrap();
+    let note = api.get(&format!("/api/notes/{}", BACKFILL_IDS[2]));
+    api.send("PUT", &format!("/api/notes/{}", BACKFILL_IDS[2]), json!({"base_version":note["version"],"note":{"fields":{"title":"changed"}}}));
+    assert_eq!(safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":p["preview"],"approve":true})).status(), 409);
+    assert_eq!(safety_session(&api, &cookie, "/api/agent-safety/backfill/approve", json!({"preview":estimate["preview"],"approve":true})).status(), 409);
+    assert!(api.get("/api/activity").to_string().contains("agent_safety.bulk_release"));
+    assert!(fake.requests().is_empty());
 }
 
 impl Api {
