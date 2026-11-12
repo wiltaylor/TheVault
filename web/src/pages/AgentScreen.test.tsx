@@ -1138,7 +1138,7 @@ describe("in the apps", () => {
     appInfo.mockResolvedValue({ platform });
     await open();
     expect(await screen.findByText("Edit agents and skills in the web app")).toBeTruthy();
-    expect(screen.getByLabelText("Agent file")).toHaveTextContent(triage().wcl);
+    expect(screen.getByLabelText("Agent file").textContent).toBe(triage().wcl);
     for (const name of ["Permissions", "Triggers", "File"]) {
       fireEvent.click(screen.getByRole("tab", { name }));
       expect(screen.queryByRole("button", { name: "Save" })).toBeNull();

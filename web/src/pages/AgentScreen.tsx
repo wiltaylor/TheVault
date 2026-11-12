@@ -1064,7 +1064,7 @@ export function AgentScreen() {
                   </For>
                 </div>
                 <div id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-tab-${tab().id}`}>
-                  <Show when={app.state === "ready" && app() === null} fallback={<>
+                  <Show when={settingsTab() === "memory" || (app.state === "ready" && app() === null)} fallback={<>
                     <p class="muted">Edit agents and skills in the web app</p>
                     <pre aria-label="Agent file">{v().a.wcl}</pre>
                   </>}>
