@@ -912,7 +912,19 @@ impl Writer {
     ) -> Result<bool> {
         let _guard = self.write_lock();
         let note = self.read(id)?;
-        let current = self.safety_fingerprint(&note.type_name, &note.doc);
+        // The owner may still release a pre-envelope hold using the fingerprint
+        // displayed by its review API. This remains a note-only decision, never
+        // silently upgraded to attachment clearance.
+        let legacy_release = status == "released"
+            && hash == fingerprint(&note.type_name, &note.doc)
+            && self.state().meta(&format!("agent_safety.note.{id}"))?
+                .and_then(|raw| serde_json::from_str::<Safety>(&raw).ok())
+                .is_some_and(|s| s.fingerprint == hash);
+        let current = if legacy_release {
+            hash.to_owned()
+        } else {
+            self.safety_fingerprint(&note.type_name, &note.doc)
+        };
         let mut equivalent = hash.to_owned();
         // Bound corrupt state/chains. Only the trusted conversion path records these edges.
         for _ in 0..32 {
