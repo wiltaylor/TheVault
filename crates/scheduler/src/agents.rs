@@ -1169,6 +1169,14 @@ impl Scheduler {
                 continue;
             };
             let request = mentions::request(&call.label, agent);
+            let scope = match state.agent_call_scope(&call.call) {
+                Ok(scope) => scope,
+                Err(e) => {
+                    eprintln!("call {}: reading issued scope: {e}", call.call);
+                    record(None);
+                    continue;
+                }
+            };
             let context =
                 (f.context != call.label.trim()).then(|| format!("Context: {}", f.context));
             let prompt = [
@@ -1198,7 +1206,7 @@ impl Scheduler {
                 ),
                 thread: None,
                 origin: Some(MENTION_ORIGIN),
-                scope: None,
+                scope,
                 caller: None,
             };
             if self.plan().agents.over_limit(&agent.name, now) {
