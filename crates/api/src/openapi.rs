@@ -145,6 +145,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Mark every email, message and call sent or made before a date processed, or count them",
     ),
     ("GET", "/api/query", "Run a query, a page at a time"),
+    ("POST", "/api/inbox/triage", "Preview or confirm a read-only mail recommendation batch (session only)"),
     (
         "POST",
         "/api/query",

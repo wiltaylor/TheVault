@@ -538,6 +538,11 @@ fn safety_rest_mutation_route_inventory() {
         ),
         (
             "post",
+            "/api/inbox/triage",
+            "session-only counted read-only recommendation batch; held notes excluded and rechecked",
+        ),
+        (
+            "post",
             "/api/integrations/ai/accounts",
             "credentials or configuration or input-only response, scope checked",
         ),

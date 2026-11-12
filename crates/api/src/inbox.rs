@@ -20,6 +20,39 @@ use writer::Writer;
 
 use crate::{ApiError, Caller, blocking};
 
+/// Session-only counted preview and single-use approval for one recommendation batch.
+pub async fn triage(
+    State(w): State<Arc<Writer>>,
+    Caller(author): Caller,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let state::Author::Session(principal) = author else {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "session_required", "Sign in to preview mail triage"));
+    };
+    blocking(w, move |w| {
+        let bad = |s: String| ApiError::bad_request(s);
+        let scheduler = crate::script_tools::scheduler_for(w).ok_or_else(|| bad("Home server required".into()))?;
+        let agent = body["agent"].as_str().ok_or_else(|| bad("Choose an agent".into()))?;
+        let lane = scheduler::agents::MAIL_TRIAGE;
+        if let Some(id) = body["preview"].as_str() {
+            let raw = w.state().confirm_trigger_backfill(id, &principal, agent, lane)?
+                .ok_or_else(|| bad("Preview expired or consumed".into()))?;
+            let notes: Vec<String> = serde_json::from_str(&raw).map_err(|e| bad(e.to_string()))?;
+            let queued = scheduler.mail_triage_enqueue(agent, &notes).map_err(bad)?;
+            w.state().record_activity(state::NewActivity::new("mail.triage", "notes", &state::Author::Session(principal), format!("Read-only recommendation batch: {} notes, queued={queued}", notes.len())));
+            Ok(Json(json!({"queued":queued})))
+        } else {
+            let limit = body["limit"].as_u64().filter(|n| (20..=50).contains(n)).ok_or_else(|| bad("Batch size must be 20 to 50".into()))? as usize;
+            let mut notes = scheduler.mail_triage_candidates(agent).map_err(bad)?;
+            let count = notes.len();
+            notes.truncate(limit);
+            if notes.len() < 20 { return Err(bad("At least 20 eligible messages are required. Held notes must first be classified or released in Held Inbox.".into())); }
+            let preview = w.state().preview_trigger_backfill(&principal, agent, lane, &serde_json::to_string(&notes).expect("notes"))?;
+            Ok(Json(json!({"count":count,"selected":notes.len(),"preview":preview})))
+        }
+    }).await
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MarkBody {

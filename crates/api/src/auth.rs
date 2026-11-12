@@ -321,6 +321,7 @@ fn is_definition_write(method: &Method, path: &str) -> bool {
 /// `/browser`, which only the user watches and takes over (browser B4).
 pub fn is_human_only(method: &Method, path: &str) -> bool {
     (*method == Method::POST && path == "/api/trash/empty")
+        || path == "/api/inbox/triage"
         || path == "/api/agent-safety/backfill"
         || path.starts_with("/api/agent-safety/backfill/")
         || path.starts_with("/api/agent-safety/release/")

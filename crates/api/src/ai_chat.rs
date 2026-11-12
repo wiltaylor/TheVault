@@ -365,6 +365,8 @@ const ALWAYS_PROPOSE: &[&str] = &[
 /// confirmation switch is on, or one of [`ALWAYS_PROPOSE`] (agents G12, TV-77 D2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
+    /// Mail backlog recommendations can only read notes, never propose or mutate.
+    Recommend,
     /// Offer it: the change waits in the thread as a proposal for the user's Apply. A chat, and
     /// an unattended trigger, a call from a note or a dispatch.
     Propose,
@@ -635,13 +637,14 @@ async fn start_with(
         .origin
         .as_deref()
         .is_some_and(crate::ai_ask::asks_on);
+    let recommendation = prepared.origin.as_deref() == Some(scheduler::agents::MAIL_TRIAGE);
     let cfg = TurnCfg {
         owner: author,
         author: actor,
-        scope,
+        scope: if recommendation { Scope::Read } else { scope },
         agent_name: named.then(|| prepared.agent.name.clone()),
         unattended: report.is_some(),
-        held: Held::of(report.is_some(), &origin),
+        held: if recommendation { Held::Recommend } else { Held::of(report.is_some(), &origin) },
         asks,
         retry,
         sub: None,
@@ -1942,6 +1945,9 @@ impl Turn {
         // sessions, and never to a sub agent, whatever its file says.
         if self.sub.is_none() && self.log.is_some() && setup.agent.permissions.subagents.allow {
             tools.push(crate::ai_subagents::spec(&setup.agent));
+        }
+        if self.held == Held::Recommend {
+            tools.retain(|t| t.name == "get_note");
         }
         let base_offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         let mut history = history;

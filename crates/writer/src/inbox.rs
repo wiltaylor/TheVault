@@ -194,7 +194,7 @@ impl Writer {
             return Ok(Some(0));
         }
         let n = ops.len();
-        let report = self.batch(ops, false, author)?;
+        let report = self.batch_catch_up(ops, false, author, true)?;
         if report.ok {
             return Ok(Some(n));
         }

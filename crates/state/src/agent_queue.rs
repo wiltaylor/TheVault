@@ -467,6 +467,13 @@ fn prune_terminal(conn: &rusqlite::Connection) -> Result<()> {
 }
 
 impl State {
+    /// Notes already covered by live or successful recommendation batches for this agent.
+    pub fn mail_triage_notes(&self, agent: &str) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT DISTINCT j.value FROM trigger_jobs t, json_each(t.payload, '$.source_notes') j WHERE t.agent=?1 AND t.trigger='mail-triage' AND t.status IN ('waiting','admitted','running','succeeded')")?;
+        Ok(stmt.query_map([agent], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn unmatched_legacy_trigger_runs(&self, agent: &str, trigger: &str) -> Result<i64> {
         Ok(self.conn().query_row(
             "SELECT count(*) FROM trigger_legacy_runs WHERE agent=?1 AND trigger=?2 AND matched=0",
