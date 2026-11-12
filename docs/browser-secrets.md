@@ -19,8 +19,44 @@ Origins use exact scheme, host and effective port matching, not subdomains or
 suffixes. Hosts are lowercased and IDNA encoded, and default ports and one
 trailing dot are removed. Wildcards and empty domain labels are refused.
 IP literals are allowed. Paths, credentials, queries and fragments are refused.
-No origins means any site, with a warning. Browser filling, agent grants and
-confirmation cards are separate work, not enabled by this storage feature.
+No origins means any site, with a warning.
+
+## Browser fill service
+
+`browser_fill_secret {secret, field, target, session}` requests `username`,
+`password` or `otp`. **Fills still need TV-164:** until its confirmation switch
+and owner Apply path are implemented, every foreground and unattended tool call
+returns `confirmation_required`. A model-supplied confirmation flag has no effect.
+The internal authorized service is not an HTTP API available to agents.
+
+That service checks the agent's Login grants and their current validity, reads
+the page origin from the signed-profile box channel, and compares exact canonical
+scheme, host and port. It computes OTP on the server using the same RFC 6238
+helper as redaction. Values travel only in the request body, bridge stdin and
+raw CDP messages. The box checks the origin again in the same document operation
+that sets the input. Tool results are `filled` or a fixed refusal, never browser
+diagnostics. Each attempt produces one value-free audit entry in each of the
+server and run logs, with agent, secret name, field, origin and allowed/refused.
+An origin not read because confirmation or permission failed is empty.
+
+The bridge supports the pinned `@playwright/cli` 0.1.22 with `playwright-core`
+1.64.0-alpha-1790635538000. Open a persistent Chromium session with
+`playwright-cli open <url> --headed --persistent`. Use a CSS selector for `target`
+and `default` or the CLI session name for `session`. Initially a session must
+have exactly one top-level page. Frames, multiple tabs, non-HTTP(S) pages,
+ambiguous selectors, and non-input elements are refused. Existing sessions
+without the debugging listener must be reopened. Custom launch configurations
+that remove the listener are not supported.
+
+Only agents with a nonempty effective `permissions.browser_secrets` list get
+the debugging launch configuration. Ordinary profiles get none. Chromium opens
+a random loopback CDP port for the lifetime of that browser session. Its existing
+debugging pipe belongs to the CLI daemon and cannot be shared safely by a separate
+bridge, and Chromium cannot turn that listener on just for a fill. On the next
+browser command after eligibility changes, the box closes that profile's old
+processes and changes the configuration. Reset/delete also closes them. No CLI
+command, including a supposedly value-free query, runs as part of a fill:
+automatic CLI snapshots could otherwise persist a previously filled field.
 
 Known limits for browser filling:
 
@@ -28,6 +64,15 @@ Known limits for browser filling:
   the browser box could reach it indirectly. This is assumed, not tested.
 - R2: Prompt injection can make an agent sign in and act.
 - R3: A Login with no origin list can be entered on a look-alike page.
+- R4: Until TV-175 isolates agents, another agent's shell in the same box can
+  attach to a loopback CDP listener and watch a live fill, not just read profile
+  files. The signed identity does not isolate processes sharing one Linux user
+  and network namespace. A grant removed during a turn may leave that turn's
+  listener open until its next setup/command or profile reset.
+- R5: After the value reaches the page, the site can read and transmit it.
+  Later agent-requested snapshots, screenshots, tracing or shell commands can
+  capture page values. The fill transport does not run those operations, but
+  it cannot prevent them. Browser output redaction has the limits below.
 
 ## Browser output redaction
 

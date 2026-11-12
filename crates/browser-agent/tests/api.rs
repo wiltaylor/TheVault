@@ -566,6 +566,58 @@ struct Agent {
     profile_home: std::path::PathBuf,
 }
 
+#[tokio::test]
+async fn secret_endpoint_fixed_errors_and_profile_authentication() {
+    let b = Agent::start().await;
+    let value = "fabricated-body-only-password";
+    for endpoint in ["/secret/fill", "/secret/origin"] {
+        let unauth = reqwest::Client::new().post(b.url(endpoint))
+            .json(&json!({"session":"default","target":"#pw","value":value,"origin":"https://example.com"}))
+            .send().await.unwrap();
+        assert_eq!(unauth.status(), 401);
+        assert!(!unauth.text().await.unwrap().contains(value));
+        for body in [
+            json!({"session":"../../other","target":"#pw","value":value}),
+            json!({"unexpected":value}),
+        ] {
+            let response = b
+                .http
+                .post(b.url(endpoint))
+                .bearer_auth(TOKEN)
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 400);
+            assert_eq!(
+                response.json::<Value>().await.unwrap(),
+                json!({"error":"browser_refused"})
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn secret_debug_listener_configuration_requires_server_opt_in() {
+    let b = Agent::start().await;
+    b.run("true").await;
+    let config = b
+        .profile_home
+        .join(".secret-browser/.playwright/cli.config.json");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "{}");
+    let (status, _) = b
+        .run_status(json!({"command":"true","secret_browser":true}))
+        .await;
+    assert_eq!(status, 200);
+    assert!(
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("--remote-debugging-address=127.0.0.1")
+    );
+    b.run("true").await;
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "{}");
+}
+
 impl Agent {
     async fn start() -> Agent {
         let work = tempfile::tempdir().unwrap();

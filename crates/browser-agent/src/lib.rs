@@ -43,6 +43,8 @@ use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::{OwnedRwLockReadGuard, RwLock, Semaphore};
 
+mod secret_fill;
+
 /// The most of stdout, and of stderr, a run answers: the tail is kept.
 pub const OUTPUT_CAP: usize = 64 * 1024;
 /// The largest file `GET /file` answers.
@@ -107,6 +109,8 @@ pub fn router(config: Config) -> io::Result<Router> {
     Ok(Router::new()
         .route("/health", get(health))
         .route("/run", post(run))
+        .route("/secret/origin", post(secret_fill::origin))
+        .route("/secret/fill", post(secret_fill::fill))
         .route("/file", get(file))
         .route("/files", get(files))
         .route("/profile", axum::routing::delete(delete_profile))
@@ -692,6 +696,8 @@ struct RunRequest {
     command: String,
     timeout_s: Option<u64>,
     cwd: Option<String>,
+    #[serde(default)]
+    secret_browser: bool,
 }
 
 async fn run(
@@ -702,6 +708,7 @@ async fn run(
     let _profile = profile_access(&state, &headers).await?;
     let state = scoped(&state, &headers, true)?;
     let Json(req) = body.map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.body_text()))?;
+    secret_fill::configure(&state, req.secret_browser)?;
     if req.command.trim().is_empty() {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -847,6 +854,10 @@ async fn run_command(
         .env("XDG_CACHE_HOME", state.home.join(".cache"))
         .env("XDG_RUNTIME_DIR", state.home.join(".runtime"))
         .env("TMPDIR", state.home.join(".runtime"))
+        .env(
+            "PWTEST_CLI_GLOBAL_CONFIG",
+            state.home.join(".secret-browser"),
+        )
         .env_remove("BROWSER_TOKEN")
         .env_remove("VAULT_BROWSER_TOKEN")
         .stdin(Stdio::null())
