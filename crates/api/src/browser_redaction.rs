@@ -102,6 +102,20 @@ impl Redactor {
 mod tests {
     use super::*;
     #[test]
+    fn normalized_seed_and_uri_parameters() {
+        let seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+        assert_eq!(totp("gezd gnbv-gy3tqojq gezdgnbvgy3tqojq", 59, 8, 30), totp(seed, 59, 8, 30));
+        assert_eq!(totp(&format!("otpauth://totp/test?secret={seed}&digits=8&period=60"), 119, 6, 30).as_deref(), Some("94287082"));
+    }
+    #[test]
+    fn invalid_seed_keeps_raw_redaction_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(&dir.path().join("state.db"), Some(state::SecretKey::generate())).unwrap();
+        state.set_login_secret("broken", &state::LoginSecret { username:"fake-user".into(), password:"fake-password".into(), totp_seed:Some("not a valid seed!".into()), origins:vec![] }).unwrap();
+        let r = Redactor::load(&state).ok().expect("invalid seed must not block browser output");
+        assert_eq!(r.text("fake-user fake-password not a valid seed!"), "[REDACTED] [REDACTED] [REDACTED]");
+    }
+    #[test]
     fn rfc6238_vectors() {
         for (time, expected) in [
             (59, "94287082"),
