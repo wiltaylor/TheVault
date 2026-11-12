@@ -15,7 +15,8 @@
 //!   runs already or its queue is full, with no thread opened; 503 `no_agent_runs` on a server
 //!   that runs no agents.
 //! - `GET /api/dispatched` (read) answers `{threads}`: the threads of origin `dispatch` and
-//!   `mention` of every agent, newest activity first, without the archived ones, each `{id,
+//!   `mention` of every agent plus `trigger:<name>` threads with pending proposals,
+//!   newest activity first, without the archived ones, each `{id,
 //!   agent, title, origin, notes, state, pending, question, last_activity, running, turn,
 //!   started_ms}`. `?notes=<id>,<id>` keeps the threads about any of those notes, and
 //!   `?state=active|needs_you|done` those in that state. `state` is worked out as it is read
