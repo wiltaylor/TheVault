@@ -309,11 +309,18 @@ fn writer_enforces_calendar_author_and_outbox_boundary() {
     let user = state::Author::Session("owner".into());
     let agent = state::Author::Agent("careless".into());
     let sender = state::Author::Handler("outbox_send".into());
+    let attendee = w
+        .create(
+            "person",
+            &writer::Input::Json(json!({"fields": {"title": "Ann"}})),
+            &user,
+        )
+        .unwrap();
     let body = json!({ "fields": {
         "title": "Standup", "google_ref": "standup", "calendar": "primary",
         "when": { "start": "2026-04-03", "end": "2026-04-03" },
         "attendees_raw": ["ann@example.com"], "my_response": "needs_action",
-        "attendees": [{"email": "ann@example.com", "responseStatus": "accepted"}]
+        "attendees": [attendee.id]
     }});
     let made = w
         .create("event", &writer::Input::Json(body.clone()), &user)
