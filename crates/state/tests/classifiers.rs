@@ -6,23 +6,50 @@ fn incoming_asset_owners_are_sticky_atomic_and_unknown_marks_stay_unknown() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("state.db");
     let state = std::sync::Arc::new(State::open(&path, None).unwrap());
-    let threads: Vec<_> = (0..8).map(|i| {
-        let state = state.clone();
-        std::thread::spawn(move || {
-            state.mark_incoming_asset("asset", None).unwrap();
-            state.mark_incoming_asset("asset", Some(&format!("owner-{i}"))).unwrap();
+    let threads: Vec<_> = (0..8)
+        .map(|i| {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                state.mark_incoming_asset("asset", None).unwrap();
+                state
+                    .mark_incoming_asset("asset", Some(&format!("owner-{i}")))
+                    .unwrap();
+            })
         })
-    }).collect();
-    for thread in threads { thread.join().unwrap(); }
-    let raw = state.meta("agent_safety.asset_owners.asset").unwrap().unwrap();
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    let raw = state
+        .meta("agent_safety.asset_owners.asset")
+        .unwrap()
+        .unwrap();
     assert_eq!(serde_json::from_str::<Vec<String>>(&raw).unwrap().len(), 8);
     state.mark_incoming_asset("asset", None).unwrap();
-    assert_eq!(state.meta("agent_safety.asset_owners.asset").unwrap().unwrap(), raw);
+    assert_eq!(
+        state
+            .meta("agent_safety.asset_owners.asset")
+            .unwrap()
+            .unwrap(),
+        raw
+    );
     state.set_meta("agent_safety.asset.old", "1").unwrap();
     state.mark_incoming_asset("old", Some("new-owner")).unwrap();
-    assert!(state.meta("agent_safety.asset_owners.old").unwrap().is_none());
+    assert!(
+        state
+            .meta("agent_safety.asset_owners.old")
+            .unwrap()
+            .is_none()
+    );
     drop(state);
-    assert_eq!(State::open(&path, None).unwrap().meta("agent_safety.asset_owners.asset").unwrap().unwrap(), raw);
+    assert_eq!(
+        State::open(&path, None)
+            .unwrap()
+            .meta("agent_safety.asset_owners.asset")
+            .unwrap()
+            .unwrap(),
+        raw
+    );
 }
 
 #[test]

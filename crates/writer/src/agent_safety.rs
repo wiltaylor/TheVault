@@ -844,7 +844,11 @@ impl Writer {
             if let Some(html) = doc.field("html").and_then(schema::Value::as_str)
                 && schema::is_ulid(html)
             {
-                if self.state().meta(&format!("agent_safety.asset_html.{html}"))?.is_none() {
+                if self
+                    .state()
+                    .meta(&format!("agent_safety.asset_html.{html}"))?
+                    .is_none()
+                {
                     self.invalidate_asset_safety(html)?;
                 }
                 self.state()
