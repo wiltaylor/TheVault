@@ -250,6 +250,74 @@ fn pattern(len: usize) -> Vec<u8> {
 }
 
 #[test]
+fn sticky_denial_crosses_replicas_after_manual_publication() {
+    let server = TestServer::start_seeded(seed);
+    let phone = Device::pair(&server, &server.base_url());
+    phone.engine(Timeouts::default()).sync().unwrap();
+    let client = Client::new();
+    let issued: Value = client.post(server.url("/api/agent-codes"))
+        .bearer_auth(server.admin_token())
+        .json(&json!({"name":"denial-test", "scope":"write"}))
+        .send().unwrap().error_for_status().unwrap().json().unwrap();
+    let agent: Value = client.post(server.url("/api/agent-codes/redeem"))
+        .json(&json!({"code": issued["code"]}))
+        .send().unwrap().error_for_status().unwrap().json().unwrap();
+    let home_read = |id: &str| client.get(server.url(&format!("/api/assets/{id}")))
+        .bearer_auth(agent["token"].as_str().unwrap())
+        .send().unwrap().status().as_u16();
+    // Each case begins with an acknowledged, agent-readable manual upload on both replicas.
+    // No note references are involved. The refill cases must work without a preceding sync.
+    for case in ["device-cached", "device-evicted", "home-cached", "home-refill"] {
+        let out = phone.call("POST", "/api/assets?filename=manual.bin&provenance=manual",
+            Body::from("same bytes"), 201);
+        let id = str(&out["id"]);
+        let w = phone.embedded.writer();
+        phone.engine(Timeouts::default()).sync().unwrap();
+        assert!(phone.embedded.queue().asset(&id).unwrap().unwrap().on_server);
+        assert!(w.agent_may_read_asset(&id), "{case}");
+        assert_eq!(home_read(&id), 200, "{case}");
+
+        if case.starts_with("device") {
+            phone.call("PUT", &format!("/api/assets/{id}?filename=manual.bin&provenance=incoming"),
+                Body::from("same bytes"), 200);
+            assert!(!w.agent_may_read_asset(&id));
+            assert_eq!(home_read(&id), 200);
+            if case == "device-evicted" { w.evict_asset(&id).unwrap(); }
+            // A fresh engine propagates durable denial even without cached bytes.
+            let report = phone.engine(Timeouts::default()).sync().unwrap();
+            assert_eq!(report.assets_sent, 0, "denial must not reupload bytes");
+        } else {
+            client.put(server.url(&format!("/api/assets/{id}")))
+                .bearer_auth(&phone.remote.token)
+                .query(&[("filename", "manual.bin"), ("provenance", "incoming")])
+                .body("same bytes").send().unwrap().error_for_status().unwrap();
+            assert_eq!(home_read(&id), 403);
+            assert!(w.agent_may_read_asset(&id));
+            if case == "home-refill" {
+                w.evict_asset(&id).unwrap();
+                phone.engine(Timeouts::default()).fetch_asset(&id).unwrap();
+            } else {
+                phone.engine(Timeouts::default()).sync().unwrap();
+                assert!(w.asset_info(&id).is_ok(), "cached bytes retained");
+            }
+        }
+        assert!(!w.agent_may_read_asset(&id), "{case}");
+        assert_eq!(home_read(&id), 403, "{case}");
+        // A manual retry, later rounds and cache refill cannot undo either replica's denial.
+        client.put(server.url(&format!("/api/assets/{id}")))
+            .bearer_auth(&phone.remote.token)
+            .query(&[("filename", "manual.bin"), ("provenance", "manual")])
+            .body("same bytes").send().unwrap().error_for_status().unwrap();
+        phone.engine(Timeouts::default()).sync().unwrap();
+        if w.asset_info(&id).is_ok() { w.evict_asset(&id).unwrap(); }
+        phone.engine(Timeouts::default()).fetch_asset(&id).unwrap();
+        assert!(!w.agent_may_read_asset(&id), "{case}");
+        assert_eq!(home_read(&id), 403, "{case}");
+        assert_eq!(server_asset(&server, &id).unwrap(), b"same bytes");
+    }
+}
+
+#[test]
 fn manual_provenance_is_relayed_from_creation_and_unknown_stays_incoming() {
     let server = TestServer::start_seeded(seed);
     let proxy = Proxy::start(server.addr());

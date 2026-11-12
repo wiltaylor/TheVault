@@ -71,6 +71,7 @@ pub const MAX_UPLOAD: usize = 512 * 1024 * 1024;
 pub struct UploadQuery {
     filename: Option<String>,
     provenance: Option<String>,
+    incoming_only: Option<bool>,
 }
 
 fn asset_json(a: &Asset) -> Value {
@@ -161,6 +162,22 @@ pub async fn put(
     Query(q): Query<UploadQuery>,
     body: Body,
 ) -> Result<Response, ApiError> {
+    // Metadata-only denial for an already published asset. This never grants intent or
+    // changes bytes, and only a live paired device may use the sync operation.
+    if q.incoming_only == Some(true) {
+        let asset = blocking(w, move |w| {
+            if !matches!(author, state::Author::Token(_))
+                || !manual_upload(w, &author, Some("manual"))?
+                || q.provenance.as_deref() != Some("incoming")
+            {
+                return Err(writer::Error::BadRequest("paired device denial required".into()));
+            }
+            let asset = w.asset_info(&id)?;
+            w.mark_incoming_asset(&id)?;
+            Ok(asset)
+        }).await?;
+        return Ok(Json(asset_json(&asset)).into_response());
+    }
     let filename = q
         .filename
         .ok_or_else(|| ApiError::bad_request("name the file with ?filename="))?;
@@ -301,7 +318,7 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
             .map(str::to_lowercase);
     let mut found = summaries;
     if let Some(t) = text {
-        found = blocking(w, move |w| {
+        found = blocking(w.clone(), move |w| {
             Ok::<_, writer::Error>(
                 found
                     .into_iter()
@@ -348,8 +365,16 @@ pub async fn list(State(w): Shared, Query(q): Query<ListQuery>) -> Result<Json<V
         .min(total);
     let end = q.limit.map_or(total, |l| (start + l.max(1)).min(total));
     let next = (end < total).then(|| end.to_string());
+    let page = picked[start..end].to_vec();
+    let assets = blocking(w, move |w| {
+        page.iter().map(|s| {
+            let mut value = summary_json(s);
+            value["incoming"] = json!(w.asset_is_incoming(&s.asset.id)?);
+            Ok::<_, writer::Error>(value)
+        }).collect::<Result<Vec<_>, _>>()
+    }).await?;
     Ok(Json(json!({
-        "assets": picked[start..end].iter().map(summary_json).collect::<Vec<_>>(),
+        "assets": assets,
         "total": total,
         "next": next,
         "unused": unused_json,
@@ -535,7 +560,7 @@ pub async fn download(
         .get(header::RANGE)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let (asset, part, file) = blocking(w, move |w| {
+    let (asset, part, file, incoming) = blocking(w, move |w| {
         let asset = w.asset_info(&id)?;
         let part = range
             .as_deref()
@@ -545,7 +570,7 @@ pub async fn download(
             Part::Range(start, _) => Some(w.asset_file(&id, start)?.1),
             Part::Unsatisfiable => None,
         };
-        Ok::<_, writer::Error>((asset, part, file))
+        Ok::<_, writer::Error>((asset, part, file, w.asset_is_incoming(&id)?))
     })
     .await?;
     let size = asset.size;
@@ -575,6 +600,7 @@ pub async fn download(
         }
     };
     let h = res.headers_mut();
+    h.insert("x-vault-asset-incoming", HeaderValue::from_static(if incoming { "true" } else { "false" }));
     let ty = content_type(&asset.filename);
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(ty));
     h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));

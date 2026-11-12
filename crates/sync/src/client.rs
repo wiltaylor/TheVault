@@ -361,6 +361,14 @@ impl Home {
         })
     }
 
+    /// Send denial without requiring cached bytes. Called only when the asset list
+    /// explicitly advertises the new incoming metadata contract.
+    pub fn deny_asset(&self, id: &str) -> Result<Answer> {
+        self.send(self.authed(self.client.put(self.url(&format!(
+            "/api/assets/{id}?incoming_only=true&provenance=incoming"
+        )))))
+    }
+
     /// Download asset `id` into a new file at `dest`, streamed to disk, telling `on_bytes` the
     /// size of each block as it arrives (ticket 144). On failure the partial file is removed.
     /// Fails with [`Error::Transfer`] when no bytes move for [`Timeouts::stall`].
@@ -369,7 +377,7 @@ impl Home {
         id: &str,
         dest: &Path,
         on_bytes: &mut dyn FnMut(u64),
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let (rt, client) = self.transfers()?;
         let what = format!("fetching asset {id}");
         let stall = self.timeouts.stall;
@@ -392,6 +400,9 @@ impl Home {
                         body: res.text().await.unwrap_or_default(),
                     });
                 }
+                // Missing/unknown metadata is not permission to preserve manual intent.
+                let denied = res.headers().get("x-vault-asset-incoming")
+                    .and_then(|v| v.to_str().ok()) != Some("false");
                 let mut out = std::fs::File::create(dest)
                     .map_err(|e| Error::Transfer(format!("writing {}: {e}", dest.display())))?;
                 while let Some(chunk) = res.chunk().await.map_err(|e| transfer_error(&e, &what))? {
@@ -402,7 +413,7 @@ impl Home {
                 }
                 out.sync_all()
                     .map_err(|e| Error::Transfer(format!("writing {}: {e}", dest.display())))?;
-                Ok(())
+                Ok(denied)
             };
             tokio::select! {
                 done = fetch => done,

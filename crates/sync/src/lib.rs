@@ -657,6 +657,8 @@ impl Engine {
             ..Report::default()
         };
         self.report_bases()?;
+        // Denial must travel even after bytes were acknowledged or evicted.
+        self.reconcile_assets(false)?;
         let missing = self.push_assets(&mut report)?;
         let mut st = Pushing::default();
         for _ in 0..PUSH_PASSES {
@@ -1378,7 +1380,7 @@ impl Engine {
     /// Step 5: learn the server's assets, then apply the change feed from the stored cursor.
     fn pull(&self, report: &mut Report) -> Result<()> {
         self.progress.stage(Stage::Pulling);
-        self.learn_assets()?;
+        self.reconcile_assets(true)?;
         if self.assets == AssetPolicy::All {
             self.plan_fetch(&self.missing_assets()?);
         }
@@ -1569,7 +1571,7 @@ impl Engine {
     }
 
     /// What the server lists of its assets, recorded as known: the start of step 5.
-    fn learn_assets(&self) -> Result<()> {
+    fn reconcile_assets(&self, learn: bool) -> Result<()> {
         let list = self.home.get("/api/assets")?.ok("listing the assets")?;
         for a in list
             .get("assets")
@@ -1584,9 +1586,21 @@ impl Engine {
             ) else {
                 continue;
             };
-            self.queue.set_asset(id, filename, size, true)?;
-            // The server has it after all, such as from an upload whose answer was lost.
-            self.queue.clear_asset_failure(id)?;
+            match a.get("incoming").and_then(Json::as_bool) {
+                Some(false) => {
+                    if self.writer.asset_is_incoming(id)? {
+                        self.home.deny_asset(id)?.ok("sending asset denial")?;
+                    }
+                }
+                // Old/unknown servers cannot attest to the absence of denial. Never
+                // preserve local manual readability based on missing metadata.
+                _ => self.writer.mark_incoming_asset(id)?,
+            }
+            if learn {
+                self.queue.set_asset(id, filename, size, true)?;
+                // The server has it after all, such as from an upload whose answer was lost.
+                self.queue.clear_asset_failure(id)?;
+            }
         }
         Ok(())
     }
@@ -1711,7 +1725,10 @@ impl Engine {
             .asset(id)?
             .ok_or_else(|| Error::Protocol(format!("asset {id} is not one the server listed")))?;
         let incoming = self.writer.incoming_file()?;
-        self.home.download_asset(id, &incoming, on_bytes)?;
+        let denied = self.home.download_asset(id, &incoming, on_bytes)?;
+        if denied {
+            self.writer.mark_incoming_asset(id)?;
+        }
         self.writer
             .cache_asset_file_with_id(id, &known.filename, &incoming)?;
         self.queue.touch_asset(id)?;
