@@ -10,6 +10,7 @@ const evidence = (current: boolean): SafetyEvidence => ({
     { id: "b", status: "pending" }, { id: "c", status: "failed" }, { id: "d", status: "unsupported" },
   ] }, fingerprint: "hash", decision_current: current, decision_status: "allowed", bytes: 1024, limit: 131072,
   estimated_input_tokens: 256, omissions: [{ id: "html", reason: "HTML stays withheld" }],
+  extraction_failures: { c: { reason: "not a Word document", at_ms: 1700000000000 } },
 });
 
 it("reviews current exact text, byte cap, omissions and honest estimates on demand", async () => {
@@ -22,6 +23,7 @@ it("reviews current exact text, byte cap, omissions and honest estimates on dema
   expect(screen.getByText(/256 tokens/)).toHaveTextContent("Prices are unknown. Actual usage is not recorded yet");
   expect(screen.getByText(/Text omitted: pending/)).toBeInTheDocument();
   expect(screen.getByText(/Text omitted: failed/)).toBeInTheDocument();
+  expect(screen.getByText(/Extraction failed: not a Word document/)).toHaveTextContent("2023-11-14T22:13:20.000Z");
   expect(screen.getByText(/Text omitted: unsupported/)).toBeInTheDocument();
   expect(screen.getByText("html: HTML stays withheld")).toBeInTheDocument();
   expect(view.container.querySelector("script")).toBeNull();

@@ -71,6 +71,15 @@ pub fn asset_text_failed(vault: &store::Vault, id: &str) -> bool {
             .exists()
 }
 
+/// Owner-visible extraction failure. Legacy reason-only records have no known time.
+pub fn asset_text_failure(vault: &store::Vault, id: &str) -> Option<serde_json::Value> {
+    if !schema::is_ulid(id) {
+        return None;
+    }
+    let raw = std::fs::read_to_string(vault.server_dir().join(format!("asset-text/v1/{id}.unreadable"))).ok()?;
+    Some(serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({"reason": raw.trim(), "at_ms": null})))
+}
+
 /// Read a bound extraction without taking the note index lock. The writer serializes
 /// publication with its commit lock. Missing, old or partially published evidence fails closed.
 pub fn bound_asset_text(vault: &store::Vault, id: &str) -> Option<serde_json::Value> {
@@ -480,7 +489,12 @@ impl AssetTexts {
     pub fn set_unreadable(&mut self, id: &str, reason: &str) -> Result<()> {
         self.set(id, "")?;
         let path = self.dir.join(format!("{id}.unreadable"));
-        std::fs::write(&path, format!("{reason}\n")).map_err(io_err(&path))?;
+        let at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let record = serde_json::json!({"reason": reason, "at_ms": at_ms});
+        std::fs::write(&path, record.to_string()).map_err(io_err(&path))?;
         Ok(())
     }
 
@@ -491,7 +505,8 @@ impl AssetTexts {
         }
         let unreadable = self.dir.join(format!("{id}.unreadable"));
         if let Ok(reason) = std::fs::read_to_string(&unreadable) {
-            return StoredText::Unreadable(reason.trim().to_owned());
+            let record = serde_json::from_str::<serde_json::Value>(&reason).ok();
+            return StoredText::Unreadable(record.as_ref().and_then(|r| r["reason"].as_str()).unwrap_or(reason.trim()).to_owned());
         }
         match std::fs::read_to_string(self.path(id)) {
             Ok(text) => StoredText::Text(text),

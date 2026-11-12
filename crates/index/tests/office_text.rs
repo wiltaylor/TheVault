@@ -13,6 +13,7 @@ fn extraction_failure_records_reason_time_and_success_clears_it() {
     let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
     assert!(!index::asset_text_failed(&vault, id));
     assert_eq!(idx.asset_text(id), index::StoredText::NotExtracted);
+    assert!(index::asset_text_failure(&vault, id).is_none());
     let failed = extract_text(TextKind::Document, b"broken".to_vec());
     assert!(matches!(failed, Extracted::Failed(_)));
     idx.set_asset_text(id, &failed).unwrap();
@@ -21,10 +22,12 @@ fn extraction_failure_records_reason_time_and_success_clears_it() {
     assert_eq!(record["reason"], "not a Word document: no zip header");
     assert!(record["at_ms"].as_u64().unwrap() > 0);
     assert!(index::asset_text_failed(&vault, id));
+    assert_eq!(index::asset_text_failure(&vault, id).unwrap(), record);
     assert!(index::bound_asset_text(&vault, id).is_none());
     idx.set_bound_asset_text(id, &index::text_digest(b"source"), &Extracted::Text("recovered".into())).unwrap();
     assert!(!path.exists());
     assert!(!index::asset_text_failed(&vault, id));
+    assert!(index::asset_text_failure(&vault, id).is_none());
     assert_eq!(idx.asset_text(id), index::StoredText::Text("recovered".into()));
 }
 
