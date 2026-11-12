@@ -711,7 +711,7 @@ fn outbox_rule(
             };
             let late_confirmation = name == "outbox_send" || name == "google_event";
             let late_confirmation = late_confirmation && was == "failed" && status == "sending"
-                && old.and_then(|o| text(o, "error")).is_some_and(|e| e.contains("check before retrying"))
+                && text(old, "error").is_some_and(|e| e.contains("check before retrying"))
                 && text(doc, "sent_at").is_some_and(|s| !s.is_empty());
             if was != status && !SEND_TRANSITIONS.contains(&(was, status)) && !late_confirmation {
                 return Err(format!(
