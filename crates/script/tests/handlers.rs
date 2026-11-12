@@ -126,6 +126,47 @@ fn json_note(fields: serde_json::Value) -> Input {
     Input::Json(json!({ "fields": fields }))
 }
 
+fn interrupted_outbox_restart(kind: &str, action: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let (writer, handlers) = open(dir.path(), false);
+    writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    let item = writer.create("outbox", &json_note(json!({
+        "title": "Check this send", "kind": kind, "status": "ready",
+        "to": ["ann@example.com"], "event_action": action,
+    })), &user()).unwrap();
+    let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    body["fields"]["status"] = json!("sending");
+    writer.update(&item.id, &Input::Json(body), None,
+        &Author::Handler("outbox_send".into())).unwrap();
+    drop(writer);
+    drop(handlers);
+
+    let (writer, _handlers) = open(dir.path(), true);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let note = writer.read(&item.id).unwrap();
+        let body = writer::doc_to_json(&note.doc);
+        if body["fields"]["status"] == "failed" {
+            assert!(body["fields"]["error"].as_str().unwrap().contains("check before retrying"));
+            break;
+        }
+        assert!(Instant::now() < deadline, "{kind}/{action} stayed sending: {body}");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn interrupted_email_restart() { interrupted_outbox_restart("email", ""); }
+
+#[test]
+fn interrupted_sms_restart() { interrupted_outbox_restart("sms", ""); }
+
+#[test]
+fn interrupted_event_create_restart() { interrupted_outbox_restart("event", ""); }
+
+#[test]
+fn interrupted_event_update_restart() { interrupted_outbox_restart("event", "update"); }
+
 #[test]
 fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
     let dir = tempfile::tempdir().unwrap();
