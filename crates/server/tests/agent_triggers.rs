@@ -1525,13 +1525,23 @@ fn safety_only_session_can_release_reviewed_fingerprint_and_list_held() {
     assert_eq!(visible["agent_safety"]["reason"], "prompt_injection");
     let release = format!("/api/notes/{id}/agent-safety/release");
     let agent = api.external_agent_token();
-    let read = api.send("POST", "/api/tokens", json!({"name":"held-review-read", "scope":"read"}));
+    let read = api.send(
+        "POST",
+        "/api/tokens",
+        json!({"name":"held-review-read", "scope":"read"}),
+    );
     for token in [&agent, &read] {
-        for (method, path) in [("GET", "/api/agent-safety/held"), ("POST", release.as_str())] {
-            let response = api.client.request(method.parse().unwrap(), api.server.url(path))
+        for (method, path) in [
+            ("GET", "/api/agent-safety/held"),
+            ("POST", release.as_str()),
+        ] {
+            let response = api
+                .client
+                .request(method.parse().unwrap(), api.server.url(path))
                 .bearer_auth(token["secret"].as_str().unwrap())
                 .json(&json!({"fingerprint":visible["agent_safety"]["fingerprint"]}))
-                .send().unwrap();
+                .send()
+                .unwrap();
             assert_eq!(response.status(), 403);
             let body = response.text().unwrap();
             assert!(!body.contains("Untrusted safety fixture"));

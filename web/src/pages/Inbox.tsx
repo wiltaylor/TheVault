@@ -76,7 +76,8 @@ export function Inbox() {
       return p;
     },
   );
-  const items = createMemo(() => (page.latest?.items ?? []).filter((i) => !gone().has(i.row.id)));
+  const heldIds = createMemo(() => new Set((held() ?? []).map((n) => n.id)));
+  const items = createMemo(() => (page.latest?.items ?? []).filter((i) => !gone().has(i.row.id) && !heldIds().has(i.row.id)));
   const hide = (id: string) => setGone((s) => new Set(s).add(id));
   const ids = createMemo(() => items().map((i) => i.row.id));
   const selection = createSelection(ids);

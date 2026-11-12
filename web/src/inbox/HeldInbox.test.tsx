@@ -54,3 +54,10 @@ it("loads every metadata page", async () => {
   expect((await loadHeld()).map((n) => n.id)).toEqual(["a", "b"]);
   expect(api.heldAgentNotes).toHaveBeenLastCalledWith(1);
 });
+
+it("reports load failures and disables individual release", async () => {
+  vi.mocked(api.note).mockRejectedValue(new Error("Cannot load review"));
+  render(() => <HeldInbox notes={[held("a")]} onReleased={() => {}} />);
+  expect((await screen.findByRole("alert")).textContent).toContain("Cannot load review");
+  expect((screen.getByText("Release") as HTMLButtonElement).disabled).toBe(true);
+});
