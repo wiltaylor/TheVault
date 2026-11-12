@@ -3,8 +3,9 @@ import json
 from pathlib import Path
 import subprocess
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+import measure_memory
 import staging
 
 
@@ -36,6 +37,12 @@ class Contracts(unittest.TestCase):
         self.assertIn("-p tv-145-staging -f compose.yaml down --volumes", source)
         for forbidden in ("prune", "--filter", "box-test.lock", "rm -rf"):
             self.assertNotIn(forbidden, source)
+        self.assertTrue(source.rstrip().endswith("python3 /app/staging.py health"))
+
+    def test_guest_used_memory_excludes_available(self):
+        with patch.object(Path, "read_text", return_value=(
+                "MemTotal:       8388608 kB\nMemFree: 100 kB\nMemAvailable: 2097152 kB\n")):
+            self.assertEqual(measure_memory.used_kib(), 6291456)
 
     def test_decisions_binary_commands(self):
         import os

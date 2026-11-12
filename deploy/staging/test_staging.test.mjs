@@ -8,6 +8,7 @@ for (const name of [
   'test_account_reuses_named_account',
   'test_compose_has_no_network_and_one_capped_service',
   'test_recreate_has_fixed_project_and_no_global_cleanup',
+  'test_guest_used_memory_excludes_available',
   'test_decisions_binary_commands',
 ]) {
   test(name, () => {

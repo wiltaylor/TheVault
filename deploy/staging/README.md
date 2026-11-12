@@ -55,6 +55,7 @@ tar -xzf /home/build/runs/tv-145/binaries.tar.gz -C /home/build/runs/tv-145/stag
 cd /home/build/runs/tv-145/staging
 sh recreate.sh
 docker compose -p tv-145-staging -f compose.yaml ps
+docker compose -p tv-145-staging -f compose.yaml exec -T staging python3 /app/staging.py health
 ```
 
 Run it twice to prove tear-down and recreation. Never use prune, cleanup filters,
@@ -66,6 +67,9 @@ docker image rm tv-145-staging:local
 ```
 
 ## Try one agent by hand
+
+Run the on-demand health command above before each test. `recreate.sh` runs it
+after smoke and fails if it is red. There is no periodic staging monitor.
 
 Do not export the live vault, a backup, state database, notes, keys or account
 secrets. Have the owner supply **one sanitized agent WCL**. Inspect it for copied
