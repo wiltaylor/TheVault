@@ -297,6 +297,9 @@ Each vault has an id, which names its key file and its git sync branch. `vault i
 
 ## Upgrade
 
+When updating `compose.yaml`, follow [Proxy network upgrades](#proxy-network-upgrades)
+before restarting. Pulling an image alone does not update a local Compose file.
+
 1. If you may want to go back to this version, take a backup with it first, as [Roll back an upgrade](#roll-back-an-upgrade) says.
 2. Pull the new image and restart:
 
@@ -446,7 +449,7 @@ evict address history until a bucket is free. Missing peer metadata shares one b
 
 The server trusts no forwarded addresses by default. `VAULT_TRUSTED_PROXIES`
 sets comma-separated literal peer IPs with a proxy type, for example
-`caddy=172.30.141.2,cloudflare=172.30.141.3`. Caddy peers use the last address in
+`caddy=10.141.0.2,cloudflare=10.141.0.3`. Caddy peers use the last address in
 `X-Forwarded-For`. Cloudflared peers use `CF-Connecting-IP`. Headers from other
 peers are ignored. Invalid configuration stops startup. Do not trust arbitrary
 clients or expose a trusted proxy's network address to untrusted containers.
@@ -454,19 +457,23 @@ The `caddy=` convention also fits nginx and Traefik when configured to replace
 untrusted forwarding headers and append the actual immediate client address.
 
 The shipped Compose file configures those two fixed proxy container addresses on
-the dedicated `172.30.141.0/24` proxy network for its `https` and `cloudflare`
+the dedicated `10.141.0.0/24` proxy network for its `https` and `cloudflare`
 profiles. No proxy container is present in the LAN-only profile. The server
 and proxy containers must be recreated after updating the Compose configuration.
-Dynamic network allocation uses `172.30.141.128/25`, keeping the trusted fixed
+Dynamic network allocation uses `10.141.0.128/25`, keeping the trusted fixed
 proxy addresses outside the dynamic range even when a proxy profile is off.
-If that subnet conflicts with an existing network, change the proxy network's
-subnet, both fixed container addresses, and `VAULT_TRUSTED_PROXIES` together.
+Set `THEVAULT_PROXY_SUBNET`, `THEVAULT_PROXY_IP_RANGE`, `THEVAULT_PROXY_CADDY_IP`,
+`THEVAULT_PROXY_CLOUDFLARED_IP` and `THEVAULT_PROXY_SERVER_IP` together in `.env`
+to use another subnet. All three addresses must be distinct, inside the subnet,
+and outside the dynamic range. The default `VAULT_TRUSTED_PROXIES` follows the
+two proxy IP variables automatically. An explicit override, including an empty
+value, is preserved and must be reviewed when changing addresses.
 For a custom deployment, set this variable to the actual immediate proxy peer,
 not its public client or the whole Docker network. An empty value trusts none.
 
 Two proxy configurations need extra care. Docker can forward a published IPv6
 port through `docker-proxy` onto this IPv4-only proxy network. Caddy then sees
-the network gateway (`172.30.141.1`) instead of the original IPv6 client, so those
+the network gateway (`10.141.0.1` by default) instead of the original IPv6 client, so those
 clients share one budget. Use an end-to-end IPv6-capable proxy path, or do not
 publish an IPv6 route to Caddy in this configuration. With Cloudflare's
 orange-cloud DNS proxy in front of Caddy, Caddy sees Cloudflare edge addresses
@@ -474,4 +481,62 @@ instead of the clients. Prefer the shipped `cloudflare` tunnel profile, or
 configure Caddy to trust only Cloudflare's current published edge ranges and to
 forward the real client securely. Do not trust client-supplied forwarding headers
 or all peers to work around either case.
+
+### Proxy network upgrades
+
+The old `172.30.141.0/24` default overlaps Docker's built-in `172.17` through
+`172.31` pools. Production encountered this when another network already used
+`172.30.0.0/16`. The new `10.141.0.0/24` default is outside Docker's built-in
+address pools, but can still clash with a LAN, VPN or custom Docker pool.
+Before installing or changing it, inspect existing allocations and host routes:
+
+```sh
+docker network ls -q | xargs -r docker network inspect --format '{{.Name}} {{json .IPAM.Config}}'
+ip route
+```
+
+Also check VPN routes and Docker daemon `default-address-pools` settings. Render
+the chosen configuration with `docker compose --profile https --profile cloudflare config`
+locally, without publishing its output (it can contain secrets). Confirm the subnet,
+dynamic range, three static addresses and `VAULT_TRUSTED_PROXIES` agree.
+
+Existing installs can keep their current network by setting all five variables
+before replacing the Compose file. For the old shipped network, use:
+
+```dotenv
+THEVAULT_PROXY_SUBNET=172.30.141.0/24
+THEVAULT_PROXY_IP_RANGE=172.30.141.128/25
+THEVAULT_PROXY_CADDY_IP=172.30.141.2
+THEVAULT_PROXY_CLOUDFLARED_IP=172.30.141.3
+THEVAULT_PROXY_SERVER_IP=172.30.141.4
+```
+
+For production's existing `192.168.141.0/24`, use that prefix instead, with
+`.128/25`, `.2`, `.3` and `.4` respectively. Preserve any explicit trusted-proxy
+entries for custom or host proxies, matching their actual immediate peer IPs.
+Do not copy a fresh `.env.example` over an existing `.env`.
+
+Production changes belong to meta/lead, with backup first, not to card workers.
+To move a network, schedule downtime and take a vault backup as in [Back up](#back-up),
+copy it off the volume, secure the key separately, and save the current Compose
+file, `.env`, overrides and network inspection locally for rollback. Then:
+
+1. With the old configuration still in place, run `docker compose down` without
+   `-v`. This removes the old Compose network, not the data or config volumes.
+   If other containers keep the network in use, stop and investigate rather than
+   forcibly disconnecting them.
+2. Install the new Compose file and set the five variables to the checked target
+   subnet, or leave them unset for the new default. Review explicit trusted-proxy
+   overrides. Render `docker compose config` with the active profiles again.
+3. Run `docker compose up -d` with the same profiles. Check `docker compose ps`,
+   server startup logs, login through each enabled proxy, and the client-address
+   behavior of attempt limits. Never test repeated failures against the owner.
+
+If the network or proxy checks fail, run `docker compose down` without `-v`,
+restore the saved configuration and start the previous image and profiles.
+Network-only changes do not require restoring vault data. If an image upgrade
+also changed the database, follow [Roll back an upgrade](#roll-back-an-upgrade).
+An older local Compose file without the proxy network or `VAULT_TRUSTED_PROXIES`
+trusts no proxy: tunnel clients then share the proxy's attempt-limit bucket.
+Update that file and recreate the server and proxies, not just the image.
 
