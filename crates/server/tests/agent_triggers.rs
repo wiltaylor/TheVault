@@ -1241,6 +1241,30 @@ fn incoming_assets_allowed_email_rest_denies_html_and_attachment() {
 }
 
 #[test]
+fn attachment_envelope_provider_receives_text_and_aggregate_cap_skips_call() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    for (text, expected) in [("amount\n17\n".to_owned(), "allowed"), ("x".repeat(128 * 1024), "held")] {
+        let asset: Value = api.client.post(api.server.url("/api/assets?filename=invoice.csv"))
+            .bearer_auth(api.server.admin_token()).body(text.clone()).send().unwrap().json().unwrap();
+        decisions.push(safety_reply("allow"));
+        let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{
+            "title":"Invoice", "attachments":[asset["id"]], "sent":"2000-01-01T00:00:00Z"
+        }}}));
+        let visible = safety_wait(&api, note["id"].as_str().unwrap());
+        assert_eq!(visible["agent_safety"]["status"], expected);
+        assert_eq!(decisions.requests().len(), 1);
+        let request: Value = serde_json::from_slice(&decisions.requests()[0].body).unwrap();
+        assert_eq!(request["state"]["envelope_version"], 1);
+        assert!(request["state"].to_string().contains("amount\\n17\\n"));
+        if expected == "held" {
+            assert_eq!(visible["agent_safety"]["reason"], "too_large");
+        }
+    }
+}
+
+#[test]
 fn incoming_assets_allowed_email_tools_and_script_deny_text() {
     let decisions = testkit::FakeDecisions::start();
     let chat = FakeAnthropic::start();

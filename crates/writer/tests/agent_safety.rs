@@ -30,6 +30,26 @@ fn create(w: &Writer, title: &str) -> writer::Saved {
 }
 
 #[test]
+fn attachment_envelope_replacement_invalidates_note_clearance() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.put_type("email", "label = \"Email\"\nfield attachments { kind = \"asset\" list = true }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    w.activate_agent_safety().unwrap();
+    let asset = w.put_asset("invoice.csv", b"amount\n12\n".to_vec()).unwrap();
+    let owner = Author::Session("owner".into());
+    let note = w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Invoice","attachments":[asset.id]}})), &owner).unwrap();
+    let hash = w.agent_safety(&note.id).unwrap().fingerprint;
+    assert!(w.finish_agent_safety(&note.id, &hash, "allowed", "allow").unwrap());
+    assert!(w.agent_may_read(&note.id));
+    w.evict_asset(&asset.id).unwrap();
+    assert!(!w.agent_may_read(&note.id), "evicted evidence kept clearance");
+    w.put_asset_with_id(&asset.id, "invoice.csv", b"amount\n999\n".to_vec()).unwrap();
+    assert_ne!(w.agent_safety(&note.id).unwrap().fingerprint, hash);
+    assert!(!w.finish_agent_safety(&note.id, &hash, "allowed", "allow").unwrap());
+    assert!(!w.release_agent_safety(&note.id, &hash, &owner).unwrap());
+}
+
+#[test]
 fn incoming_assets_release_and_shared_local_reference_do_not_clear_files() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
