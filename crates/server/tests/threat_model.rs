@@ -101,10 +101,8 @@ macro_rules! row {
             fn $cell() { super::run(stringify!($source), stringify!($cell), $rule); })*
             pub(super) const CELLS: &[&str] = &[$(stringify!($cell)),*];
             #[test]
-            #[ignore = "TV-161: per-agent Login grants are not on next"]
             fn login_grant_requires_owner() { super::login_grant(stringify!($source)); }
             #[test]
-            #[ignore = "TV-167: server-selected signed browser profiles are not on next"]
             fn browser_profile_identity() { super::profile_identity(stringify!($source)); }
         }
     };
@@ -878,7 +876,6 @@ fn profile_identity(source: &str) {
 }
 
 #[test]
-#[ignore = "TV-185: external-token in-app chat entry denial is not on next"]
 fn external_token_cannot_drive_any_in_app_capability() {
     let f = Fixture::start();
     let token = f.source_token("external_agent_token");
