@@ -5089,7 +5089,7 @@ mod tests {
         .unwrap();
         let proposal = json!({
             "name": "fresh", "before": null,
-            "after": "label = \"Fresh\"\n", "op": "create"
+            "after": "label = \"Fresh\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n", "op": "create"
         });
         let result = apply_change(
             &w,

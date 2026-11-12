@@ -811,7 +811,7 @@ fn apply_refuses_a_deleted_proposer_without_changing_the_note() {
 
 #[test]
 fn limited_agents_cannot_apply_type_create_delete_or_taxonomy_delete() {
-    for restriction in ["change_types = []", "change_fields = { log: [] fresh: [] }"] {
+    for restriction in ["change_types = []", "change_fields = { log: [], fresh: [] }"] {
         for (tool, input, event, path) in [
             (
                 "propose_type_change",
