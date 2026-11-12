@@ -849,6 +849,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Settings > AI: the AI accounts with their kinds, URLs, models, headers, sign-in state and plan usage, the default account and the global AI settings; never a key or token",
     ),
     (
+        "GET",
+        "/api/ai/usage",
+        "Owner-only daily UTC token totals by account, model and purpose, retained at least 90 days; no content or prices",
+    ),
+    (
         "PUT",
         "/api/integrations/ai/settings",
         "Save the AI settings that belong to no account: the chat system prompt, the confirmation and internet switches, fetch_private and compaction",

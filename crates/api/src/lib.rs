@@ -466,6 +466,7 @@ fn build() -> Built {
         .post("/api/integrations/gitsync/run", gitsync::run);
     let ai = Routes::new()
         .get("/api/integrations/ai", ai_settings::status)
+        .get("/api/ai/usage", ai_settings::token_usage)
         .put("/api/integrations/ai/settings", ai_settings::put_settings)
         .put("/api/integrations/ai/default", ai_settings::put_default)
         .post("/api/integrations/ai/accounts", ai_settings::create_account)
