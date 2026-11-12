@@ -72,9 +72,15 @@ def identity(sha: str, version: str, branch: str, kind: str) -> dict:
     return dict(sha=sha, version=version, branch=branch, kind=kind)
 
 
-def assets(version: str) -> dict[str, str]:
+def stages(release: dict):
+    if release.get("signing_mode") == "none":
+        return ("preflight", "cut", "build", "manifest", "images", "draft", "push", "publish", "verify")
+    return STAGES
+
+
+def assets(version: str, mode="github") -> dict[str, str]:
     """Public filenames preserve the existing installed-client contract."""
-    return {
+    inventory = {
         f"TheVault_{version}_aarch64.apk": "android",
         f"TheVault_{version}_amd64.AppImage": "desktop",
         f"TheVault_{version}_amd64.AppImage.sig": "updater-signature",
@@ -90,6 +96,9 @@ def assets(version: str) -> dict[str, str]:
         "Caddyfile": "compose",
         "env.example": "compose",
     }
+    if mode == "none":
+        return {n: r for n, r in inventory.items() if r in ("cli", "compose") or n == "SHA256SUMS-cli"}
+    return inventory
 
 
 def digest(path: Path) -> str:
@@ -99,7 +108,7 @@ def digest(path: Path) -> str:
 
 def manifest(directory: Path, release: dict, signed: bool) -> dict:
     entries = []
-    expected = assets(release["version"])
+    expected = assets(release["version"], release.get("signing_mode", "github"))
     if not signed:
         expected = {n: r for n, r in expected.items() if r != "updater-signature"}
     for name, role in expected.items():
@@ -122,6 +131,8 @@ def compare_baseline(recorded: dict, baseline: dict) -> list[dict]:
     """Gross size regression gate, not a substitute for format/signature checks."""
     version = recorded["release"]["version"]
     expected = {row["name"].replace(baseline["version"], version): row for row in baseline["assets"]}
+    if recorded["release"].get("signing_mode") == "none":
+        expected = {n: r for n, r in expected.items() if n in assets(version, "none")}
     actual = {row["name"]: row for row in recorded["assets"]}
     if set(actual) != set(expected):
         raise ReleaseError("asset inventory differs from alpha.37 versioned names")
@@ -143,7 +154,7 @@ def stage_plan(release: dict) -> list[dict]:
         "cut evidence from lead-owned target runs" if stage == "cut" else
         "DOCKER_HOST (daemon-provisioned relay)" if stage in ("build", "images") else
         "release_target (current release job)"), "sha": release["sha"], "version": release["version"],
-        "dry_run": True} for stage in STAGES]
+        "dry_run": True} for stage in stages(release)]
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -186,11 +197,12 @@ class Journal:
         if self.data["release"] != release:
             raise ReleaseError("resume SHA/version/config identity mismatch")
         completed = self.data["completed"]
-        if completed != list(STAGES[:len(completed)]):
+        self.stages = stages(release)
+        if completed != list(self.stages[:len(completed)]):
             raise ReleaseError("stage journal is not a valid completed prefix")
 
     def complete(self, stage: str, outputs: dict) -> None:
-        if len(self.data["completed"]) >= len(STAGES) or STAGES[len(self.data["completed"])] != stage:
+        if len(self.data["completed"]) >= len(self.stages) or self.stages[len(self.data["completed"])] != stage:
             raise ReleaseError("cannot skip or repeat a completed release stage")
         self.data["outputs"][stage] = outputs
         self.data["completed"].append(stage)

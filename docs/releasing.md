@@ -319,3 +319,32 @@ tool responses, not real keys or registries. The alpha.37 fixture records
 public asset metadata; comparison of that fixture is not a measurement of new
 compiled artifact sizes. The lead's first real local pre-release is the
 end-to-end proof, including actual builds, signing, smoke and publication.
+
+## Releases without desktop and Android apps
+
+When signing is unavailable, select `THEVAULT_SIGNING_MODE=none` in the
+release job environment, or add `signing: none` to the main commit's final
+trailer paragraph alongside `pre-release: true` and `tested-at-cut`.
+The environment wins over the trailer. With neither set, the default remains
+`github`. Invalid values fail rather than falling back to another mode.
+
+Mode `none` builds no desktop packages or APKs, requests no signatures,
+dispatches no workflow and requires no signing keys, Android SDK or signed
+APK smoke. It still builds and tests the server and browser images, publishes
+both images and CLI binaries with `SHA256SUMS-cli`, compose files and the
+GitHub release. Its release notes explicitly say the desktop and Android apps
+are not in this pre-release and a later release will bring them back. It does
+not publish unsigned apps as substitutes for signed apps.
+
+This mode completes in **one prepare job**, including publication and image
+channel updates. There is no smoke handoff or required `signed-smoke` trailer.
+An interrupted job resumes from its private draft checkpoint using the same
+main commit and mode. A `release-phase: finish` recovery can also use the
+recorded version with `signing: none`, without signed-smoke evidence. The
+mode is bound into recovery identity and cannot change mid-release.
+
+The `github` and `custodian` modes retain the two-phase signed release.
+GitHub mode preflight requires the remote `sign-only.yml` workflow to exist
+and be active. Missing or disabled workflows fail clearly before building or
+dispatching. The script never enables a workflow. Choose `none` when apps
+must be omitted, or provision custodian keys for a later signed release.

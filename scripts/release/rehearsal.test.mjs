@@ -10,14 +10,33 @@ const stages = ['preflight', 'cut', 'build', 'unsigned-manifest', 'sign', 'signe
   'images', 'draft', 'push', 'smoke', 'publish', 'verify'];
 const version = '0.1.14-alpha.38';
 const sha = 'a'.repeat(40);
-function plan() {
+function plan(mode) {
   const dir = mkdtempSync(join(tmpdir(), 'thevault-release-plan-'));
   try {
     return JSON.parse(execFileSync('python3', ['scripts/release/release.py', 'plan',
       '--state', join(dir, 'state'),
-      '--plan-sha', sha, '--version', version], {encoding: 'utf8'}));
+      '--plan-sha', sha, '--version', version], {encoding: 'utf8',
+        env: {...process.env, THEVAULT_SIGNING_MODE: mode || 'github'}}));
   } finally { rmSync(dir, {recursive: true, force: true}); }
 }
+test('mode none plan retains image publication and CLI checksums, without app signing or smoke', () => {
+  const output = plan('none');
+  assert.deepEqual(output.stages.map(s => s.stage),
+    ['preflight', 'cut', 'build', 'manifest', 'images', 'draft', 'push', 'publish', 'verify']);
+  assert.deepEqual(Object.values(output.assets).sort(), ['checksums', 'cli', 'cli', 'compose', 'compose', 'compose']);
+  assert.ok(output.assets['SHA256SUMS-cli']);
+  assert.doesNotMatch(JSON.stringify(output.assets), /apk|AppImage|\.deb|\.rpm|aur/);
+  assert.match(output.notes, /desktop and Android apps are not in this pre-release/);
+});
+test('none build path exits after CLI and compose before desktop, APK and device fixtures', () => {
+  const script = readFileSync('scripts/release/build-unsigned.sh', 'utf8');
+  const branch = script.match(/if \[ "\$\{THEVAULT_SIGNING_MODE:-github\}" = none \]; then([\s\S]*?)\nfi/)[1];
+  assert.match(branch, /just cli-release/);
+  assert.match(branch, /SHA256SUMS-cli/);
+  assert.match(branch, /exit 0/);
+  assert.doesNotMatch(branch, /desktop-release|android build|gradle-wrapper|smoke-fixtures/);
+  assert.ok(script.indexOf(branch) < script.indexOf('just desktop-release-test'));
+});
 for (const stage of stages) {
   test(`daemon-relay contract dry-run stage: ${stage}`, () => {
     const output = plan();
