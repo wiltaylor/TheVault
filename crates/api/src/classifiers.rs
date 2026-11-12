@@ -352,13 +352,22 @@ fn request(saved: &Saved, config: &Classifier) -> Result<decisions::Request, AiE
 }
 
 fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
-    let safety_hash = (config.name == "agent_safety")
+    let safety_envelope = (config.name == "agent_safety")
         .then(|| {
             Doc::parse(&saved.wcl, "safety snapshot")
                 .ok()
-                .map(|doc| writer::agent_safety::fingerprint(&saved.type_name, &doc))
+                .map(|doc| writer.agent_safety_envelope(&saved.type_name, &doc))
         })
         .flatten();
+    let safety_hash = safety_envelope
+        .as_ref()
+        .map(writer::agent_safety::envelope_fingerprint);
+    if let (Some(envelope), Some(hash)) = (&safety_envelope, &safety_hash)
+        && envelope.to_string().len() > writer::agent_safety::ENVELOPE_LIMIT
+    {
+        let _ = writer.finish_agent_safety(&saved.id, hash, "held", "too_large");
+        return None;
+    }
     let prepared = (|| {
         let accounts = Accounts::load(writer.state())?;
         let account = accounts.pick(config.account.as_deref(), None)?;
@@ -371,13 +380,9 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         let credential = Credentials::resolve(writer.state(), account)?;
         decisions::validate_credential(&credential)?;
         let mut request = request(saved, config)?;
-        if safety_hash.is_some() {
+        if let Some(envelope) = &safety_envelope {
             // Exactly the projection used by the clearance fingerprint.
-            request.state = writer::agent_safety::classified_content(
-                &saved.type_name,
-                &Doc::parse(&saved.wcl, "safety snapshot")
-                    .map_err(|_| AiError::invalid("Invalid safety snapshot"))?,
-            );
+            request.state = envelope.clone();
         }
         Ok::<_, AiError>((credential, request))
     })();
@@ -395,12 +400,6 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
             return None;
         }
     };
-    if let Some(hash) = &safety_hash
-        && request.state.to_string().len() > 128 * 1024
-    {
-        let _ = writer.finish_agent_safety(&saved.id, hash, "held", "too_large");
-        return None;
-    }
     let began = Instant::now();
     let mut result = decisions::decide(&credential, &request, Duration::from_secs(30));
     match &result {
