@@ -283,8 +283,10 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
     api.google.put_event("primary", standup());
     api.sync();
     let id = api.events().keys().next().unwrap().clone();
-    api.google.fail_calendar_writes(Some((500, "Interrupted request")));
-    api.google.set_calendar_delay(Some(std::time::Duration::from_secs(60)));
+    api.google
+        .fail_calendar_writes(Some((500, "Interrupted request")));
+    api.google
+        .set_calendar_delay(Some(std::time::Duration::from_secs(60)));
     let item = api.delete_item(&id);
     let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !api.google.requests().iter().any(|r| r.method == "DELETE") {
@@ -296,41 +298,107 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
     api.server.restart();
     api.google.set_calendar_delay(None);
     api.server.settle_handlers();
-    assert_eq!(api.fields(&item)["status"], "failed", "interrupted delete must expose manual retry, not remain sending");
+    assert_eq!(
+        api.fields(&item)["status"],
+        "failed",
+        "interrupted delete must expose manual retry, not remain sending"
+    );
     api.google.fail_calendar_writes(None);
     api.retry_delete(&item, &id);
 }
 
 #[test]
 fn review_restart_after_local_trash_finishes_outbox_without_second_delete() {
+    restart_confirmed_delete(2);
+}
+
+#[test]
+fn restart_after_persisted_confirmation_finishes_without_second_delete() {
+    restart_confirmed_delete(1);
+}
+
+#[test]
+fn restart_after_google_success_before_confirmation_checks_google_without_delete() {
+    restart_confirmed_delete(0);
+}
+
+fn restart_confirmed_delete(phase: u8) {
     let mut api = Api::start();
     let pause = testkit::StandIn::start();
-    pause.route("/pause", testkit::Reply::text(200, "ok").delay(std::time::Duration::from_secs(60)));
+    pause.route(
+        "/pause",
+        testkit::Reply::text(200, "ok").delay(std::time::Duration::from_secs(60)),
+    );
     let outbox_type = api.file("types/outbox.wcl");
-    expect(api.req("PUT", "/api/types/outbox").body(outbox_type.replace("allow_domains = [", &format!("allow_domains = [\"{}\", ", pause.host()))).send().unwrap(), 200);
-    // Test-only crash barrier. It adds no write and pauses exactly between the shipped
-    // local deletion and return to record_sent.
+    expect(
+        api.req("PUT", "/api/types/outbox")
+            .body(outbox_type.replace(
+                "allow_domains = [",
+                &format!("allow_domains = [\"{}\", ", pause.host()),
+            ))
+            .send()
+            .unwrap(),
+        200,
+    );
+    // Test-only crash barriers add no writes around the shipped confirmation and trash.
     let source = api.file("scripts/outbox_send.ws");
-    let line = "        vault::delete(target, text_of(event, \"version\"))?";
+    let line = if phase == 0 {
+        "        vault::patch(text_of(item, \"id\"), Value::Map(#{ \"sent_at\": Value::String(rfc3339(vault::now())) }), \"\")?"
+    } else {
+        "        vault::delete(target, text_of(event, \"version\"))?"
+    };
     assert!(source.contains(line));
-    let instrumented = source.replace(line, &format!("{line}\n        http::request(\"GET\", \"{}\", #{{}}, \"\")?", pause.url("/pause")));
-    std::fs::write(api.server.vault_path().join("scripts/outbox_send.ws"), instrumented).unwrap();
+    let barrier = format!("        http::request(\"GET\", \"{}\", #{{}}, \"\")?", pause.url("/pause"));
+    let instrumented = source.replace(
+        line,
+        &if phase == 2 { format!("{line}\n{barrier}") } else { format!("{barrier}\n{line}") },
+    );
+    std::fs::write(
+        api.server.vault_path().join("scripts/outbox_send.ws"),
+        instrumented,
+    )
+    .unwrap();
     api.google.put_event("primary", standup());
     api.sync();
     let id = api.events().keys().next().unwrap().clone();
     let item = api.delete_item(&id);
     let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while pause.requests().is_empty() {
-        assert!(std::time::Instant::now() < until, "crash barrier never reached");
+        assert!(
+            std::time::Instant::now() < until,
+            "crash barrier never reached"
+        );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    api.assert_trashed(&id);
-    assert_eq!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
+    if phase == 2 {
+        api.assert_trashed(&id);
+    } else {
+        assert_eq!(api.fields(&id)["google_ref"], "standup");
+    }
+    assert_eq!(
+        api.google.event("primary", "standup").unwrap()["status"],
+        "cancelled"
+    );
     assert_eq!(api.fields(&item)["status"], "sending");
+    assert_eq!(api.fields(&item)["sent_ref"], id);
+    let confirmed = api.fields(&item)["sent_at"].as_str().is_some_and(|s| !s.is_empty());
+    assert_eq!(confirmed, phase != 0);
+    std::fs::write(api.server.vault_path().join("scripts/outbox_send.ws"), source).unwrap();
     api.server.restart();
     api.server.settle_handlers();
-    assert!(api.gone(&item), "Google confirmed and note trashed, but restart lost Outbox completion");
-    assert_eq!(api.google.requests().iter().filter(|r| r.method == "DELETE").count(), 1);
+    assert!(
+        api.gone(&item),
+        "Google confirmed and note trashed, but restart lost Outbox completion"
+    );
+    api.assert_trashed(&id);
+    assert_eq!(
+        api.google
+            .requests()
+            .iter()
+            .filter(|r| r.method == "DELETE")
+            .count(),
+        1
+    );
 }
 
 fn paragraph(text: &str) -> Value {
