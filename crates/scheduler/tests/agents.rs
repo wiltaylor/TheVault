@@ -548,8 +548,9 @@ fn edits_during_a_run_wait_for_that_agent_note_before_running_once() {
         r.create("memo", &format!("Other {i}"), "open", &user());
     }
     r.advance(31);
-    for _ in 0..4 {
-        r.advance(0);
+    // Drain disk overflow and the same-note capacity backoff (at most 15 minutes).
+    for _ in 0..30 {
+        r.advance(31);
     }
     assert_eq!(
         r.fake.turns().len(),
