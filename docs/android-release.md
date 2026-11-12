@@ -1,6 +1,6 @@
 # Releasing the Android app
 
-TheVault's Android app is not on Google Play. Each release is an APK signed with one permanent keystore and attached to a GitHub Release. Install it with `adb`, or let Obtainium track the releases (D10). The app needs Android 13 (API 33) or later (D14).
+TheVault's Android app is not on Google Play. Releases that include the app attach an APK signed with one permanent keystore to a GitHub Release. Install it with `adb`, or let Obtainium track the releases (D10). The app needs Android 13 (API 33) or later (D14). Releases with `signing: none` omit the apps rather than publishing unsigned APKs.
 
 ## The keystore
 
@@ -8,7 +8,7 @@ Android installs an update only when it is signed with the same key as the insta
 
 ### Where the keystore lives
 
-The keystore and its passwords live outside the repository, in `~/.config/thevault/android/`, readable only by you:
+The local development copy of the keystore and its passwords lives outside the repository, in `~/.config/thevault/android/`, readable only by you. The coordinated release uses the existing key supplied through TheVault release secrets at the custodian, not this development path:
 
 | File | What it is |
 |---|---|
@@ -17,11 +17,11 @@ The keystore and its passwords live outside the repository, in `~/.config/thevau
 
 `./dev` reads `keystore.env` by itself when it exists and `THEVAULT_ANDROID_KEYSTORE` is not already set, so `./dev just android-release` and `./dev just publish-clients` sign with the release key with no setup. Set `THEVAULT_NO_SIGNING_KEYS=1` to run `./dev` without it.
 
-> **Back up `~/.config/thevault/android/` now** (both files), as [Back up the keystore](#back-up-the-keystore) says. It is the only copy. Without it, no phone can install an update over the app it has: each one must uninstall TheVault, losing its local vault and anything not yet synced, and install again.
+> **Back up `~/.config/thevault/android/` now** (both files), as [Back up the keystore](#back-up-the-keystore) says. Do not rely on release secrets as your only backup. Without the existing key, no phone can install an update over the app it has: each one must uninstall TheVault, losing its local vault and anything not yet synced, and install again.
 
 ### Create the keystore
 
-Create it on a trusted machine, in a folder outside any repository. `keytool` comes with any JDK. The dev container has one, and it mounts the folder you run it from:
+For a new app identity only, create it on a trusted machine, in a folder outside any repository. Existing TheVault releases must keep their existing key, never generate a replacement. `keytool` comes with any JDK. The dev container has one, and it mounts the folder you run it from:
 
 ```bash
 mkdir -p ~/thevault-keys && cd ~/thevault-keys
@@ -48,6 +48,8 @@ Print the certificate's SHA-256 fingerprint and keep it with the backups. Use it
 Never commit the keystore, and never put it inside the repository.
 
 ## Build a release locally
+
+These are standalone developer build commands, not the coordinated publication procedure. For a release, follow [the local release runbook](releasing.md) and its signed-artifact smoke handoff.
 
 `just android-release` reads the keystore from these variables. `./dev` passes them into the container and mounts the keystore file read-only.
 
@@ -86,7 +88,7 @@ The release build differs from the debug build the other tests run: another pack
 The recipe:
 
 1. Builds the release APK for x86_64, the emulator's ABI, into `target/android-release-smoke/`. Gradle signs it with the release key when the keystore is set up; otherwise the recipe signs it with the debug key, so the test needs no release keystore.
-2. Builds the aarch64 release with `just android-release` from the same tree, when the release keystore is there. `THEVAULT_SMOKE_SKIP_AARCH64=1` skips this step, for a run where another job builds the aarch64 APK, as the release workflow does.
+2. Builds the aarch64 release with `just android-release` from the same tree, when the release keystore is there. `THEVAULT_SMOKE_SKIP_AARCH64=1` skips this step when the aarch64 APK is built separately.
 3. Boots the headless emulator from a wiped data partition, installs the x86_64 APK and launches it. The test fails when the app's process dies or restarts within 20 s, when logcat holds a `FATAL EXCEPTION` of `dev.wiltaylor.thevault`, or when the onboarding screen ("Connect TheVault to your server") does not show.
 4. Runs checks 1, 2, 3, 7, 8, 11, 17 and 29 of [`android-manual-checks.md`](android-manual-checks.md) against a throwaway home server: first launch, a wrong and then the right password, a note from the server and an edit from the phone, the share target, a push notification and an SMS capture. A crash during the checks fails the test too.
 5. When everything passes, writes `target/android-release/SMOKE_PASSED`, which lists the sha256 of the tested x86_64 APK and of the aarch64 APK built beside it.
@@ -97,7 +99,7 @@ A release APK cannot be driven with Playwright, because Tauri turns WebView debu
 
 ### Publishing needs the smoke test
 
-`just publish-clients` publishes a release APK only when its sha256 is in `target/android-release/SMOKE_PASSED`. When it builds the release itself, it runs `just android-release-smoke` rather than `just android-release`. A release APK that has not passed is not published, nor is a debug APK in its place; the desktop builds are still published, and the recipe exits with an error. A later `just android-release` deletes `SMOKE_PASSED`, so a rebuilt APK must pass again. This rule covers publishing from your machine, and still applies now that the release workflow runs the smoke test on GitHub: that run's result is not recorded in your `SMOKE_PASSED`.
+`just publish-clients` publishes a release APK only when its sha256 is in `target/android-release/SMOKE_PASSED`. When it builds the release itself, it runs `just android-release-smoke` rather than `just android-release`. A release APK that has not passed is not published, nor is a debug APK in its place; the desktop builds are still published, and the recipe exits with an error. A later `just android-release` deletes `SMOKE_PASSED`, so a rebuilt APK must pass again. This marker belongs to standalone client publishing. The coordinated release instead requires the [signed smoke handoff](releasing.md#signed-smoke-handoff) for its exact signed APK.
 
 In an emergency, `just publish-clients <dir> <build> skip` publishes the release APK without the test, with a warning. Do not use it for a normal release.
 
@@ -116,27 +118,15 @@ Sync everything first: uninstalling deletes the phone's local vault.
 
 ## Publish a release
 
-A release train publishes the APK with the rest of the release when a commit with a `pre-release: true` or `release: true` trailer reaches `main`. [docs/releasing.md](releasing.md) describes the trailers, the version rules and how to re-run a failed train.
+Follow [Releasing TheVault locally](releasing.md) for the cut gate, version rules, two-phase prepare/finish jobs, signed APK smoke and recovery. Do not repeat or bypass that coordinator procedure with the standalone developer recipes above.
 
-`.github/workflows/android-release.yml` is the train's Android part. It writes the train's version into its checkout, which sets the APK's `versionName` and its `versionCode` ([How each format writes a pre-release](releasing.md#how-each-format-writes-a-pre-release)), and has two jobs:
+As of 2026-11-12, the operator has disabled all TheVault GitHub workflows, including the temporary `sign-only.yml`. The old `android-release.yml` build/publish path is removed. Do not dispatch GitHub builds or enable the sign-only workflow as part of a release.
 
-1. `build` builds the aarch64 APK with `just android-release` in the dev container, checks its `versionName` and `versionCode` with `aapt2`, and keeps it, with `SHA256SUMS-android`, as the `release-android` workflow artifact.
-2. `smoke` runs at the same time as `build`. It runs the [release smoke test](#the-release-smoke-test) on a GitHub-hosted runner with KVM, against an x86_64 release build of the same commit and version, signed with the release key from the repository secrets. It keeps `.scratch/emulator-release/` as the `emulator-release` artifact, whether the test passed or failed. The steps live in `.github/workflows/android-smoke-reusable.yml`.
+The normal signed-release path is local custodian signing, selected explicitly with `THEVAULT_SIGNING_MODE=custodian`. The operator chose to supply the existing signing keys as TheVault release secrets. See [Delivery configuration and tools](releasing.md#delivery-configuration-and-tools) for the runtime variables and key handling. Keep the same Android signing identity and its offline backups. The coordinator verifies it against `scripts/release/android-signer.sha256`.
 
-The train publishes the release only when both jobs passed. When the smoke test fails, the train publishes no release, no tag and no image. Read the `emulator-release` artifact of the failed run, fix the app, and cut a new release.
+The script still defaults to `github` when no mode is selected. That mode requires an active sign-only workflow and fails preflight while it is disabled. It is not the current operational path. Select custodian explicitly for signed apps. If apps must be omitted, use [Releases without desktop and Android apps](releasing.md#releases-without-desktop-and-android-apps): `signing: none` publishes the server/browser images, CLI binaries and release files in one prepare job, without APKs, desktop packages or signed APK smoke. It never substitutes unsigned apps.
 
-To run the same smoke test on GitHub without a release, start `android-smoke` from the Actions tab. It signs the tested APK with the debug key unless you tick `release-key`.
-
-Set these repository secrets once, under Settings > Secrets and variables > Actions:
-
-| Secret | Value |
-|---|---|
-| `ANDROID_KEYSTORE_BASE64` | The keystore file, base64-encoded: `base64 -w0 thevault-release.jks` |
-| `ANDROID_KEYSTORE_PASSWORD` | The keystore password |
-| `ANDROID_KEY_ALIAS` | The key's alias |
-| `ANDROID_KEY_PASSWORD` | The key's password, only when it differs from the keystore password |
-
-Android refuses an update whose `versionCode` is lower than the installed app's. The train computes the code from the version, so each release and pre-release has a higher code than the one before it, and you never set it by hand.
+Android refuses an update whose `versionCode` is lower than the installed app's. The local release coordinator stamps and checks `versionName` and `versionCode` from the release version. Do not set the code by hand.
 
 ### Releasing a format change
 
