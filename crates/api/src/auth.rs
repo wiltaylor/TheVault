@@ -321,6 +321,7 @@ fn is_definition_write(method: &Method, path: &str) -> bool {
 /// `/browser`, which only the user watches and takes over (browser B4).
 pub fn is_human_only(method: &Method, path: &str) -> bool {
     (*method == Method::POST && path == "/api/trash/empty")
+        || path.starts_with("/api/ai/apply-kind/")
         || path == "/api/inbox/triage"
         || path == "/api/agent-safety/backfill"
         || path.starts_with("/api/agent-safety/backfill/")
@@ -528,7 +529,7 @@ async fn identify(sessions: &Arc<Sessions>, headers: &HeaderMap) -> Result<Grant
 }
 
 /// The session id in the request's cookies.
-fn session_id(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn session_id(headers: &HeaderMap) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()

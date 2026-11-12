@@ -76,6 +76,7 @@ mod ai_activity;
 mod ai_agents;
 mod ai_ask;
 mod ai_assets;
+mod ai_batch;
 mod ai_browser;
 mod ai_chat;
 mod ai_decide;
@@ -521,6 +522,8 @@ fn build() -> Built {
         .get("/api/ai/chat/turns/{turn}/events", ai_turns::events)
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
         .post("/api/ai/apply", ai_turns::apply)
+        .post("/api/ai/apply-kind/preview", ai_batch::preview)
+        .post("/api/ai/apply-kind/confirm", ai_batch::confirm)
         .post("/api/ai/discard", ai_turns::discard);
     let browser = Routes::new()
         .get("/api/integrations/browser", browser::status)

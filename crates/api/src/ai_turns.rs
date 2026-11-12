@@ -638,18 +638,58 @@ pub async fn apply(
             return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message));
         }
     }
-    let w = a.writer.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let approval_state = a.clone();
+    let result = serialized_apply(a.clone(), move |w| {
+        let mut _thread_busy = None;
+        if let (Some(thread), Some(id)) =
+            (change["thread"].as_str(), change["id"].as_str())
+        {
+            if agent_threads::running(thread).is_some() {
+                return Err(ApiError::bad_request("Wait for the thread to finish."));
+            }
+            let t = agent_threads::Thread::read(w, thread)?;
+            _thread_busy = Some(agent_threads::Busy::take(thread, &t.agent)?);
+            let t = agent_threads::Thread::read(w, thread)?;
+            let p = t.transcript.proposals.iter().find(|p| p.id() == id)
+                .ok_or_else(|| ApiError::bad_request("Proposal no longer exists."))?;
+            if p.data != change || p.event != event {
+                return Err(ApiError::bad_request("Proposal changed. Preview it again."));
+            }
+            if p.status == Status::Applied {
+                return Ok(p.result.clone().unwrap_or(Value::Null));
+            }
+            if !p.waits() {
+                return Err(ApiError::bad_request("Proposal is resolved or its outcome is uncertain. Review the thread."));
+            }
+            // Fail closed if the process stops after a write but before its outcome is saved.
+            // Stale is terminal, so neither a new preview nor individual Apply repeats it.
+            agent_threads::record_outcome(w, thread, id, Status::Stale, None,
+                Some("Apply interrupted or outcome uncertain. Check the target before proposing again.".into()))?;
+        }
         let signed_in_admin = scope.allows(Scope::Admin) && matches!(author, Author::Session(_));
-        apply_as_agent(&w, author, event, &change, signed_in_admin)
+        // No generic API error proves rollback. Never turn the terminal reservation into
+        // a retryable failure, including errors before apply_as_agent records its outcome.
+        apply_as_agent(w, author, event, &change, signed_in_admin, &approval_state)
     })
     .await
-    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
     .map(Json);
     if event == "agent_proposal" {
         crate::ai_browser::cleanup_retired(a.writer.clone());
     }
     result
+}
+
+/// The blocking worker owns serialization, not the cancellable HTTP future.
+async fn serialized_apply(
+    a: Arc<Ai>,
+    f: impl FnOnce(&writer::Writer) -> Result<Value, ApiError> + Send + 'static,
+) -> Result<Value, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let _approval = a.approval_lock.lock().unwrap_or_else(|e| e.into_inner());
+        f(&a.writer)
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
 }
 
 /// Apply `change` as the caller, or, when it names the agent that proposed it, as that agent
@@ -661,6 +701,7 @@ fn apply_as_agent(
     event: &str,
     change: &Value,
     admin: bool,
+    _a: &Ai,
 ) -> Result<Value, ApiError> {
     let author = match change["agent"].as_str().filter(|n| !n.is_empty()) {
         Some(name) => {
@@ -707,6 +748,16 @@ fn apply_as_agent(
         None => caller,
     };
     let result = ai_chat::apply_change_with_admin(w, &author, event, change, admin);
+    // Simulate a writer returning an uncertain storage error after the actual mutation.
+    // Per-Ai and test-only: no process-global state or production fault switch.
+    #[cfg(test)]
+    let result = if result.is_ok() && _a.fail_apply_after_commit.swap(false, Ordering::SeqCst) {
+        Err(ai_chat::ApplyError::Write(writer::Error::Store(
+            store::Error::Interrupted,
+        )))
+    } else {
+        result
+    };
     crate::ai_activity::applied(
         w,
         &author,
@@ -725,15 +776,19 @@ fn apply_as_agent(
                 None,
             ),
             Err(e) => {
-                let stale = matches!(
-                    e,
-                    ai_chat::ApplyError::Stale(_)
-                        | ai_chat::ApplyError::Write(
-                            writer::Error::Conflict { .. } | writer::Error::NotFound(_)
-                        )
-                );
-                let status = if stale { Status::Stale } else { Status::Failed };
-                agent_threads::record_outcome(w, thread, id, status, None, Some(e.to_string()))
+                // The writer can commit before journal/index bookkeeping returns an error.
+                // Without a proven rollback every unsuccessful attempt is terminal. This
+                // deliberately favors a new reviewed proposal over repeating a create.
+                agent_threads::record_outcome(
+                    w,
+                    thread,
+                    id,
+                    Status::Stale,
+                    None,
+                    Some(format!(
+                        "Apply failed. Check the target before proposing again: {e}"
+                    )),
+                )
             }
         };
         if let Err(e) = recorded {
@@ -777,6 +832,48 @@ pub async fn discard(
 #[cfg(test)]
 mod timeout_tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_apply_keeps_serialization_until_worker_finishes() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let a = Arc::new(Ai::new(Arc::new(
+            writer::Writer::open(vault, state).unwrap(),
+        )));
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = writes.clone();
+        let first = tokio::spawn(serialized_apply(a.clone(), move |_| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            count.fetch_add(1, Ordering::SeqCst);
+            done_tx.send(()).unwrap();
+            Ok(Value::Null)
+        }));
+        entered_rx.await.unwrap();
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        assert!(
+            a.approval_lock.try_lock().is_err(),
+            "cancel must not release the worker's lock"
+        );
+        let count = writes.clone();
+        let second = tokio::spawn(serialized_apply(a.clone(), move |_| {
+            assert_eq!(
+                count.load(Ordering::SeqCst),
+                1,
+                "retry cannot enter before the mutation completes"
+            );
+            Ok(json!({"done":true}))
+        }));
+        release_tx.send(()).unwrap();
+        done_rx.await.unwrap();
+        assert_eq!(second.await.unwrap().unwrap(), json!({"done":true}));
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+    }
 
     #[tokio::test(start_paused = true)]
     async fn an_unread_turn_expires_at_the_production_30_second_deadline() {
