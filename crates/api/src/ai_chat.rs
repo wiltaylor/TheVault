@@ -2648,7 +2648,15 @@ impl Turn {
             }
             "browser_file" => {
                 let may_send = images_sent < ai_assets::IMAGE_LIMIT;
-                crate::ai_browser::file(b, &call.id, &call.input, may_send, &self.images, self.writer.state()).await
+                crate::ai_browser::file(
+                    b,
+                    &call.id,
+                    &call.input,
+                    may_send,
+                    &self.images,
+                    self.writer.state(),
+                )
+                .await
             }
             _ => {
                 let direct = setup.direct.downloads;

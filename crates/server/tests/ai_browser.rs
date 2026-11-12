@@ -33,12 +33,23 @@ fn browser_login_redaction() {
     let text = "fabricated-user fabricated-pass JBSWY3DPEHPK3PXP";
     browser.push_run(BrowserRun::exited(0, text, text));
     browser.file("/work/login.txt", "text/plain", text.as_bytes().to_vec());
-    for (tool, input) in [("browser_run", json!({"command":"snapshot"})), ("browser_file", json!({"path":"/work/login.txt"}))] {
+    for (tool, input) in [
+        ("browser_run", json!({"command":"snapshot"})),
+        ("browser_file", json!({"path":"/work/login.txt"})),
+    ] {
         let events = api.call(&fake, Some("driver"), tool, input);
-        let output = format!("{} {}", serde_json::to_string(&events).unwrap(), fake.message_requests().last().unwrap().json());
-        for secret in text.split_whitespace() { assert!(!output.contains(secret), "credential leaked"); }
+        let output = format!(
+            "{} {}",
+            serde_json::to_string(&events).unwrap(),
+            fake.message_requests().last().unwrap().json()
+        );
+        for secret in text.split_whitespace() {
+            assert!(!output.contains(secret), "credential leaked");
+        }
     }
-    let lines = api.server.stderr_lines_when(|lines| lines.iter().any(|l| l.contains("browser: exit=")));
+    let lines = api
+        .server
+        .stderr_lines_when(|lines| lines.iter().any(|l| l.contains("browser: exit=")));
     assert!(!lines.join("\n").contains("fabricated-"));
 }
 
