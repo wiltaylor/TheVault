@@ -1,3 +1,5 @@
+set working-directory := '../..'
+
 # Run on release_target only. The daemon provisions DOCKER_HOST and secrets.
 publish *args:
 	python3 scripts/release/release.py publish {{args}}
