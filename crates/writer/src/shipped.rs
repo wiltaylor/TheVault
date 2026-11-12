@@ -202,6 +202,7 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "9bc72d0981a46efd7e3915fdf88103d8e42e00fc85af0bb9f3a53d69ee1365cd",
             "4c23a158e244825fa3d8e14782d8c0d0397467a2961e85590203ae53956cbd0d",
             "58b14fe863c28eb3937a035f48465ea2182b1c8b4007520b9dc0150917e31164",
+            "ef6c49d03d8c0f30829f924bc4354af4d210650d81e629c943be461fa275f1cc",
         ],
     },
     // The Google Calendar write-back, named by the shipped `event` type's handlers.
@@ -223,6 +224,7 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "ae1e8226181e8001720b620bd5da05c5e3574f8389fc0d1934fcd4ea54b6e5a1",
             "bc9c5b42a6e9b25642a0f6037059e6ec9bdda49a37c962a15da9a85b448229ab",
             "44e7f48082165527419b26f44205db3b38fd78883ae8476aa5791aa8814ba1bc",
+            "b37cc475176e2977aec441aaeeb120810b3b932788c3c3340fa5504cbff50f7d",
         ],
     },
     // The Google Calendar write-back of event series, named by the shipped `event_series` type's
@@ -250,6 +252,7 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "c49ce64d1666a4c06ed700f7a177758c809af1cf6750cecbd4b36c6da41424b4",
             "836c5c81eaaea3fb3868a5021dad0db49f1a087f48b44fd9a27543d181df1786",
             "936b12de7caccb4da3a52fb34d6dc153cb28a737e4874276574b0d69ce2ccab1",
+            "f5c558ee27ed6a0b2a199508a4571a9d796429a539acdeddff5794d5f30ffec8",
         ],
     },
     // The built-in agent, the chat panel's default (agents G6).
