@@ -6,6 +6,19 @@ mod h7_tests {
     use super::totp;
 
     #[test]
+    fn uri_algorithm_codes_are_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(&dir.path().join("state.db"), Some(state::SecretKey::generate())).unwrap();
+        for algorithm in ["SHA256", "SHA512"] {
+            let seed = format!("otpauth://totp/test?secret=JBSWY3DPEHPK3PXP&algorithm={algorithm}&digits=8&period=60");
+            state.set_login_secret("test", &state::LoginSecret { username: "fake-user".into(), password: "fake-password".into(), totp_seed: Some(seed.clone()), origins: vec![] }).unwrap();
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            let code = totp(&seed, now, 6, 30).expect("supported URI");
+            assert_eq!(super::Redactor::load(&state).unwrap_or_else(|_| panic!("load failed")).text(&code), "[REDACTED]");
+        }
+    }
+
+    #[test]
     fn rfc_hashes_and_strict_parameters() {
         for (algorithm, seed, expected) in [
             ("SHA256", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA", "46119246"),

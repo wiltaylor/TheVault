@@ -23,6 +23,7 @@ it("writes a Login with masked credentials and warns about unrestricted sites", 
   const seed = screen.getByLabelText("One-time-code seed (optional)") as HTMLInputElement;
   expect(password.type).toBe("password");
   expect(seed.type).toBe("password");
+  expect(screen.getByText(/otpauth:\/\//)).toBeTruthy();
   fireEvent.input(password, { target: { value: "made-up-password" } });
   fireEvent.input(seed, { target: { value: "JBSWY3DPEHPK3PXP" } });
   fireEvent.click(screen.getByRole("button", { name: "Save secret" }));
