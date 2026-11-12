@@ -179,6 +179,7 @@ New attachments made with the in-app picker, camera or drawing carry manual
 intent through device sync. Only a live paired device may assert this exception
 to the server's default incoming policy. It is not a statement that the file is
 safe. Share-to-vault, MMS, call captures and script uploads remain incoming.
+Pasted and dropped files also stay incoming rather than claiming picker intent.
 Existing incoming marks always win, even after unlinking or a manual retry.
 
 Both apps and server need the provenance protocol for manual device attachments

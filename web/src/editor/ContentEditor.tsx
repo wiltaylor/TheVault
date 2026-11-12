@@ -696,7 +696,7 @@ export function ContentEditor(props: {
   async function insertUpload(file: File, make: (asset: string) => Block) {
     setUploadError(null);
     try {
-      const asset = await upload(file);
+      const asset = await upload(file, true);
       insertBlock(make(asset.id));
     } catch (e) {
       setUploadError(uploadFailed(file, e));

@@ -138,7 +138,7 @@ export function ImagePickerDialog(props: {
     if (props.pasted) void uploadFile(props.pasted);
   });
 
-  async function uploadFile(file: File) {
+  async function uploadFile(file: File, manual = false) {
     setError(null);
     if (!isImageFile(file.name) && !file.type.startsWith("image/")) {
       setError(`${file.name} is not an image.`);
@@ -146,7 +146,7 @@ export function ImagePickerDialog(props: {
     }
     setBusy(true);
     try {
-      const a = await upload(file);
+      const a = await upload(file, manual);
       props.onPick(a.id);
     } catch (e) {
       setError(`Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -209,7 +209,7 @@ export function ImagePickerDialog(props: {
             label={`Upload an image to ${props.label}`}
             text={busy() ? "Uploading…" : "Upload"}
             accept="image/*"
-            onFile={(file) => void uploadFile(file)}
+            onFile={(file) => void uploadFile(file, true)}
           />
           <span class="muted">or drop or paste an image here</span>
         </div>

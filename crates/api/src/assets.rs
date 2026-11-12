@@ -57,10 +57,9 @@ fn mark_device_upload(
             .list_tokens()?
             .iter()
             .any(|t| t.name == *name && t.kind == "device")
+        && !manual
     {
-        if !manual {
-            w.mark_incoming_asset(id)?;
-        }
+        w.mark_incoming_asset(id)?;
     }
     Ok(())
 }
@@ -734,6 +733,29 @@ pub(crate) fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_intent_requires_session_or_live_paired_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        let (device, _) = w.state().pair_device(&state::NewDevice {
+            name: "phone", platform: "android", capabilities: "[]", settings: "{}",
+        }).unwrap();
+        let author = state::Author::Token(device.token_id.clone());
+        assert!(manual_upload(&w, &author, Some("manual")).unwrap());
+        for source in [None, Some(""), Some("incoming"), Some("MANUAL"), Some("unknown")] {
+            assert!(!manual_upload(&w, &author, source).unwrap());
+        }
+        w.state().create_token("device-spoof", state::Scope::Admin).unwrap();
+        for author in [state::Author::Token("device-spoof".into()), state::Author::Token("absent".into()), state::Author::Agent("agent-cli".into())] {
+            assert!(!manual_upload(&w, &author, Some("manual")).unwrap());
+        }
+        w.state().revoke_token(&device.token_id).unwrap();
+        assert!(!manual_upload(&w, &author, Some("manual")).unwrap());
+        assert!(manual_upload(&w, &state::Author::Session("owner".into()), Some("manual")).unwrap());
+    }
 
     #[test]
     fn encodes_file_names_for_the_disposition_header() {

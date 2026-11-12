@@ -130,7 +130,7 @@ describe("CaptureModal", () => {
     expect(m.save()).toBeEnabled();
     fireEvent.click(m.save());
     await waitFor(() => expect(closeCapture).toHaveBeenCalled());
-    expect(upload).toHaveBeenCalledWith(file);
+    expect(upload).toHaveBeenCalledWith(file, false);
     const doc = createNote.mock.calls[0]![1];
     expect(doc.fields.title).toMatch(/^Image \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
   });

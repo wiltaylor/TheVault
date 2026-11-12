@@ -104,7 +104,7 @@ describe("api", () => {
 
     // Bytes go in base64 chunks of 1 MiB, then the request names the upload.
     const bytes = new Uint8Array(1024 * 1024 + 3).map((_, i) => i % 256);
-    const asset = await api.uploadAsset(new File([bytes], "a b.bin"));
+    const asset = await api.uploadAsset(new File([bytes], "a b.bin"), true);
     expect(asset).toEqual({ id: "A1" });
     expect(uploads).toHaveLength(2);
     const [first, second] = uploads.map((c) => Uint8Array.from(atob(c), (ch) => ch.charCodeAt(0))) as [Uint8Array, Uint8Array];
@@ -114,6 +114,10 @@ describe("api", () => {
     expect(upload.path).toBe("/api/assets?filename=a%20b.bin&provenance=manual");
     expect(upload.upload).toBe(7);
     expect(upload.text).toBeUndefined();
+
+    await api.uploadAsset(new File(["unclassified"], "unknown.bin"));
+    const unknown = invoke.mock.calls.at(-1)?.[1]?.request as { path: string };
+    expect(unknown.path).toBe("/api/assets?filename=unknown.bin&provenance=incoming");
 
     // A 204 answer has no body.
     await expect(api.putType("task", "label = \"Task\"")).resolves.toBeUndefined();

@@ -1730,13 +1730,13 @@ export function Conversation(props: {
   let picker: HTMLInputElement | undefined;
   const uploading = () => files().some((f) => f.state === "uploading");
   const ready = () => files().flatMap((f) => (f.state === "ready" && f.asset ? [f.asset] : []));
-  function attach(list: FileList | File[] | null | undefined) {
+  function attach(list: FileList | File[] | null | undefined, manual = false) {
     for (const file of Array.from(list ?? [])) {
       const key = ++uploads;
       const named = pastedName(file);
       setFiles((all) => [...all, { key, filename: named.name, size: named.size, state: "uploading" }]);
       const set = (patch: Partial<Upload>) => setFiles((all) => all.map((u) => (u.key === key ? { ...u, ...patch } : u)));
-      api.uploadAsset(named).then(
+      api.uploadAsset(named, manual).then(
         (a) => set({ state: "ready", asset: { id: a.id, filename: a.filename, size: a.size } }),
         (e: unknown) => set({ state: "failed", error: e instanceof Error ? e.message : String(e) }),
       );
@@ -2026,7 +2026,7 @@ export function Conversation(props: {
             multiple
             hidden
             onChange={(e) => {
-              attach(e.currentTarget.files);
+              attach(e.currentTarget.files, true);
               e.currentTarget.value = "";
             }}
           />

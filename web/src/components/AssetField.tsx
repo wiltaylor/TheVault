@@ -75,7 +75,7 @@ export function AssetInput(props: AssetInputProps) {
     props.onChange(rest.length === 0 ? undefined : rest);
   }
 
-  async function uploadFiles(files: File[]) {
+  async function uploadFiles(files: File[], manual = false) {
     if (!editable() || files.length === 0) return;
     const wanted = multiple() ? files : files.slice(0, 1);
     setErrors([]);
@@ -84,7 +84,7 @@ export function AssetInput(props: AssetInputProps) {
     for (const [i, file] of wanted.entries()) {
       setProgress(wanted.length > 1 ? `Uploading ${file.name} (${i + 1} of ${wanted.length})…` : `Uploading ${file.name}…`);
       try {
-        done.push(await upload(file));
+        done.push(await upload(file, manual));
       } catch (e) {
         failed.push(`Could not upload ${file.name}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -175,7 +175,7 @@ export function AssetInput(props: AssetInputProps) {
             onChange={(e) => {
               const files = [...(e.currentTarget.files ?? [])];
               e.currentTarget.value = "";
-              void uploadFiles(files);
+              void uploadFiles(files, true);
             }}
           />
           <button
