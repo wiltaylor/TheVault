@@ -953,7 +953,7 @@ fn a_missing_message_or_missing_scope_does_not_clear_the_restore_ref() {
         assert_eq!(failed.len(), 1);
         if !missing_message {
             assert!(failed[0].contains("if it reached Gmail trash"), "{failed:?}");
-            assert!(api.notifications().iter().any(|n| n.to_string().contains("if it reached Gmail trash")));
+            assert!(api.notifications().iter().any(|n| n.to_string().contains("untrash the message in Gmail if it reached Gmail trash.")));
         }
         assert_eq!(
             api.server.secret_json("google_gmail_trashed"),
