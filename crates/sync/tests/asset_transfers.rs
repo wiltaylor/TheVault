@@ -312,6 +312,23 @@ fn sticky_denial_crosses_replicas_after_manual_publication() {
         assert!(w.agent_may_read_asset(&id), "{case}");
         assert_eq!(home_read(&id), 200, "{case}");
 
+        // The metadata operation is not a declassification API or a generic token write.
+        for (token, provenance) in [
+            (server.admin_token(), "incoming"),
+            (agent["token"].as_str().unwrap(), "incoming"),
+            (phone.remote.token.as_str(), "manual"),
+            (phone.remote.token.as_str(), "unknown"),
+        ] {
+            let response = client
+                .put(server.url(&format!("/api/assets/{id}")))
+                .bearer_auth(token)
+                .query(&[("incoming_only", "true"), ("provenance", provenance)])
+                .send()
+                .unwrap();
+            assert!(response.status().is_client_error());
+            assert_eq!(home_read(&id), 200);
+        }
+
         if case.starts_with("device") {
             phone.call(
                 "PUT",

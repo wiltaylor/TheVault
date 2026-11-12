@@ -190,3 +190,19 @@ incoming. Old apps stay conservative on new servers, and old servers ignore the
 new field and keep their existing denial. Upgrading never relabels old queue
 entries or releases historical attachments. Local intent survives restart and
 cache eviction, but files downloaded from another device do not acquire it.
+
+Sticky denial also syncs after the bytes have been uploaded. The asset list's
+`incoming` boolean carries denial to existing caches. A paired device sends
+`PUT /api/assets/{id}?incoming_only=true&provenance=incoming` to add denial
+without uploading bytes, including after local eviction. Downloads carry
+`X-Vault-Asset-Incoming` so an on-demand refill checks denial even between sync
+rounds. Neither mechanism grants manual intent or clears a mark. A failed
+metadata update fails the sync round and is retried on a later round.
+
+This reconciliation requires updated apps and server. Offline replicas keep
+their previous state until they sync or refill. Missing or unknown list/header
+metadata makes the updated device persist denial, even for a formerly manual
+file. It sends metadata-only updates only when the server lists an explicit
+`incoming: false`. Old apps do not reconcile later denial, but their uploads
+remain incoming on updated servers. Old-server safety assumes the TV-156
+default-incoming policy, not a downgrade to a server predating it.

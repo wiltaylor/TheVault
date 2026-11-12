@@ -1570,7 +1570,8 @@ impl Engine {
         Ok(missing)
     }
 
-    /// What the server lists of its assets, recorded as known: the start of step 5.
+    /// Reconcile sticky denial before pushing and when pulling. Only the pull records
+    /// assets as known, preserving initial upload conflict handling.
     fn reconcile_assets(&self, learn: bool) -> Result<()> {
         let list = self.home.get("/api/assets")?.ok("listing the assets")?;
         for a in list
