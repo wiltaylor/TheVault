@@ -65,7 +65,7 @@ fn eventually(timeout: u64, mut condition: impl FnMut() -> bool) {
 }
 
 #[test]
-fn browser_secret_confirmation_is_unconditional_and_value_free() {
+fn browser_secret_foreground_proposal_apply_and_revocation_are_value_free() {
     let fake = FakeAnthropic::start();
     let browser = FakeBrowser::start();
     let api = Api::start(&fake, Some(&browser));
@@ -107,13 +107,19 @@ fn browser_secret_confirmation_is_unconditional_and_value_free() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let events = read_events(response);
-    assert!(result_text(&result(&fake, 0)).contains("confirmation_required"));
+    let proposal = last(&events, "proposal").clone();
+    assert_eq!(proposal["op"], "browser_secret");
+    assert_eq!(proposal["secret"], "login");
+    assert_eq!(proposal["field"], "password");
+    assert_eq!(proposal["target"], "#password");
+    assert_eq!(proposal["origin"], "https://fixture.example");
+    assert_eq!(proposal["unrestricted_origin"], true);
     assert!(!serde_json::to_string(&events).unwrap().contains(password));
     let saved = api.get(&format!(
         "/api/agents/driver/threads/{}",
         thread["id"].as_str().unwrap()
     ));
-    assert!(saved.to_string().contains("confirmation_required"));
+    assert!(saved.to_string().contains("browser_secret"));
     assert!(!saved.to_string().contains(password));
     assert!(
         !fake
@@ -129,24 +135,35 @@ fn browser_secret_confirmation_is_unconditional_and_value_free() {
         !browser
             .requests()
             .iter()
-            .any(|r| r.path.starts_with("/secret/"))
+            .any(|r| r.route() == "/secret/fill")
     );
+    let (status, done) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "filled");
+    assert!(!done.to_string().contains(password));
+    assert_eq!(browser.requests().iter().filter(|r| r.route() == "/secret/fill").count(), 1);
+    api.client.delete(api.server.url("/api/secrets/login")).bearer_auth(api.token()).send().unwrap().error_for_status().unwrap();
+    let (status, _) = api.apply(&proposal);
+    assert!(!status.is_success());
+    assert_eq!(browser.requests().iter().filter(|r| r.route() == "/secret/fill").count(), 1);
     let lines = api
         .server
         .stderr_lines_when(|lines| lines.iter().any(|l| l.starts_with("browser_secret:")));
-    assert_eq!(
-        lines
-            .iter()
-            .filter(|l| l.starts_with("browser_secret:"))
-            .count(),
-        1
-    );
     assert!(!lines.join("\n").contains(password));
-    assert!(lines.iter().any(|l| l.contains("refused")));
+    assert!(lines.iter().any(|l| l.contains("allowed")));
 }
 
 #[test]
 fn browser_secret_unattended_run_audits_refusal_without_value() {
+    unattended_secret(true);
+}
+
+#[test]
+fn browser_secret_unattended_off_fills_without_value() {
+    unattended_secret(false);
+}
+
+fn unattended_secret(confirm: bool) {
     let fake = FakeAnthropic::start();
     let browser = FakeBrowser::start();
     let url = browser.base_url();
@@ -186,7 +203,7 @@ fn browser_secret_unattended_run_audits_refusal_without_value() {
         .unwrap()
         .error_for_status()
         .unwrap();
-    api.agent("driver", "label = \"Driver\"\npermissions {\n browser = true\n browser_secrets = [\"login\"]\n}\ntrigger fill {\n on = [\"create\"]\n type = \"fillfixture\"\n prompt = \"Fill the fixture.\"\n}\n");
+    api.agent("driver", &format!("label = \"Driver\"\npermissions {{\n browser = true\n browser_secrets = [\"login\"]\n confirm {{ secrets = {confirm}\n }}\n}}\ntrigger fill {{\n on = [\"create\"]\n type = \"fillfixture\"\n prompt = \"Fill the fixture.\"\n}}\n"));
     fake.push(AnthropicMessage::new().tool_use(
         "fill",
         "browser_fill_secret",
@@ -219,13 +236,14 @@ fn browser_secret_unattended_run_audits_refusal_without_value() {
             .count(),
         1
     );
-    assert!(log.contains("refused"));
+    assert!(log.contains(if confirm { "refused" } else { "allowed" }));
     assert!(!runs.to_string().contains(password));
     let thread = api.get(&format!(
         "/api/agents/driver/threads/{}",
         run["thread"].as_str().unwrap()
     ));
-    assert!(thread.to_string().contains("confirmation_required"));
+    assert!(thread.to_string().contains(if confirm { "confirmation_required" } else { "filled" }));
+    assert_eq!(browser.requests().iter().filter(|r| r.route() == "/secret/fill").count(), if confirm { 0 } else { 1 });
     assert!(!thread.to_string().contains(password));
     assert!(browser.commands().is_empty());
     let lines = api.server.stderr_lines();

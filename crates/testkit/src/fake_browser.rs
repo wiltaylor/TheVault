@@ -260,6 +260,8 @@ fn answer(s: &Shared, r: &Request) -> Reply {
         }
     }
     match (r.method.as_str(), r.route()) {
+        ("POST", "/secret/origin") => Reply::json(200, &json!({"origin":"https://fixture.example"})),
+        ("POST", "/secret/fill") => Reply::json(200, &json!({"status":"filled"})),
         ("DELETE", "/profile") if *lock(&s.cleanup_failure) => error(503, "box unavailable"),
         ("DELETE", "/profile")
             if lock(&s.failed_profile).as_deref() == r.header("x-vault-agent") =>

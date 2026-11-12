@@ -582,6 +582,13 @@ mod tests {
     }
 
     #[test]
+    fn browser_secret_confirmation_cannot_be_weakened_by_an_agent() {
+        let parent = agent("");
+        let off = agent("permissions { confirm { secrets = false\n}\n}\n");
+        assert!(escalation(&parent, &off).iter().any(|s| s.contains("secrets")));
+    }
+
+    #[test]
     fn browser_secrets_client_redaction_covers_before_after_and_tool_inputs() {
         let source = "permissions {\n browser = true\n browser_secrets = [\"bank\"]\n}\n";
         let mut value = json!({"proposals":[{"kind":"agent", "name":"helper", "before":source, "after":source}], "messages":[{"name":"propose_agent_change", "input":{"name":"helper", "wcl":source}}]});
