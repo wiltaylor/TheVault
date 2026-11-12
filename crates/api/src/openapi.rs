@@ -835,6 +835,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/integrations/attempt-limits",
+        "Show trusted proxies and the caller's attempt-limit key (owner session or admin token only)",
+    ),
+    (
+        "GET",
         "/api/integrations/ai",
         "Settings > AI: the AI accounts with their kinds, URLs, models, headers, sign-in state and plan usage, the default account and the global AI settings; never a key or token",
     ),

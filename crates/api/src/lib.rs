@@ -505,7 +505,9 @@ fn build() -> Built {
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
         .post("/api/ai/apply", ai_turns::apply)
         .post("/api/ai/discard", ai_turns::discard);
-    let browser = Routes::new().get("/api/integrations/browser", browser::status);
+    let browser = Routes::new()
+        .get("/api/integrations/browser", browser::status)
+        .get("/api/integrations/attempt-limits", attempt_limits::diagnostic);
     Built {
         api,
         login,
@@ -588,15 +590,11 @@ pub fn router(
     if let Some(desktop) = browser::desktop_router(&browser) {
         app = app.merge(desktop);
     }
-    app.route(
-        "/api/integrations/attempt-limits",
-        axum::routing::get(attempt_limits::diagnostic),
-    )
-    .layer(middleware::from_fn_with_state(sessions, auth::authenticate))
-    .layer(middleware::from_fn_with_state(
-        limits,
-        attempt_limits::check,
-    ))
+    app.layer(middleware::from_fn_with_state(sessions, auth::authenticate))
+        .layer(middleware::from_fn_with_state(
+            limits,
+            attempt_limits::check,
+        ))
 }
 
 /// Builds the router for every `/api` route with no credentials checked: every request acts as
