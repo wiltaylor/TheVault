@@ -80,3 +80,7 @@ test('signed smoke holds shared lock, fails busy, and never kills by name or ser
 test('just release module parses', () => {
   execFileSync('just', ['--list'], {encoding: 'utf8'});
 });
+test('release module runs recipes from the repository root', () => {
+  const module = readFileSync('.just/release/mod.just', 'utf8');
+  assert.match(module, /^set working-directory := '\.\.\/\.\.'\s*$/m);
+});
