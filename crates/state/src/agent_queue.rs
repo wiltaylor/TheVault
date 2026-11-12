@@ -4,6 +4,7 @@ use rusqlite::{OptionalExtension, params};
 
 pub const TRIGGER_QUEUE_CAP: i64 = 10_000;
 const WEEK: i64 = 7 * 24 * 60 * 60 * 1000;
+const RUNNING_BOUND: i64 = 2 * 60 * 60 * 1000;
 pub(crate) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS trigger_jobs (
  id INTEGER PRIMARY KEY, agent TEXT NOT NULL, trigger TEXT NOT NULL,
@@ -650,13 +651,22 @@ impl State {
         )? == 1)
     }
 
+    /// Running rows use due_ms as their start time. A lost finish must not block forever.
+    pub fn trigger_note_running(&self, agent: &str, note: Option<&str>, now: i64) -> Result<bool> {
+        Ok(self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND note=?2 AND status='running' AND due_ms>?3)",
+            params![agent, note, now - RUNNING_BOUND],
+            |r| r.get(0),
+        )?)
+    }
+
     pub fn begin_trigger_job(&self, id: i64, now: i64) -> Result<bool> {
         let conn = self.conn();
         conn.execute("UPDATE trigger_jobs SET status='expired',message='wait exceeded seven days' WHERE id=?1 AND status='admitted' AND queued_ms<=?2", params![id,now-WEEK])?;
         prune_terminal(&conn)?;
         let started = conn.execute(
-            "UPDATE trigger_jobs SET status='running' WHERE id=?1 AND status='admitted' AND NOT EXISTS (SELECT 1 FROM trigger_jobs other WHERE other.status='running' AND other.agent=trigger_jobs.agent AND other.note=trigger_jobs.note)",
-            [id],
+            "UPDATE trigger_jobs SET status='running',due_ms=?2 WHERE id=?1 AND status='admitted' AND NOT EXISTS (SELECT 1 FROM trigger_jobs other WHERE other.status='running' AND other.agent=trigger_jobs.agent AND other.note=trigger_jobs.note AND other.due_ms>?3)",
+            params![id, now, now - RUNNING_BOUND],
         )? == 1;
         if !started {
             let waits: Option<u32> = conn

@@ -876,6 +876,19 @@ impl Scheduler {
         match state.due_trigger_jobs(now) {
             Ok(queued) => {
                 for row in queued {
+                    // Check before admission, which charges the hourly start budget.
+                    // On a state read error leave the job durable and try next tick.
+                    match state.trigger_note_running(&row.agent, row.note.as_deref(), now) {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            let _ = state.retry_trigger_job(row.id, now, None);
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("checking running trigger note: {e}");
+                            continue;
+                        }
+                    }
                     let Ok(payload) = serde_json::from_str::<serde_json::Value>(&row.payload)
                     else {
                         let _ = state.finish_trigger_job(
@@ -1500,7 +1513,7 @@ impl Scheduler {
             eprintln!("agent {:?}: recording the run's end: {e}", agent.name);
         }
         if let Some(queued) = job.durable {
-            let result = match &outcome {
+            let finish = || match &outcome {
                 AgentRunOutcome::Succeeded => state.finish_trigger_job(queued, "succeeded", None),
                 AgentRunOutcome::Failed(message) if no_side_effects => {
                     state.retry_trigger_job(queued, self.clock.now_ms(), Some(message))
@@ -1510,8 +1523,11 @@ impl Scheduler {
                 }
                 AgentRunOutcome::Running => unreachable!(),
             };
-            if let Err(e) = result {
-                eprintln!("finishing trigger queue job: {e}");
+            if let Err(e) = finish() {
+                eprintln!("finishing trigger queue job (retrying once): {e}");
+                if let Err(e) = finish() {
+                    eprintln!("finishing trigger queue job: {e}");
+                }
             }
         }
         let (word, message) = match &outcome {
