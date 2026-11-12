@@ -80,6 +80,7 @@ export function Inbox() {
   const items = createMemo(() => (page.latest?.items ?? []).filter((i) => !gone().has(i.row.id) && !heldIds().has(i.row.id)));
   const hide = (id: string) => setGone((s) => new Set(s).add(id));
   const ids = createMemo(() => items().map((i) => i.row.id));
+  const itemsById = createMemo(() => new Map(items().map((i) => [i.row.id, i])));
   const selection = createSelection(ids);
   const threads = watchListThreads(ids);
   const [bulkBusy, setBulkBusy] = createSignal(false);
@@ -276,17 +277,21 @@ export function Inbox() {
             <button type="button" class="danger" disabled={bulkBusy() || selectedItems().some((i) => i.source.key === "mail")} title={selectedItems().some((i) => i.source.key === "mail") ? "Mail cannot be deleted from the Inbox" : undefined} onClick={() => void bulk("delete")}>Delete selected</button>
           </>} />
           <ul class="inbox-list" aria-label="Inbox">
-            <For each={items()}>
-              {(i) => (
+            {/* For keys by identity: use note IDs, not fresh objects from each reload. */}
+            <For each={ids()}>
+              {(id) => {
+                const item = () => itemsById().get(id)!;
+                return (
                 <InboxItem
-                  item={i}
+                  item={item()}
                   selection={selection}
-                  threads={threads().get(i.row.id) ?? []}
-                  onDone={(v) => void done(i.row, v)}
-                  onDelete={() => void remove(i.row)}
-                  onConvert={(t) => void convert(i.row, t)}
+                  threads={threads().get(id) ?? []}
+                  onDone={(v) => void done(item().row, v)}
+                  onDelete={() => void remove(item().row)}
+                  onConvert={(t) => void convert(item().row, t)}
                 />
-              )}
+                );
+              }}
             </For>
           </ul>
           <Show when={(page.latest?.total ?? 0) > limit()}>
