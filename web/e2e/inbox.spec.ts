@@ -62,7 +62,9 @@ async function create(admin: APIRequestContext, type: string, fields: Record<str
   const res = await admin.post(`/api/notes?type=${type}`, { data: { note: { fields, blocks: [] } } });
   expect(res.status(), await res.text()).toBe(201);
   const note = (await res.json()) as { id: string };
-  if (["email", "message", "call"].includes(type)) {
+  const incoming = (type === "email" && !(fields.labels as string[] | undefined)?.includes("system/SENT"))
+    || (type === "message" && fields.direction === "in") || (type === "call" && fields.direction === "missed");
+  if (incoming) {
     await expect.poll(async () => {
       const response = await admin.get(`/api/notes/${note.id}`);
       return (await response.json()).agent_safety?.status;
