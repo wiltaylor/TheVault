@@ -321,6 +321,7 @@ fn is_definition_write(method: &Method, path: &str) -> bool {
 /// `/browser`, which only the user watches and takes over (browser B4).
 pub fn is_human_only(method: &Method, path: &str) -> bool {
     (*method == Method::POST && path == "/api/trash/empty")
+        || (*method == Method::GET && path == "/api/ai/usage")
         || (*method == Method::DELETE
             && path
                 .strip_prefix("/api/trash/")
@@ -344,6 +345,13 @@ pub fn human_only() -> ApiError {
 
 /// [`human_only`] for `path`.
 fn human_only_for(path: &str) -> ApiError {
+    if path == "/api/ai/usage" {
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "human_only",
+            "Only the signed-in user can read AI token usage.",
+        );
+    }
     if is_desktop(path) {
         ApiError::new(
             StatusCode::FORBIDDEN,

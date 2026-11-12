@@ -7,6 +7,8 @@
 //! Unlike `index.db`, nothing here can be rebuilt from the vault files (D25).
 
 mod activity;
+mod ai_usage;
+pub use ai_usage::{AI_USAGE_RETENTION_MS, AiUsageDaily};
 mod agent_calls;
 mod agent_queue;
 mod agent_runs;
@@ -168,7 +170,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 26;
+const SCHEMA_VERSION: i64 = 27;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -687,7 +689,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=25 => {
+        0..=26 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -811,6 +813,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                     UPDATE agent_call_ids SET scope='write' WHERE principal NOT LIKE 'session:%';",
                 )?;
             }
+            tx.execute_batch(ai_usage::SCHEMA)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

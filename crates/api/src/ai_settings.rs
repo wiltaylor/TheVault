@@ -368,6 +368,13 @@ pub async fn status(State(a): Shared) -> Result<Json<Value>, ApiError> {
     status_answer(&a).await
 }
 
+/// Owner-only UTC daily token totals. Provider content is never stored here.
+pub async fn token_usage(State(a): Shared) -> Result<Json<Value>, ApiError> {
+    blocking_w(&a, |w| Ok(json!({"items": w.state().ai_usage_daily()?})))
+        .await
+        .map(Json)
+}
+
 /// `GET /api/ai/accounts` (read): the accounts set up with their default models, the default
 /// account and the confirmation switches, for the chat panel's picker in every client (ai D23).
 /// Unlike `GET /api/integrations/ai` it holds no URL, header, sign-in or system prompt.

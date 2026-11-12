@@ -215,6 +215,8 @@ fn safety_rest_read_route_inventory() {
         "/api/ai/accounts",
         "/api/ai/chat/turns/{turn}/events",
         "/api/ai/models",
+        // TV-217 review: owner-only token counts, no held-note content or identifiers.
+        "/api/ai/usage",
         "/api/assets",
         "/api/assets/trash",
         "/api/assets/{id}",
