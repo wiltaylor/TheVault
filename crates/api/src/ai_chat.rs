@@ -2738,11 +2738,19 @@ impl Turn {
         };
         let began = Instant::now();
         let record = |usage: Usage| {
-            if let Err(e) = self.writer.state().record_ai_usage(&setup.cred.account, &setup.model, "agent", usage.input, usage.output) {
+            if let Err(e) = self.writer.state().record_ai_usage(
+                &setup.cred.account,
+                &setup.model,
+                "agent",
+                usage.input,
+                usage.output,
+            ) {
                 eprintln!("ai: recording compaction usage: {e}");
             }
         };
-        let mut stream = ai::stream(http(), &setup.cred, &req).await.inspect_err(|e| record(e.usage))?;
+        let mut stream = ai::stream(http(), &setup.cred, &req)
+            .await
+            .inspect_err(|e| record(e.usage))?;
         let mut summary = String::new();
         let mut usage = Usage::default();
         let mut ended = false;

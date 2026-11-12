@@ -402,6 +402,22 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
     };
     let began = Instant::now();
     let mut result = decisions::decide(&credential, &request, Duration::from_secs(30));
+    let usage = result.as_ref().map_or_else(
+        |e| e.usage,
+        |r| ai::Usage {
+            input: r.usage.input_tokens,
+            output: r.usage.output_tokens,
+        },
+    );
+    if let Err(e) = writer.state().record_ai_usage(
+        &credential.account,
+        &request.model,
+        "classifier",
+        usage.input,
+        usage.output,
+    ) {
+        eprintln!("ai: recording classifier usage: {e}");
+    }
     match &result {
         Ok(_) => {
             let _ = writer

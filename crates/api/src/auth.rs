@@ -346,7 +346,11 @@ pub fn human_only() -> ApiError {
 /// [`human_only`] for `path`.
 fn human_only_for(path: &str) -> ApiError {
     if path == "/api/ai/usage" {
-        return ApiError::new(StatusCode::FORBIDDEN, "human_only", "Only the signed-in user can read AI token usage.");
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "human_only",
+            "Only the signed-in user can read AI token usage.",
+        );
     }
     if is_desktop(path) {
         ApiError::new(
