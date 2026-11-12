@@ -74,23 +74,6 @@ async function pasteImage(page: Page, png: Buffer, name = "") {
   );
 }
 
-/** What the badge counts: the inbox's All view (src/inbox/sources.ts). */
-const INBOX_QUERIES = [
-  "from fleeting where !processed",
-  'from email where !processed && !under(labels, "system/SENT")',
-  'from message where !processed && direction == "in"',
-  'from call where !processed && direction == "missed"',
-];
-
-async function inboxTotal(admin: APIRequestContext): Promise<number> {
-  let n = 0;
-  for (const query of INBOX_QUERIES) {
-    const res = await admin.post("/api/query", { data: { query, page_size: 1 } });
-    n += ((await res.json()) as { total: number }).total;
-  }
-  return n;
-}
-
 async function fleeting(admin: APIRequestContext, title: string, body: string, image?: string): Promise<{ id: string; version: string }> {
   const res = await admin.post("/api/notes?type=fleeting", {
     data: {
@@ -136,9 +119,28 @@ test("a text capture is saved to the inbox, counted in the sidebar, and opens fr
   });
   expect(held.status(), await held.text()).toBe(201);
   const heldId = ((await held.json()) as { id: string }).id;
+  // Keep the real server queries and held-item filtering, but restrict badge counts to
+  // this test's two notes. Other workers can mutate the shared inbox at any time.
+  const countedSources = new Set<string>();
+  await page.route("**/api/query", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.page_size === 1 && body.exclude_held === true) {
+      body.query = body.query.replace(" sort ", ` && (title == "${title}" || title == "Held mail ${t}") sort `);
+      const response = await route.fetch({ postData: JSON.stringify(body) });
+      expect(response.ok(), await response.text()).toBe(true);
+      await route.fulfill({ response });
+      countedSources.add(body.query);
+    } else {
+      await route.continue();
+    }
+  });
   await logIn(page, "/daily");
   const heldNote = await (await page.request.get(`/api/notes/${heldId}`)).json();
   expect(heldNote.agent_safety.status).toBe("held");
+  // Wait for all four initial count responses before capturing. An absent badge
+  // alone could also mean the count has not loaded yet.
+  await expect.poll(() => countedSources.size).toBe(4);
+  await expect(inboxLink(page)).toHaveText("Inbox");
   await page.keyboard.press("Control+Shift+K");
   await captureText(page).fill(`  ${title}  \nabout the leak under the sink`);
   await page.keyboard.press("Control+Enter");
@@ -153,14 +155,8 @@ test("a text capture is saved to the inbox, counted in the sidebar, and opens fr
   const note = await (await admin.get(`/api/notes/${rows[0]!.id}`)).json();
   expect(note.note.blocks[0].blocks[0].fields.text).toBe(`  ${title}  \nabout the leak under the sink`);
 
-  // The badge shows the inbox's count.
-  // Other specs capture in parallel, so compare the badge with the total read at the same moment.
-  await expect
-    .poll(async () => {
-      const badge = (await inboxLink(page).textContent())?.replace("Inbox", "").trim();
-      return badge === String(await inboxTotal(admin));
-    })
-    .toBe(true);
+  // A fresh capture changes the badge from empty to one. Held mail stays excluded.
+  await expect(inboxLink(page)).toHaveText("Inbox1");
 
   await toast.getByRole("link", { name: "Open" }).click();
   await expect(page).toHaveURL(new RegExp(`/notes/${rows[0]!.id}$`));
