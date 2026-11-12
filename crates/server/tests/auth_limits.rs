@@ -9,6 +9,34 @@ use std::{
 use testkit::TestServer;
 
 #[test]
+fn failure_addresses_and_owner_diagnostic() {
+    for (config, header, address, source) in [
+        ("", "X-Forwarded-For", "127.0.0.1", "peer"),
+        ("caddy=127.0.0.1", "X-Forwarded-For", "2001:db8:1:2::/64", "x-forwarded-for"),
+        ("cloudflare=127.0.0.1", "CF-Connecting-IP", "2001:db8:1:2::/64", "cf-connecting-ip"),
+    ] {
+        let server = TestServer::start_with_env(|_| {}, &[("VAULT_TRUSTED_PROXIES", config)]);
+        let client = Client::new();
+        for (path, body, kind) in [
+            ("/api/login", json!({"password":"wrong"}), "auth.login_failed"),
+            ("/api/devices/pair", json!({"code":"bad", "name":"Phone", "platform":"android"}), "auth.pair_failed"),
+            ("/api/agent-codes/redeem", json!({"code":"bad"}), "auth.agent_code_failed"),
+        ] {
+            assert!(!client.post(server.url(path)).header(header, "2001:db8:1:2::abcd").json(&body).send().unwrap().status().is_success());
+            let activity: serde_json::Value = client.get(server.url(&format!("/api/activity?kind={kind}"))).bearer_auth(server.admin_token()).send().unwrap().json().unwrap();
+            assert_eq!(activity["items"][0]["detail"]["client_address"], address, "{activity}");
+            assert_eq!(activity["items"][0]["detail"]["client_address_source"], source);
+        }
+        let url = server.url("/api/integrations/attempt-limits");
+        assert_eq!(client.get(&url).send().unwrap().status(), 401);
+        let diagnostic: serde_json::Value = client.get(&url).bearer_auth(server.admin_token()).header(header, "2001:db8:1:2::abcd").send().unwrap().json().unwrap();
+        assert_eq!(diagnostic["client_address"], address);
+        assert_eq!(diagnostic["client_address_source"], source);
+        assert_eq!(diagnostic["trusted_proxies"].as_array().unwrap().len(), usize::from(!config.is_empty()));
+    }
+}
+
+#[test]
 fn login_attempts_are_limited() {
     let server = TestServer::start();
     let client = Client::new();
