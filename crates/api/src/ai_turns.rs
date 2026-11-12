@@ -638,9 +638,10 @@ pub async fn apply(
             return Err(ApiError::new(StatusCode::FORBIDDEN, "needs_admin", message));
         }
     }
+    let approval_state = a.clone();
     let result = serialized_apply(a.clone(), move |w| {
         let mut _thread_busy = None;
-        let stored = if let (Some(thread), Some(id)) =
+        if let (Some(thread), Some(id)) =
             (change["thread"].as_str(), change["id"].as_str())
         {
             if agent_threads::running(thread).is_some() {
@@ -664,19 +665,11 @@ pub async fn apply(
             // Stale is terminal, so neither a new preview nor individual Apply repeats it.
             agent_threads::record_outcome(w, thread, id, Status::Stale, None,
                 Some("Apply interrupted or outcome uncertain. Check the target before proposing again.".into()))?;
-            Some((thread.to_owned(), id.to_owned()))
-        } else { None };
-        let signed_in_admin = scope.allows(Scope::Admin) && matches!(author, Author::Session(_));
-        let result = apply_as_agent(w, author, event, &change, signed_in_admin);
-        if let (Some((thread, id)), Err(e)) = (stored, &result) {
-            // Includes early authorization errors before apply_as_agent records an outcome.
-            let t = agent_threads::Thread::read(w, &thread)?;
-            if t.transcript.proposals.iter().any(|p| p.id() == id && p.error.as_deref()
-                == Some("Apply interrupted or outcome uncertain. Check the target before proposing again.")) {
-                agent_threads::record_outcome(w, &thread, &id, Status::Failed, None, Some(e.body.to_string()))?;
-            }
         }
-        result
+        let signed_in_admin = scope.allows(Scope::Admin) && matches!(author, Author::Session(_));
+        // No generic API error proves rollback. Never turn the terminal reservation into
+        // a retryable failure, including errors before apply_as_agent records its outcome.
+        apply_as_agent(w, author, event, &change, signed_in_admin, &approval_state)
     })
     .await
     .map(Json);
@@ -708,6 +701,7 @@ fn apply_as_agent(
     event: &str,
     change: &Value,
     admin: bool,
+    _a: &Ai,
 ) -> Result<Value, ApiError> {
     let author = match change["agent"].as_str().filter(|n| !n.is_empty()) {
         Some(name) => {
@@ -754,6 +748,14 @@ fn apply_as_agent(
         None => caller,
     };
     let result = ai_chat::apply_change_with_admin(w, &author, event, change, admin);
+    // Simulate a writer returning an uncertain storage error after the actual mutation.
+    // Per-Ai and test-only: no process-global state or production fault switch.
+    #[cfg(test)]
+    let result = if result.is_ok() && _a.fail_apply_after_commit.swap(false, Ordering::SeqCst) {
+        Err(ai_chat::ApplyError::Write(writer::Error::Store(store::Error::Interrupted)))
+    } else {
+        result
+    };
     crate::ai_activity::applied(
         w,
         &author,
@@ -772,15 +774,11 @@ fn apply_as_agent(
                 None,
             ),
             Err(e) => {
-                let stale = matches!(
-                    e,
-                    ai_chat::ApplyError::Stale(_)
-                        | ai_chat::ApplyError::Write(
-                            writer::Error::Conflict { .. } | writer::Error::NotFound(_)
-                        )
-                );
-                let status = if stale { Status::Stale } else { Status::Failed };
-                agent_threads::record_outcome(w, thread, id, status, None, Some(e.to_string()))
+                // The writer can commit before journal/index bookkeeping returns an error.
+                // Without a proven rollback every unsuccessful attempt is terminal. This
+                // deliberately favors a new reviewed proposal over repeating a create.
+                agent_threads::record_outcome(w, thread, id, Status::Stale, None,
+                    Some(format!("Apply failed. Check the target before proposing again: {e}")))
             }
         };
         if let Err(e) = recorded {
