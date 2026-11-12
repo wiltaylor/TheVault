@@ -80,8 +80,11 @@ terrarium job release <version-card> --commit <main-commit>
 The daemon reads `release_target` and `docker_release` from project delivery
 configuration. It enforces the relay pin, holds the SSH key and supplies a
 per-job Unix socket in DOCKER_HOST. The script has no delivery-config argument,
-relay address, pin or SSH key. The client is rebuilt from its base snapshot
-for each job and retains no local state. Private draft checkpoints are the
+relay address, pin or SSH key. The daemon serializes TheVault release jobs in
+its per-project release lane. Keep that requirement, the script's flock and
+the unfinished-draft check together. META restores the client to its base only
+when running rebuild.sh, not before every job. Nothing required for recovery
+may depend on surviving that rebuild: private draft checkpoints are the
 cross-job recovery store, not the client's filesystem.
 
 The client needs Python 3.11+, git, bash, jq, Docker CLI/buildx, gh, crane,
@@ -103,6 +106,12 @@ the client too.
 | ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS | existing Android signing identity |
 | ANDROID_KEY_PASSWORD | optional, defaults to keystore password |
 | TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD | existing updater signing key and password |
+
+GH_TOKEN and GHCR_TOKEN must be classic tokens with `repo` and `write:packages`.
+The script checks the classic `X-OAuth-Scopes` header for both before any
+release work. `repo` covers workflow dispatch/rerun, run listing, artifact
+downloads and releases. The separate `workflow` scope is not needed.
+Fine-grained token permissions are not accepted for this ghcr publishing path.
 
 PATH, LANG, LC_ALL, TZ, RUSTUP_HOME and CARGO_HOME are allowed through to client
 tools. HOME and tool configuration paths are replaced by private runtime paths.

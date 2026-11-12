@@ -65,8 +65,9 @@ draft and advances image channels. The single recipe `just release::publish`
 reads `release-phase: finish`, `release-version: <exact version>` and
 `signed-smoke: <test run ID>` trailers for phase 2. The lead starts either job
 with `terrarium job release <version-card> --commit <main-commit>`. No delivery
-snapshot is passed to the script. The client resets between jobs, so private
-draft checkpoints, not local files, preserve the unsigned build and journal.
+snapshot is passed to the script. The daemon serializes releases per project.
+META can rebuild the client from its base, so private draft checkpoints, not
+local files, preserve the unsigned build and journal across a rebuild.
 Missing local keys do not stop default GitHub signing. The Android certificate fingerprint is
 committed in `scripts/release/android-signer.sha256`.
 

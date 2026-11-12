@@ -24,6 +24,8 @@ import tarfile
 import tempfile
 import time
 import uuid
+import urllib.error
+import urllib.request
 
 from local import (Journal, ReleaseError, STAGES, assets, atomic_json, compare_baseline,
                    digest, identity, manifest, release_lock,
@@ -44,6 +46,21 @@ def android_signer():
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ReleaseError("invalid committed Android certificate fingerprint")
     return expected
+
+
+def check_token_scopes(name, token, opener=urllib.request.urlopen):
+    if not token:
+        raise ReleaseError("missing " + name + " from release-github")
+    request = urllib.request.Request("https://api.github.com/user", headers={
+        "Authorization": "Bearer " + token, "Accept": "application/vnd.github+json"})
+    try:
+        with opener(request, timeout=30) as response:
+            scopes = {value.strip() for value in response.headers.get("X-OAuth-Scopes", "").split(",") if value.strip()}
+    except (urllib.error.URLError, OSError):
+        raise ReleaseError(name + " classic token validation failed") from None
+    if not {"repo", "write:packages"}.issubset(scopes):
+        raise ReleaseError(name + " must be a classic token with repo and write:packages scopes")
+    return sorted(scopes)
 
 
 def command(argv, *, cwd=ROOT, env=None, input=None, check=True):
@@ -766,6 +783,8 @@ def main(argv=None):
                 raise ReleaseError("release-phase must be prepare or finish")
             state = args.state.resolve()
             with private_runtime() as runtime:
+                for name in ("GH_TOKEN", "GHCR_TOKEN"):
+                    check_token_scopes(name, os.environ.get(name))
                 run_id = None
                 if phase == "finish":
                     version = git("log", "-1", "--format=%(trailers:key=release-version,valueonly)")

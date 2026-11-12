@@ -279,6 +279,7 @@ class LocalReleaseTests(unittest.TestCase):
 
     def signing_job(self):
         job = self.job()
+        job.release["tagged_sha"] = "b" * 40
         job.runtime.mkdir()
         job.dist.mkdir()
         for name in local.assets(job.release["version"]):
@@ -515,6 +516,24 @@ class LocalReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "selection differs"):
             web_gate.gate(self.root, runner)
         self.assertEqual(len(calls), 2)
+
+    def test_classic_token_scopes_require_repo_and_write_packages(self):
+        class Response:
+            headers = {"X-OAuth-Scopes": "repo, write:packages"}
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+        self.assertEqual(coordinator.check_token_scopes("GH_TOKEN", "dummy-test-token", lambda *a, **kw: Response()), ["repo", "write:packages"])
+        for scopes in ["", "repo", "write:packages", "workflow"]:
+            Response.headers = {"X-OAuth-Scopes": scopes}
+            with self.subTest(scopes=scopes), self.assertRaisesRegex(local.ReleaseError, "classic token") as caught:
+                coordinator.check_token_scopes("GH_TOKEN", "dummy-test-token", lambda *a, **kw: Response())
+            self.assertNotIn("dummy-test-token", str(caught.exception))
+
+    def test_missing_classic_token_never_calls_api(self):
+        with patch.object(coordinator.urllib.request, "urlopen") as opener:
+            with self.assertRaisesRegex(local.ReleaseError, "missing GHCR_TOKEN"):
+                coordinator.check_token_scopes("GHCR_TOKEN", None, opener)
+            opener.assert_not_called()
 
 
 if __name__ == "__main__":
