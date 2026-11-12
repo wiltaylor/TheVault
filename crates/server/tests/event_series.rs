@@ -20,6 +20,61 @@ use testkit::{FakeGoogle, TestServer};
 
 const START: &str = "2026-03-01T08:00:00Z";
 
+#[test]
+fn adversarial_import_markup_series_write_back_reads_fresh_google_text() {
+    use crate::import_markup::{TEXT, assert_literal};
+    let api = Api::start();
+    api.google.put_event("primary", standup());
+    api.sync();
+    let id = api.series()[0]["id"].as_str().unwrap().to_owned();
+    for (title, description) in [
+        ("Plain rename", TEXT.to_owned()),
+        ("HTML rename", format!("<p>{TEXT}</p>")),
+    ] {
+        api.google
+            .change_event("primary", "standup", json!({ "description": description }));
+        api.google.clear_requests();
+        api.edit(&id, json!({ "title": title }));
+        let methods: Vec<_> = api
+            .google
+            .requests_to(CALENDAR_PATH)
+            .into_iter()
+            .map(|r| r.method)
+            .collect();
+        assert_eq!(methods, ["PATCH", "GET", "PATCH"]);
+        assert_literal(&api.note(&id), "description");
+    }
+}
+
+#[test]
+fn adversarial_import_markup_series_and_occurrences_plain_and_html() {
+    use crate::import_markup::{TEXT, assert_literal};
+    let api = Api::start();
+    for (id, description) in [
+        ("literal", TEXT.to_owned()),
+        ("html", format!("<p>{TEXT}</p>")),
+    ] {
+        api.google.put_event(
+            "primary",
+            json!({ "id": id, "summary": TEXT,
+            "description": description, "start": { "date": "2026-03-10" },
+            "end": { "date": "2026-03-11" }, "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"] }),
+        );
+    }
+    api.sync();
+    let series = api.series();
+    assert_eq!(series.len(), 2);
+    for row in series {
+        let id = row["id"].as_str().unwrap();
+        assert_literal(&api.note(id), "description");
+        let occurrences = api.occurrences(id);
+        assert_eq!(occurrences.len(), 2);
+        for occurrence in occurrences {
+            assert_literal(&api.note(occurrence["id"].as_str().unwrap()), "description");
+        }
+    }
+}
+
 fn expect(res: Response, status: u16) -> Value {
     let got = res.status().as_u16();
     let text = res.text().unwrap();
