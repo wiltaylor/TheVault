@@ -203,6 +203,7 @@ fn safety_rest_read_route_inventory() {
     let expected = [
         "/agent/install.sh",
         "/api/activity",
+        "/api/agent-safety/evidence/{id}",
         "/api/agent-safety/held",
         "/api/agents",
         "/api/agents/calls/{call}",
