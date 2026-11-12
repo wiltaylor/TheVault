@@ -94,6 +94,7 @@ mod ai_subagents;
 mod ai_task_changes;
 mod ai_taxonomies;
 mod ai_turns;
+mod ai_batch;
 mod ai_web;
 mod apps;
 mod assets;
@@ -520,6 +521,8 @@ fn build() -> Built {
         .get("/api/ai/chat/turns/{turn}/events", ai_turns::events)
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
         .post("/api/ai/apply", ai_turns::apply)
+        .post("/api/ai/apply-kind/preview", ai_batch::preview)
+        .post("/api/ai/apply-kind/confirm", ai_batch::confirm)
         .post("/api/ai/discard", ai_turns::discard);
     let browser = Routes::new()
         .get("/api/integrations/browser", browser::status)

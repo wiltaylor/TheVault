@@ -19,6 +19,7 @@ import { SECTIONS, activityMs, bySection, hasDot, originText, threadLink, waitin
 import { relativeTime } from "../notifications/model";
 import { errorText } from "./TypeEditor";
 import "../dispatched/dispatched.css";
+import { ApplyKind } from "../dispatched/ApplyKind";
 
 /** How often the page reads again while no thread is active. */
 export const IDLE_POLL_MS = 30_000;
@@ -97,6 +98,9 @@ export function Dispatched() {
             <span class="ai-new-reply" role="img" aria-label="Not opened yet" title="Not opened yet" />
           </Show>
         </a>
+        <Show when={t().state === "needs_you" && t().pending > 0}>
+          <ApplyKind agent={t().agent} thread={t().id} />
+        </Show>
       </li>
     );
   }

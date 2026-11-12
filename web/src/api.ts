@@ -595,6 +595,18 @@ export interface StoredProposal {
   error?: string | null;
 }
 
+export interface ApprovalPreview {
+  preview: string;
+  count: number;
+  kind: [string, string, string];
+  items: { id: string; summary: string; data: Record<string, unknown> }[];
+}
+export interface ApprovalResult {
+  id: string;
+  ok: boolean;
+  error?: { message: string };
+}
+
 /** A thread with its transcript (agents G7, G8). */
 export interface AgentThread extends AgentThreadSummary {
   agent: string;
@@ -2189,6 +2201,10 @@ export const api = {
    * version (ai D23). A stale one is a 409; a type change without admin a 403 `needs_admin`.
    */
   aiApply: (proposal: unknown) => request<AiApplied>("POST", "/api/ai/apply", proposal),
+  aiApplyKindPreview: (thread: string, proposal: string) =>
+    request<ApprovalPreview>("POST", "/api/ai/apply-kind/preview", { thread, proposal }),
+  aiApplyKindConfirm: (preview: string) =>
+    request<{ results: ApprovalResult[] }>("POST", "/api/ai/apply-kind/confirm", { preview, confirmed: true }),
   /** Record that the user discarded a thread's proposal (agents G8). */
   aiDiscard: (id: string, thread: string) => request<{ thread: string; pending: number }>("POST", "/api/ai/discard", { id, thread }),
   /** Start a chat turn in the turns form: its id (ai D23). */

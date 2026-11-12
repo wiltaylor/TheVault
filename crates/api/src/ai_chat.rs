@@ -1007,7 +1007,7 @@ fn prepare_for(
 }
 
 /// The events of a proposal for the user, or of a change a tool made.
-const PROPOSAL_EVENTS: [&str; 11] = [
+pub(crate) const PROPOSAL_EVENTS: [&str; 11] = [
     "proposal",
     "type_proposal",
     "taxonomy_proposal",

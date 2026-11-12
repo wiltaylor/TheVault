@@ -470,6 +470,8 @@ fn safety_rest_mutation_route_inventory() {
             "caller ownership or session-only agent operations",
         ),
         ("post", "/api/ai/apply", "caller-bound proposal approval"),
+        ("post", "/api/ai/apply-kind/preview", "session-only stored proposal preview"),
+        ("post", "/api/ai/apply-kind/confirm", "session-only current selection approval"),
         (
             "post",
             "/api/ai/chat",
@@ -3436,6 +3438,94 @@ fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
     api.server.restart();
     assert_eq!(api.get(&path)["proposals"], resolved);
     assert_eq!(api.get(&path)["pending"], 0);
+}
+
+fn approval_cookie(api: &Api) -> String {
+    let login = api.client.post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD})).send().unwrap().error_for_status().unwrap();
+    login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned()
+}
+
+fn approval_batch_fixture(fake: &FakeAnthropic) -> (Api, String, String, String) {
+    let api = Api::start(fake);
+    api.agent("reader", "label = \"Reader\"\ntrigger any {\n on = [\"create\"]\n type = \"memo\"\n prompt = \"Review it.\"\n}\n");
+    let (id, version) = api.memo("Original", "open");
+    let (other, other_version) = api.memo("Second", "open");
+    fake.push(AnthropicMessage::new()
+        .tool_use("batch_create1", "propose_create", json!({"type":"memo", "note":json!({"fields":{"title":"First new"}}).to_string()}))
+        .tool_use("batch_create2", "propose_create", json!({"type":"memo", "note":json!({"fields":{"title":"Second new"}}).to_string()}))
+        .tool_use("batch_email", "propose_create", json!({"type":"email", "note":json!({"fields":{"title":"Different kind"}}).to_string()}))
+        .tool_use("batch_edit1", "propose_edit", json!({"id":id, "base_version":version, "note":json!({"fields":{"title":"Edited"}}).to_string()}))
+        .tool_use("batch_edit2", "propose_edit", json!({"id":other, "base_version":other_version, "note":json!({"fields":{"title":"Edited second"}}).to_string()}))
+        .tool_use("batch_delete", "propose_delete", json!({"id":id})));
+    fake.push(AnthropicMessage::text("Review these changes."));
+    api.advance("PT31S");
+    let list = api.get("/api/agents/reader/threads");
+    let thread = list["threads"].as_array().unwrap().iter().find(|t| t["pending"].as_u64().unwrap_or(0) > 0)
+        .unwrap()["id"].as_str().unwrap().to_owned();
+    (api, thread, id, other)
+}
+
+#[test]
+fn apply_kind_snapshot_session_confirmation_and_retry_never_repeat_creates() {
+    let fake = FakeAnthropic::start();
+    let (api, thread, _, _) = approval_batch_fixture(&fake);
+    let cookie = approval_cookie(&api);
+    let selection = json!({"thread":thread,"proposal":"batch_create1"});
+    for token in [api.server.admin_token().to_owned(), api.external_agent_token()["secret"].as_str().unwrap().to_owned()] {
+        for route in ["preview", "confirm"] {
+            let res = api.client.post(api.server.url(&format!("/api/ai/apply-kind/{route}")))
+                .bearer_auth(&token).json(&selection).send().unwrap();
+            assert_eq!(res.status(), 403);
+        }
+    }
+    let p: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/preview", selection)
+        .error_for_status().unwrap().json().unwrap();
+    assert_eq!(p["count"], 2, "{p}");
+    assert_eq!(p["kind"], json!(["proposal","create","memo"]));
+    let body = json!({"preview":p["preview"],"confirmed":true});
+    let rejected = safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", json!({"preview":p["preview"],"confirmed":false}));
+    assert_eq!(rejected.status(), 400);
+    let other_session = approval_cookie(&api);
+    assert_eq!(safety_session(&api, &other_session, "/api/ai/apply-kind/confirm", body.clone()).status(), 400);
+    let apply = || -> Value { safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body.clone()).error_for_status().unwrap().json().unwrap() };
+    let first = apply();
+    assert!(first["results"].as_array().unwrap().iter().all(|r| r["ok"] == true), "{first}");
+    assert_eq!(apply(), first, "same stable result IDs, no second create");
+    let path = format!("/api/agents/reader/threads/{thread}");
+    let after = api.get(&path);
+    for proposal in after["proposals"].as_array().unwrap() {
+        let id = proposal["data"]["id"].as_str().unwrap();
+        assert_eq!(proposal["status"], if id == "batch_create1" || id == "batch_create2" { "applied" } else { "pending" });
+    }
+    // A normal Apply of an already successful batch proposal also returns the original result.
+    let result = api.send("POST", "/api/ai/apply", p["items"][0]["data"].clone());
+    assert_eq!(result, first["results"][0]["result"]);
+}
+
+#[test]
+fn apply_kind_partial_stale_and_revoked_permissions_are_rechecked() {
+    let fake = FakeAnthropic::start();
+    let (api, thread, id, other) = approval_batch_fixture(&fake);
+    let cookie = approval_cookie(&api);
+    let p: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/preview",
+        json!({"thread":thread,"proposal":"batch_edit1"})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(p["count"], 2);
+    api.send("PUT", &format!("/api/notes/{id}"), json!({"fields":{"title":"Changed after preview"}}));
+    let body = json!({"preview":p["preview"],"confirmed":true});
+    let first: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body.clone()).error_for_status().unwrap().json().unwrap();
+    assert_eq!(first["results"][0]["ok"], false, "{first}");
+    assert_eq!(first["results"][1]["ok"], true, "{first}");
+    let version = api.get(&format!("/api/notes/{other}"))["version"].clone();
+    let retry: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body).error_for_status().unwrap().json().unwrap();
+    assert_eq!(retry["results"][1], first["results"][1]);
+    assert_eq!(api.get(&format!("/api/notes/{other}"))["version"], version);
+    let p: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/preview",
+        json!({"thread":thread,"proposal":"batch_create1"})).error_for_status().unwrap().json().unwrap();
+    api.agent("reader", "label = \"Reader\"\nenabled = false\n");
+    let result: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/confirm",
+        json!({"preview":p["preview"],"confirmed":true})).error_for_status().unwrap().json().unwrap();
+    assert!(result["results"].as_array().unwrap().iter().all(|r| r["ok"] == false), "{result}");
 }
 
 #[test]

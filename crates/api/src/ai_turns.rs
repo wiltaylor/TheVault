@@ -577,6 +577,8 @@ pub async fn apply(
     Json(change): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     crate::auth::require_in_app_agent_caller(&author)?;
+    // Serialize individual and batch Apply, including the durable outcome reservation.
+    let _approval = a.approval_lock.lock().await;
     if !change.is_object() {
         return Err(ApiError::bad_request(
             "send the proposal as the chat sent it",
@@ -640,8 +642,44 @@ pub async fn apply(
     }
     let w = a.writer.clone();
     let result = tokio::task::spawn_blocking(move || {
+        let mut _thread_busy = None;
+        let stored = if let (Some(thread), Some(id)) =
+            (change["thread"].as_str(), change["id"].as_str())
+        {
+            if agent_threads::running(thread).is_some() {
+                return Err(ApiError::bad_request("Wait for the thread to finish."));
+            }
+            let t = agent_threads::Thread::read(&w, thread)?;
+            _thread_busy = Some(agent_threads::Busy::take(thread, &t.agent)?);
+            let t = agent_threads::Thread::read(&w, thread)?;
+            let p = t.transcript.proposals.iter().find(|p| p.id() == id)
+                .ok_or_else(|| ApiError::bad_request("Proposal no longer exists."))?;
+            if p.data != change || p.event != event {
+                return Err(ApiError::bad_request("Proposal changed. Preview it again."));
+            }
+            if p.status == Status::Applied {
+                return Ok(p.result.clone().unwrap_or(Value::Null));
+            }
+            if !p.waits() {
+                return Err(ApiError::bad_request("Proposal is resolved or its outcome is uncertain. Review the thread."));
+            }
+            // Fail closed if the process stops after a write but before its outcome is saved.
+            // Stale is terminal, so neither a new preview nor individual Apply repeats it.
+            agent_threads::record_outcome(&w, thread, id, Status::Stale, None,
+                Some("Apply interrupted or outcome uncertain. Check the target before proposing again.".into()))?;
+            Some((thread.to_owned(), id.to_owned()))
+        } else { None };
         let signed_in_admin = scope.allows(Scope::Admin) && matches!(author, Author::Session(_));
-        apply_as_agent(&w, author, event, &change, signed_in_admin)
+        let result = apply_as_agent(&w, author, event, &change, signed_in_admin);
+        if let (Some((thread, id)), Err(e)) = (stored, &result) {
+            // Includes early authorization errors before apply_as_agent records an outcome.
+            let t = agent_threads::Thread::read(&w, &thread)?;
+            if t.transcript.proposals.iter().any(|p| p.id() == id && p.error.as_deref()
+                == Some("Apply interrupted or outcome uncertain. Check the target before proposing again.")) {
+                agent_threads::record_outcome(&w, &thread, &id, Status::Failed, None, Some(e.body.to_string()))?;
+            }
+        }
+        result
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?

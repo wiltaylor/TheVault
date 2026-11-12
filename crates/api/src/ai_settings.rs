@@ -78,6 +78,8 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The routes' state: the writer, whose state store holds the secrets, and the sign-ins started.
 pub struct Ai {
+    pub(crate) approval_previews: Mutex<HashMap<String, crate::ai_batch::Preview>>,
+    pub(crate) approval_lock: tokio::sync::Mutex<()>,
     pub(crate) writer: Arc<Writer>,
     pending: Mutex<HashMap<String, Pending>>,
     http: reqwest::Client,
@@ -88,6 +90,8 @@ pub struct Ai {
 impl Ai {
     pub fn new(writer: Arc<Writer>) -> Ai {
         Ai {
+            approval_previews: Mutex::default(),
+            approval_lock: tokio::sync::Mutex::new(()),
             writer,
             pending: Mutex::default(),
             http: ai::client(),

@@ -968,6 +968,8 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/ai/discard",
         "Record that the user discarded a thread's proposal, from {id, thread}",
     ),
+    ("POST", "/api/ai/apply-kind/preview", "Session-only current pending proposal snapshot: {thread, proposal}. Expires after ten minutes, grouped by event, operation and note type."),
+    ("POST", "/api/ai/apply-kind/confirm", "Session-only confirmation: {preview, confirmed:true}. Applies only snapshotted IDs with individual authorization and freshness checks, returning individual outcomes. No future rule."),
 ];
 
 /// The OpenAPI document of [`ENDPOINTS`].
