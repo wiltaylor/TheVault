@@ -87,7 +87,7 @@ export function CatchUpDialog(props: { onCancel: () => void; onDone: (changed: n
         <header class="capture-head">
           <h2 id="catch-up-heading">Mark older items processed</h2>
         </header>
-        <p>Every email, message and call sent or made before this date is marked processed and leaves the inbox. Captures stay. Nothing is sent to Gmail.</p>
+        <p>Every email, message and call sent or made before this date is marked processed and leaves the inbox. Captures stay. Nothing is sent to Gmail. No model calls or agent runs are started by this action.</p>
         <label class="inbox-catch-up-date">
           Before
           <input type="date" value={date()} max={today()} onInput={(e) => setDate(e.currentTarget.value)} />

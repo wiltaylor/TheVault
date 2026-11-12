@@ -19,6 +19,7 @@ import { watchListThreads } from "../dispatch";
 import { knowTitle } from "../editor/titles";
 import { appInfo } from "../inApp";
 import { CatchUpDialog } from "../inbox/CatchUpDialog";
+import { MailTriage } from "../inbox/MailTriage";
 import { HeldInbox, loadHeld } from "../inbox/HeldInbox";
 import { loadInbox } from "../inbox/load";
 import { FILTERS, type Filter, type Item } from "../inbox/sources";
@@ -217,6 +218,7 @@ export function Inbox() {
             Show processed
           </label>
           <Show when={app.state === "ready" && app() === null}>
+            <MailTriage />
             <button type="button" onClick={() => setCatchingUp(true)}>
               Mark older processed…
             </button>
