@@ -12,7 +12,7 @@ const TOKEN: &str = "test-token-0123456789abcdef";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn long_component_deletion_has_bounded_peak_memory() {
-    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+    use rustix::fs::{AtFlags, Mode, OFlags, mkdirat, open, openat, unlinkat};
     struct Child(std::process::Child);
     impl Drop for Child {
         fn drop(&mut self) {
@@ -66,12 +66,29 @@ async fn long_component_deletion_has_bounded_peak_memory() {
     let mut depth = 0;
     let mut long_components = 0;
     let mut stop_reason = "reached 4000 levels";
-    while depth < 4000 {
+    let mut target_depth = 4000;
+    while depth < target_depth {
         match mkdirat(&fd, name.as_str(), Mode::RWXU) {
             Ok(()) => {}
             Err(rustix::io::Errno::NAMETOOLONG) if name.len() == 255 => {
-                eprintln!("ENAMETOOLONG at depth {depth} with 255-byte components; trying 1 byte");
+                eprintln!("ENAMETOOLONG at depth {depth} with 255-byte components; rebuilding with 1-byte components");
+                // AppArmor mediates the full path even for fd-relative calls.
+                // Remove the probe from the bottom up before restarting at home.
+                while depth > 0 {
+                    let parent = openat(&fd, "..", flags, Mode::empty()).unwrap();
+                    unlinkat(&parent, name.as_str(), AtFlags::REMOVEDIR).unwrap();
+                    fd = parent;
+                    depth -= 1;
+                }
+                long_components = 0;
                 name.truncate(1);
+                let base_bytes = std::fs::canonicalize(profile.join("home"))
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .len();
+                target_depth = 4000.min(7600usize.saturating_sub(base_bytes) / 2);
+                stop_reason = "reached 1-byte depth budget below 7600 path bytes";
                 continue;
             }
             Err(rustix::io::Errno::NAMETOOLONG) => {
