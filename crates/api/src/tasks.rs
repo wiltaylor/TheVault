@@ -355,10 +355,12 @@ fn validate_login(b: SecretBody) -> Result<state::LoginSecret, ApiError> {
         .totp_seed
         .filter(|s| !s.is_empty())
         .map(|s| s.trim().to_owned());
-    if let Some(seed) = &seed {
-        if crate::browser_redaction::totp(seed, 0, 6, 30).is_none() {
-            return Err(ApiError::bad_request("Invalid one-time-code seed: use a base32 key or otpauth://totp URI with SHA1, SHA256 or SHA512, digits 6-8 and a positive period."));
-        }
+    if let Some(seed) = &seed
+        && crate::browser_redaction::totp(seed, 0, 6, 30).is_none()
+    {
+        return Err(ApiError::bad_request(
+            "Invalid one-time-code seed: use a base32 key or otpauth://totp URI with SHA1, SHA256 or SHA512, digits 6-8 and a positive period.",
+        ));
     }
     let mut origins = Vec::new();
     for origin in b.origins.unwrap_or_default() {
