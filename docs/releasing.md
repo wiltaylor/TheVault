@@ -319,6 +319,7 @@ tool responses, not real keys or registries. The alpha.37 fixture records
 public asset metadata; comparison of that fixture is not a measurement of new
 compiled artifact sizes. The lead's first real local pre-release is the
 end-to-end proof, including actual builds, signing, smoke and publication.
+
 ## Releases without desktop and Android apps
 
 When signing is unavailable, select `THEVAULT_SIGNING_MODE=none` in the
@@ -347,4 +348,3 @@ GitHub mode preflight requires the remote `sign-only.yml` workflow to exist
 and be active. Missing or disabled workflows fail clearly before building or
 dispatching. The script never enables a workflow. Choose `none` when apps
 must be omitted, or provision custodian keys for a later signed release.
-

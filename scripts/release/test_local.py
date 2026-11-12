@@ -674,6 +674,50 @@ class LocalReleaseTests(unittest.TestCase):
         self.assertNotIn("Java", checked)
         self.assertNotIn("minisign", checked)
 
+    def test_none_build_passes_mode_and_needs_no_apk_or_fixtures(self):
+        self.release.update(signing_mode="none", tagged_sha="b" * 40)
+        job = self.job()
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as archive:
+            item = tarfile.TarInfo("docker/dev.Dockerfile")
+            item.size = 12
+            archive.addfile(item, io.BytesIO(b"FROM scratch"))
+        success = subprocess.CompletedProcess([], 0, stream.getvalue(), b"")
+        with patch.object(job, "run", return_value=success), patch.object(job, "docker"), patch.object(job, "container") as container:
+            result = job.build()
+        self.assertIn("THEVAULT_SIGNING_MODE=none", container.call_args.kwargs["extra"])
+        self.assertNotIn("smoke_sha256", result)
+        self.assertNotIn("fixtures_sha256", result)
+
+    def test_none_publish_checks_inventory_notes_and_advances_both_images_without_smoke(self):
+        self.release.update(signing_mode="none", tagged_sha="b" * 40)
+        job = self.job()
+        job.dist.mkdir()
+        for path in job.upload_files():
+            path.write_bytes(b"fixture")
+        rows = [{"name": p.name, "digest": "sha256:" + local.digest(p)} for p in job.upload_files()]
+        rows.append({"name": "release-state.json"})
+        remote = {"target_commitish": "b" * 40, "assets": rows, "body": coordinator.NO_APPS_NOTES}
+        job.journal.data["outputs"]["push"] = {name: {"ref": "registry/" + name, "digest": "sha256:test"} for name in ("thevault", "thevault-browser")}
+        def gh(*args, **kwargs):
+            if args[0] == "api" and "/git/ref/" in args[1]:
+                return subprocess.CompletedProcess(args, 1, b"", b"404")
+            return subprocess.CompletedProcess(args, 0, json.dumps(remote).encode(), b"")
+        with patch.object(job, "check_assets"), patch.object(job, "save_capsule"), patch.object(job, "gh", side_effect=gh) as api, patch.object(job, "crane", return_value=subprocess.CompletedProcess([], 0, b"sha256:test", b"")) as crane:
+            job.publish()
+            edits = [c.args for c in api.call_args_list if c.args[:2] == ("release", "edit")]
+            self.assertIn("--draft=false", edits[0])
+            tags = [c.args for c in crane.call_args_list if c.args[0] == "tag"]
+            self.assertEqual(len(tags), 2)
+            self.assertTrue(all(c[-1] == "edge" for c in tags))
+            remote["body"] = "notice removed"
+            with self.assertRaisesRegex(local.ReleaseError, "notice missing"):
+                job.publish()
+            remote["body"] = coordinator.NO_APPS_NOTES
+            rows.append({"name": "unexpected.apk"})
+            with self.assertRaisesRegex(local.ReleaseError, "inventory changed"):
+                job.publish()
+
 
 if __name__ == "__main__":
     unittest.main()

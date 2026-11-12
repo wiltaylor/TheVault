@@ -585,7 +585,7 @@ class Release:
                     "--title", "TheVault " + tag, "--generate-notes", "--latest=false",
                     "--prerelease=" + str(self.release["kind"] == "pre-release").lower(),
                     *(["--notes", NO_APPS_NOTES] if self.mode == "none" else []))
-            value = {"assets": []}
+            value = {"assets": [], "body": NO_APPS_NOTES if self.mode == "none" else ""}
         if self.mode == "none" and NO_APPS_NOTES not in value.get("body", ""):
             self.gh("release", "edit", tag, "--repo", REPO, "--notes", NO_APPS_NOTES + "\n\n" + value.get("body", ""))
         return value
