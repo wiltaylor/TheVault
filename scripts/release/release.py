@@ -22,11 +22,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import uuid
 
 from local import (Journal, ReleaseError, STAGES, assets, atomic_json, compare_baseline,
                    digest, identity, manifest, release_lock,
-                   stage_plan, verify_manifest)
+                   stage_plan, verify_manifest, safe_extract)
 
 ROOT = Path(__file__).resolve().parents[2]
 REPO = "wiltaylor/TheVault"
@@ -35,6 +36,7 @@ BASE_ENV = ("PATH", "LANG", "LC_ALL", "TZ", "RUSTUP_HOME", "CARGO_HOME")
 SIGN_ENV = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS",
             "ANDROID_KEY_PASSWORD", "TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
 CHECKPOINT = re.compile(r"thevault-release-checkpoint-([0-9]{2})-([0-9a-f]{64})\.tar\.gz")
+SIGN_INPUT = re.compile(r"thevault-sign-input-([0-9a-f]{32})\.tar\.gz")
 
 
 def android_signer():
@@ -113,10 +115,7 @@ def restore_remote(state, version, runtime):
         if digest(archive) != CHECKPOINT.fullmatch(name)[2]:
             raise ReleaseError("checkpoint filename hash mismatch")
         with tarfile.open(archive) as tar:
-            members = tar.getmembers()
-            if sum(member.size for member in members) > 8 * 1024**3:
-                raise ReleaseError("checkpoint uncompressed size exceeds 8 GiB")
-            tar.extractall(out, members=members, filter="data")
+            safe_extract(tar, out)
         archive.unlink()
         journal = json.loads((out / "journal.json").read_text())
     elif "release-state.json" in items:
@@ -261,7 +260,7 @@ class Release:
             shutil.rmtree(self.source)
         self.source.mkdir()
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-            tar.extractall(self.source, filter="data")
+            safe_extract(tar, self.source)
         dev = self.prefix + "-dev:build"
         self.docker("build", "-f", str(self.source / "docker/dev.Dockerfile"), "-t", dev, str(self.source / "docker"))
         # Root performs only directory ownership, then drops to numeric uid 1000.
@@ -272,7 +271,8 @@ class Release:
             "chown -R 1000:1000 /src /cargo /gradle /pnpm-store /tmp/release-home; "
             "exec setpriv --reuid=1000 --regid=1000 --clear-groups bash scripts/release/build-unsigned.sh \"$1\"", "_", self.release["version"]],
             copies=[(str(self.source) + "/.", "/src")], outputs=[("/src/out/.", self.out)],
-            extra=["--workdir", "/src", "--env", "HOME=/tmp/release-home", "--env", "CARGO_BUILD_JOBS=8", "--env", "RUST_TEST_THREADS=8"])
+            extra=["--workdir", "/src", "--env", "HOME=/tmp/release-home", "--env", "CARGO_BUILD_JOBS=8", "--env", "RUST_TEST_THREADS=8",
+                   "--env", "THEVAULT_WEB_COMMIT=" + self.release["tagged_sha"][:7]])
         # Stamp only the owned source copy for the image builds, never job HEAD.
         self.run(["bash", str(self.source / "scripts/release/stamp.sh"), self.release["version"]], cwd=self.source)
         return {"dev_image": dev, "smoke_sha256": digest(self.smoke_apk()),
@@ -293,6 +293,92 @@ class Release:
         return {"manifest_sha256": digest(self.out / "unsigned-manifest.json")}
 
     def sign(self):
+        mode = os.environ.get("THEVAULT_SIGNING_MODE", "github")
+        if mode == "github":
+            return self.sign_github()
+        if mode == "custodian":
+            return self.sign_custodian()
+        raise ReleaseError("THEVAULT_SIGNING_MODE must be github or custodian")
+
+    def sign_github(self):
+        from signing import filenames, input_manifest, verify_outputs
+        version = self.release["version"]
+        original = self.out / "unsigned"
+        if digest(self.out / "unsigned-manifest.json") != self.journal.data["outputs"]["unsigned-manifest"]["manifest_sha256"]:
+            raise ReleaseError("unsigned manifest changed before workflow signing")
+        verify_manifest(original / "assets", json.loads((self.out / "unsigned-manifest.json").read_text()), self.release)
+        unsigned = self.out / "github-inputs"
+        unsigned.mkdir(exist_ok=True)
+        for name in filenames(version):
+            source = original / name if name.endswith("_x86_64.apk") else original / "assets" / name
+            shutil.copy2(source, unsigned / name)
+        if digest(unsigned / filenames(version)[1]) != self.journal.data["outputs"]["build"]["smoke_sha256"]:
+            raise ReleaseError("unsigned x86_64 APK changed before workflow signing")
+        inputs = input_manifest(unsigned, version, self.release["tagged_sha"])
+        atomic_json(unsigned / "input-manifest.json", inputs)
+        request_path = self.out / "sign-request.json"
+        if request_path.exists():
+            request = json.loads(request_path.read_text())
+            if request["inputs"] != inputs or not re.fullmatch(r"[a-f0-9]{32}", request["id"]):
+                raise ReleaseError("workflow signing request identity changed")
+        else:
+            request_id = uuid.uuid4().hex
+            bundle = self.state / f"thevault-sign-input-{request_id}.tar.gz"
+            with tarfile.open(bundle, "w:gz") as tar:
+                for name in [*filenames(version), "input-manifest.json"]:
+                    tar.add(unsigned / name, arcname=name)
+            request = {"id": request_id, "inputs": inputs, "bundle_sha": digest(bundle)}
+            self.gh("release", "upload", "v" + version, "--repo", REPO, str(bundle))
+            atomic_json(request_path, request)
+            self.checkpoint()  # survive reset between dispatch and artifact collection
+            bundle.unlink()
+        request_id = request["id"]
+
+        def find_run():
+            response = self.gh("run", "list", "--repo", REPO, "--workflow", "sign-only.yml", "--event", "workflow_dispatch",
+                               "--limit", "100", "--json", "databaseId,displayTitle,status,conclusion")
+            matches = [row for row in json.loads(response.stdout) if row["displayTitle"] == "Sign-only " + request_id]
+            if len(matches) > 1:
+                raise ReleaseError("ambiguous sign-only workflow request")
+            return matches[0] if matches else None
+
+        workflow = find_run()
+        if not workflow:
+            self.gh("workflow", "run", "sign-only.yml", "--repo", REPO, "--ref", "main",
+                    "-f", "version=" + version, "-f", "source_sha=" + self.release["tagged_sha"],
+                    "-f", "request_id=" + request_id, "-f", "bundle_asset=thevault-sign-input-" + request_id + ".tar.gz",
+                    "-f", "bundle_sha=" + request["bundle_sha"])
+            for _ in range(10):
+                workflow = find_run()
+                if workflow:
+                    break
+                time.sleep(2)
+            if not workflow:
+                raise ReleaseError("sign-only dispatch accepted; run not visible yet, resume this release")
+        run_id = str(workflow["databaseId"])
+        if request.get("run_id") not in (None, run_id):
+            raise ReleaseError("workflow signing run changed for the saved request")
+        if "run_id" not in request:
+            request["run_id"] = run_id
+            atomic_json(request_path, request)
+            self.checkpoint()
+        print(f"sign-only request {request_id}: workflow run {run_id}", flush=True)
+        if workflow["status"] == "completed" and workflow["conclusion"] != "success":
+            self.gh("run", "rerun", run_id, "--repo", REPO, "--failed")
+        self.gh("run", "watch", run_id, "--repo", REPO, "--exit-status")
+        signed = self.out / "github-signed"
+        if signed.exists():
+            shutil.rmtree(signed)
+        signed.mkdir()
+        self.gh("run", "download", run_id, "--repo", REPO, "--name", "thevault-signing-" + request_id, "--dir", str(signed))
+        verify_outputs(unsigned, signed, version, self.release["tagged_sha"], runner=lambda argv: self.run(argv).stdout)
+        for name in filenames(version) + [f"TheVault_{version}_amd64.AppImage.sig"]:
+            destination = self.smoke_apk() if name.endswith("_x86_64.apk") else self.dist / name
+            shutil.copy2(signed / name, destination)
+        self.write_sums()
+        return {"smoke_sha256": digest(self.smoke_apk()), "workflow_run": run_id, "request_id": request_id}
+
+    def sign_custodian(self):
         missing = [name for name in SIGN_ENV if name != "ANDROID_KEY_PASSWORD" and not os.environ.get(name)]
         if missing:
             raise ReleaseError("waiting for operator signing prerequisites: " + ", ".join(missing))
@@ -320,7 +406,7 @@ class Release:
             for apk in inputs:
                 aligned, output = signed / (apk.name + ".aligned"), signed / apk.name
                 self.run(["zipalign", "-f", "-p", "4", str(apk), str(aligned)])
-                command(["apksigner", "sign", "--ks", str(key), "--ks-pass", "env:ANDROID_KEYSTORE_PASSWORD",
+                command(["apksigner", "sign", "--v4-signing-enabled", "false", "--ks", str(key), "--ks-pass", "env:ANDROID_KEYSTORE_PASSWORD",
                          "--ks-key-alias", env["ANDROID_KEY_ALIAS"], "--key-pass", "env:ANDROID_KEY_PASSWORD",
                          "--out", str(output), str(aligned)], env=env)
                 cert = self.run(["apksigner", "verify", "--min-sdk-version", "33", "--print-certs", str(output)]).stdout.decode()
@@ -339,7 +425,7 @@ class Release:
             public.write_bytes(base64.b64decode(pubkey))
             signature.write_bytes(base64.b64decode(Path(str(appimage) + ".sig").read_bytes()))
             self.run(["minisign", "-Vm", str(appimage), "-p", str(public), "-x", str(signature)])
-            if version not in signature.read_text().split("trusted comment:")[-1]:
+            if not re.search(r"(?<![\w.-])" + re.escape(version) + r"(?![\w.-])", signature.read_text().split("trusted comment:")[-1]):
                 raise ReleaseError("AppImage signature does not bind the release version")
             # Commit APK replacement only after every signing verification passes.
             for apk in inputs:
@@ -451,7 +537,7 @@ class Release:
         self.check_assets()
         tag = "v" + self.release["version"]
         value = self.ensure_draft()
-        remote = {asset["name"]: asset for asset in value["assets"] if not CHECKPOINT.fullmatch(asset["name"])}
+        remote = {asset["name"]: asset for asset in value["assets"] if not CHECKPOINT.fullmatch(asset["name"]) and not SIGN_INPUT.fullmatch(asset["name"])}
         if set(remote) - {path.name for path in self.upload_files()}:
             raise ReleaseError("draft contains unexpected assets")
         for path in self.upload_files():
@@ -527,7 +613,7 @@ class Release:
         value = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
         if value["target_commitish"] != self.release["tagged_sha"]:
             raise ReleaseError("draft target changed after prepare")
-        by_name = {asset["name"]: asset for asset in value["assets"] if not CHECKPOINT.fullmatch(asset["name"])}
+        by_name = {asset["name"]: asset for asset in value["assets"] if not CHECKPOINT.fullmatch(asset["name"]) and not SIGN_INPUT.fullmatch(asset["name"])}
         if set(by_name) != {path.name for path in self.upload_files()} | {"release-state.json", "signed-smoke.json"}:
             raise ReleaseError("draft asset inventory changed after prepare")
         for path in self.upload_files():
@@ -545,7 +631,7 @@ class Release:
         # bundles. A client reset after this point resumes from public assets.
         self.save_capsule()
         for asset in value["assets"]:
-            if CHECKPOINT.fullmatch(asset["name"]):
+            if CHECKPOINT.fullmatch(asset["name"]) or SIGN_INPUT.fullmatch(asset["name"]):
                 self.gh("release", "delete-asset", tag, asset["name"], "--repo", REPO, "--yes")
         # Mutable tags only advance after the signed smoke stage has been recorded.
         for name, image in self.journal.data["outputs"]["push"].items():
@@ -608,7 +694,7 @@ class Release:
         # No credentials ever enter out. Explicit allowlist also excludes
         # image tarballs, runtime state, and transient signing intermediates.
         allowed = ("journal.json", "run.json", "source", "assets", "unsigned", "smoke", "device",
-                   "unsigned-manifest.json", "release-manifest.json", "asset-comparison.json")
+                   "unsigned-manifest.json", "release-manifest.json", "asset-comparison.json", "sign-request.json")
         with tarfile.open(archive, "w:gz") as tar:
             for name in allowed:
                 path = self.out / name

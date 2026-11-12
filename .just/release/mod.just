@@ -8,7 +8,7 @@ dry-run *args:
 # Lead-owned cut gates on the frozen release checkout, never per-card.
 gate-dev:
 	just check
-	bash scripts/nightly/build.sh e2e
+	python3 scripts/release/web_gate.py
 
 # Build fixture bundle on dev. Transfer it and run device.sh on android as
 # documented. A skipped/busy device run does not satisfy this gate.

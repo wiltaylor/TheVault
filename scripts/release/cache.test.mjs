@@ -42,7 +42,7 @@ test('cache paths exclude signing and runtime locations', () => {
   assert.match(read('dev'), /THEVAULT_PNPM_CACHE:-thevault-pnpm/);
 });
 
-test('all GitHub workflows are manual notices without secrets or build jobs', () => {
+test('the nine former CI workflows are manual notices without secrets or build jobs', () => {
   for (const file of ['release-train', 'release', 'android-release', 'android-smoke-reusable',
     'android-smoke', 'image', 'browser-image', 'dev-image', 'release-cache-check']) {
     const source = read(`.github/workflows/${file}.yml`);
@@ -51,4 +51,14 @@ test('all GitHub workflows are manual notices without secrets or build jobs', ()
     assert.doesNotMatch(source, /workflow_call:|push:|secrets:|uses:|docker |cargo |pnpm |gh release/);
     assert.match(source, /GitHub CI is disabled/);
   }
+});
+
+test('the single signing exception only accepts manual hash-bound inputs and cannot publish', () => {
+  const workflow = read('.github/workflows/sign-only.yml');
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /contents: read/);
+  assert.match(workflow, /--bundle-sha/);
+  assert.match(workflow, /git merge-base --is-ancestor/);
+  assert.doesNotMatch(workflow, /workflow_call:|push:|packages: write|contents: write|cargo build|tauri build|gh release (create|edit|upload)|docker push/);
+  assert.match(workflow, /actions\/upload-artifact@v6/);
 });

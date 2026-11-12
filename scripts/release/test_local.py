@@ -5,12 +5,16 @@ import subprocess
 import io
 import tarfile
 import base64
+import shutil
+import zipfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 
 import local
 import release as coordinator
+import signing
+import web_gate
 
 
 class LocalReleaseTests(unittest.TestCase):
@@ -140,7 +144,7 @@ class LocalReleaseTests(unittest.TestCase):
 
     def test_missing_keys_stops_before_signer_or_asset_mutation(self):
         job = self.job()
-        with patch.dict("os.environ", {}, clear=True), patch.object(job, "run") as run:
+        with patch.dict("os.environ", {"THEVAULT_SIGNING_MODE": "custodian"}, clear=True), patch.object(job, "run") as run:
             with self.assertRaisesRegex(local.ReleaseError, "waiting for operator signing prerequisites"):
                 job.sign()
             run.assert_not_called()
@@ -288,6 +292,7 @@ class LocalReleaseTests(unittest.TestCase):
     def test_mocked_signing_aligns_then_signs_checks_versions_and_commits(self):
         job = self.signing_job()
         env = {name: "dummy-test-value" for name in coordinator.SIGN_ENV}
+        env["THEVAULT_SIGNING_MODE"] = "custodian"
         env["ANDROID_KEYSTORE_BASE64"] = base64.b64encode(b"dummy-keystore").decode()
         env["ANDROID_KEY_ALIAS"] = "test-key-alias"
         calls = []
@@ -321,6 +326,7 @@ class LocalReleaseTests(unittest.TestCase):
     def test_mocked_failed_signing_keeps_unsigned_inputs_and_removes_key(self):
         job = self.signing_job()
         env = {name: "dummy" for name in coordinator.SIGN_ENV}
+        env["THEVAULT_SIGNING_MODE"] = "custodian"
         env.update(ANDROID_KEYSTORE_BASE64=base64.b64encode(b"dummy").decode())
         with patch.dict("os.environ", env, clear=True), patch.object(job, "run", side_effect=local.ReleaseError("zipalign failed")):
             with self.assertRaises(local.ReleaseError):
@@ -382,6 +388,133 @@ class LocalReleaseTests(unittest.TestCase):
                 job.checkpoint()
         self.assertEqual(len(gh.call_args_list), 1)
         self.assertEqual(gh.call_args.args[:2], ("release", "upload"))
+
+    def test_safe_extract_rejects_traversal_and_links_on_python311(self):
+        for name, kind in [("../escape", tarfile.REGTYPE), ("link", tarfile.SYMTYPE), ("device", tarfile.CHRTYPE)]:
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w") as archive:
+                member = tarfile.TarInfo(name)
+                member.type = kind
+                member.linkname = "/etc/passwd"
+                archive.addfile(member)
+            stream.seek(0)
+            with tarfile.open(fileobj=stream) as archive, self.assertRaises(local.ReleaseError):
+                local.safe_extract(archive, self.root / "extract")
+        self.assertFalse((self.root / "escape").exists())
+
+    def signed_fixture(self):
+        unsigned, signed = self.root / "unsigned", self.root / "signed"
+        unsigned.mkdir()
+        signed.mkdir()
+        version = self.release["version"]
+        for name in signing.filenames(version):
+            if name.endswith(".apk"):
+                with zipfile.ZipFile(unsigned / name, "w") as archive:
+                    archive.writestr("classes.dex", "unchanged-code")
+            else:
+                (unsigned / name).write_bytes(b"unchanged-appimage")
+            shutil.copy2(unsigned / name, signed / name)
+        (signed / (signing.filenames(version)[2] + ".sig")).write_bytes(base64.b64encode(b"trusted comment: app-version:0.1.14-alpha.38\n"))
+        report = {"inputs": signing.input_manifest(unsigned, version, self.release["sha"]), "outputs": {p.name: {"sha256": local.digest(p), "size": p.stat().st_size} for p in signed.iterdir()}}
+        local.atomic_json(signed / "signed-manifest.json", report)
+        return unsigned, signed
+
+    def test_mocked_returned_signatures_are_verified_against_committed_identity(self):
+        unsigned, signed = self.signed_fixture()
+        commands = []
+        def runner(argv):
+            commands.append(argv)
+            if argv[0] == "bash": return b"101438"
+            if argv[0] == "apksigner": return ("certificate SHA-256 digest: " + coordinator.android_signer()).encode()
+            if argv[0] == "aapt2": return b"versionCode='101438' versionName='0.1.14-alpha.38'"
+            return b""
+        signing.verify_outputs(unsigned, signed, self.release["version"], self.release["sha"], runner)
+        self.assertEqual(sum(argv[0] == "apksigner" for argv in commands), 2)
+        self.assertEqual(sum(argv[0] == "minisign" for argv in commands), 1)
+
+    def test_returned_artifact_hash_mismatch_stops_before_signature_tool(self):
+        unsigned, signed = self.signed_fixture()
+        (signed / signing.filenames(self.release["version"])[0]).write_bytes(b"tampered")
+        with patch.object(signing, "run") as run:
+            with self.assertRaisesRegex(local.ReleaseError, "hash mismatch"):
+                signing.verify_outputs(unsigned, signed, self.release["version"], self.release["sha"], run)
+            run.assert_not_called()
+
+    def test_apk_payload_comparison_detects_changed_code(self):
+        unsigned, signed = self.signed_fixture()
+        name = signing.filenames(self.release["version"])[0]
+        with zipfile.ZipFile(signed / name, "w") as archive:
+            archive.writestr("classes.dex", "different-code")
+        self.assertNotEqual(signing.apk_contents(unsigned / name), signing.apk_contents(signed / name))
+
+    def test_default_workflow_signing_dispatches_once_and_reuses_request(self):
+        job = self.signing_job()
+        job.release["tagged_sha"] = "b" * 40
+        dispatched = []
+        def gh(*args, **kwargs):
+            data = b""
+            if args[:2] == ("workflow", "run"):
+                dispatched.append(args)
+            elif args[:2] == ("run", "list"):
+                request = json.loads((job.out / "sign-request.json").read_text())
+                data = json.dumps([{"databaseId": 42, "displayTitle": "Sign-only " + request["id"], "status": "completed", "conclusion": "success"}] if dispatched else []).encode()
+            elif args[:2] == ("run", "download"):
+                directory = Path(args[args.index("--dir") + 1])
+                for name in signing.filenames(job.release["version"]) + [f'TheVault_{job.release["version"]}_amd64.AppImage.sig']:
+                    (directory / name).write_bytes(b"mock-signed-output")
+            return subprocess.CompletedProcess(args, 0, data, b"")
+        with patch.dict("os.environ", {}, clear=True), patch.object(job, "gh", side_effect=gh), patch.object(job, "checkpoint"), patch.object(signing, "verify_outputs") as verify:
+            first = job.sign()
+            second = job.sign()
+        self.assertEqual(first["workflow_run"], "42")
+        self.assertEqual(first["request_id"], second["request_id"])
+        self.assertEqual(len(dispatched), 1)
+        self.assertEqual(verify.call_count, 2)
+        self.assertIn("source_sha=" + "b" * 40, dispatched[0])
+
+    def web_runner(self, persistent=False, wrong_selection=False):
+        calls = []
+        def runner(argv, cwd, env=None):
+            calls.append(argv)
+            if len(calls) == 1:
+                report = cwd / ".scratch/nightly/e2e.xml"
+                report.parent.mkdir(parents=True)
+                report.write_text('<testsuite><testcase classname="suite" name="flaky"><failure/></testcase><testcase classname="suite" name="good"/></testsuite>')
+                last = cwd / "web/test-results/.last-run.json"
+                last.parent.mkdir(parents=True)
+                last.write_text('{"status":"failed","failedTests":["one"]}')
+                return subprocess.CompletedProcess(argv, 1)
+            name = "unexpected" if wrong_selection else "flaky"
+            failure = "<failure/>" if persistent else ""
+            Path(env["PLAYWRIGHT_JUNIT_OUTPUT_FILE"]).write_text(f'<testsuite><testcase classname="suite" name="{name}">{failure}</testcase></testsuite>')
+            return subprocess.CompletedProcess(argv, 1 if persistent else 0)
+        return calls, runner
+
+    def test_web_gate_reruns_only_failed_and_reports_recovered_flake(self):
+        calls, runner = self.web_runner()
+        self.assertEqual(web_gate.gate(self.root, runner), 0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--last-failed", calls[1])
+        self.assertIn("--retries=0", calls[1])
+        summary = json.loads((self.root / ".scratch/release-gate/summary.json").read_text())
+        self.assertEqual(summary["flakes"], [["suite", "flaky"]])
+
+    def test_web_gate_persistent_failure_blocks_without_third_run(self):
+        calls, runner = self.web_runner(persistent=True)
+        self.assertEqual(web_gate.gate(self.root, runner), 1)
+        self.assertEqual(len(calls), 2)
+
+    def test_web_gate_infrastructure_failure_does_not_rerun(self):
+        with patch.object(web_gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as runner:
+            with self.assertRaisesRegex(ValueError, "before producing JUnit"):
+                web_gate.gate(self.root, runner)
+            self.assertEqual(runner.call_count, 1)
+
+    def test_web_gate_rejects_wrong_rerun_selection(self):
+        calls, runner = self.web_runner(wrong_selection=True)
+        with self.assertRaisesRegex(ValueError, "selection differs"):
+            web_gate.gate(self.root, runner)
+        self.assertEqual(len(calls), 2)
 
 
 if __name__ == "__main__":

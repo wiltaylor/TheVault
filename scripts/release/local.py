@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import shutil
 
 
 STAGES = (
@@ -25,6 +26,37 @@ VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-alph
 
 class ReleaseError(Exception):
     """An actionable prerequisite or immutable-release mismatch."""
+
+
+def safe_extract(tar, destination: Path) -> None:
+    """Python 3.11-compatible extraction of regular files/directories only.
+
+    Release source/checkpoints contain no links. Reject links, devices,
+    traversal and excessive expansion rather than relying on tar defaults.
+    """
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    members = tar.getmembers()
+    if sum(member.size for member in members) > 8 * 1024**3:
+        raise ReleaseError("archive expansion exceeds 8 GiB")
+    seen = set()
+    for member in members:
+        relative = Path(member.name)
+        path = destination / relative
+        if relative.is_absolute() or ".." in relative.parts or member.name in seen:
+            raise ReleaseError("unsafe or duplicate archive path")
+        seen.add(member.name)
+        if not (member.isdir() or member.isfile()) or path.is_symlink():
+            raise ReleaseError("archive links and special files are forbidden")
+        if not path.resolve().is_relative_to(root):
+            raise ReleaseError("archive path escapes destination")
+        if member.isdir():
+            path.mkdir(parents=True, exist_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tar.extractfile(member) as source, path.open("wb") as output:
+                shutil.copyfileobj(source, output)
+            path.chmod(member.mode & 0o777)
 
 
 def identity(sha: str, version: str, branch: str, kind: str) -> dict:
@@ -107,6 +139,7 @@ def compare_baseline(recorded: dict, baseline: dict) -> list[dict]:
 def stage_plan(release: dict) -> list[dict]:
     return [{"stage": stage, "target": (
         "thevault-android (lead-owned signed smoke)" if stage == "smoke" else
+        "GitHub sign-only workflow + release-client verification (custodian switch available)" if stage == "sign" else
         "cut evidence from lead-owned target runs" if stage == "cut" else
         "DOCKER_HOST (daemon-provisioned relay)" if stage in ("build", "images") else
         "release_target (current release job)"), "sha": release["sha"], "version": release["version"],

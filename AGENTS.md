@@ -10,8 +10,10 @@ Before you move a card to review, push the branch and run the recipes below your
 
 Run them on a clean checkout of the pushed commit, never on a working tree. Check it out with `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<agent>`, then check out the branch at the pushed commit. Do not run `git -C /src/<agent> checkout <commit>` after the repo checkout: the target does not allow it.
 
-GitHub CI is disabled. All nine workflows are inert manual notices. Releases use
-the local two-phase release job documented in `docs/releasing.md`.
+GitHub build/test CI is disabled. The nine former workflows are inert manual
+notices. One manual sign-only workflow temporarily uses the existing repository
+keys, as the operator requested. Releases use the local two-phase release job
+documented in `docs/releasing.md`.
 
 thevault-dev is the dev container itself. Run the recipes there without `./dev`, with `CARGO_BUILD_JOBS` at 8 or less.
 
@@ -54,8 +56,10 @@ A machine can run emulators that are not yours, such as `emulator-5554` on theva
 
 Release jobs run only on delivery `release_target`, with `docker_release`
 provided as a daemon-owned Docker socket relay. Agents never test or exec on
-the release client. The job builds in secret-free relay containers, signs only
-at the custodian, uploads a draft and pushes version-only images. After the
+the release client. The job builds in secret-free relay containers, obtains
+signatures through the manual sign-only workflow by default, verifies them on
+the client, uploads a draft and pushes version-only images. Custodian signing
+requires THEVAULT_SIGNING_MODE=custodian. After the
 lead runs signed x86_64 smoke on thevault-android, a second job publishes the
 draft and advances image channels. The single recipe `just release::publish`
 reads `release-phase: finish`, `release-version: <exact version>` and
@@ -63,7 +67,7 @@ reads `release-phase: finish`, `release-version: <exact version>` and
 with `terrarium job release <version-card> --commit <main-commit>`. No delivery
 snapshot is passed to the script. The client resets between jobs, so private
 draft checkpoints, not local files, preserve the unsigned build and journal.
-Missing keys stop before signing. The Android certificate fingerprint is
+Missing local keys do not stop default GitHub signing. The Android certificate fingerprint is
 committed in `scripts/release/android-signer.sha256`.
 
 The cut gate is lead-owned: `just release::gate-dev` and
@@ -75,6 +79,12 @@ reports. The job requires the main and frozen release trees to match and tags
 the main merge SHA. A busy emulator lock at a cut is unfinished (exit 75),
 never a passing skip. Card checks remain targeted; do not run full cut gates
 per card.
+
+At the release cut only, a red full web e2e run receives one rerun of only its
+failed tests (`playwright test --last-failed`). Passing reruns are reported as
+flakes and do not block. A repeated failure blocks. Keep and upload both
+original reports. `scripts/release/web_gate.py` enforces this, without retries
+for missing results or infrastructure failures.
 
 Signed smoke uses `bash scripts/release/device.sh`, port 5584, an owned AVD and
 the shared emulator lock. Preserve emulator-5554 by identifying its qemu

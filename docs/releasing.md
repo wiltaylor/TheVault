@@ -1,14 +1,17 @@
 # Releasing TheVault locally
 
 GitHub hosts source, tags, release downloads and ghcr packages. It runs no
-TheVault build or test jobs. All nine workflows are inert manual notices.
-There is no GitHub publishing fallback.
+TheVault build or test jobs. The nine former workflows are inert manual
+notices. One operator-approved exception, sign-only.yml, is workflow_dispatch
+only and uses existing repository signing secrets until the operator provides
+keys to the local custodian. It never builds or publishes anything.
 
 The release recipe runs only on the project's dedicated `release_target`.
 Terrarium supplies the configured `docker_release` relay as `DOCKER_HOST`
 (`TERRARIUM_DOCKER_HOST` is also accepted). The recipe never reads an SSH key.
-Builds run in secret-free containers on that relay. Signing and registry/GitHub
-publication run on the release client. Never run card tests on that client.
+Builds run in secret-free containers on that relay. Registry/GitHub publication
+and verification of signed files run on the release client. Never run card
+tests on that client.
 
 ## Release identity and cut gate
 
@@ -35,6 +38,13 @@ bundle runbook in AGENTS.md, except a busy emulator lock at the cut must exit
 75 (unfinished), never 0. The Android target has neither just nor pnpm.
 The lead must obtain a real passing device report before recording the cut.
 Upload the original reports with `terrarium test push --label version:<version>`.
+
+For a red web e2e run, `scripts/release/web_gate.py` runs exactly one
+`playwright test --last-failed --retries=0`. Both original JUnit reports remain
+under .scratch/release-gate. A recovered failure is listed as a flake in
+summary.json and does not block. A persistent failure blocks. Missing reports,
+infrastructure failures, skipped rerun tests and changed/empty selections fail
+without a broad suite retry. Upload both reports, including the red first run.
 
 Merge the frozen release into main with trailers in the final paragraph:
 
@@ -85,9 +95,10 @@ the client too.
 | Runtime environment | Purpose |
 |---|---|
 | DOCKER_HOST or TERRARIUM_DOCKER_HOST | daemon-provisioned Docker relay |
-| GH_TOKEN | release-github, GitHub release access |
+| GH_TOKEN | release-github, release access plus workflow dispatch/rerun and artifact read access |
 | GHCR_TOKEN | release-github, existing ghcr package write access |
 | GHCR_USER | optional registry username, default wiltaylor |
+| THEVAULT_SIGNING_MODE | github (default), or custodian after local keys are provisioned |
 | ANDROID_KEYSTORE_BASE64 | existing keystore, not a new key |
 | ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS | existing Android signing identity |
 | ANDROID_KEY_PASSWORD | optional, defaults to keystore password |
@@ -100,12 +111,27 @@ keystore material live in mode-0700 tmpfs directories removed on exit.
 Passwords are environment references, not command-line values. Do not enable
 shell tracing or dump the environment.
 
-Missing signing prerequisites stop the run before signing. The preceding
-private draft checkpoint preserves the unsigned build for the same-version
-resume. Do not generate replacement signing keys. The Android fingerprint must
+The key variables above are used only in custodian mode. Default github mode
+receives no signing keys on the release client. It uploads three unsigned
+inputs and their manifest as a private draft asset, dispatches sign-only.yml
+with the bundle SHA256 and original main SHA, waits for the exact request ID,
+and downloads its signed artifact. A retry finds the same request. The workflow
+checks input hashes and requires the source SHA to be on reviewed main history.
+It has contents:read only, installs signing tools, signs and returns artifacts.
+The client verifies returned manifest hashes, APK signatures, unchanged APK
+payloads, versions, unchanged AppImage bytes and the updater signature before
+accepting returned files. Card tests never dispatch this workflow.
+
+With THEVAULT_SIGNING_MODE=custodian, missing keys stop before signing and
+preserve the preceding private checkpoint. A follow-up card removes the
+temporary workflow after the operator supplies keys. Do not generate
+replacement signing keys. The Android fingerprint must
 match `scripts/release/android-signer.sha256`, extracted from a shipped APK.
 That public value is reviewed in git, never configured as a secret. AppImage
 signatures are verified with the updater public key embedded in the frozen source.
+The pin was extracted with build-tools 36.0.0 apksigner from the public
+v0.1.14-alpha.37 arm64 APK after checking its SHA256
+`c234806dfe5f950f6af387d6e33f7adb24d94a410146868a5ec699cd54b551c3`.
 
 ## Phase 1: prepare
 
@@ -117,9 +143,10 @@ release-phase trailer (or `release-phase: prepare`) it prepares the release.
 2. Build the dev image from the frozen source and create an isolated build
    container. Build unsigned arm64 and x86_64 release APKs, desktop bundles
    and startup smoke, AUR archive, both static CLIs and device fixtures.
-3. Save the unsigned manifest and immutable signing inputs. Sign APKs at the
-   custodian (zipalign first), verify signer and versionName/versionCode,
-   then sign and verify the version-bound AppImage updater signature.
+3. Save the unsigned manifest and immutable signing inputs. Dispatch the
+   sign-only workflow by default (or sign at the custodian with the explicit
+   switch). APKs are zipaligned first. Verify existing signer identity,
+   versionName/versionCode and version-bound AppImage updater signatures.
 4. Recompute checksums. Build server and browser images on the relay from
    the same stamped source. Test served client hashes and the complete
    browser image behavior before exporting local image archives.
@@ -141,7 +168,8 @@ AppImage and signature, deb, rpm, AUR tarball, two CLIs, three checksum files,
 compose.yaml, Caddyfile and env.example. The draft additionally carries the
 x86_64 smoke APK, smoke-fixtures.tar.gz and release-manifest.json. The later
 release-state.json and signed-smoke.json record the handoff. These extra assets
-remain attached when published. Private checkpoint archives do not.
+remain attached when published. Private checkpoints and unsigned signing-input
+bundles are removed before publication.
 
 The signed-manifest stage compares actual asset sizes against alpha.37 at
 0.5x..2x and saves asset-comparison.json. A size outside that broad range stops
@@ -216,6 +244,8 @@ removed. Checkpoints include the journal, run identity, source, manifests,
 unsigned inputs and signed assets/fixtures. An explicit allowlist excludes
 keys, tmpfs state, transient signing files and large image tar exports. A
 checkpoint above GitHub's 2 GiB limit fails rather than dropping state.
+sign-request.json preserves the signing request ID and input digest. No
+workflow artifact or checkpoint contains a private key.
 
 The next job downloads the highest completed checkpoint, verifies its hash
 and release identity, and resumes. A failed stage is retried; completed stages
@@ -249,7 +279,8 @@ node --test --test-reporter=tap scripts/release/local.test.mjs scripts/release/c
 ```
 
 The local tests use Python's built-in unittest; no pytest install is needed.
-Run actionlint against all nine inert workflows. Upload original TAP/XML output
+Run actionlint against all nine inert workflows and the manual sign-only
+workflow. Upload original TAP/XML output
 with `terrarium test push --card TV-209`.
 
 `just release::dry-run --plan-sha <40-hex-sha> --version 0.1.14-alpha.38`
