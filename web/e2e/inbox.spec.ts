@@ -3,55 +3,29 @@
 // outgoing messages stay out. Done takes each row out, and the sidebar badge counts what All lists.
 
 import type { APIRequestContext, Page } from "@playwright/test";
-import { createServer, type Server } from "node:http";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { activePane, expect, logIn, test, vaultDir } from "./fixtures";
+import { activePane, expect, logIn, test } from "./fixtures";
 
-let decisions: Server;
-let originalClassifier: string;
-test.beforeAll(async ({ admin }) => {
-  decisions = createServer((req, res) => {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", () => {
-      const reason = body.includes("TV231 held scam") ? "scam" : "allow";
-      const probabilities = Object.fromEntries(["allow", "prompt_injection", "sensitive_credentials", "scam", "spam", "marketing"].map((r) => [r, r === reason ? 1 : 0]));
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ id: "inbox-safety", model: "jev-1.13.0", answers: { reason: { type: "choice", choice: reason, confidence: 1, probabilities } } }));
-    });
-  });
-  await new Promise<void>((resolve) => decisions.listen(0, "127.0.0.1", resolve));
-  const port = (decisions.address() as { port: number }).port;
-  const account = await admin.post("/api/integrations/ai/accounts", { data: { name: "Inbox decisions", kind: "openai_compatible", base_url: `http://127.0.0.1:${port}/api/v1`, key: "test-decisions-key" } });
-  expect(account.ok()).toBe(true);
-  const path = join(vaultDir(), "classifiers/agent_safety.wcl");
-  originalClassifier = readFileSync(path, "utf8");
-  writeFileSync(path, `account = "Inbox decisions"\n${originalClassifier}`);
-});
-
-test("held scams stay in the held view, not the Inbox badge, and release returns them", async ({ page, admin }) => {
-  const held = await create(admin, "email", { title: unique("TV231 held scam"), from_raw: "scam@example.com", labels: ["system/INBOX"] });
+test("notes without a verdict stay in the held view, not the Inbox badge, and release returns them", async ({ page, admin }) => {
+  const heldTitle = unique("TV231 held mail");
+  await create(admin, "email", { title: heldTitle, from_raw: "sender@example.com", labels: ["system/INBOX"] });
   const allowedTitle = unique("TV231 allowed mail");
-  await create(admin, "email", { title: allowedTitle, from_raw: "sam@example.com", labels: ["system/INBOX"] });
+  const allowed = await create(admin, "email", { title: allowedTitle, from_raw: "sam@example.com", labels: ["system/INBOX"] });
   await logIn(page, "/inbox");
+  await release(page.request, allowed.id);
+  await page.reload();
   await expect(row(page, allowedTitle)).toBeVisible();
+  await expect(list(page).getByRole("link", { name: heldTitle, exact: true })).toHaveCount(0);
   await badgeMatches(page, admin);
-  await page.getByRole("button", { name: /^Possible scams \(/ }).click();
+  await page.getByRole("button", { name: /^Other held \(/ }).click();
   const heldView = page.getByRole("region", { name: "Held items" });
   // A labelled section is a region. Held rows are not in the normal Inbox list.
-  const heldRow = heldView.getByRole("listitem").filter({ hasText: "TV231 held scam" });
+  const heldRow = heldView.getByRole("listitem").filter({ hasText: heldTitle });
   await expect(heldRow).toHaveCount(1);
   await heldRow.getByRole("button", { name: "Release", exact: true }).click();
   await expect(heldRow).toHaveCount(0);
   await activePane(page).getByRole("navigation", { name: "Inbox views" }).getByRole("button", { name: "Inbox", exact: true }).click();
-  await expect(list(page).getByRole("link", { name: /TV231 held scam/ })).toBeVisible();
+  await expect(list(page).getByRole("link", { name: heldTitle, exact: true })).toBeVisible();
   await badgeMatches(page, admin);
-  expect(held.id).toBeTruthy();
-});
-test.afterAll(async () => {
-  if (originalClassifier) writeFileSync(join(vaultDir(), "classifiers/agent_safety.wcl"), originalClassifier);
-  await new Promise<void>((resolve) => decisions.close(() => resolve()));
 });
 
 function unique(prefix: string): string {
@@ -62,15 +36,16 @@ async function create(admin: APIRequestContext, type: string, fields: Record<str
   const res = await admin.post(`/api/notes?type=${type}`, { data: { note: { fields, blocks: [] } } });
   expect(res.status(), await res.text()).toBe(201);
   const note = (await res.json()) as { id: string };
-  const incoming = (type === "email" && !(fields.labels as string[] | undefined)?.includes("system/SENT"))
-    || (type === "message" && fields.direction === "in") || (type === "call" && fields.direction === "missed");
-  if (incoming) {
-    await expect.poll(async () => {
-      const response = await admin.get(`/api/notes/${note.id}`);
-      return (await response.json()).agent_safety?.status;
-    }).toBe(fields.title?.toString().includes("TV231 held scam") ? "held" : "allowed");
-  }
   return note;
+}
+
+/** Clear only this fixture, with the same session-only, fingerprint-bound action as the UI. */
+async function release(session: APIRequestContext, id: string) {
+  const res = await session.get(`/api/notes/${id}`);
+  const note = await res.json();
+  expect(note.agent_safety.status).toBe("held");
+  const released = await session.post(`/api/notes/${id}/agent-safety/release`, { data: { fingerprint: note.agent_safety.fingerprint } });
+  expect(released.ok(), await released.text()).toBe(true);
 }
 
 /** What the badge counts: the All view (src/inbox/sources.ts). */
@@ -132,18 +107,20 @@ test("the inbox lists captures, incoming mail and messages and missed calls by t
   const capture = `${tag} capture`;
   await create(admin, "fleeting", { title: capture });
   const mailIn = `${tag} mail in`;
-  await create(admin, "email", { title: mailIn, from_raw: "sam@example.com", sent: at(3600), labels: ["system/INBOX"], snippet: "Lunch on Friday?" });
+  const mail = await create(admin, "email", { title: mailIn, from_raw: "sam@example.com", sent: at(3600), labels: ["system/INBOX"], snippet: "Lunch on Friday?" });
   const mailSent = `${tag} mail sent`;
   await create(admin, "email", { title: mailSent, sent: at(3500), labels: ["system/SENT"] });
   const smsIn = `${tag} sms in`;
-  await create(admin, "message", { title: smsIn, channel: "sms", direction: "in", from_raw: "+61400000003", sent: at(2400) });
+  const sms = await create(admin, "message", { title: smsIn, channel: "sms", direction: "in", from_raw: "+61400000003", sent: at(2400) });
   const smsOut = `${tag} sms out`;
   await create(admin, "message", { title: smsOut, channel: "sms", direction: "out", sent: at(2300) });
   const missed = `${tag} missed call`;
-  await create(admin, "call", { title: missed, direction: "missed", number: "+61400000004", started: at(1200), device_ref: `call:${tag}` });
+  const call = await create(admin, "call", { title: missed, direction: "missed", number: "+61400000004", started: at(1200), device_ref: `call:${tag}` });
   await create(admin, "call", { title: `${tag} answered call`, direction: "in", started: at(1100), device_ref: `call:${tag}:in` });
 
   await logIn(page, "/inbox");
+  for (const note of [mail, sms, call]) await release(page.request, note.id);
+  await page.reload();
   await expect(chip(page, "All")).toHaveAttribute("aria-pressed", "true");
   // Four rows: the mail, the message and the call ahead of the capture, made just now.
   await expect(rows(page, tag)).toHaveCount(4);
