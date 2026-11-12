@@ -1045,8 +1045,8 @@ export function AgentScreen() {
                   <p class="muted">{v().a.description}</p>
                 </Show>
                 <p class="muted">Attachments and original HTML of incoming messages are not available to agents, even after the note is allowed or released. You can still open them yourself.</p>
-                <p class="muted">New in-app picker, camera and drawing attachments can be read by agents after both app and server are updated. Share-to-vault, phone imports and script uploads stay incoming. Existing withheld files are not released by upgrading or uploading them again.</p>
-                <p class="muted">Files uploaded from the phone or desktop app are also unavailable to agents for now. Agent searches do not match extracted file text.</p>
+                <p class="muted">New in-app picker, camera and drawing attachments can be read by agents after both app and server are updated. Share-to-vault, phone imports, pasted or dropped files and script uploads stay incoming. Existing withheld files are not released by upgrading or uploading them again.</p>
+                <p class="muted">Agent searches do not match extracted file text.</p>
                 <div class="agent-tabs" role="tablist" aria-label="Agent settings" onKeyDown={onTabKey}>
                   <For each={AGENT_TABS}>
                     {(t) => (
