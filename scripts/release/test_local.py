@@ -1,9 +1,12 @@
+import contextlib
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import local
+import release as coordinator
 
 
 class LocalReleaseTests(unittest.TestCase):
@@ -101,6 +104,85 @@ class LocalReleaseTests(unittest.TestCase):
         local.atomic_json(path, {"release": self.release, "completed": ["publish"]})
         with self.assertRaises(local.ReleaseError):
             local.Journal(path, self.release)
+
+    def config(self):
+        return {"delivery": {"release_target": "test-release-client", "docker_release": {
+            "destination": "test@relay", "port": 2251, "known_hosts": "test relay pin", "key": "must-not-leak"},
+            "release_secrets": {"GH_TOKEN": "must-not-leak"}}}
+
+    def test_delivery_identity_excludes_credentials(self):
+        public = local.delivery_identity(self.config())
+        self.assertNotIn("must-not-leak", json.dumps(public))
+
+    def test_missing_delivery_route_fails_closed(self):
+        for config in [{}, {"release_target": "client"}, {"release_target": "client", "docker_release": {"destination": "relay"}}]:
+            with self.subTest(config=config), self.assertRaises(local.ReleaseError):
+                local.delivery_identity(config)
+
+    def test_dry_run_every_stage_has_target_identity_and_no_execution(self):
+        plan = local.stage_plan(self.release, self.config())
+        self.assertEqual([row["stage"] for row in plan], list(local.STAGES))
+        for row in plan:
+            self.assertTrue(row["dry_run"])
+            self.assertEqual(row["sha"], self.release["sha"])
+            self.assertEqual(row["version"], self.release["version"])
+            self.assertTrue(row["target"])
+
+    def job(self):
+        with patch.dict("os.environ", {"DOCKER_HOST": "unix:///test-relay"}, clear=True):
+            return coordinator.Release(self.root / "state", self.release, self.config(), self.root / "ram")
+
+    def test_docker_environment_never_inherits_signing_or_publisher_credentials(self):
+        with patch.dict("os.environ", {"GH_TOKEN": "secret", "TAURI_SIGNING_PRIVATE_KEY": "secret", "DOCKER_HOST": "unix:///relay"}):
+            job = coordinator.Release(self.root / "state", self.release, self.config(), self.root / "ram")
+        self.assertNotIn("secret", json.dumps(job.denv))
+        self.assertNotIn("GH_TOKEN", job.base)
+
+    def test_missing_keys_stops_before_signer_or_asset_mutation(self):
+        job = self.job()
+        with patch.dict("os.environ", {}, clear=True), patch.object(job, "run") as run:
+            with self.assertRaisesRegex(local.ReleaseError, "waiting for operator signing prerequisites"):
+                job.sign()
+            run.assert_not_called()
+
+    def test_cleanup_only_this_run_names(self):
+        job = self.job()
+        with patch.object(job, "docker") as docker:
+            with self.assertRaises(local.ReleaseError):
+                job.clean_container("someone-elses-container")
+            docker.assert_not_called()
+            job.clean_container(job.prefix + "-build")
+            docker.assert_called_once_with("rm", "-f", "-v", job.prefix + "-build", check=False)
+
+    def test_prepare_stops_before_smoke_and_publication(self):
+        job = self.job()
+        with contextlib.ExitStack() as stack:
+            methods = {stage: stack.enter_context(patch.object(job, stage.replace("-", "_"), return_value={})) for stage in local.STAGES}
+            self.assertIn("await signed smoke", job.execute())
+            methods["smoke"].assert_not_called()
+            methods["publish"].assert_not_called()
+            self.assertEqual(job.journal.data["completed"], list(local.STAGES[:local.STAGES.index("smoke")]))
+
+    def test_failure_does_not_advance_journal(self):
+        job = self.job()
+        with patch.object(job, "preflight", return_value={}), patch.object(job, "cut", side_effect=local.ReleaseError("red gate")):
+            with self.assertRaisesRegex(local.ReleaseError, "red gate"):
+                job.execute()
+        self.assertEqual(job.journal.data["completed"], ["preflight"])
+
+    def test_unsigned_smoke_evidence_rejected(self):
+        job = self.job()
+        evidence = self.root / "smoke.json"
+        evidence.write_text(json.dumps({"sha": "b" * 40, "apk_sha256": "wrong", "status": "pass"}))
+        with patch.object(job, "check_assets"):
+            with self.assertRaisesRegex(local.ReleaseError, "does not match"):
+                job.smoke(evidence, "TEST-1")
+
+    def test_missing_smoke_run_id_rejected(self):
+        job = self.job()
+        with patch.object(job, "check_assets"):
+            with self.assertRaisesRegex(local.ReleaseError, "waiting for signed APK smoke"):
+                job.smoke(None, None)
 
 
 if __name__ == "__main__":

@@ -1,22 +1,11 @@
-name: release-cache-check
-
+# TV-209: all GitHub build/test/publish jobs moved to local release jobs.
+name: release-cache-check-disabled
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
-  packages: read
-
-# No inherited secrets, image publication, release creation, signing or emulator runs.
-# Run twice on the same branch commit to compare cold and warm compilation.
+permissions: {}
 jobs:
-  desktop:
-    uses: ./.github/workflows/release.yml
-    with:
-      version: 0.0.0-alpha.1
-      compile-only: true
-  android:
-    uses: ./.github/workflows/android-release.yml
-    with:
-      version: 0.0.0-alpha.1
-      compile-only: true
+  notice:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Local release only
+        run: printf '%s\n' 'GitHub CI is disabled. Use the Terrarium release job. See docs/releasing.md.'

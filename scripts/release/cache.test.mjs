@@ -42,15 +42,13 @@ test('cache paths exclude signing and runtime locations', () => {
   assert.match(read('dev'), /THEVAULT_PNPM_CACHE:-thevault-pnpm/);
 });
 
-test('branch dispatch has no secrets or publishing and exercises reusable jobs', () => {
-  const workflow = read('.github/workflows/release-cache-check.yml');
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.doesNotMatch(workflow, /^\s*(secrets:|packages: write|contents: write)/m);
-  assert.equal((workflow.match(/compile-only: true/g) || []).length, 2);
-  for (const [file, lane] of [['release.yml', 'desktop'], ['android-release.yml', 'android-arm64'], ['android-smoke-reusable.yml', 'android-x86_64']]) {
-    const source = read(`.github/workflows/${file}`);
-    assert.match(source, new RegExp(`lane: ${lane}`));
-    assert.ok(source.indexOf('actions/release-cache') < source.indexOf('Write the version'));
-    assert.match(source, /compile-only:/);
+test('all GitHub workflows are manual notices without secrets or build jobs', () => {
+  for (const file of ['release-train', 'release', 'android-release', 'android-smoke-reusable',
+    'android-smoke', 'image', 'browser-image', 'dev-image', 'release-cache-check']) {
+    const source = read(`.github/workflows/${file}.yml`);
+    assert.match(source, /workflow_dispatch:/);
+    assert.match(source, /permissions: \{\}/);
+    assert.doesNotMatch(source, /workflow_call:|push:|secrets:|uses:|docker |cargo |pnpm |gh release/);
+    assert.match(source, /GitHub CI is disabled/);
   }
 });

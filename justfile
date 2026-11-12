@@ -4,6 +4,7 @@ import '.just/shared.just'
 
 # Verification gate
 mod ci '.just/ci'
+mod release '.just/release'
 
 alias server := server-run
 alias test-e2e := web-e2e-test
