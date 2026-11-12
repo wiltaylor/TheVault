@@ -4828,8 +4828,7 @@ fn block_format() -> ToolOut {
     type_out(json!({ "format": block_format_text() }), Vec::new(), None)
 }
 
-/// Handler bindings are code grants, not ordinary type edits. Recompute from the WCL rather
-/// than trusting a flag in the proposal body.
+/// Compare parsed tool code bindings and grants rather than trusting a proposal flag.
 fn tool_binding_changed(p: &Value) -> bool {
     if p["op"] == "delete" {
         return false;
@@ -4850,6 +4849,8 @@ fn tool_binding_changed(p: &Value) -> bool {
         || before.allow_domains != after.allow_domains
 }
 
+/// Handler bindings are code grants, not ordinary type edits. Recompute from the WCL rather
+/// than trusting a flag in the proposal body.
 fn type_handlers_changed(p: &Value) -> bool {
     if p["op"] == "delete" {
         return false;
