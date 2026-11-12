@@ -657,6 +657,10 @@ class Release:
         self.check_assets()
         if not evidence or not run_id:
             raise ReleaseError("prepared draft and version images: waiting for signed APK smoke evidence and original run ID")
+        if not evidence.exists():
+            self.fetch_signed_smoke(evidence)
+        if evidence.is_symlink() or not evidence.is_file() or evidence.stat().st_size > 65536:
+            raise ReleaseError("invalid signed smoke sidecar")
         report = json.loads(evidence.read_text())
         if report.get("status") != "pass" or report.get("sha") != self.release["sha"] or report.get("apk_sha256") != digest(self.smoke_apk()):
             raise ReleaseError("signed smoke evidence does not match the frozen SHA and signed APK")
@@ -733,9 +737,76 @@ class Release:
         for suffix in ("dev", "plain", "server", "browser"):
             self.docker("image", "rm", self.prefix + "-" + suffix + ":build", check=False)
 
+    def handoff_metadata(self):
+        outputs = self.journal.data["outputs"]
+        return {"repository": REPO, "tag": "v" + self.release["version"],
+                "files": {self.smoke_apk().name: outputs["signed-manifest"]["smoke_sha256"],
+                          "smoke-fixtures.tar.gz": outputs["build"]["fixtures_sha256"]}}
+
+    def fetch_signed_smoke(self, evidence):
+        """Inbound seam: META uploads the sidecar, only the job uses GH_TOKEN."""
+        tag = "v" + self.release["version"]
+        remote = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
+        if remote["target_commitish"] != self.release["tagged_sha"]:
+            raise ReleaseError("signed smoke draft targets another commit")
+        item = next((a for a in remote["assets"] if a["name"] == "signed-smoke.json"), None)
+        if not item or not 0 < item["size"] <= 65536:
+            raise ReleaseError("waiting for META signed-smoke.json draft asset")
+        self.gh("release", "download", tag, "--repo", REPO, "--pattern", "signed-smoke.json",
+                "--dir", str(evidence.parent))
+        if item.get("digest") != "sha256:" + digest(evidence) or item["size"] != evidence.stat().st_size:
+            raise ReleaseError("signed smoke draft asset hash mismatch")
+
+    def publish_handoff(self, staged, hashes):
+        """Outbound seam until Terrarium provides release-job file artifacts.
+
+        The signed inputs normally exist from draft(), and save_capsule()
+        supplies the capsule. Never replace a mismatched existing asset.
+        """
+        tag = "v" + self.release["version"]
+        def inventory():
+            remote = json.loads(self.gh("api", f"repos/{REPO}/releases/tags/{tag}").stdout)
+            if not remote["draft"] or remote["target_commitish"] != self.release["tagged_sha"]:
+                raise ReleaseError("smoke handoff requires the prepared private draft")
+            return {a["name"]: a for a in remote["assets"]}
+        remote = inventory()
+        for filename, expected in hashes.items():
+            path = staged / filename
+            if filename in remote:
+                if remote[filename].get("digest") != "sha256:" + expected or remote[filename]["size"] != path.stat().st_size:
+                    raise ReleaseError("smoke handoff draft hash mismatch: " + filename)
+            else:
+                self.gh("release", "upload", tag, "--repo", REPO, str(path))
+        remote = inventory()
+        for filename, expected in hashes.items():
+            if remote.get(filename, {}).get("digest") != "sha256:" + expected or remote[filename]["size"] != (staged / filename).stat().st_size:
+                raise ReleaseError("smoke handoff draft hash mismatch: " + filename)
+
+    def prepare_handoff(self):
+        """Package and verify the exact signed inputs, also on prepare recovery."""
+        self.check_assets()
+        metadata = self.handoff_metadata()
+        self.save_capsule()
+        paths = [self.smoke_apk(), self.out / "device/smoke-fixtures.tar.gz", self.out / "release-state.json"]
+        hashes = metadata["files"] | {"release-state.json": digest(paths[-1])}
+        with tempfile.TemporaryDirectory(prefix="handoff-", dir=self.out) as directory:
+            staged = Path(directory) / "handoff"
+            staged.mkdir()
+            for path in paths:
+                if path.is_symlink() or not path.is_file() or digest(path) != hashes[path.name]:
+                    raise ReleaseError("smoke handoff input changed: " + path.name)
+                shutil.copyfile(path, staged / path.name)
+            self.publish_handoff(staged, hashes)
+        print("signed smoke handoff private draft:", REPO, metadata["tag"], flush=True)
+        for filename, expected in hashes.items():
+            print(f"{expected}  {filename}", flush=True)
+
     def save_capsule(self):
         capsule = self.out / "release-state.json"
-        atomic_json(capsule, {"journal": self.journal.data, "run": json.loads((self.out / "run.json").read_text())})
+        value = {"journal": self.journal.data, "run": json.loads((self.out / "run.json").read_text())}
+        if self.mode != "none" and "push" in self.journal.data["completed"]:
+            value["handoff"] = self.handoff_metadata()
+        atomic_json(capsule, value)
         remote = json.loads(self.gh("api", f'repos/{REPO}/releases/tags/v{self.release["version"]}').stdout)
         if not remote["draft"]:
             existing = next((a for a in remote["assets"] if a["name"] == capsule.name), {})
@@ -784,6 +855,7 @@ class Release:
             if stage in self.journal.data["completed"]:
                 continue
             if stage == "smoke" and not finish:
+                self.prepare_handoff()
                 return "prepared: draft and version-only images await signed smoke"
             print("release stage:", stage, flush=True)
             method = getattr(self, stage.replace("-", "_"))
