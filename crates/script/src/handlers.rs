@@ -631,14 +631,21 @@ impl Shared {
             // A crash can happen after creating the event but before linking `result` on
             // its Outbox item. The durable chain still identifies that interrupted send.
             if p["script"] == "google_event"
-                && p["chain"].as_array().is_some_and(|chain| chain.iter().any(|link| {
-                    link["type"] == "outbox"
-                        && link["id"].as_str().and_then(|id| writer.read(id).ok()).is_some_and(|note| {
-                            let body = doc_to_json(&note.doc);
-                            body["fields"]["status"] == "failed"
-                                && body["fields"]["error"].as_str().is_some_and(|e| e.contains("check before retrying"))
-                        })
-                }))
+                && p["chain"].as_array().is_some_and(|chain| {
+                    chain.iter().any(|link| {
+                        link["type"] == "outbox"
+                            && link["id"]
+                                .as_str()
+                                .and_then(|id| writer.read(id).ok())
+                                .is_some_and(|note| {
+                                    let body = doc_to_json(&note.doc);
+                                    body["fields"]["status"] == "failed"
+                                        && body["fields"]["error"]
+                                            .as_str()
+                                            .is_some_and(|e| e.contains("check before retrying"))
+                                })
+                    })
+                })
             {
                 return Ok(None);
             }

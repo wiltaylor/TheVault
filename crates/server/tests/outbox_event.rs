@@ -298,9 +298,16 @@ fn restart_during_event_write(update: bool, unlinked: bool) {
         let script = api.file("scripts/outbox_send.ws");
         let needle = "return Ok(Sent { done: false, sent_ref: \"\", result: id })";
         assert!(script.contains(needle));
-        expect(api.req("PUT", "/api/scripts/outbox_send")
-            .body(script.replace(needle, "return Ok(Sent { done: false, sent_ref: \"\", result: \"\" })"))
-            .send().unwrap(), 200);
+        expect(
+            api.req("PUT", "/api/scripts/outbox_send")
+                .body(script.replace(
+                    needle,
+                    "return Ok(Sent { done: false, sent_ref: \"\", result: \"\" })",
+                ))
+                .send()
+                .unwrap(),
+            200,
+        );
     }
     let mut fields = json!({
         "title": "Check interrupted event",
