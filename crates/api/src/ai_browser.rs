@@ -580,7 +580,10 @@ pub async fn run(b: &BrowserBox, input: &Value, state: &state::State) -> Browser
     let Ok(redactor) = crate::browser_redaction::Redactor::load(state) else {
         return BrowserOut::error("browser credential redaction unavailable");
     };
-    let mut out = run_inner(b, input, &redactor).await;
+    let mut out = run_inner(b, input, &redactor, state).await;
+    let Ok(redactor) = crate::browser_redaction::Redactor::load(state) else {
+        return BrowserOut::error("browser credential redaction unavailable");
+    };
     redact_out(&mut out, &redactor);
     out
 }
@@ -609,6 +612,7 @@ async fn run_inner(
     b: &BrowserBox,
     input: &Value,
     redactor: &crate::browser_redaction::Redactor,
+    state: &state::State,
 ) -> BrowserOut {
     if let Err(e) = b.check_protocol().await {
         return BrowserOut::error(e);
@@ -665,6 +669,9 @@ async fn run_inner(
                 "the browser box answered something unreadable: {e}"
             ));
         }
+    };
+    let Ok(redactor) = crate::browser_redaction::Redactor::load(state) else {
+        return BrowserOut::error("browser credential redaction unavailable");
     };
     let exit = got["exit"].as_i64().unwrap_or(-1);
     let ms = got["ms"].as_u64().unwrap_or(0);
@@ -820,10 +827,13 @@ pub async fn file(
     images: &Images,
     state: &state::State,
 ) -> BrowserOut {
+    let Ok(_) = crate::browser_redaction::Redactor::load(state) else {
+        return BrowserOut::error("browser credential redaction unavailable");
+    };
+    let mut out = file_inner(b, call_id, input, may_send_image, images, state).await;
     let Ok(redactor) = crate::browser_redaction::Redactor::load(state) else {
         return BrowserOut::error("browser credential redaction unavailable");
     };
-    let mut out = file_inner(b, call_id, input, may_send_image, images, &redactor).await;
     redact_out(&mut out, &redactor);
     out
 }
@@ -834,7 +844,7 @@ async fn file_inner(
     input: &Value,
     may_send_image: bool,
     images: &Images,
-    redactor: &crate::browser_redaction::Redactor,
+    state: &state::State,
 ) -> BrowserOut {
     if let Err(e) = b.check_protocol().await {
         return BrowserOut::error(e);
@@ -864,6 +874,9 @@ async fn file_inner(
         Err(e) => return BrowserOut::error(unreachable(&e)),
     };
     let size = bytes.len();
+    let Ok(redactor) = crate::browser_redaction::Redactor::load(state) else {
+        return BrowserOut::error("browser credential redaction unavailable");
+    };
     let mut head = format!("Path: {path}\nMedia type: {media}\nSize: {size} bytes\n");
     let mut info = json!({ "path": path, "media_type": media, "size": size });
     let done = |content: String, kind: &str, parts: Vec<Part>, mut info: Value| {

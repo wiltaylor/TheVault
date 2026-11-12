@@ -744,9 +744,7 @@ async fn run(
         })?;
     eprintln!(
         "browser-agent: run exit={} ms={} timed_out={}",
-        outcome.exit,
-        outcome.ms,
-        outcome.timed_out,
+        outcome.exit, outcome.ms, outcome.timed_out,
     );
     Ok(Json(json!({
         "exit": outcome.exit,
