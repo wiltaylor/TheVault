@@ -47,12 +47,13 @@ fn selective_approval_email_fields_caps_restart_and_destructive_denial() {
     let denied = api.client.put(api.server.url("/api/agents/reader")).bearer_auth(api.server.admin_token()).header("content-type", "text/plain").body(source).send().unwrap();
     assert!(!denied.status().is_success());
     api.client.put(api.server.url("/api/agents/reader")).header("cookie", &cookie).header("content-type", "text/plain").body(source).send().unwrap().error_for_status().unwrap();
-    let (memo, _) = api.memo("Start", "open");
+    let (memo, memo_version) = api.memo("Start", "open");
+    let versions: Vec<Value> = ids.iter().map(|id| api.get(&format!("/api/notes/{id}"))["version"].clone()).collect();
     fake.push(AnthropicMessage::new()
-        .tool_use("allowed", "propose_fields", json!({"id":ids[0],"fields":{"processed":true}}))
-        .tool_use("capped", "propose_fields", json!({"id":ids[1],"fields":{"processed":true}}))
-        .tool_use("other-field", "propose_fields", json!({"id":ids[1],"fields":{"title":"Not approved"}}))
-        .tool_use("other-type", "propose_fields", json!({"id":memo,"fields":{"status":"closed"}}))
+        .tool_use("allowed", "propose_fields", json!({"id":ids[0],"base_version":versions[0],"fields":{"processed":true}}))
+        .tool_use("capped", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":{"processed":true}}))
+        .tool_use("other-field", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":{"title":"Not approved"}}))
+        .tool_use("other-type", "propose_fields", json!({"id":memo,"base_version":memo_version,"fields":{"status":"closed"}}))
         .tool_use("delete", "propose_delete", json!({"id":ids[1]}))
         .tool_use("archive", "propose_archive", json!({"id":ids[1]})));
     fake.push(AnthropicMessage::text("Review the rest."));
@@ -67,7 +68,7 @@ fn selective_approval_email_fields_caps_restart_and_destructive_denial() {
     assert_eq!(api.get(&format!("/api/agents/reader/threads/{thread}"))["pending"], 5);
     api.server.restart();
     api.memo("After restart", "open");
-    fake.push(AnthropicMessage::new().tool_use("still-capped", "propose_fields", json!({"id":ids[1],"fields":{"processed":true}})));
+    fake.push(AnthropicMessage::new().tool_use("still-capped", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":{"processed":true}})));
     fake.push(AnthropicMessage::text("Still needs review."));
     api.advance("PT31S");
     assert_ne!(api.get(&format!("/api/notes/{}", ids[1]))["note"]["fields"]["processed"], true);

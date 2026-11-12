@@ -3789,13 +3789,12 @@ fn run_tool(
         Some((event, p)) if !destructive && (direct.covers(event, p) || rule.is_some()) => {
             let (event, mut p) = (*event, p.clone());
             let reservation = if let Some(rule) = rule {
-                use sha2::{Digest, Sha256};
                 let mut fields = rule.fields.clone();
                 fields.sort();
                 fields.dedup();
                 // No cap or array position in the bucket: editing a cap cannot reset usage.
                 let bucket = json!([rule.operation, rule.note_type, fields]).to_string();
-                let id = format!("{:x}", Sha256::digest(json!([agent.name, event, p]).to_string().as_bytes()));
+                let id = approval_attempt_id(&agent.name, event, &p);
                 let budget = state::ApprovalBudget { rule_daily: rule.daily_cap, agent_destructive_daily: None, vault_destructive_daily: None };
                 match w.state().reserve_approval(&id, &agent.name, &bucket, false, budget) {
                     Ok(state::ApprovalReservation::Reserved) => {},
@@ -3900,6 +3899,13 @@ fn touches_outbox(w: &Writer, event: &str, p: &Value) -> bool {
 
 /// Make the change a tool proposed, as the caller: the `applied` event, and a result telling the
 /// model it was made and its new version. A failure writes nothing and goes back to the model.
+fn approval_attempt_id(agent: &str, event: &str, p: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    // One attempt per target/base version, independent of model call IDs, rule edits,
+    // dry-run timestamps and retry phrasing. Currently only updates reach this path.
+    format!("{:x}", Sha256::digest(json!([agent, event, p["op"], p["note_id"], p["base_version"]]).to_string().as_bytes()))
+}
+
 fn approval_proven_no_write(result: &Result<Value, ApplyError>) -> bool {
     // Authorization and proposal-shape checks precede commit_checked_note. Conflict is
     // the pre-write base-version check. Storage/index/state errors are never proof.
@@ -5198,6 +5204,11 @@ mod tests {
 
     #[test]
     fn selective_approval_never_releases_uncertain_storage_failure() {
+        let mut p = json!({"id":"first-call","op":"update","note_id":"note","base_version":"v1","after":{"fields":{"status":"done"}}});
+        let id = approval_attempt_id("reader", "proposal", &p);
+        p["id"] = json!("different-retry-call");
+        p["after"]["fields"]["updated"] = json!("later");
+        assert_eq!(approval_attempt_id("reader", "proposal", &p), id);
         assert!(!approval_proven_no_write(&Err(ApplyError::Write(writer::Error::Store(store::Error::Interrupted)))));
         assert!(!approval_proven_no_write(&Err(ApplyError::Write(writer::Error::Rejected("unclassified writer failure".into())))));
         assert!(approval_proven_no_write(&Err(ApplyError::Refused("revoked before commit".into()))));
