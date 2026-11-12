@@ -112,6 +112,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shell_has_security_headers() {
+        let res = file_response("index.html", vec![], false);
+        let h = res.headers();
+        assert!(h.contains_key(header::CONTENT_SECURITY_POLICY));
+        assert_eq!(h[header::X_FRAME_OPTIONS], "DENY");
+        assert_eq!(h[header::REFERRER_POLICY], "no-referrer");
+    }
+
+    #[test]
     fn refuses_paths_that_leave_the_root() {
         assert_eq!(relative("/"), Some(PathBuf::new()));
         assert_eq!(relative("/assets/a.js"), Some(PathBuf::from("assets/a.js")));
