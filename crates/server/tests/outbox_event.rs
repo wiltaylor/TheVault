@@ -277,7 +277,7 @@ impl Api {
     }
 }
 
-+#[test]
+#[test]
 fn review_restart_during_delete_keeps_manual_retry_available() {
     let mut api = Api::start();
     api.google.put_event("primary", standup());
