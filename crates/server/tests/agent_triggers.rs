@@ -1,6 +1,6 @@
 //! S1 with S7 and the fake Anthropic: agent triggers run on the server (agents G9 to G12). A note
-//! event starts an unattended turn on a new thread with the event line; the turn is offered no
-//! change tool whose confirmation switch is on; a change tool whose switch is off applies at once,
+//! event starts an unattended turn on a new thread with the event line; held changes persist as
+//! proposals; a change tool whose switch is off applies at once,
 //! authored by the agent, and fires no further trigger; runs are recorded and listed; a failed
 //! run leaves one notification linking to its thread.
 
@@ -2860,6 +2860,71 @@ fn review_f6_backfill_preview_keeps_success_after_a_failing_edit_run() {
 }
 
 #[test]
+fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
+    let fake = FakeAnthropic::start();
+    let mut api = Api::start(&fake);
+    api.agent("reader", "label = \"Reader\"\ntrigger any {\n on = [\"create\"]\n type = \"memo\"\n prompt = \"Review it.\"\n}\n");
+    let (id, version) = api.memo("Unchanged", "open");
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use(
+                "toolu_edit",
+                "propose_edit",
+                json!({
+                    "id": id, "base_version": version,
+                    "note": json!({"fields":{"title":"Proposed", "status":"open"}}).to_string()
+                }),
+            )
+            .tool_use("toolu_delete", "propose_delete", json!({"id":id}))
+            .tool_use(
+                "toolu_script",
+                "propose_script_change",
+                json!({
+                    "name":"pending_trigger_script", "source":"fn run() { }\n"
+                }),
+            ),
+    );
+    fake.push(AnthropicMessage::text("Waiting for review."));
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 2);
+    let threads = api.get("/api/agents/reader/threads");
+    let thread = threads["threads"][0]["id"].as_str().unwrap().to_owned();
+    let path = format!("/api/agents/reader/threads/{thread}");
+    let before = api.get(&path);
+    assert_eq!(before["pending"], 3, "{before}");
+    for event in ["proposal", "script_proposal"] {
+        assert!(
+            before["proposals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["event"] == event && p["status"] == "pending"),
+            "{before}"
+        );
+    }
+    assert_eq!(api.get(&format!("/api/notes/{id}"))["version"], version);
+    assert!(
+        !api.server
+            .vault_path()
+            .join("scripts/pending_trigger_script.ws")
+            .exists()
+    );
+    api.server.restart();
+    let reopened = api.get(&path);
+    assert_eq!(reopened["proposals"], before["proposals"]);
+    assert_eq!(reopened["pending"], 3);
+    assert_eq!(api.get(&format!("/api/notes/{id}"))["version"], version);
+    for p in reopened["proposals"].as_array().unwrap() {
+        api.send("POST", "/api/ai/discard", p["data"].clone());
+    }
+    assert_eq!(api.get(&path)["pending"], 0);
+    let resolved = api.get(&path)["proposals"].clone();
+    api.server.restart();
+    assert_eq!(api.get(&path)["proposals"], resolved);
+    assert_eq!(api.get(&path)["pending"], 0);
+}
+
+#[test]
 fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
@@ -2885,8 +2950,7 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
         format!("Tidy this memo.\nEvent: create of note {id} (type memo, title \"Roof\")")
     );
 
-    // Offered the read tools and the note changes its switch lets through, nothing that would
-    // wait for a user.
+    // Offered both direct changes and changes that wait for Apply.
     let tools = tool_names(&fake, 0);
     for t in [
         "search_notes",
@@ -2907,7 +2971,7 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
         "propose_agent_delete",
         "download_asset",
     ] {
-        assert!(!tools.contains(&t.to_owned()), "{t} not in {tools:?}");
+        assert!(tools.contains(&t.to_owned()), "{t} in {tools:?}");
     }
 
     // The edit was made at once, by the agent, and fired nothing more.
@@ -2949,7 +3013,7 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
 }
 
 #[test]
-fn a_change_tool_whose_switch_is_on_is_left_out_of_a_trigger_run() {
+fn a_change_tool_whose_switch_is_on_is_offered_as_a_trigger_proposal() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent(
@@ -2965,17 +3029,16 @@ fn a_change_tool_whose_switch_is_on_is_left_out_of_a_trigger_run() {
         .collect();
     assert!(tools.contains(&"propose_delete"), "{tools:?}");
     assert!(tools.contains(&"get_note"), "{tools:?}");
-    assert!(!tools.contains(&"propose_edit"), "{tools:?}");
-    assert!(!tools.contains(&"propose_create"), "{tools:?}");
+    assert!(tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(tools.contains(&"propose_create"), "{tools:?}");
     fake.push(AnthropicMessage::text("Read."));
     api.memo("Roof", "open");
     api.advance("PT31S");
     let offered = tool_names(&fake, 0);
     assert_eq!(offered, tools, "the run is offered what the route says");
-    // Unlike a call from a note (TV-77 D2), the trigger's run says what it holds back.
+    // Like mention and dispatch, the trigger retains proposals rather than withholding tools.
     let system = fake.message_requests()[0].json()["system"].to_string();
-    assert!(system.contains("This run is unattended"), "{system}");
-    assert!(system.contains("create or edit notes"), "{system}");
+    assert!(!system.contains("This run is unattended"), "{system}");
 }
 
 #[test]
@@ -2996,7 +3059,7 @@ fn a_trigger_run_is_sent_no_ask_user_and_no_section_about_it() {
     assert!(tools.contains(&"get_note".to_owned()), "{tools:?}");
     assert!(!tools.contains(&"ask_user".to_owned()), "{tools:?}");
     let system = fake.message_requests()[0].json()["system"].to_string();
-    assert!(system.contains("This run is unattended"), "{system}");
+    assert!(!system.contains("This run is unattended"), "{system}");
     assert!(!system.contains("Asking the user"), "{system}");
 }
 
@@ -3032,7 +3095,7 @@ fn a_failed_run_is_recorded_and_notified_once() {
 }
 
 #[test]
-fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
+fn an_unattended_run_starts_sub_agents_that_keep_held_proposals() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent(
@@ -3058,12 +3121,11 @@ fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
     api.memo("Roof", "open");
     api.advance("PT31S");
     assert_eq!(fake.message_requests().len(), 3);
-    // The sub agent, like its run, has nobody to ask (subagents U8): it is offered the change
-    // tools it makes itself, not those that would only propose, and never start_subagent.
+    // The sub agent inherits the parent's proposal mode, but cannot start another subagent.
     let sub = tool_names(&fake, 1);
     assert!(sub.contains(&"propose_delete".to_owned()), "{sub:?}");
     assert!(sub.contains(&"get_note".to_owned()), "{sub:?}");
-    assert!(!sub.contains(&"propose_create".to_owned()), "{sub:?}");
+    assert!(sub.contains(&"propose_create".to_owned()), "{sub:?}");
     assert!(!sub.contains(&"start_subagent".to_owned()), "{sub:?}");
     let runs = api.runs("chief");
     assert_eq!(
@@ -3080,7 +3142,7 @@ const HELPER_GRANT: &str =
 const BOSS: &str = "label = \"Boss\"\n\npermissions {\n  confirm {\n    agents = false\n  }\n\n  scripts {\n    run_saved = true\n  }\n}\n\ntrigger opened {\n  on     = [\"create\"]\n  type   = \"memo\"\n  prompt = \"Look after the memo.\"\n}\n";
 
 #[test]
-fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it() {
+fn a_trigger_run_and_a_chat_propose_a_grant_that_requires_apply() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("helper", HELPER);
@@ -3100,22 +3162,15 @@ fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it()
         "{:?}",
         tool_names(&fake, 0)
     );
-    // The model is told the change was refused, not that it waits.
+    // The grant waits for session Apply, never becoming a direct mutation.
     let r = fake.message_requests()[1].json();
     let result = r["messages"].as_array().unwrap().last().unwrap()["content"][0].clone();
-    assert_eq!(result["is_error"], true, "{result}");
-    assert!(
-        result["content"]
-            .as_str()
-            .unwrap()
-            .contains("the change was not proposed"),
-        "{result}"
-    );
-    // Nothing waits in the thread, and the helper is unchanged.
+    assert_ne!(result["is_error"], true, "{result}");
+    // The proposal waits in the thread, and the helper is unchanged.
     let threads = api.get("/api/agents/boss/threads");
     let threads = threads["threads"].as_array().unwrap();
     assert_eq!(threads.len(), 1, "{threads:?}");
-    assert_eq!(threads[0]["pending"], 0, "{threads:?}");
+    assert_eq!(threads[0]["pending"], 1, "{threads:?}");
     let runs = api.runs("boss");
     assert_eq!(
         runs["triggers"][0]["runs"][0]["outcome"], "succeeded",
