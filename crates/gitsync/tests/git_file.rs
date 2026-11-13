@@ -17,12 +17,12 @@ pub fn clone_of(remote: &str, auth: Auth) -> (tempfile::TempDir, Git) {
 pub fn sample_files(key: &SyncKey, vault_id: &str) -> BTreeMap<String, Vec<u8>> {
     let layout = Layout::new(key, vault_id);
     let mut files = BTreeMap::new();
-    files.insert(layout.manifest(), key.seal(b"{\"format\":1}"));
-    files.insert(layout.note("N1"), key.seal(b"task\nbody 1"));
-    files.insert(layout.note("N2"), key.seal(b"task\nbody 2"));
-    files.insert(layout.asset_part("A1", 0), key.seal(b"part 0"));
-    files.insert(layout.asset_part("A1", 1), key.seal(b"part 1"));
-    files.insert(layout.type_def("task"), key.seal(b"type task {}"));
+    files.insert(layout.manifest(), key.seal("opaque-git-fixture", b"{\"format\":1}"));
+    files.insert(layout.note("N1"), key.seal("opaque-git-fixture", b"task\nbody 1"));
+    files.insert(layout.note("N2"), key.seal("opaque-git-fixture", b"task\nbody 2"));
+    files.insert(layout.asset_part("A1", 0), key.seal("opaque-git-fixture", b"part 0"));
+    files.insert(layout.asset_part("A1", 1), key.seal("opaque-git-fixture", b"part 1"));
+    files.insert(layout.type_def("task"), key.seal("opaque-git-fixture", b"type task {}"));
     files
 }
 
@@ -100,7 +100,7 @@ fn the_same_files_give_the_same_tree_and_a_force_push_replaces_history() {
 
     files.insert(
         Layout::new(&key, "vault-a").note("N3"),
-        key.seal(b"task\n3"),
+        key.seal("opaque-git-fixture", b"task\n3"),
     );
     let second = publish(&a, &files, &branch);
     assert_ne!(first, second);

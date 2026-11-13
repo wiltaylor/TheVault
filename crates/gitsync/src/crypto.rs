@@ -4,8 +4,8 @@
 //! subkeys come from it through HKDF-SHA256, under the labels `enc`, `nonce` and `name`.
 //!
 //! A blob is `TVGS`, a version byte, a 24-byte nonce, then the XChaCha20-Poly1305 ciphertext of
-//! the plaintext, with the five header bytes as associated data. The nonce is the first 24 bytes
-//! of HMAC-SHA256(nonce key, plaintext), so unchanged plaintext gives a byte-identical blob and
+//! the plaintext, with the header and canonical object path as associated data. The nonce is
+//! derived from both that context and plaintext, so unchanged context and content give a byte-identical blob and
 //! git stores it once. A blob that fails to authenticate is [`Error::KeyMismatch`].
 
 use base64::Engine as _;
@@ -23,7 +23,7 @@ pub const KEY_PREFIX: &str = "tvsync1-";
 /// The first bytes of every blob.
 pub const MAGIC: &[u8; 4] = b"TVGS";
 /// The blob version this build writes and reads.
-pub const BLOB_VERSION: u8 = 1;
+pub const BLOB_VERSION: u8 = 2;
 /// The bytes a blob adds to its plaintext: the header, the nonce and the Poly1305 tag.
 pub const OVERHEAD: usize = HEADER_LEN + NONCE_LEN + TAG_LEN;
 /// The hex characters of a [`SyncKey::name`].
@@ -102,9 +102,11 @@ impl SyncKey {
     }
 
     /// Encrypts `plaintext` into a blob. The same plaintext always gives the same blob.
-    pub fn seal(&self, plaintext: &[u8]) -> Vec<u8> {
+    pub fn seal(&self, context: &str, plaintext: &[u8]) -> Vec<u8> {
+        let aad = associated_data(context);
         let mut mac =
             <HmacSha256 as Mac>::new_from_slice(&self.nonce).expect("HMAC takes any key length");
+        mac.update(&aad);
         mac.update(plaintext);
         let tag = mac.finalize().into_bytes();
         let nonce = XNonce::from_slice(&tag[..NONCE_LEN]);
@@ -115,7 +117,7 @@ impl SyncKey {
                 nonce,
                 Payload {
                     msg: plaintext,
-                    aad: &header,
+                    aad: &aad,
                 },
             )
             .expect("XChaCha20-Poly1305 encrypts any length a blob holds");
@@ -128,13 +130,13 @@ impl SyncKey {
 
     /// Decrypts a blob [`SyncKey::seal`] made. A blob sealed with another key, or altered, is
     /// [`Error::KeyMismatch`]; one that is not a blob at all is [`Error::Malformed`].
-    pub fn open(&self, blob: &[u8]) -> Result<Vec<u8>> {
+    pub fn open(&self, context: &str, blob: &[u8]) -> Result<Vec<u8>> {
         if blob.len() < OVERHEAD || &blob[..4] != MAGIC {
             return Err(Error::Malformed("not a gitsync blob".into()));
         }
         if blob[4] != BLOB_VERSION {
             return Err(Error::Malformed(format!(
-                "blob version {} is not {BLOB_VERSION}",
+                "blob version {} is not {BLOB_VERSION}; upgrade every peer and republish from its local vault (no legacy fallback)",
                 blob[4]
             )));
         }
@@ -144,7 +146,7 @@ impl SyncKey {
                 nonce,
                 Payload {
                     msg: &blob[HEADER_LEN + NONCE_LEN..],
-                    aad: &blob[..HEADER_LEN],
+                    aad: &associated_data(context),
                 },
             )
             .map_err(|_| Error::KeyMismatch)
@@ -172,6 +174,13 @@ impl SyncKey {
 
 fn header() -> [u8; HEADER_LEN] {
     [MAGIC[0], MAGIC[1], MAGIC[2], MAGIC[3], BLOB_VERSION]
+}
+
+fn associated_data(context: &str) -> Vec<u8> {
+    let mut aad = header().to_vec();
+    aad.extend_from_slice(&(context.len() as u64).to_be_bytes());
+    aad.extend_from_slice(context.as_bytes());
+    aad
 }
 
 pub(crate) fn to_hex(bytes: &[u8]) -> String {

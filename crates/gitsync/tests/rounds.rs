@@ -35,7 +35,7 @@ fn peer_note_over_thread(legacy_row: bool) {
         name: "memo".into(),
         path: layout.type_def("memo"),
     });
-    files.insert(layout.type_def("memo"), key.seal(MEMO.as_bytes()));
+    files.insert(layout.type_def("memo"), key.seal(&layout.type_def("memo"), MEMO.as_bytes()));
     if legacy_row {
         let state =
             state::State::open(&b.server.vault_path().join(".vault/state.db"), None).unwrap();
@@ -60,7 +60,7 @@ fn peer_note_over_thread(legacy_row: bool) {
         });
         files.insert(
             layout.note(id),
-            gitsync::pack::seal_note(&key, "memo", text.as_bytes()),
+            gitsync::pack::seal_note(&key, &layout.note(id), "memo", text.as_bytes()),
         );
     }
     files.insert(layout.manifest(), manifest.seal(&key));
@@ -146,12 +146,12 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     let mut files = BTreeMap::new();
     files.insert(
         layout.note(incoming),
-        gitsync::pack::seal_note(&key, "agent_thread", text.as_bytes()),
+        gitsync::pack::seal_note(&key, &layout.note(incoming), "agent_thread", text.as_bytes()),
     );
     let thread_type = b.get("/api/types/agent_thread");
     files.insert(
         layout.type_def("agent_thread"),
-        key.seal(s(&thread_type["wcl"]).as_bytes()),
+        key.seal(&layout.type_def("agent_thread"), s(&thread_type["wcl"]).as_bytes()),
     );
     files.insert(layout.manifest(), manifest.seal(&key));
     let temp = tempfile::tempdir().unwrap();
@@ -190,11 +190,11 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     let mut old_files = BTreeMap::new();
     old_files.insert(
         own_layout.note(own),
-        gitsync::pack::seal_note(&key, "agent_thread", own_text.as_bytes()),
+        gitsync::pack::seal_note(&key, &own_layout.note(own), "agent_thread", own_text.as_bytes()),
     );
     old_files.insert(
         own_layout.type_def("agent_thread"),
-        key.seal(s(&thread_type["wcl"]).as_bytes()),
+        key.seal(&own_layout.type_def("agent_thread"), s(&thread_type["wcl"]).as_bytes()),
     );
     old_files.insert(own_layout.manifest(), old_manifest.seal(&key));
     let old_tree = git.write_tree(&old_files).unwrap();

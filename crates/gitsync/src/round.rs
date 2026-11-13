@@ -526,7 +526,7 @@ impl Round<'_> {
             .get(&layout.manifest())
             .ok_or_else(|| Skip::new("the branch has no manifest"))?;
         let blob = self.git.cat_blob(manifest_oid).map_err(Skip::new)?;
-        let manifest = match Manifest::open(self.key, &blob) {
+        let manifest = match Manifest::open(self.key, &layout, &blob) {
             Ok(m) => m,
             Err(Error::KeyMismatch) => {
                 return Err(Skip::new(
@@ -552,7 +552,7 @@ impl Round<'_> {
             ));
         }
 
-        let open_defs = |defs: &[DefEntry]| -> std::result::Result<BTreeMap<String, String>, Skip> {
+        let open_defs = |defs: &[DefEntry], taxonomy: bool| -> std::result::Result<BTreeMap<String, String>, Skip> {
             let found: Vec<(&DefEntry, &str)> = defs
                 .iter()
                 .filter_map(|d| oids.get(&d.path).map(|o| (d, o.as_str())))
@@ -563,15 +563,19 @@ impl Round<'_> {
                 .map_err(Skip::new)?;
             let mut out = BTreeMap::new();
             for ((d, _), blob) in found.into_iter().zip(blobs) {
-                let text = self.key.open(&blob).map_err(Skip::new)?;
+                let path = if taxonomy { layout.taxonomy(&d.name) } else { layout.type_def(&d.name) };
+                if d.path != path {
+                    return Err(Skip::new("definition path does not match its identity"));
+                }
+                let text = self.key.open(&path, &blob).map_err(Skip::new)?;
                 let text = String::from_utf8(text)
                     .map_err(|_| Skip::new(format!("definition {} is not text", d.name)))?;
                 out.insert(d.name.clone(), text);
             }
             Ok(out)
         };
-        let types = open_defs(&manifest.types)?;
-        let taxonomies = open_defs(&manifest.taxonomies)?;
+        let types = open_defs(&manifest.types, false)?;
+        let taxonomies = open_defs(&manifest.taxonomies, true)?;
         let schema = {
             let t: Vec<(&str, &str)> = types
                 .iter()
@@ -596,7 +600,14 @@ impl Round<'_> {
             .map_err(Skip::new)?;
         let mut notes = BTreeMap::new();
         for ((entry, _), blob) in found.into_iter().zip(blobs) {
-            let opened = pack::open_note(self.key, &blob).and_then(|(t, wcl)| {
+            let path = layout.note(&entry.id);
+            if entry.path != path {
+                return Err(Skip::new("note path does not match its identity"));
+            }
+            let opened = pack::open_note(self.key, &path, &blob).and_then(|(t, wcl)| {
+                if t != entry.note_type || pack::sha256_hex(&wcl) != entry.hash {
+                    return Err(Error::Corrupt { id: entry.id.clone(), detail: "manifest note type or hash mismatch".into() });
+                }
                 let wcl =
                     String::from_utf8(wcl).map_err(|_| Error::Malformed("not UTF-8".into()))?;
                 Ok((t, wcl))
@@ -604,11 +615,10 @@ impl Round<'_> {
             let (type_name, wcl) = match opened {
                 Ok(n) => n,
                 Err(e) => {
-                    self.report.warnings.push(format!(
+                    return Err(Skip::new(format!(
                         "{}: note {}: {e}",
                         manifest.instance.name, entry.id
-                    ));
-                    continue;
+                    )));
                 }
             };
             // Transcripts are local runtime records, never peer-authored content.
@@ -817,7 +827,11 @@ impl Round<'_> {
                     })
                     .collect::<Result<_>>()?;
                 let parts = self.git.cat_blobs(&oids)?;
-                let bytes = pack::join(self.key, parts, id, asset.size, &asset.sha256)?;
+                let layout = Layout::new(self.key, &b.peer);
+                if asset.parts.iter().enumerate().any(|(i, p)| *p != layout.asset_part(id, i)) {
+                    return Err(Error::Malformed("asset part path does not match its identity".into()));
+                }
+                let bytes = pack::join(self.key, &layout, parts, id, asset.size, &asset.sha256)?;
                 self.w.put_asset_with_id(id, &asset.filename, bytes)?;
                 Ok(())
             })();
@@ -1124,7 +1138,7 @@ impl Round<'_> {
             let path = layout.note(id);
             files.insert(
                 path.clone(),
-                pack::seal_note(self.key, type_name, wcl.as_bytes()),
+                pack::seal_note(self.key, &path, type_name, wcl.as_bytes()),
             );
             if origin == &self.me {
                 let row = state.gitsync_get(id, &self.me)?;
@@ -1152,7 +1166,7 @@ impl Round<'_> {
             let Ok((asset, bytes)) = self.w.asset(id) else {
                 continue;
             };
-            let parts = pack::split(self.key, &bytes, self.paths.part_bytes);
+            let parts = pack::split(self.key, &layout, id, &bytes, self.paths.part_bytes);
             let mut paths = Vec::new();
             for (k, part) in parts.into_iter().enumerate() {
                 let p = layout.asset_part(id, k);
@@ -1175,7 +1189,7 @@ impl Round<'_> {
                 continue;
             };
             let path = layout.type_def(name);
-            files.insert(path.clone(), self.key.seal(source.as_bytes()));
+            files.insert(path.clone(), self.key.seal(&path, source.as_bytes()));
             manifest.types.push(DefEntry {
                 name: name.clone(),
                 path,
@@ -1186,7 +1200,7 @@ impl Round<'_> {
                 continue;
             };
             let path = layout.taxonomy(name);
-            files.insert(path.clone(), self.key.seal(source.as_bytes()));
+            files.insert(path.clone(), self.key.seal(&path, source.as_bytes()));
             manifest.taxonomies.push(DefEntry {
                 name: name.clone(),
                 path,
