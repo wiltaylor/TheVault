@@ -1474,8 +1474,13 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
+        let context = script::RunContext::default();
+        context.restrict();
+        let generation = state.admit_automation().unwrap();
+        context.capture_stop_generation(generation);
+        let reads = crate::browser_redaction::ContextReads::start();
         let command = format!("{}fake-password", "a".repeat(115));
-        let out = run(&script::RunContext::default(), &b, &json!({"command":command}), &state).await;
+        let out = run(&context, &b, &json!({"command":command}), &state).await;
         assert!(!out.is_error);
         let trail = out.trail.unwrap();
         assert!(!trail.contains("fake-"));
@@ -1485,7 +1490,7 @@ mod tests {
         }
         let images = Default::default();
         let out = file(
-            &script::RunContext::default(),
+            &context,
             &b,
             "test",
             &json!({"path":"test.txt"}),
@@ -1499,7 +1504,16 @@ mod tests {
             assert!(!out.content.contains(secret));
         }
         let locked = state.with_key(None);
-        assert!(run(&script::RunContext::default(), &b, &json!({"command":"true"}), &locked).await.is_error);
+        assert!(run(&context, &b, &json!({"command":"true"}), &locked).await.is_error);
+        let observed = reads.take();
+        assert_eq!(observed.len(), 7); // run (3), file (3), locked preflight (1)
+        for actual in observed {
+            let actual = actual.expect("credential read scope");
+            assert_eq!(actual, context);
+            assert!(actual.is_restricted());
+            assert_eq!(actual.stop_generation(), Some(generation));
+        }
+        assert!(script::RunContext::current().is_none());
         server.abort();
     }
 

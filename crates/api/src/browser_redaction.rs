@@ -93,6 +93,35 @@ mod h7_tests {
 
 pub(crate) struct Redactor(Vec<(String, bool)>);
 
+// Current-thread async tests observe the actual credential-read boundary across
+// network awaits. No credential data is recorded, and Drop isolates later tests.
+#[cfg(test)]
+thread_local! {
+    static CONTEXT_READS: std::cell::RefCell<Option<Vec<Option<script::RunContext>>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct ContextReads;
+
+#[cfg(test)]
+impl ContextReads {
+    pub(crate) fn start() -> Self {
+        CONTEXT_READS.with(|reads| *reads.borrow_mut() = Some(Vec::new()));
+        Self
+    }
+
+    pub(crate) fn take(&self) -> Vec<Option<script::RunContext>> {
+        CONTEXT_READS.with(|reads| std::mem::take(reads.borrow_mut().as_mut().unwrap()))
+    }
+}
+
+#[cfg(test)]
+impl Drop for ContextReads {
+    fn drop(&mut self) {
+        CONTEXT_READS.with(|reads| *reads.borrow_mut() = None);
+    }
+}
+
 fn seed_parameters(
     input: &str,
     mut digits: u32,
@@ -199,6 +228,12 @@ pub(crate) fn totp(seed: &str, seconds: u64, digits: u32, period: u64) -> Option
 
 impl Redactor {
     pub(crate) fn load(state: &state::State) -> Result<Self, ()> {
+        #[cfg(test)]
+        CONTEXT_READS.with(|reads| {
+            if let Some(reads) = reads.borrow_mut().as_mut() {
+                reads.push(script::RunContext::current());
+            }
+        });
         let mut patterns = Vec::new();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

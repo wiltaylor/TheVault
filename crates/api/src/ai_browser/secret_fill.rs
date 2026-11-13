@@ -302,7 +302,9 @@ mod tests {
         )
         .unwrap();
         let context = script::RunContext::default();
-        context.restrict();
+        let generation = state.admit_automation().unwrap();
+        context.capture_stop_generation(generation);
+        let reads = crate::browser_redaction::ContextReads::start();
         let password = "fabricated-TV162-password-only";
         state
             .set_login_secret(
@@ -321,11 +323,16 @@ mod tests {
         let agent = schema::Agent::parse("tester", "label = \"Tester\"\npermissions {\n browser = true\n browser_secrets = [\"login\"]\n}\n").unwrap();
         let bodies = Arc::new(Mutex::new(Vec::new()));
         let received = bodies.clone();
+        let late_context = context.clone();
         let app = axum::Router::new()
             .route(
                 "/secret/origin",
-                axum::routing::post(|| async {
-                    axum::Json(json!({"origin":"https://example.com"}))
+                axum::routing::post(move || {
+                    let context = late_context.clone();
+                    async move {
+                        context.restrict();
+                        axum::Json(json!({"origin":"https://example.com"}))
+                    }
                 }),
             )
             .route(
@@ -477,6 +484,15 @@ mod tests {
                 .contains("secret_not_allowed")
         );
         assert_eq!(bodies.lock().unwrap().len(), 3);
+        let observed = reads.take();
+        assert!(observed.len() >= 10);
+        for actual in observed {
+            let actual = actual.expect("secret-fill read scope");
+            assert_eq!(actual, context);
+            assert!(actual.is_restricted());
+            assert_eq!(actual.stop_generation(), Some(generation));
+        }
+        assert!(script::RunContext::current().is_none());
         server.abort();
     }
 }
