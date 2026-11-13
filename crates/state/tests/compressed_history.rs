@@ -22,6 +22,15 @@ fn mixed_legacy_new_restore_and_restart() {
     let new = state
         .record_distinct_version("note", "task", &author, &large)
         .unwrap();
+    let mut devices = Vec::new();
+    for token in [&old.token, &new.token] {
+        let (device, _) = state.pair_device(&state::NewDevice {
+            name: "fixture", platform: "android", capabilities: "[]", settings: "{}",
+        }).unwrap();
+        state.set_device_bases(&device.id, &[("note".into(), token.clone())]).unwrap();
+        devices.push(device.id);
+    }
+    assert_eq!(state.prune(&state::PrunePolicy { keep_versions: Some(1), max_age_ms: None }).unwrap(), 0);
     for (token, content) in [(&old.token, legacy), (&new.token, large.as_str())] {
         assert_eq!(
             state
@@ -37,6 +46,9 @@ fn mixed_legacy_new_restore_and_restart() {
     assert_eq!(state.restore_from_trash("note").unwrap().content, large);
     drop(state);
     let state = State::open(&path, None).unwrap();
+    for (device, token) in devices.iter().zip([&old.token, &new.token]) {
+        assert_eq!(state.device_bases(device).unwrap(), vec![("note".into(), token.clone())]);
+    }
     assert_eq!(state.history("note").unwrap(), vec![old, new]);
     // Restoring legacy content also remains exact.
     state
