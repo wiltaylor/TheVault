@@ -99,8 +99,17 @@ fn oversized_history_creates_updates_recovers_and_restores() {
 
 #[test]
 fn compressed_and_legacy_restore_are_exact_and_corruption_writes_nothing() {
+    struct FixedClock;
+
+    impl state::Clock for FixedClock {
+        fn now_ms(&self) -> i64 {
+            1_700_000_000_000
+        }
+    }
+
     let dir = tempfile::tempdir().unwrap();
-    let w = setup(dir.path());
+    // Restore writes a fresh updated stamp. Freeze time to compare every byte.
+    let w = setup(dir.path()).with_clock(Arc::new(FixedClock));
     let by = Author::Token("fixture".into());
     let a = w
         .create(
