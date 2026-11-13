@@ -109,12 +109,23 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
         .unwrap();
     assert_eq!(invalid["reason"], "invalid_definition");
     for name in ["agent_safety", "scam"] {
-        std::fs::write(server.vault_path().join(format!("classifiers/{name}.wcl")), CONFIG).unwrap();
-        let result = client.put(server.url(&format!("/api/classifiers/{name}/account")))
-            .header("cookie", &cookie).json(&json!({"account": selected})).send().unwrap();
+        std::fs::write(
+            server.vault_path().join(format!("classifiers/{name}.wcl")),
+            CONFIG,
+        )
+        .unwrap();
+        let result = client
+            .put(server.url(&format!("/api/classifiers/{name}/account")))
+            .header("cookie", &cookie)
+            .json(&json!({"account": selected}))
+            .send()
+            .unwrap();
         assert!(result.status().is_success(), "{}", result.text().unwrap());
-        assert_eq!(std::fs::read_to_string(server.vault_path().join(format!("classifiers/{name}.wcl"))).unwrap(),
-            CONFIG.replace("account = \"router\"", "account = \"OpenRouter\""));
+        assert_eq!(
+            std::fs::read_to_string(server.vault_path().join(format!("classifiers/{name}.wcl")))
+                .unwrap(),
+            CONFIG.replace("account = \"router\"", "account = \"OpenRouter\"")
+        );
     }
     let result = client
         .put(server.url("/api/classifiers/incoming/account"))
@@ -438,22 +449,25 @@ notify {
 "#;
 
 fn setup(fake: &FakeDecisions, config: &str) -> (TestServer, Client) {
-    let server = TestServer::start_with_args(|vault| {
-        std::fs::create_dir_all(vault.join("types")).unwrap();
-        std::fs::create_dir_all(vault.join("classifiers")).unwrap();
-        std::fs::write(
-            vault.join("types/memo.wcl"),
-            r#"
+    let server = TestServer::start_with_args(
+        |vault| {
+            std::fs::create_dir_all(vault.join("types")).unwrap();
+            std::fs::create_dir_all(vault.join("classifiers")).unwrap();
+            std::fs::write(
+                vault.join("types/memo.wcl"),
+                r#"
 label = "Memo"
 field status { kind = "string" }
 field scam_probability { kind = "float" }
 field category { kind = "string" }
 template default { tab Main { slot title } }
 "#,
-        )
-        .unwrap();
-        std::fs::write(vault.join("classifiers/incoming.wcl"), config).unwrap();
-    }, &["--test-clock".as_ref(), "2026-11-13T12:00:00Z".as_ref()]);
+            )
+            .unwrap();
+            std::fs::write(vault.join("classifiers/incoming.wcl"), config).unwrap();
+        },
+        &["--test-clock".as_ref(), "2026-11-13T12:00:00Z".as_ref()],
+    );
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
