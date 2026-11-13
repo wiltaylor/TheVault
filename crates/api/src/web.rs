@@ -137,14 +137,15 @@ mod tests {
         let res = file_response("index.html", vec![], false, true);
         let h = res.headers();
         assert!(h.contains_key(header::CONTENT_SECURITY_POLICY));
-        assert_eq!(
-            h[header::STRICT_TRANSPORT_SECURITY],
-            "max-age=31536000"
-        );
+        assert_eq!(h[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
         assert_eq!(h[header::X_FRAME_OPTIONS], "DENY");
         assert_eq!(h[header::REFERRER_POLICY], "no-referrer");
         let plain = file_response("index.html", vec![], false, false);
-        assert!(!plain.headers().contains_key(header::STRICT_TRANSPORT_SECURITY));
+        assert!(
+            !plain
+                .headers()
+                .contains_key(header::STRICT_TRANSPORT_SECURITY)
+        );
     }
 
     #[test]
