@@ -173,8 +173,6 @@ pub fn default_name() -> String {
         .unwrap_or_else(|| "Linux desktop".to_owned())
 }
 
-/// Pairs with the server in `req`, stores the token in `tokens` and records the device in `dir`.
-/// It blocks while it waits for the server.
 static PAIRING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Native owner action only. Leave the link intact on credential deletion failure.
@@ -187,6 +185,8 @@ pub fn unpair(dir: &Path, tokens: &dyn TokenStore) -> Result<(), String> {
     Ok(())
 }
 
+/// Pairs with the server in `req`, stores the token in `tokens` and records the device in `dir`.
+/// It blocks while it waits for the server.
 pub fn pair(dir: &Path, tokens: &dyn TokenStore, req: &PairRequest) -> Result<Device, String> {
     let _guard = PAIRING.lock().unwrap_or_else(|p| p.into_inner());
     if load(dir)?.is_some() {
