@@ -1893,6 +1893,12 @@ impl Writer {
     /// and `updated` times and its archived state, and is put back in canonical order.
     fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
         Self::check_memory_author(&change.type_name, author)?;
+        if let Author::Token(name) = author
+            && self.state.device_for_token(name)?.is_some()
+            && let Some(doc) = change.doc.as_ref()
+        {
+            self.check_remote_calendar(&change.id, &change.type_name, doc)?;
+        }
         if change.type_name == "outbox" && change.event == Event::Delete {
             let (_, old) = self.existing(&change.id)?;
             let doc = Input::Wcl(old).parse(&note_path("outbox", &change.id))?;

@@ -192,6 +192,11 @@ impl Writer {
                 self.check_base(id, old, &text, Some(base))?;
             }
         }
+        // Only the authenticated home-server feed is authoritative. Peer imports
+        // cannot introduce provider capabilities, even when their author is trusted.
+        if !matches!(expect, Expect::Any) {
+            self.check_remote_calendar(id, type_name, &doc)?;
+        }
         if old_type.as_deref() == Some(type_name) && self.vault.read_text(&path)? == wcl {
             return Ok(Saved {
                 id: id.to_owned(),
@@ -240,6 +245,47 @@ impl Writer {
         };
         self.announce(std::slice::from_ref(&saved), &|_| None);
         Ok(saved)
+    }
+
+    /// Denial only: never run handlers or rewrite an untrusted incoming document.
+    pub(crate) fn check_remote_calendar(
+        &self,
+        id: &str,
+        type_name: &str,
+        next: &schema::Doc,
+    ) -> Result<()> {
+        let old = match self.locate(id)? {
+            Some(ty) => {
+                let text = self.vault.read_text(&note_path(&ty, id))?;
+                Some((ty.clone(), Input::Wcl(text).parse(&note_path(&ty, id))?))
+            }
+            None => None,
+        };
+        let calendar = |ty: &str| matches!(ty, "event" | "event_series");
+        if !calendar(type_name) && !old.as_ref().is_some_and(|(ty, _)| calendar(ty)) {
+            return Ok(());
+        }
+        let previous = old.as_ref().map(|(_, doc)| doc);
+        let changed = [
+            "google_ref", "etag", "attendees", "attendees_raw", "my_response", "status",
+        ]
+        .into_iter()
+        .any(|name| next.field(name) != previous.and_then(|doc| doc.field(name)));
+        let snapshots = |doc: &schema::Doc| {
+            doc.blocks.iter()
+                .filter(|b| b.kind == "dict" && b.label() == Some("snapshot"))
+                .cloned().collect::<Vec<_>>()
+        };
+        let snapshot_changed = snapshots(next) != previous.map(snapshots).unwrap_or_default();
+        let send = next.field("send_updates");
+        let send_changed = send.is_some()
+            && send != previous.and_then(|doc| doc.field("send_updates"));
+        if changed || snapshot_changed || send_changed {
+            return Err(Error::Rejected(
+                "remote writes may not change protected calendar metadata or send_updates".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Write a note exactly as the home server holds it, or move it to the trash, and index it.
