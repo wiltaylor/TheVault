@@ -1,5 +1,3 @@
-/src/tv-260/crates/server/tests/sync.rs:
-
 //! S1: the sync handshake, the change feed over every kind of vault file, device writes that
 //! always add a version, and base versions that survive pruning (D20, D27, D29).
 

@@ -66,10 +66,36 @@ fn calendar_home_feed_is_trusted_but_device_upload_metadata_is_denied() {
         .sync_engine(device.remote.clone(), AssetPolicy::desktop())
         .unwrap();
     let result = std::thread::scope(|s| s.spawn(|| engine.sync()).join().unwrap());
-    assert!(result.is_err(), "{result:?}");
+    let report = result.unwrap();
+    assert!(report.pushed.is_empty(), "{report:?}");
+    assert!(report.held.iter().any(|held| held.note_id == id), "{report:?}");
     let unchanged = admin.call("GET", &format!("/api/notes/{id}"), None, 200);
     assert_eq!(unchanged["wcl"], made["wcl"]);
     assert_eq!(unchanged["version"], made["version"]);
+
+    // A title-only edit retaining the admitted Google metadata uploads normally.
+    let local = device.embedded.writer().read(id).unwrap();
+    device.embedded.writer().update(
+        id,
+        &writer::Input::Wcl("title = \"allowed\"\ngoogle_ref = \"real\"\n".into()),
+        Some(&local.version),
+        &state::Author::Session("owner".into()),
+    ).unwrap();
+    assert!(device.sync().pushed.iter().any(|pushed| pushed == id));
+
+    // A device-created note is also checked, not just a replacement. Simulate
+    // forged offline bytes without running a provider or a privileged handler.
+    let created = device.embedded.writer().create(
+        "event", &writer::Input::Wcl("title = \"offline\"\n".into()),
+        &state::Author::Session("owner".into()),
+    ).unwrap();
+    device.embedded.writer().apply_remote(&writer::Remote::Put {
+        id: created.id.clone(), type_name: "event".into(),
+        wcl: "title = \"forged create\"\nsend_updates = true\n".into(),
+    }).unwrap();
+    let report = device.sync();
+    assert!(report.held.iter().any(|held| held.note_id == created.id));
+    admin.call("GET", &format!("/api/notes/{}", created.id), None, 404);
 }
 
 fn seed(vault: &std::path::Path) {
