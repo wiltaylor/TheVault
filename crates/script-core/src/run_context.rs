@@ -403,7 +403,8 @@ mod tests {
             .unwrap();
         assert_eq!(activity.items[0].kind, "run.recovery_unavailable");
         assert_eq!(activity.items[0].subject.as_deref(), Some("missing"));
-        for id in [active.id()] {
+        {
+            let id = active.id();
             let recovered = RunContext::recover(&database, id).unwrap();
             assert!(recovered.is_restricted());
             assert!(
