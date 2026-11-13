@@ -712,6 +712,7 @@ export interface AgentList {
 
 /** An agent's own permissions (agents G4). `null` tools or types means all of them. */
 export interface AgentPermissions {
+  approval_rules?: AgentApprovalRule[];
   tools: string[] | null;
   types: string[] | null;
   change_types?: string[] | null;
@@ -746,6 +747,13 @@ export interface AgentPermissions {
    * sub agents.
    */
   subagents?: AgentSubagents;
+}
+
+export interface AgentApprovalRule {
+  operation: string;
+  note_type: string;
+  fields: string[];
+  daily_cap: number;
 }
 
 /** An agent's script switches (script-tools T7). */
