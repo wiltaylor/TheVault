@@ -501,27 +501,25 @@ describe("the General tab", () => {
 });
 
 describe("the Permissions tab", () => {
-  it("shows stored rules read-only in the app and preserves them on an unrelated Save", async () => {
+  it("shows stored rules in the app's read-only WCL without editing or Save", async () => {
     appInfo.mockResolvedValue({ platform: "android" });
     const rules: NonNullable<Agent["permissions"]["approval_rules"]> = [
       { operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 },
       { operation: "delete", note_type: "email", fields: [], daily_cap: 5 },
     ];
-    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, approval_rules: rules } }));
+    const wcl = `${triage().wcl}permissions {\n  approval_rule { operation = "update" type = "email" fields = ["processed"] daily_cap = 200 }\n}\n`;
+    agent.mockResolvedValue(triage({ wcl, permissions: { ...triage().permissions, approval_rules: rules } }));
     await open();
-    const p = await tab("Permissions");
-    expect(await p.findByText(/update email: processed — 200/)).toBeTruthy();
-    expect(p.getByText(/held, never automatic/)).toBeTruthy();
-    expect(p.getByText("Open the web app with an owner session to edit rules.")).toBeTruthy();
-    expect(p.queryByLabelText("Rule type")).toBeNull();
-    expect(p.queryByText("Add update rule")).toBeNull();
-    expect(p.queryByRole("button", { name: /Remove rule/ })).toBeNull();
-    const general = await tab("General");
-    fireEvent.input(general.getByLabelText("Label"), { target: { value: "App renamed" } });
-    fireEvent.click(general.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(putAgent).toHaveBeenCalled());
-    expect(sent().label).toBe("App renamed");
-    expect((sent().permissions as Agent["permissions"]).approval_rules).toEqual(rules);
+    expect(await screen.findByText("Edit agents and skills in the web app")).toBeTruthy();
+    for (const name of ["General", "Permissions", "File"]) {
+      fireEvent.click(screen.getByRole("tab", { name }));
+      expect(screen.getByLabelText("Agent file").textContent).toBe(wcl);
+      expect(screen.queryByLabelText("Rule type")).toBeNull();
+      expect(screen.queryByText("Add update rule")).toBeNull();
+      expect(screen.queryByRole("button", { name: /Remove rule/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    }
+    expect(putAgent).not.toHaveBeenCalled();
   });
 
   it("round-trips an explicit approval rule through Save and reload", async () => {
