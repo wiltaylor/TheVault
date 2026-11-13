@@ -95,6 +95,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn terminal_pruning_rolls_back_job_deletion_when_reference_cleanup_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        let id = s.enqueue_trigger("a", "t", None, "{}", 0).unwrap().unwrap();
+        let conn = s.conn();
+        conn.execute(
+            "UPDATE trigger_jobs SET status='succeeded' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO trigger_provenance VALUES (?1,'old')", [id])
+            .unwrap();
+        conn.execute_batch("CREATE TRIGGER refuse_prune BEFORE DELETE ON trigger_provenance BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;").unwrap();
+        assert!(prune_terminal(&conn).is_err());
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM trigger_jobs WHERE id=?1", [id], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        conn.execute_batch("DROP TRIGGER refuse_prune").unwrap();
+        prune_terminal(&conn).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM trigger_provenance", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
     fn mail_triage_batch_membership_survives_restart_and_failed_batches_can_be_selected() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.db");
@@ -499,6 +530,14 @@ pub struct TriggerQueueStats {
 }
 
 fn prune_terminal(conn: &rusqlite::Connection) -> Result<()> {
+    // Some callers already own the queue transaction. Otherwise start one so
+    // a crash cannot leave references attached to a subsequently reused row ID.
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        prune_terminal(&tx)?;
+        tx.commit()?;
+        return Ok(());
+    }
     conn.execute("DELETE FROM trigger_jobs WHERE status IN ('succeeded','failed','expired','cancelled') AND (note IS NULL OR (id NOT IN (SELECT max(id) FROM trigger_jobs WHERE note IS NOT NULL AND status IN ('succeeded','failed','expired','cancelled') GROUP BY agent,trigger,note) AND id NOT IN (SELECT max(id) FROM trigger_jobs WHERE note IS NOT NULL AND status='succeeded' GROUP BY agent,trigger,note)))", [])?;
     conn.execute(
         "DELETE FROM trigger_provenance WHERE job_id NOT IN (SELECT id FROM trigger_jobs)",

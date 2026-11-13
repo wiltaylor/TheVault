@@ -178,18 +178,21 @@ impl RunContext {
                 return Err(error);
             }
         };
+        // Own the lease before the fallible audit. An audit failure drops this
+        // context and releases its token with the conservative recovered values.
+        let context = Self(Arc::new(Mutex::new(State {
+            restricted: snapshot.is_restricted(),
+            stop_generation: snapshot.stop_generation(),
+            parent: None,
+            durable: vec![lease],
+        })));
         if snapshot
             .stop_generation()
             .is_none_or(|generation| database.automation_commit(generation).is_err())
         {
             database.record_stale_run(id)?;
         }
-        Ok(Self(Arc::new(Mutex::new(State {
-            restricted: snapshot.is_restricted(),
-            stop_generation: snapshot.stop_generation(),
-            parent: None,
-            durable: vec![lease],
-        }))))
+        Ok(context)
     }
 
     /// Capture the synchronous caller's context before crossing a worker boundary.

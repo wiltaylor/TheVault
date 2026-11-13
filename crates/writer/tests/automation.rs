@@ -16,6 +16,42 @@ fn setup() -> (tempfile::TempDir, Writer) {
 }
 
 #[test]
+fn failed_recovery_audit_releases_each_new_lease() {
+    let (dir, w) = setup();
+    let context = script_core::RunContext::default();
+    let id = context.persist(w.state()).unwrap();
+    drop(context);
+    w.state().set_automation_stopped(true).unwrap();
+    w.state().set_automation_stopped(false).unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER refuse_audit BEFORE INSERT ON activity BEGIN SELECT RAISE(ABORT,'injected audit failure'); END;").unwrap();
+    for _ in 0..3 {
+        assert!(script_core::RunContext::recover(w.state(), &id).is_err());
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM run_provenance_leases", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(w.state().load_run_provenance(&id).is_sealed());
+    }
+    conn.execute_batch("DROP TRIGGER refuse_audit").unwrap();
+    let recovered = script_core::RunContext::recover(w.state(), &id).unwrap();
+    assert!(
+        w.state()
+            .automation_commit(recovered.stop_generation().unwrap())
+            .is_err()
+    );
+    drop(recovered);
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM run_provenance_leases", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn shared_registry_reuses_joined_aliases_and_seals_after_last_queue_reference() {
     let (_dir, w) = setup();
     let a = script_core::RunContext::default();

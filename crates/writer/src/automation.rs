@@ -82,8 +82,9 @@ impl Writer {
                 .filter_map(|id| contexts.remove(&id))
                 .collect())
         })();
-        // No registry lock is held during final-owner sealing. Read errors keep
-        // all owners rather than guessing which pending references are alive.
+        // Pruned owners seal outside this registry lock (replacement during
+        // publication can seal under it). State is a leaf in the lock order.
+        // Read errors keep all owners rather than guessing which are alive.
         drop(removed);
     }
 
