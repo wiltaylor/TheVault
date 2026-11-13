@@ -42,9 +42,9 @@ pub fn lock_owner(root: &std::path::Path) -> std::io::Result<std::fs::File> {
 fn owner_lock_error(e: rustix::io::Errno) -> std::io::Error {
     if e == rustix::io::Errno::WOULDBLOCK {
         std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                format!("vault is in use by a server or history repair: {e}"),
-            )
+            std::io::ErrorKind::WouldBlock,
+            format!("vault is in use by a server or history repair: {e}"),
+        )
     } else {
         e.into()
     }
@@ -53,9 +53,15 @@ fn owner_lock_error(e: rustix::io::Errno) -> std::io::Error {
 #[test]
 fn owner_lock_preserves_non_contention_error() {
     let error = owner_lock_error(rustix::io::Errno::OPNOTSUPP);
-    assert_eq!(error.raw_os_error(), Some(rustix::io::Errno::OPNOTSUPP.raw_os_error()));
+    assert_eq!(
+        error.raw_os_error(),
+        Some(rustix::io::Errno::OPNOTSUPP.raw_os_error())
+    );
     assert!(!error.to_string().contains("in use"));
-    assert_eq!(owner_lock_error(rustix::io::Errno::WOULDBLOCK).kind(), std::io::ErrorKind::WouldBlock);
+    assert_eq!(
+        owner_lock_error(rustix::io::Errno::WOULDBLOCK).kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }
 
 /// Errors from the vault store.
