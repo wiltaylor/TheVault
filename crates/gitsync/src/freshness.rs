@@ -101,23 +101,32 @@ mod tests {
         drop(State::open(&database, Some(key)).unwrap());
         let barrier = std::sync::Barrier::new(8);
         let mut sequences = std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..8).map(|i| {
-                let barrier = &barrier;
-                let database = &database;
-                let key_file = &key_file;
-                scope.spawn(move || {
-                    barrier.wait();
-                    let _lock = lock(root).unwrap();
-                    let key = state::SecretKey::load_file(key_file).unwrap();
-                    let state = State::open(database, Some(key)).unwrap();
-                    publication(&state, "publisher", &crate::pack::sha256_hex(&[i])).unwrap()
+            let handles: Vec<_> = (0..8)
+                .map(|i| {
+                    let barrier = &barrier;
+                    let database = &database;
+                    let key_file = &key_file;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        let _lock = lock(root).unwrap();
+                        let key = state::SecretKey::load_file(key_file).unwrap();
+                        let state = State::open(database, Some(key)).unwrap();
+                        publication(&state, "publisher", &crate::pack::sha256_hex(&[i])).unwrap()
+                    })
                 })
-            }).collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
         });
         sequences.sort_unstable();
         assert_eq!(sequences, (1..=8).collect::<Vec<_>>());
-        let state = State::open(&database, Some(state::SecretKey::load_file(&key_file).unwrap())).unwrap();
+        let state = State::open(
+            &database,
+            Some(state::SecretKey::load_file(&key_file).unwrap()),
+        )
+        .unwrap();
         let hash = crate::pack::sha256_hex(b"after restart");
         assert_eq!(publication(&state, "publisher", &hash).unwrap(), 9);
         assert_eq!(publication(&state, "publisher", &hash).unwrap(), 9);
