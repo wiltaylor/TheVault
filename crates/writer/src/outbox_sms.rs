@@ -327,7 +327,11 @@ mod tests {
                 ambient.scope(|| {
                     let result = writer.finish_outbox_sms(&command);
                     if restricted {
-                        assert!(result.unwrap_err().contains(script_core::OUTSIDE_TEXT_REFUSAL));
+                        assert!(
+                            result
+                                .unwrap_err()
+                                .contains(script_core::OUTSIDE_TEXT_REFUSAL)
+                        );
                     } else {
                         result.unwrap();
                     }
