@@ -125,6 +125,8 @@ pub struct Agent {
 /// An agent's own permissions (agents G4). Nothing is inherited from Settings > AI.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Permissions {
+    /// Explicit, bounded future approval. Empty never adds an automatic allowance.
+    pub approval_rules: Vec<ApprovalRule>,
     /// Allow interactive note actions to archive or trash messages in Gmail. Off by default.
     pub gmail_actions: bool,
     /// The tools the agent may use; `None` is every tool the server offers.
@@ -151,6 +153,17 @@ pub struct Permissions {
     pub scripts: Scripts,
     /// Starting sub agents (subagents U2). Written only when it differs from the default.
     pub subagents: Subagents,
+}
+
+/// A rule grants approval, not permission. The API still checks the live agent's limits.
+/// Destructive operations remain held until the outside-text and destructive policy layer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ApprovalRule {
+    pub operation: String,
+    pub note_type: String,
+    pub fields: Vec<String>,
+    pub daily_cap: i64,
 }
 
 impl Permissions {
@@ -864,6 +877,14 @@ impl Agent {
         let p = &self.permissions;
         if !p.is_default() {
             out.push_str("\npermissions {\n");
+            for rule in &p.approval_rules {
+                out.push_str("  approval_rule {\n");
+                field(&mut out, "    ", "operation", &quoted(&rule.operation));
+                field(&mut out, "    ", "type", &quoted(&rule.note_type));
+                field(&mut out, "    ", "fields", &list(&rule.fields));
+                field(&mut out, "    ", "daily_cap", &rule.daily_cap.to_string());
+                out.push_str("  }\n");
+            }
             if let Some(tools) = &p.tools {
                 field(&mut out, "  ", "tools", &list(tools));
             }
@@ -1240,6 +1261,60 @@ impl Reader<'_> {
         let mut seen = HashSet::new();
         for b in &d.blocks {
             let at = format!("permissions.{}", b.kind);
+            if b.kind == "approval_rule" {
+                self.c.only_blocks(&b.body, &[], &at);
+                self.known(
+                    &b.body,
+                    &["operation", "type", "fields", "daily_cap"],
+                    &format!("{at}."),
+                    "unknown approval rule field",
+                );
+                if !b.labels.is_empty() {
+                    self.c.fail(&at, "takes no labels");
+                }
+                let operation = b
+                    .body
+                    .field("operation")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let note_type = b
+                    .body
+                    .field("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !matches!(operation, "update" | "archive" | "delete") || !is_name(note_type) {
+                    self.c.fail(
+                        &at,
+                        "requires operation update/archive/delete and a type name",
+                    );
+                }
+                let fields = self
+                    .names(&b.body, "fields", &at, "field")
+                    .unwrap_or_default();
+                if (operation == "update" && fields.is_empty())
+                    || (operation != "update" && !fields.is_empty())
+                {
+                    self.c.fail(
+                        &at,
+                        "update requires explicit fields; destructive rules take no fields",
+                    );
+                }
+                let daily_cap = match b.body.field("daily_cap") {
+                    Some(Value::Int(n)) if *n >= 0 => *n,
+                    None => 0,
+                    _ => {
+                        self.c.fail(&at, "daily_cap must be a nonnegative integer");
+                        0
+                    }
+                };
+                p.approval_rules.push(ApprovalRule {
+                    operation: operation.into(),
+                    note_type: note_type.into(),
+                    fields,
+                    daily_cap,
+                });
+                continue;
+            }
             let switches: &[&str] = match b.kind.as_str() {
                 "confirm" => &CONFIRM_SWITCHES,
                 "web" => &WEB_SWITCHES,

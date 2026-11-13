@@ -2,8 +2,12 @@
 //! binary, and linking them all saturated the disk. Run one module with
 //! `cargo test -p state --test main <module>::`.
 
+/// The schema version the current build migrates every older `state.db` to.
+const EXPECTED_SCHEMA_VERSION: i64 = 28;
+
 mod activity;
 mod ai_usage;
+mod approval_quota;
 mod changes;
 mod classifiers;
 mod commands;
