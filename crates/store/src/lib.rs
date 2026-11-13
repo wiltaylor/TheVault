@@ -34,8 +34,14 @@ pub fn lock_owner(root: &std::path::Path) -> std::io::Result<std::fs::File> {
         .create(true)
         .truncate(false)
         .open(root.join(".vault/owner.lock"))?;
-    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, format!("vault is in use by a server or history repair: {e}")))?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
+        |e| {
+            std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                format!("vault is in use by a server or history repair: {e}"),
+            )
+        },
+    )?;
     Ok(file)
 }
 

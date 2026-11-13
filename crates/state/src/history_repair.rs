@@ -40,7 +40,10 @@ fn scan(conn: &Connection) -> Result<Vec<CorruptRow>> {
 
 /// No migrations, writes, retention or normal State open.
 pub fn check(path: &Path) -> Result<Vec<CorruptRow>> {
-    scan(&Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?)
+    scan(&Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?)
 }
 
 #[derive(Debug, Serialize)]
@@ -58,16 +61,25 @@ pub fn repair(path: &Path, contents: &BTreeMap<String, Option<String>>) -> Resul
     let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     let schema: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if schema != crate::SCHEMA_VERSION {
-        return Err(Error::Corrupt("history repair requires the current state schema".into()));
+        return Err(Error::Corrupt(
+            "history repair requires the current state schema".into(),
+        ));
     }
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let corrupt = scan(&tx)?;
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default().as_millis() as i64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
     let mut actions = Vec::new();
-    for row in corrupt.into_iter().filter(|r| contents.contains_key(&r.note_id)) {
+    for row in corrupt
+        .into_iter()
+        .filter(|r| contents.contains_key(&r.note_id))
+    {
         let replacement = if row.head {
-            let content = contents[&row.note_id].as_ref().ok_or_else(|| Error::Corrupt("corrupt head needs current note file content".into()))?;
+            let content = contents[&row.note_id].as_ref().ok_or_else(|| {
+                Error::Corrupt("corrupt head needs current note file content".into())
+            })?;
             let encoded = if content.len() > MAX_SNAPSHOT_BYTES {
                 rusqlite::types::Value::Text(content.clone())
             } else {
@@ -77,12 +89,31 @@ pub fn repair(path: &Path, contents: &BTreeMap<String, Option<String>>) -> Resul
             crate::random_bytes(&mut raw);
             let token = crate::to_hex(&raw);
             tx.execute("INSERT INTO versions (note_id,note_type,token,author_kind,author_name,at_ms,content,started_ms,content_bytes) VALUES (?1,?2,?3,'token','history-repair',?4,?5,?4,?6)", params![row.note_id,row.note_type,token,now,encoded,content.len() as i64])?;
-            tx.execute("UPDATE heads SET token=?2 WHERE note_id=?1", params![row.note_id,token])?;
-            crate::changes::journal(&tx, &crate::changes::ChangeKey::Note(row.note_id.clone()), true, now)?;
+            tx.execute(
+                "UPDATE heads SET token=?2 WHERE note_id=?1",
+                params![row.note_id, token],
+            )?;
+            crate::changes::journal(
+                &tx,
+                &crate::changes::ChangeKey::Note(row.note_id.clone()),
+                true,
+                now,
+            )?;
             Some(token)
-        } else { None };
+        } else {
+            None
+        };
         tx.execute("DELETE FROM versions WHERE token=?1", [&row.version])?;
-        let action = Action { note_id: row.note_id, version: row.version, action: if row.head { "replace_corrupt_head" } else { "drop_corrupt_version" }, replacement };
+        let action = Action {
+            note_id: row.note_id,
+            version: row.version,
+            action: if row.head {
+                "replace_corrupt_head"
+            } else {
+                "drop_corrupt_version"
+            },
+            replacement,
+        };
         let id = crate::activity::next_id(&tx, now)?;
         let detail = serde_json::to_string(&action).map_err(|e| Error::Corrupt(e.to_string()))?;
         tx.execute("INSERT INTO activity (id,at_ms,kind,category,actor_kind,actor,summary,subject_kind,subject,detail) VALUES (?1,?2,'history.repair','notes','token','history-repair','Offline history repair','note',?3,?4)", params![id,now,action.note_id,detail])?;
