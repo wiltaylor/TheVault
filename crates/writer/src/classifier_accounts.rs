@@ -15,7 +15,10 @@ impl Writer {
             let path = format!("classifiers/{name}.wcl");
             let source = w.vault().read_text(&path)?;
             let text = account_source(name, &source, account)?;
-            Ok::<_, Error>(vec![Change::ClassifierAccount { path, contents: text.into_bytes() }])
+            Ok::<_, Error>(vec![Change::ClassifierAccount {
+                path,
+                contents: text.into_bytes(),
+            }])
         })
     }
 }

@@ -73,9 +73,10 @@ impl Change {
     /// The vault path the change writes or removes.
     pub fn path(&self) -> &str {
         match self {
-            Change::Write { path, .. } | Change::ClassifierAccount { path, .. } | Change::Stage { path, .. } | Change::Delete { path } => {
-                path
-            }
+            Change::Write { path, .. }
+            | Change::ClassifierAccount { path, .. }
+            | Change::Stage { path, .. }
+            | Change::Delete { path } => path,
         }
     }
 }
@@ -135,7 +136,8 @@ impl Vault {
             let mut ops = Vec::with_capacity(changes.len());
             for (n, change) in changes.into_iter().enumerate() {
                 match change {
-                    Change::Write { path, contents } | Change::ClassifierAccount { path, contents } => {
+                    Change::Write { path, contents }
+                    | Change::ClassifierAccount { path, contents } => {
                         let name = n.to_string();
                         write_synced(&txn.join(&name), &contents)?;
                         ops.push(Op::Write { path, staged: name });
@@ -198,12 +200,22 @@ impl Vault {
             let real = self.contain(&self.resolve(&path)?)?;
             out.push(match change {
                 Change::ClassifierAccount { path, contents } => {
-                    if !path.strip_prefix("classifiers/").is_some_and(|name| !name.contains('/') && name.ends_with(".wcl")) {
-                        return Err(Error::InvalidPath { path, reason: "classifier account edit requires a classifier file".into() });
+                    if !path
+                        .strip_prefix("classifiers/")
+                        .is_some_and(|name| !name.contains('/') && name.ends_with(".wcl"))
+                    {
+                        return Err(Error::InvalidPath {
+                            path,
+                            reason: "classifier account edit requires a classifier file".into(),
+                        });
                     }
-                    let text = String::from_utf8(contents).map_err(|_| Error::NotUtf8(path.clone()))?;
+                    let text =
+                        String::from_utf8(contents).map_err(|_| Error::NotUtf8(path.clone()))?;
                     crate::parse_data_only(&text, &path)?;
-                    Change::ClassifierAccount { path, contents: text.into_bytes() }
+                    Change::ClassifierAccount {
+                        path,
+                        contents: text.into_bytes(),
+                    }
                 }
                 Change::Write { path, contents } if is_wcl(&path) => {
                     let text =

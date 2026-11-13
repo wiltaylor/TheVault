@@ -49,7 +49,9 @@ fn synced_changes(files: &[Change]) -> Vec<(String, bool)> {
     files
         .iter()
         .map(|c| match c {
-            Change::Write { path, .. } | Change::ClassifierAccount { path, .. } | Change::Stage { path, .. } => (path.clone(), true),
+            Change::Write { path, .. }
+            | Change::ClassifierAccount { path, .. }
+            | Change::Stage { path, .. } => (path.clone(), true),
             Change::Delete { path } => (path.clone(), false),
         })
         .filter(|(path, _)| synced_file(path).is_some())
