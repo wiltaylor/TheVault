@@ -28,6 +28,7 @@ mod tests {
                 scope: Scope::Write,
                 created_ms: 1,
                 last_used_ms: None,
+                expires_ms: None,
             };
             let value = token_json(&token);
             assert_eq!(value["kind"], kind);
@@ -43,6 +44,7 @@ fn token_json(t: &TokenInfo) -> Value {
         "kind": t.kind,
         "created": t.created_ms,
         "last_used": t.last_used_ms,
+        "expires": t.expires_ms,
     })
 }
 
@@ -73,6 +75,7 @@ fn check_name(name: &str) -> Result<(), ApiError> {
 pub struct CreateBody {
     name: String,
     scope: String,
+    expires: Option<i64>,
 }
 
 /// `POST /api/tokens`: create a token. The response is the only time its secret is shown.
@@ -84,7 +87,9 @@ pub async fn create(
     check_name(&body.name)?;
     let scope: Scope = body.scope.parse()?;
     let (info, secret) = blocking(w, move |w| {
-        let made = w.state().create_token(&body.name, scope)?;
+        let made = w
+            .state()
+            .create_token_with_expiry(&body.name, scope, body.expires)?;
         w.state().record_activity(
             NewActivity::new(
                 "auth.token_created",

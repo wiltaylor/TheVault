@@ -55,6 +55,7 @@ fn pairing_makes_a_write_token_bound_to_the_device() {
     let token = state.authenticate_token(&secret).unwrap().unwrap();
     assert_eq!(token.name, device.token_id);
     assert_eq!(token.scope, Scope::Write);
+    assert_eq!(token.expires_ms, None);
     assert_eq!(
         state.device(&device.id).unwrap().last_seen_ms,
         Some(1_000_500)
@@ -82,6 +83,21 @@ fn an_unknown_platform_is_refused_and_leaves_no_token() {
         .unwrap_err();
     assert!(matches!(err, Error::UnknownPlatform(_)), "{err}");
     assert!(state.list_tokens().unwrap().is_empty());
+}
+
+#[test]
+fn expired_credential_does_not_mark_device_seen() {
+    let dir = TempDir::new().unwrap();
+    let (state, clock) = open(&dir);
+    let (device, secret) = state.pair_device(&phone()).unwrap();
+    let conn = Connection::open(dir.path().join("state.db")).unwrap();
+    // Simulate an expiring stored credential without adding device-expiry issuance policy.
+    conn.execute("UPDATE tokens SET expires_ms=1000500", [])
+        .unwrap();
+    clock.advance(500);
+    assert!(state.authenticate_token(&secret).unwrap().is_none());
+    assert_eq!(state.device(&device.id).unwrap().last_seen_ms, None);
+    assert_eq!(state.list_tokens().unwrap()[0].last_used_ms, None);
 }
 
 #[test]

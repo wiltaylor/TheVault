@@ -95,6 +95,8 @@ pub enum Error {
     InvalidPrunePolicy(String),
     #[error("a token named {0:?} already exists")]
     TokenExists(String),
+    #[error("token expiry must be a future UTC Unix millisecond timestamp through year 9999")]
+    InvalidTokenExpiry,
     #[error("no token named {0:?}")]
     UnknownToken(String),
     #[error("unknown token scope {0:?}; expected read, write or admin")]
@@ -172,7 +174,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 28;
+const SCHEMA_VERSION: i64 = 29;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -691,7 +693,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=27 => {
+        0..=28 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -817,6 +819,14 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             tx.execute_batch(ai_usage::SCHEMA)?;
             tx.execute_batch(approval_quota::SCHEMA)?;
+            let has_expiry: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tokens') WHERE name='expires_ms')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_expiry {
+                tx.execute_batch("ALTER TABLE tokens ADD COLUMN expires_ms INTEGER;")?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

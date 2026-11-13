@@ -74,6 +74,7 @@ pub struct TokenInfo {
     pub scope: Scope,
     pub created_ms: i64,
     pub last_used_ms: Option<i64>,
+    pub expires_ms: Option<i64>,
 }
 
 /// Prefix of every token secret, so a leaked one is recognisable.
@@ -93,6 +94,7 @@ fn token_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(TokenInfo, String)> {
             scope: Scope::Read,
             created_ms: row.get(2)?,
             last_used_ms: row.get(3)?,
+            expires_ms: row.get(5)?,
         },
         row.get(1)?,
     ))
@@ -118,18 +120,41 @@ impl State {
         self.create_token_kind(name, scope, "user")
     }
 
+    /// Creates a user token with an optional UTC Unix millisecond expiry.
+    pub fn create_token_with_expiry(
+        &self,
+        name: &str,
+        scope: Scope,
+        expires_ms: Option<i64>,
+    ) -> Result<(TokenInfo, String)> {
+        self.insert_token(name, scope, "user", expires_ms)
+    }
+
     pub(crate) fn create_token_kind(
         &self,
         name: &str,
         scope: Scope,
         kind: &str,
     ) -> Result<(TokenInfo, String)> {
+        self.insert_token(name, scope, kind, None)
+    }
+
+    fn insert_token(
+        &self,
+        name: &str,
+        scope: Scope,
+        kind: &str,
+        expires_ms: Option<i64>,
+    ) -> Result<(TokenInfo, String)> {
         let secret = new_secret();
         let created_ms = self.now();
+        if expires_ms.is_some_and(|expiry| expiry <= created_ms || expiry > 253_402_300_799_999) {
+            return Err(Error::InvalidTokenExpiry);
+        }
         let inserted = self.conn().execute(
-            "INSERT INTO tokens (name, scope, secret_hash, created_ms, kind) VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO tokens (name, scope, secret_hash, created_ms, kind, expires_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (name) DO NOTHING",
-            params![name, scope.as_str(), token_hash(&secret), created_ms, kind],
+            params![name, scope.as_str(), token_hash(&secret), created_ms, kind, expires_ms],
         )?;
         if inserted == 0 {
             return Err(Error::TokenExists(name.to_owned()));
@@ -140,6 +165,7 @@ impl State {
             scope,
             created_ms,
             last_used_ms: None,
+            expires_ms,
         };
         Ok((info, secret))
     }
@@ -151,7 +177,8 @@ impl State {
         let row = conn
             .query_row(
                 "UPDATE tokens SET last_used_ms = ?1 WHERE secret_hash = ?2
-                 RETURNING name, scope, created_ms, last_used_ms, kind",
+                 AND (expires_ms IS NULL OR expires_ms > ?1)
+                 RETURNING name, scope, created_ms, last_used_ms, kind, expires_ms",
                 params![now, token_hash(secret)],
                 token_row,
             )
@@ -169,7 +196,7 @@ impl State {
     pub fn list_tokens(&self) -> Result<Vec<TokenInfo>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT name, scope, created_ms, last_used_ms, kind FROM tokens ORDER BY name",
+            "SELECT name, scope, created_ms, last_used_ms, kind, expires_ms FROM tokens ORDER BY name",
         )?;
         let rows = stmt.query_map([], token_row)?;
         rows.map(|r| finish_token(r?)).collect()
@@ -211,6 +238,10 @@ impl State {
     /// return it with its secret. `None` when the code is unknown, used or expired.
     pub fn redeem_agent_code(&self, code: &str) -> Result<Option<(TokenInfo, String)>> {
         let now = self.now();
+        let expires_ms = now
+            .checked_add(90 * 24 * 60 * 60 * 1000)
+            .filter(|expiry| *expiry <= 253_402_300_799_999)
+            .ok_or(Error::InvalidTokenExpiry)?;
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let taken = tx
@@ -235,8 +266,8 @@ impl State {
         let secret = new_secret();
         tx.execute("DELETE FROM tokens WHERE name = ?1", [&name])?;
         tx.execute(
-            "INSERT INTO tokens (name, scope, secret_hash, created_ms, kind) VALUES (?1, ?2, ?3, ?4, 'agent')",
-            params![name, scope.as_str(), token_hash(&secret), now],
+            "INSERT INTO tokens (name, scope, secret_hash, created_ms, kind, expires_ms) VALUES (?1, ?2, ?3, ?4, 'agent', ?5)",
+            params![name, scope.as_str(), token_hash(&secret), now, expires_ms],
         )?;
         tx.commit()?;
         let info = TokenInfo {
@@ -245,6 +276,7 @@ impl State {
             scope,
             created_ms: now,
             last_used_ms: None,
+            expires_ms: Some(expires_ms),
         };
         Ok(Some((info, secret)))
     }

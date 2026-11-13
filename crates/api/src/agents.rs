@@ -164,6 +164,7 @@ pub async fn redeem(
         "token": secret,
         "name": info.name,
         "scope": info.scope.as_str(),
+        "expires": info.expires_ms,
     });
     Ok((StatusCode::CREATED, Json(out)).into_response())
 }
