@@ -48,7 +48,7 @@ export function ClassifierSettings(props: { status: AiStatus }) {
                 <For each={s().accounts}>{(account) => <option value={account.id}>{account.name}</option>}</For>
               </select>
             </label>
-            <Show when={!row.account}><p>Currently inherits the vault default. Choosing an account pins its name in this classifier only.</p></Show>
+            <Show when={!row.account}><p>Currently inherits the vault default. Choosing an account stores its ID in this classifier only.</p></Show>
           </Show>
           <p>Types: {row.types?.join(", ") ?? "unavailable"}. Filter: {row.filter ?? "none"}.</p>
           <p>{row.name === "agent_safety"
