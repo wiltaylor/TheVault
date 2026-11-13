@@ -675,7 +675,10 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
     // Each mutation must reach the rule comparison, not just the added-rule case.
     for (name, after) in [
         ("helper", rules.replace("daily_cap = 1", "daily_cap = 5")),
-        ("helper", rules.replace("[\"status\"]", "[\"status\", \"title\"]")),
+        (
+            "helper",
+            rules.replace("[\"status\"]", "[\"status\", \"title\"]"),
+        ),
         ("helper", HELPER.to_owned()),
         ("new-helper", rules.clone()),
     ] {
@@ -692,7 +695,10 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
         assert_eq!(body["error"], "invalid");
         assert_eq!(body["issues"].as_array().unwrap().len(), 1);
         assert_eq!(body["issues"][0]["at"], "permissions.approval_rules");
-        assert_eq!(body["issues"][0]["message"], "only an owner session may change automatic approval rules");
+        assert_eq!(
+            body["issues"][0]["message"],
+            "only an owner session may change automatic approval rules"
+        );
         assert_eq!(api.agent_wcl("helper").unwrap(), saved);
         assert!(api.agent_wcl("new-helper").is_none());
     }
@@ -707,7 +713,10 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
     assert_eq!(body["error"], "invalid");
     assert_eq!(body["issues"].as_array().unwrap().len(), 1);
     assert_eq!(body["issues"][0]["at"], "permissions.approval_rules");
-    assert_eq!(body["issues"][0]["message"], "only an owner session may change automatic approval rules");
+    assert_eq!(
+        body["issues"][0]["message"],
+        "only an owner session may change automatic approval rules"
+    );
     assert_eq!(api.agent_wcl("helper").unwrap(), saved);
 
     // Legacy admin install codes redeem as write-scoped agent tokens.
@@ -752,28 +761,66 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
 #[test]
 fn assistant_settings_saves_keep_approval_rules() {
     let api = Api::start();
-    let login = api.client.post(api.server.url("/api/login"))
-        .json(&json!({"password": testkit::PASSWORD})).send().unwrap();
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
     assert_eq!(login.status(), StatusCode::OK);
-    let cookie = login.headers()[reqwest::header::SET_COOKIE].to_str().unwrap()
-        .split(';').next().unwrap();
+    let cookie = login.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
     let original = api.agent_wcl("assistant").unwrap();
     let rules = original.replace("permissions {", "permissions {\n  approval_rule {\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"status\"]\n    daily_cap = 1\n  }");
-    let response = api.client.put(api.server.url("/api/agents/assistant"))
-        .header("cookie", cookie).header("content-type", "text/plain")
-        .body(rules).send().unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "{}", response.text().unwrap());
+    let response = api
+        .client
+        .put(api.server.url("/api/agents/assistant"))
+        .header("cookie", cookie)
+        .header("content-type", "text/plain")
+        .body(rules)
+        .send()
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{}",
+        response.text().unwrap()
+    );
     let saved = schema::Agent::parse("assistant", &api.agent_wcl("assistant").unwrap()).unwrap();
     assert_eq!(saved.permissions.approval_rules.len(), 1);
     for session in [false, true] {
-        let prompt = if session { "Session prompt" } else { "Token prompt" };
-        let request = api.client.put(api.server.url("/api/integrations/ai/settings"))
+        let prompt = if session {
+            "Session prompt"
+        } else {
+            "Token prompt"
+        };
+        let request = api
+            .client
+            .put(api.server.url("/api/integrations/ai/settings"))
             .json(&json!({"system_prompt": prompt}));
-        let response = if session { request.header("cookie", cookie) }
-            else { request.bearer_auth(api.token()) }.send().unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{}", response.text().unwrap());
-        let after = schema::Agent::parse("assistant", &api.agent_wcl("assistant").unwrap()).unwrap();
-        assert_eq!(after.permissions.approval_rules, saved.permissions.approval_rules);
+        let response = if session {
+            request.header("cookie", cookie)
+        } else {
+            request.bearer_auth(api.token())
+        }
+        .send()
+        .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{}",
+            response.text().unwrap()
+        );
+        let after =
+            schema::Agent::parse("assistant", &api.agent_wcl("assistant").unwrap()).unwrap();
+        assert_eq!(
+            after.permissions.approval_rules,
+            saved.permissions.approval_rules
+        );
         assert_eq!(after.system_prompt, prompt);
     }
 }
@@ -784,17 +831,32 @@ fn assistant_settings_saves_keep_approval_rules() {
 #[test]
 fn http_agent_writers_install_acting_authors() {
     for (source, marker, author) in [
-        (include_str!("../../api/src/agent_files.rs"), "w.put_agent(", "writer::acting_as(&by)"),
-        (include_str!("../../api/src/ai_settings.rs"), "w.put_agent(schema::ASSISTANT_AGENT", "writer::acting_as(&by)"),
-        (include_str!("../../api/src/ai_chat.rs"), "pub fn apply_change_with_admin(", "writer::acting_as(author)"),
+        (
+            include_str!("../../api/src/agent_files.rs"),
+            "w.put_agent(",
+            "writer::acting_as(&by)",
+        ),
+        (
+            include_str!("../../api/src/ai_settings.rs"),
+            "w.put_agent(schema::ASSISTANT_AGENT",
+            "writer::acting_as(&by)",
+        ),
+        (
+            include_str!("../../api/src/ai_chat.rs"),
+            "pub(crate) fn apply_change_with_admin(",
+            "writer::acting_as(author)",
+        ),
     ] {
         let position = source.find(marker).unwrap();
-        let vicinity = if marker.starts_with("pub fn") {
+        let vicinity = if marker.starts_with("pub(crate) fn") {
             &source[position..position + 600]
         } else {
             &source[position.saturating_sub(2500)..position]
         };
-        assert!(vicinity.contains(author), "missing acting author at {marker}");
+        assert!(
+            vicinity.contains(author),
+            "missing acting author at {marker}"
+        );
     }
 }
 
