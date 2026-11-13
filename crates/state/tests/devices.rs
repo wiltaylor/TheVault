@@ -92,7 +92,8 @@ fn expired_credential_does_not_mark_device_seen() {
     let (device, secret) = state.pair_device(&phone()).unwrap();
     let conn = Connection::open(dir.path().join("state.db")).unwrap();
     // Simulate an expiring stored credential without adding device-expiry issuance policy.
-    conn.execute("UPDATE tokens SET expires_ms=1000500", []).unwrap();
+    conn.execute("UPDATE tokens SET expires_ms=1000500", [])
+        .unwrap();
     clock.advance(500);
     assert!(state.authenticate_token(&secret).unwrap().is_none());
     assert_eq!(state.device(&device.id).unwrap().last_seen_ms, None);
