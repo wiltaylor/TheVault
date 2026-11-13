@@ -309,25 +309,30 @@ fn client_address(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> Key {
     resolve(proxies, peer, headers).0
 }
 
+fn trusted_proxy(proxies: &[Proxy], peer: Key) -> Option<&Proxy> {
+    let peer = peer.map(|ip| ip.to_canonical());
+    proxies.iter().find(|p| Some(p.address) == peer)
+}
+
+#[derive(Clone, Copy)]
+pub struct TrustedProxy(pub bool);
+
 fn resolve(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> (Key, &'static str) {
     let peer = peer.map(|ip| ip.to_canonical());
-    let forwarded = proxies
-        .iter()
-        .find(|p| Some(p.address) == peer)
-        .and_then(|p| {
-            // Reject duplicate headers rather than guessing which one a proxy wrote.
-            let mut values = headers.get_all(p.header).iter();
-            let value = values.next()?.to_str().ok()?;
-            if values.next().is_some() {
-                return None;
-            }
-            let value = if p.header == "x-forwarded-for" {
-                value.rsplit(',').next()
-            } else {
-                Some(value)
-            }?;
-            Some((Some(key(value.trim().parse::<IpAddr>().ok()?)), p.header))
-        });
+    let forwarded = trusted_proxy(proxies, peer).and_then(|p| {
+        // Reject duplicate headers rather than guessing which one a proxy wrote.
+        let mut values = headers.get_all(p.header).iter();
+        let value = values.next()?.to_str().ok()?;
+        if values.next().is_some() {
+            return None;
+        }
+        let value = if p.header == "x-forwarded-for" {
+            value.rsplit(',').next()
+        } else {
+            Some(value)
+        }?;
+        Some((Some(key(value.trim().parse::<IpAddr>().ok()?)), p.header))
+    });
     forwarded.unwrap_or((
         peer.map(key),
         if peer.is_some() {
@@ -465,6 +470,9 @@ pub(crate) async fn check(
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
     let (address, source) = resolve(&limits.proxies, peer, request.headers());
+    request
+        .extensions_mut()
+        .insert(TrustedProxy(trusted_proxy(&limits.proxies, peer).is_some()));
     let info = Diagnostic {
         client_address: address.map(|ip| match ip {
             IpAddr::V4(_) => ip.to_string(),
