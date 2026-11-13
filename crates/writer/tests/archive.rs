@@ -41,6 +41,45 @@ fn author() -> Author {
 }
 
 #[test]
+fn oversized_history_creates_updates_recovers_and_restores() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = setup(dir.path());
+    let by = Author::Token("large-fixture".into());
+    let input = Input::Wcl(format!("title = \"{}\"\n", "x".repeat(64 * 1024 * 1024 + 1)));
+    let a = w.create("task", &input, &by).unwrap();
+    assert!(a.wcl.len() > 64 * 1024 * 1024);
+    let b = w
+        .update(
+            &a.id,
+            &Input::Wcl("title = \"small\"\n".into()),
+            Some(&a.version),
+            &by,
+        )
+        .unwrap();
+    // External edits exercise recover's record_version path with oversized content.
+    let path = dir.path().join(format!("notes/task/{}.wcl", a.id));
+    std::fs::write(&path, &a.wcl).unwrap();
+    drop(w);
+    let w = open(dir.path());
+    let current = w.current_version(&a.id).unwrap().unwrap();
+    assert_ne!(current, b.version);
+    assert_eq!(w.version(&a.id, &current).unwrap().content, a.wcl);
+    let restored = w
+        .restore_version(&a.id, &a.version, Some(&current), &by)
+        .unwrap();
+    assert_eq!(restored.wcl, a.wcl);
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    let kind: String = conn
+        .query_row(
+            "SELECT typeof(content) FROM versions WHERE token=?1",
+            [&a.version],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "text");
+}
+
+#[test]
 fn compressed_and_legacy_restore_are_exact_and_corruption_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let w = setup(dir.path());

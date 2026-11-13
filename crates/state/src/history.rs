@@ -27,7 +27,7 @@ pub const MERGE_GAP_MS: i64 = 2 * 60 * 1000;
 /// leaves a version every so often.
 pub const MERGE_SPAN_MS: i64 = 10 * 60 * 1000;
 
-/// Hard per-snapshot input and decoded limit. Legacy text remains readable unchanged.
+/// Compressed snapshot input and decoded limit. Larger snapshots use legacy text.
 pub const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const SNAPSHOT_MAGIC: &[u8; 4] = b"VHS\x01";
 const SNAPSHOT_HEADER: usize = 44;
@@ -189,7 +189,11 @@ impl State {
         content: &str,
         merge: bool,
     ) -> Result<Version> {
-        let encoded = encode_snapshot(content.as_bytes())?;
+        let encoded = if content.len() > MAX_SNAPSHOT_BYTES {
+            rusqlite::types::Value::Text(content.to_owned())
+        } else {
+            rusqlite::types::Value::Blob(encode_snapshot(content.as_bytes())?)
+        };
         let mut raw = [0u8; 16];
         random_bytes(&mut raw);
         let token = to_hex(&raw);
