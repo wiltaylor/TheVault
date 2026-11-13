@@ -148,10 +148,7 @@ impl BrowserBox {
             self.auth(http().delete(url))
                 .timeout(Duration::from_secs(40))
         });
-        let response = request
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let response = request.send().await.map_err(|e| e.to_string())?;
         if response.status().is_success() {
             Ok(())
         } else {
@@ -244,7 +241,9 @@ pub fn cleanup_retired(w: Arc<Writer>) {
         let mut offline_until = Instant::now();
         let mut offline_delay = Duration::from_secs(30);
         loop {
-            let ids = context.scope(|| w.retired_browser_profiles()).unwrap_or_default();
+            let ids = context
+                .scope(|| w.retired_browser_profiles())
+                .unwrap_or_default();
             retries.retain(|id, _| ids.contains(id));
             let now = Instant::now();
             let due: Vec<_> = ids
@@ -271,8 +270,8 @@ pub fn cleanup_retired(w: Arc<Writer>) {
                         let profile = b.clone().with_profile(id.clone());
                         let name = id.clone();
                         let context = context.clone();
-                        let task =
-                            deletes.spawn(async move { (id, profile.remove_profile(&context).await) });
+                        let task = deletes
+                            .spawn(async move { (id, profile.remove_profile(&context).await) });
                         task_ids.insert(task.id(), name);
                     }
                 } else {
