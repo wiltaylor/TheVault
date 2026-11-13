@@ -109,7 +109,7 @@ fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
             // Authenticated home-server feed may carry exactly the same fields.
             w.apply_remote(&writer::Remote::Put { id: ID.into(), type_name: ty.into(), wcl: text.clone() }).unwrap();
             let before = w.read(ID).unwrap();
-            let changed = text.replace("forged", "changed").replace("true", "\"all\"").replace("cancelled", "confirmed").replace("accepted", "declined");
+            let changed = text.replace("forged", "changed").replace("true", "\"none\"").replace("\"all\"", "\"none\"").replace("cancelled", "confirmed").replace("accepted", "declined");
             assert!(matches!(w.replace_remote(ID, ty, &changed, &before.version, &gitsync()), Err(Error::Rejected(_))));
             assert_eq!(w.read(ID).unwrap().wcl, before.wcl);
             assert_eq!(w.state().history(ID).unwrap().len(), 2);

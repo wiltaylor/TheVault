@@ -265,7 +265,9 @@ impl Writer {
         if !calendar(type_name) && !old.as_ref().is_some_and(|(ty, _)| calendar(ty)) {
             return Ok(());
         }
-        let previous = old.as_ref().map(|(_, doc)| doc);
+        // Metadata on a non-calendar note has never been admitted as calendar
+        // metadata. Carrying it across a type transition is a new capability.
+        let previous = old.as_ref().filter(|(ty, _)| calendar(ty)).map(|(_, doc)| doc);
         let changed = [
             "google_ref", "etag", "attendees", "attendees_raw", "my_response", "status",
         ]
