@@ -80,6 +80,7 @@ const CAPTURE_FLAG: &str = "--capture";
 
 /// The app's state, managed by Tauri.
 struct App {
+    unpair_armed: AtomicBool,
     http_warning: device::HttpWarning,
     app: AppHandle,
     /// The local vault and its embedded server, which a fresh start replaces.
@@ -258,6 +259,7 @@ pub fn run() {
             let live = Live::start(Arc::new(LiveShell(handle.clone())), remote_rx);
             let hotkey = Arc::new(Mutex::new(hotkey::Status::Starting));
             app.manage(App {
+                unpair_armed: AtomicBool::new(false),
                 http_warning,
                 app: handle.clone(),
                 local,
@@ -346,6 +348,17 @@ fn on_tray_menu(app: &AppHandle, id: &str) {
         tray::RESTART_TO_UPDATE => {
             if let Err(e) = self_update::restart_to_update(app) {
                 eprintln!("thevault: {e}");
+            }
+        }
+        tray::UNPAIR => {
+            state.unpair_armed.store(true, Ordering::SeqCst);
+            state.tray.confirm_unpair(true);
+        }
+        tray::CONFIRM_UNPAIR if state.unpair_armed.swap(false, Ordering::SeqCst) => {
+            state.tray.confirm_unpair(false);
+            match device::unpair(&state.dir, &Keyring) {
+                Ok(()) => app.exit(0),
+                Err(e) => eprintln!("thevault: unpair failed: {e}"),
             }
         }
         tray::QUIT => app.exit(0),
