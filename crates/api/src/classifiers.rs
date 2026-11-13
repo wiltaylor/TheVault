@@ -38,6 +38,8 @@ impl Binding {
     /// Holds only a weak writer while idle, so dropping the server releases the worker.
     pub fn start(self, writer: &Arc<Writer>) -> std::io::Result<()> {
         crate::safety_backfill::recover(writer).map_err(std::io::Error::other)?;
+        crate::scam_history::recover(writer)
+            .map_err(|_| std::io::Error::other("historical scam recovery failed"))?;
         writer
             .activate_agent_safety()
             .map_err(std::io::Error::other)?;
@@ -542,7 +544,7 @@ fn configuration_warning(writer: &Writer, config: &Classifier, error: &AiError) 
     }
 }
 
-fn apply(
+pub(crate) fn apply(
     writer: &Writer,
     saved: &Saved,
     config: &Classifier,
