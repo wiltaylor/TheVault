@@ -116,6 +116,7 @@ fn approval_quota_gains_its_table_when_a_schema_27_state_db_opens() {
             scope: Scope::Write,
             created_ms: 111,
             last_used_ms: None,
+            expires_ms: None,
         }]
     );
     drop(state);
