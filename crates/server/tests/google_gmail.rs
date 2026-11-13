@@ -1331,11 +1331,11 @@ fn images_the_time_budget_leaves_out_wait_for_the_next_run() {
     assert!(web.requests().is_empty());
 
     // Disabling consent prevents pending completion, even with time available.
+    gmail.release_safety(&note);
     gmail.set_settings(json!({ "gmail_mode": "all" }));
     gmail.run_ok();
     assert!(web.requests().is_empty());
     // The next opted-in run, with time for images, fetches it into its place.
-    gmail.release_safety(&note);
     gmail.set_settings(json!({ "gmail_mode": "all", "gmail_remote_images": true }));
     gmail.run_ok();
     let note = gmail.email("later");

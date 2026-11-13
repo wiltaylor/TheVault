@@ -13,6 +13,18 @@ vi.mock("../api", async (orig) => {
 describe("View original", () => {
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+  it("shows the original with data-only images when the status lookup fails", async () => {
+    vi.mocked(api.googleStatus).mockRejectedValueOnce(new Error("status unavailable"));
+    render(() => <ViewOriginalButton id="01JB8Z4K2MQ7V3X9T5R6W8Y2ZA" />);
+    fireEvent.click(screen.getByRole("button", { name: "View original" }));
+    const frame = await screen.findByTestId("original-frame");
+    await waitFor(() => expect(api.googleStatus).toHaveBeenCalledOnce());
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(frame.getAttribute("srcdoc")).toContain("<p>Hello</p>");
+    expect(frame.getAttribute("srcdoc")).toContain(`content="${originalPolicy(false)}"`);
+    expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
+  });
+
   it("offers no remote load without owner consent", async () => {
     vi.mocked(api.googleStatus).mockResolvedValueOnce({ settings: { gmail_remote_images: false } } as Awaited<ReturnType<typeof api.googleStatus>>);
     render(() => <ViewOriginalButton id="01JB8Z4K2MQ7V3X9T5R6W8Y2ZA" />);

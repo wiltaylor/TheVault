@@ -47,6 +47,7 @@ export function ViewOriginalButton(props: { id: string }) {
 function OriginalDialog(props: { id: string; onClose: () => void }) {
   const [html] = createResource(() => props.id, originalHtml);
   const [settings] = createResource(() => api.googleStatus());
+  const consent = () => !settings.error && settings()?.settings.gmail_remote_images === true;
   const [remote, setRemote] = createSignal(false);
   let dialog!: HTMLDivElement;
   let close!: HTMLButtonElement;
@@ -78,7 +79,7 @@ function OriginalDialog(props: { id: string; onClose: () => void }) {
         >
           <header class="capture-head">
             <h2 id="original-heading">Original</h2>
-            <Show when={settings()?.settings.gmail_remote_images === true && !remote() && hasRemoteImages(html() ?? "")}>
+            <Show when={consent() && !remote() && hasRemoteImages(html() ?? "")}>
               <button type="button" class="original-remote" onClick={() => setRemote(true)}>
                 Load remote images
               </button>
@@ -99,7 +100,7 @@ function OriginalDialog(props: { id: string; onClose: () => void }) {
                 title="The original email"
                 sandbox="allow-popups allow-popups-to-escape-sandbox"
                 referrerpolicy="no-referrer"
-                srcdoc={originalDocument(text(), settings()?.settings.gmail_remote_images === true && remote())}
+                srcdoc={originalDocument(text(), consent() && remote())}
                 data-testid="original-frame"
               />
             )}
