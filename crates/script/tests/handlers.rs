@@ -409,6 +409,73 @@ fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
 }
 
 #[test]
+fn unreadable_handler_reference_stays_pending_and_visible_without_running_script() {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let (writer, handlers) = open(dir.path(), false);
+    let created = writer
+        .create("report", &json_note(json!({"title":"Pending"})), &user())
+        .unwrap();
+    writer
+        .update(
+            &created.id,
+            &json_note(json!({"title":"Queued"})),
+            Some(&created.version),
+            &Author::Token("test".into()),
+        )
+        .unwrap();
+    let jobs = writer.state().queued_jobs().unwrap();
+    assert_eq!(jobs.len(), 1);
+    let id = writer
+        .state()
+        .queue_jobs_with_provenance(&[jobs[0].payload.clone()], "unreadable-handler")
+        .unwrap()[0];
+    writer
+        .state()
+        .finish_job(jobs[0].id, Ok(()), "fixture replacement")
+        .unwrap();
+    drop(writer);
+    drop(handlers);
+    let (writer, handlers) = open(dir.path(), false);
+    let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let capture = commits.clone();
+    writer.set_commit_hook(Some(Box::new(move |_| {
+        capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::ops::ControlFlow::Continue(())
+    })));
+    handlers.start(&writer);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let entries = writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap();
+        if entries.items.iter().any(|entry| {
+            entry.kind == "run.recovery_unavailable"
+                && entry.subject.as_deref() == Some("unreadable-handler")
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "handler recovery was not audited"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        writer
+            .state()
+            .queued_jobs()
+            .unwrap()
+            .iter()
+            .any(|job| job.id == id)
+    );
+    assert!(writer.state().failed_jobs().unwrap().is_empty());
+    assert_eq!(commits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(writer.history(&created.id).unwrap().len(), 2);
+}
+
+#[test]
 fn a_note_a_before_handler_creates_commits_with_the_write_or_not_at_all() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());

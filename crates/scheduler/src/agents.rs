@@ -255,6 +255,105 @@ enum Admitted {
 #[cfg(test)]
 mod persistence_retry_tests {
     use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn restricted_persistence_retry_reaches_runner_with_original_context() {
+        struct Runner(Mutex<Vec<script::RunContext>>);
+        impl AgentRunner for Runner {
+            fn open_thread(
+                &self,
+                _: &Agent,
+                _: &str,
+                _: &str,
+                _: &[String],
+            ) -> Result<String, String> {
+                Ok("retry-thread".into())
+            }
+            fn run_turn(
+                &self,
+                _: &Agent,
+                _: &str,
+                _: &str,
+                _: Option<state::Scope>,
+                _: Option<&Author>,
+            ) -> TurnReport {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(script::RunContext::current().unwrap());
+                TurnReport {
+                    no_side_effects: true,
+                    outcome: Ok(()),
+                    log: vec![],
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let clock = Arc::new(crate::TestClock::new(
+            crate::parse_time("2026-01-05T00:30:00Z").unwrap(),
+        ));
+        let state = state::State::open_with_clock(
+            &vault.server_dir().join("state.db"),
+            None,
+            clock.clone(),
+        )
+        .unwrap();
+        let writer = Arc::new(
+            writer::Writer::open(vault, state)
+                .unwrap()
+                .with_clock(clock.clone()),
+        );
+        writer.put_agent("owl", "label = \"Owl\"\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"queued\"\n}\n", |_| vec![]).unwrap();
+        let host = Arc::new(script::Host::new(
+            writer.clone(),
+            1,
+            script::Limits::default(),
+            script::Ai::unavailable(),
+        ));
+        let scheduler = Scheduler::new(writer.clone(), host, clock.clone()).unwrap();
+        let runner = Arc::new(Runner(Mutex::new(Vec::new())));
+        scheduler.set_agent_runner(runner.clone());
+        let context = script::RunContext::default();
+        context.restrict();
+        let generation = writer.state().admit_automation().unwrap();
+        context.capture_stop_generation(generation);
+        let job = AgentJob {
+            run_context: context.clone(),
+            source_notes: vec![],
+            scope: None,
+            caller: None,
+            op: None,
+            durable: None,
+            note: None,
+            agent: "owl".into(),
+            trigger: "nightly".into(),
+            prompt: "queued".into(),
+            title: "Retry".into(),
+            thread: None,
+            origin: None,
+        };
+        let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+        conn.execute_batch("CREATE TRIGGER refuse_publish BEFORE INSERT ON trigger_jobs BEGIN SELECT RAISE(FAIL,'injected publication failure'); END;").unwrap();
+        scheduler.plan().agents.retry_persistence(job);
+        scheduler.tick();
+        assert!(runner.0.lock().unwrap().is_empty());
+        assert_eq!(scheduler.plan().agents.persist_retry.len(), 1);
+        assert_eq!(
+            scheduler.plan().agents.persist_retry[0].run_context,
+            context
+        );
+        conn.execute_batch("DROP TRIGGER refuse_publish;").unwrap();
+        clock.advance(std::time::Duration::from_secs(31));
+        scheduler.tick();
+        assert!(scheduler.plan().agents.persist_retry.is_empty());
+        let seen = runner.0.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0], context);
+        assert!(seen[0].is_restricted());
+        assert_eq!(seen[0].stop_generation(), Some(generation));
+    }
 
     #[test]
     fn persistence_retry_buffer_is_capped_and_discards_oldest() {

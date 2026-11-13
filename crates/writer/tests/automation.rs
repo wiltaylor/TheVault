@@ -50,6 +50,55 @@ fn shared_registry_reuses_joined_aliases_and_seals_after_last_queue_reference() 
 }
 
 #[test]
+fn outbox_reference_failure_after_file_commit_is_visible_and_unavailable_on_restart() {
+    let (dir, writer) = setup();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER refuse_outbox_reference BEFORE INSERT ON outbox_provenance BEGIN SELECT RAISE(FAIL,'injected reference failure'); END;").unwrap();
+    let context = script_core::RunContext::default();
+    context.restrict();
+    assert!(
+        context
+            .scope(|| {
+                writer.create("outbox", &Input::Json(serde_json::json!({"fields": {
+        "title":"File committed", "kind":"email", "status":"sending", "to":["ann@example.com"]
+    }})), &Author::Session("owner".into()))
+            })
+            .is_err()
+    );
+    let notes = writer.list(Some("outbox")).unwrap();
+    assert_eq!(
+        notes.len(),
+        1,
+        "the file committed before reference publication failed"
+    );
+    let id = notes[0].id.clone();
+    assert!(writer.state().outbox_provenance(&id).unwrap().is_empty());
+    conn.execute_batch("DROP TRIGGER refuse_outbox_reference;")
+        .unwrap();
+    drop(conn);
+    drop(context);
+    drop(writer);
+    let vault = Vault::open(dir.path()).unwrap();
+    let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
+    let writer = Writer::open(vault, state).unwrap();
+    assert!(writer.outbox_run_context(&id).is_err());
+    assert!(writer.read(&id).is_ok());
+    assert!(
+        writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap()
+            .items
+            .iter()
+            .any(|entry| entry.kind == "run.recovery_unavailable"
+                && entry.subject.as_deref() == Some(&id))
+    );
+}
+
+#[test]
 fn run_context_bridges_admission_at_note_and_definition_commits() {
     let (dir, w) = setup();
     let context = script_core::RunContext::default();
