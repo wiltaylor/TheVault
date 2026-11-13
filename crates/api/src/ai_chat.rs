@@ -5503,7 +5503,11 @@ mod tests {
         let dropped = run(Held::Drop);
         assert!(dropped.is_error, "{}", dropped.content);
         assert!(dropped.proposal.is_none());
-        assert!(dropped.content.contains("unattended"), "{}", dropped.content);
+        assert!(
+            dropped.content.contains("unattended"),
+            "{}",
+            dropped.content
+        );
         // A reviewable origin keeps the capped change as a proposal.
         let proposed = run(Held::Propose);
         assert!(!proposed.is_error, "{}", proposed.content);
@@ -5540,11 +5544,19 @@ mod tests {
         let held = run(true);
         assert!(!held.is_error, "{}", held.content);
         assert!(held.proposal.is_some());
-        assert!(!held.content.contains("moved to the trash"), "{}", held.content);
+        assert!(
+            !held.content.contains("moved to the trash"),
+            "{}",
+            held.content
+        );
         // S4: an attended turn keeps its confirmation switch (ai D22).
         let made = run(false);
         assert!(!made.is_error, "{}", made.content);
-        assert!(made.content.contains("moved to the trash"), "{}", made.content);
+        assert!(
+            made.content.contains("moved to the trash"),
+            "{}",
+            made.content
+        );
     }
 
     #[test]
