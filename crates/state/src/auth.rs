@@ -238,7 +238,8 @@ impl State {
     /// return it with its secret. `None` when the code is unknown, used or expired.
     pub fn redeem_agent_code(&self, code: &str) -> Result<Option<(TokenInfo, String)>> {
         let now = self.now();
-        let expires_ms = now.checked_add(90 * 24 * 60 * 60 * 1000)
+        let expires_ms = now
+            .checked_add(90 * 24 * 60 * 60 * 1000)
             .filter(|expiry| *expiry <= 253_402_300_799_999)
             .ok_or(Error::InvalidTokenExpiry)?;
         let mut conn = self.conn();

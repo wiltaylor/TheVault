@@ -87,7 +87,9 @@ pub async fn create(
     check_name(&body.name)?;
     let scope: Scope = body.scope.parse()?;
     let (info, secret) = blocking(w, move |w| {
-        let made = w.state().create_token_with_expiry(&body.name, scope, body.expires)?;
+        let made = w
+            .state()
+            .create_token_with_expiry(&body.name, scope, body.expires)?;
         w.state().record_activity(
             NewActivity::new(
                 "auth.token_created",

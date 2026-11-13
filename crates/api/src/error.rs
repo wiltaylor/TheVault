@@ -51,7 +51,9 @@ impl ApiError {
             S::InvalidNotification(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             S::PinCycle { .. } => (StatusCode::CONFLICT, "pin_cycle"),
             S::EmptyFolderName => (StatusCode::BAD_REQUEST, "bad_request"),
-            S::UnknownScope(_) | S::UnknownPlatform(_) | S::InvalidTokenExpiry => (StatusCode::BAD_REQUEST, "bad_request"),
+            S::UnknownScope(_) | S::UnknownPlatform(_) | S::InvalidTokenExpiry => {
+                (StatusCode::BAD_REQUEST, "bad_request")
+            }
             S::UnknownVersion { .. } => (StatusCode::BAD_REQUEST, "unknown_version"),
             S::KeyMissing { .. } | S::WrongKey { .. } => {
                 (StatusCode::SERVICE_UNAVAILABLE, "secret_key")

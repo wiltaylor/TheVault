@@ -18,8 +18,12 @@ fn token_expiry_boundary_restart_and_never_used() {
     let path = dir.path().join("state.db");
     let clock = TestClock::new(1_000);
     let state = State::open_with_clock(&path, None, clock.clone()).unwrap();
-    let (_, secret) = state.create_token_with_expiry("finite", Scope::Read, Some(2_000)).unwrap();
-    let (_, unused) = state.create_token_with_expiry("unused", Scope::Write, Some(2_000)).unwrap();
+    let (_, secret) = state
+        .create_token_with_expiry("finite", Scope::Read, Some(2_000))
+        .unwrap();
+    let (_, unused) = state
+        .create_token_with_expiry("unused", Scope::Write, Some(2_000))
+        .unwrap();
     let (_, legacy) = state.create_token("legacy", Scope::Admin).unwrap();
     clock.advance(999);
     let info = state.authenticate_token(&secret).unwrap().unwrap();
@@ -32,8 +36,22 @@ fn token_expiry_boundary_restart_and_never_used() {
     assert!(state.authenticate_token(&secret).unwrap().is_none());
     assert!(state.authenticate_token(&unused).unwrap().is_none());
     let tokens = state.list_tokens().unwrap();
-    assert_eq!(tokens.iter().find(|t| t.name == "finite").unwrap().last_used_ms, Some(1_999));
-    assert_eq!(tokens.iter().find(|t| t.name == "unused").unwrap().last_used_ms, None);
+    assert_eq!(
+        tokens
+            .iter()
+            .find(|t| t.name == "finite")
+            .unwrap()
+            .last_used_ms,
+        Some(1_999)
+    );
+    assert_eq!(
+        tokens
+            .iter()
+            .find(|t| t.name == "unused")
+            .unwrap()
+            .last_used_ms,
+        None
+    );
     assert!(state.authenticate_token(&legacy).unwrap().is_some());
 }
 
@@ -45,7 +63,8 @@ fn token_expiry_migration_preserves_legacy_credentials() {
     let (_, secret) = state.create_token("legacy", Scope::Admin).unwrap();
     drop(state);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("ALTER TABLE tokens DROP COLUMN expires_ms; PRAGMA user_version=28;").unwrap();
+    conn.execute_batch("ALTER TABLE tokens DROP COLUMN expires_ms; PRAGMA user_version=28;")
+        .unwrap();
     drop(conn);
     let state = State::open(&path, None).unwrap();
     let info = state.authenticate_token(&secret).unwrap().unwrap();
@@ -60,11 +79,17 @@ fn token_expiry_rejects_invalid_dates_and_agent_overflow() {
     let clock = TestClock::new(1_000);
     let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
     for expiry in [i64::MIN, -1, 0, 1_000, 253_402_300_800_000, i64::MAX] {
-        assert!(matches!(state.create_token_with_expiry("invalid", Scope::Read, Some(expiry)), Err(Error::InvalidTokenExpiry)));
+        assert!(matches!(
+            state.create_token_with_expiry("invalid", Scope::Read, Some(expiry)),
+            Err(Error::InvalidTokenExpiry)
+        ));
     }
     assert!(state.list_tokens().unwrap().is_empty());
     clock.advance(i64::MAX - 1_000);
-    assert!(matches!(state.redeem_agent_code("unknown"), Err(Error::InvalidTokenExpiry)));
+    assert!(matches!(
+        state.redeem_agent_code("unknown"),
+        Err(Error::InvalidTokenExpiry)
+    ));
 }
 
 #[test]
@@ -72,7 +97,9 @@ fn new_agent_tokens_expire_after_ninety_days() {
     let dir = TempDir::new().unwrap();
     let clock = TestClock::new(1_000);
     let state = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
-    let code = state.create_agent_code("test", Scope::Write, 60_000).unwrap();
+    let code = state
+        .create_agent_code("test", Scope::Write, 60_000)
+        .unwrap();
     let (token, secret) = state.redeem_agent_code(&code.code).unwrap().unwrap();
     assert_eq!(token.expires_ms, Some(1_000 + 90 * DAY_MS));
     assert_eq!(token.kind, "agent");

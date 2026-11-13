@@ -1258,9 +1258,14 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
         },
         Command::Token(t) => match t {
             Token::List => api.get(&["api", "tokens"]),
-            Token::Create { name, scope, expires } => {
-                api.post(&["api", "tokens"], json!({ "name": name, "scope": scope, "expires": expires }))
-            }
+            Token::Create {
+                name,
+                scope,
+                expires,
+            } => api.post(
+                &["api", "tokens"],
+                json!({ "name": name, "scope": scope, "expires": expires }),
+            ),
             Token::Revoke { name } => {
                 api.delete(&["api", "tokens", &name])?;
                 Ok(json!({ "name": name, "revoked": true }))
