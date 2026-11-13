@@ -450,6 +450,12 @@ have temporary state until completion or cancellation. If every retained bucket
 has a check in flight, a new failure contributes to the global counter but cannot
 evict address history until a bucket is free. Missing peer metadata shares one bucket.
 
+Set `VAULT_SITE_HTTPS=1` when the site is served over HTTPS. This is the reliable
+switch for Secure session cookies and HSTS behind a TLS proxy that sends no
+`X-Forwarded-Proto` header. Otherwise, that header affects cookies only from a
+direct peer listed in `VAULT_TRUSTED_PROXIES`, using its first comma-separated
+value. The header alone never enables HSTS.
+
 The server trusts no forwarded addresses by default. `VAULT_TRUSTED_PROXIES`
 sets comma-separated literal peer IPs with a proxy type, for example
 `caddy=10.141.0.2,cloudflare=10.141.0.3`. Caddy peers use the last address in

@@ -67,6 +67,9 @@ pub fn is_local(ip: IpAddr) -> bool {
                 || (first & 0xffc0) == 0xfec0
                 // NAT64 64:ff9b::/96 and 6to4 2002::/16 can relay to an IPv4 local network.
                 || v6.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0]
+                // RFC 8215 local-use NAT64 and Teredo can also relay to local IPv4.
+                || v6.segments()[..3] == [0x64, 0xff9b, 1]
+                || v6.segments()[..2] == [0x2001, 0]
                 || first == 0x2002
                 // The old IPv4-compatible form ::a.b.c.d.
                 || (v6.segments()[..6].iter().all(|s| *s == 0) && is_local_v4(v6_tail(v6)))
@@ -617,6 +620,10 @@ mod tests {
             "2002:c0a8:101::",
             "64:ff9b::101:101",
             "2002:101:101::",
+            "64:ff9b:1::",
+            "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+            "2001::",
+            "2001:0:ffff:ffff:ffff:ffff:ffff:ffff",
         ] {
             assert!(is_local(ip(local)), "{local}");
         }
@@ -627,6 +634,8 @@ mod tests {
             "172.32.0.1",
             "2606:4700::1111",
             "::ffff:1.1.1.1",
+            "64:ff9b:2::",
+            "2001:1::",
         ] {
             assert!(!is_local(ip(public)), "{public}");
         }
