@@ -391,9 +391,7 @@ impl Scheduler {
             }
             let handles: Vec<_> = due
                 .into_iter()
-                .map(|(def, attempt, context)| {
-                    s.spawn(move || self.run(&def, attempt, context))
-                })
+                .map(|(def, attempt, context)| s.spawn(move || self.run(&def, attempt, context)))
                 .collect();
             handles
                 .into_iter()

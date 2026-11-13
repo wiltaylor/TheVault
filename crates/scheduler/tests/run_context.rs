@@ -48,14 +48,15 @@ impl Fixture {
         )
         .unwrap();
         let clock = Arc::new(TestClock::new(0));
-        let state = State::open_with_clock(
-            &vault.server_dir().join("state.db"),
-            None,
-            clock.clone(),
-        )
-        .unwrap();
+        let state =
+            State::open_with_clock(&vault.server_dir().join("state.db"), None, clock.clone())
+                .unwrap();
         let (send, recv) = mpsc::channel();
-        let writer = Arc::new(Writer::open(vault, state).unwrap().with_hooks(Box::new(Probe(send))));
+        let writer = Arc::new(
+            Writer::open(vault, state)
+                .unwrap()
+                .with_hooks(Box::new(Probe(send))),
+        );
         writer
             .put_script(
                 "probe",
@@ -68,7 +69,12 @@ fn run() -> Result[Value, string] {
 "#,
             )
             .unwrap();
-        let host = Arc::new(Host::new(writer.clone(), 2, Limits::default(), Ai::of(&writer)));
+        let host = Arc::new(Host::new(
+            writer.clone(),
+            2,
+            Limits::default(),
+            Ai::of(&writer),
+        ));
         let scheduler = Scheduler::new(writer, host, clock.clone()).unwrap();
         scheduler
             .put_task(
@@ -76,11 +82,20 @@ fn run() -> Result[Value, string] {
                 "schedule = \"* * * * *\"\nscript = \"probe\"\nretries = 2\nretry_delay = \"PT1S\"\n",
             )
             .unwrap();
-        Self { scheduler, clock, seen: Mutex::new(recv), _dir: dir }
+        Self {
+            scheduler,
+            clock,
+            seen: Mutex::new(recv),
+            _dir: dir,
+        }
     }
 
     fn observe(&self) -> Observation {
-        self.seen.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap()
+        self.seen
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
     }
 }
 
@@ -89,7 +104,10 @@ fn task_retries_keep_live_restriction_and_oldest_generation_across_workers() {
     let f = Fixture::new();
     let parent = RunContext::default();
     parent.capture_stop_generation(7);
-    let first = f.scheduler.trigger_with_context("probe", parent.clone()).unwrap();
+    let first = f
+        .scheduler
+        .trigger_with_context("probe", parent.clone())
+        .unwrap();
     assert!(matches!(first.outcome, RunOutcome::Failed(_)));
     let seen = f.observe();
     assert_eq!(seen.context, parent);
