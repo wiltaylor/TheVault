@@ -79,7 +79,7 @@ mod tests {
         let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let proxy = format!("http://{}", dead.local_addr().unwrap());
         drop(dead);
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["http_pairing_ignores_dead_proxy", "--nocapture"])
             .env(CHILD, "1")
             .env("HTTP_PROXY", &proxy)
@@ -88,9 +88,9 @@ mod tests {
             .env("all_proxy", &proxy)
             .env("NO_PROXY", "")
             .env("no_proxy", "")
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        assert!(output.status.success(), "{output:?}");
     }
     #[test]
     fn checked_dns_is_pinned_and_redirects_are_not_followed() {
