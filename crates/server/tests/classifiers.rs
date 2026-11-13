@@ -124,7 +124,7 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
         assert_eq!(
             std::fs::read_to_string(server.vault_path().join(format!("classifiers/{name}.wcl")))
                 .unwrap(),
-            CONFIG.replace("account = \"router\"", "account = \"OpenRouter\"")
+            CONFIG.replace("account = \"router\"", &format!("account = {selected:?}"))
         );
     }
     let result = client
@@ -136,7 +136,7 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
     assert!(result.status().is_success(), "{}", result.text().unwrap());
     assert_eq!(
         std::fs::read_to_string(server.vault_path().join("classifiers/incoming.wcl")).unwrap(),
-        CONFIG.replace("account = \"router\"", "account = \"OpenRouter\"")
+        CONFIG.replace("account = \"router\"", &format!("account = {selected:?}"))
     );
     assert_eq!(
         client

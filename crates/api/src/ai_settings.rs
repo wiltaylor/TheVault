@@ -516,6 +516,7 @@ pub async fn update_account(
         let s = w.state();
         Accounts::change(s, api_error, |all| {
             let id = account(all, &id)?.id;
+            crate::classifier_settings::pin_account(w, all, &id)?;
             let renamed = all.update(&id, input).map_err(account_error)?;
             if let Some(old) = renamed {
                 let new = all.get(&id).map(|a| a.name.clone()).unwrap_or_default();
@@ -544,9 +545,10 @@ pub async fn delete_account(
     State(a): Shared,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let gone = blocking(&a, move |s| {
-        Accounts::change(s, api_error, |all| {
+    let gone = blocking_w(&a, move |w| {
+        Accounts::change(w.state(), api_error, |all| {
             let id = account(all, &id)?.id;
+            crate::classifier_settings::pin_account(w, all, &id)?;
             all.remove(&id).map_err(api_error)
         })
     })

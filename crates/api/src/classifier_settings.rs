@@ -145,8 +145,31 @@ pub async fn select(
                     "Select an OpenAI-compatible /api/v1 account in Settings > AI",
                 )
             })?;
-        w.set_classifier_account(&name, &account.name)?;
+        w.set_classifier_account(&name, &account.id)?;
         local(w).map(Json)
     })
     .await
+}
+
+/// Pin legacy name bindings before the name can be reused. Deleted IDs fail closed.
+pub(crate) fn pin_account(w: &Writer, accounts: &Accounts, id: &str) -> Result<(), ApiError> {
+    for entry in std::fs::read_dir(w.vault().root().join("classifiers"))? {
+        let entry = entry?;
+        let file = entry.file_name();
+        let Some(name) = file.to_str().and_then(|s| s.strip_suffix(".wcl")) else {
+            continue;
+        };
+        if !schema::is_name(name) {
+            continue;
+        }
+        let source = w.vault().read_text(&format!("classifiers/{name}.wcl"))?;
+        if let Ok(config) = Classifier::parse(name, &source)
+            && let Some(reference) = config.account.as_deref()
+            && reference != id
+            && accounts.find(reference).is_some_and(|a| a.id == id)
+        {
+            w.set_classifier_account(name, id)?;
+        }
+    }
+    Ok(())
 }
