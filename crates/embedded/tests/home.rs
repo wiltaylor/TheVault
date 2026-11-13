@@ -27,7 +27,7 @@ template default {
 
 #[test]
 fn calendar_home_feed_is_trusted_but_device_upload_metadata_is_denied() {
-    let server = TestServer::start(|root| {
+    let server = TestServer::start_seeded(|root| {
         seed(root);
         std::fs::write(root.join("types/event.wcl"), MEMO).unwrap();
     });
