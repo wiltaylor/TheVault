@@ -122,6 +122,21 @@ impl Writer {
         let Some(item) = payload["outbox"].as_str().filter(|s| !s.is_empty()) else {
             return Ok(());
         };
+        // External receipts must not inherit whichever API/handler job received
+        // them. The item owns its durable send context, including on restart.
+        if self.read(item).is_err() {
+            return Ok(());
+        }
+        let context = self.outbox_run_context(item).map_err(|e| e.to_string())?;
+        context.scope_recovered(|| self.finish_outbox_sms_scoped(command, item, &payload))
+    }
+
+    fn finish_outbox_sms_scoped(
+        &self,
+        command: &DeviceCommand,
+        item: &str,
+        payload: &Json,
+    ) -> Result<(), String> {
         // An item deleted since stays deleted.
         let Ok(note) = self.get(item) else {
             return Ok(());
@@ -253,6 +268,81 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sms_receipts_use_the_items_context_not_the_callback_context() {
+        for failed in [false, true] {
+            for restricted in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let vault = store::Vault::init(dir.path()).unwrap();
+                let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+                let writer = Writer::open(vault, state).unwrap();
+                writer
+                    .upgrade_shipped_defaults(crate::Upkeep::Home)
+                    .unwrap();
+                let item_context = script_core::RunContext::default();
+                if restricted {
+                    item_context.restrict();
+                }
+                let item = item_context.scope(|| writer.create("outbox", &crate::Input::Json(json!({"fields": {
+                    "title":"Receipt", "kind":"sms", "status":"sending", "to":["+61400000002"], "sent_ref":"command-1"
+                }})), &Author::Session("owner".into())).unwrap());
+                let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let capture = observed.clone();
+                writer.set_commit_hook(Some(Box::new(move |_| {
+                    capture
+                        .lock()
+                        .unwrap()
+                        .push(script_core::RunContext::current().unwrap());
+                    std::ops::ControlFlow::Continue(())
+                })));
+                let ambient = script_core::RunContext::default();
+                if !restricted {
+                    ambient.restrict();
+                }
+                let command = DeviceCommand {
+                    id: "command-1".into(),
+                    device_id: "phone".into(),
+                    name: SEND_SMS.into(),
+                    payload: json!({"outbox":item.id,"to":"+61400000002","body":"Receipt"})
+                        .to_string(),
+                    created_ms: 0,
+                    expires_ms: i64::MAX,
+                    status: if failed {
+                        CommandStatus::Failed
+                    } else {
+                        CommandStatus::Done
+                    },
+                    result: Some(
+                        if failed {
+                            json!({"error":"radio off"})
+                        } else {
+                            json!({"device_ref":"sms:123"})
+                        }
+                        .to_string(),
+                    ),
+                    source: "test".into(),
+                    updated_ms: Some(1),
+                };
+                ambient.scope(|| {
+                    writer.finish_outbox_sms(&command).unwrap();
+                    assert_eq!(script_core::RunContext::current(), Some(ambient.clone()));
+                });
+                let observed = observed.lock().unwrap();
+                assert!(!observed.is_empty());
+                assert!(observed.iter().all(|context| context == &item_context));
+                assert_eq!(item_context.is_restricted(), restricted);
+                assert_eq!(ambient.is_restricted(), !restricted);
+                assert_ne!(item_context, ambient);
+                let note = writer.get(&item.id).unwrap();
+                if failed {
+                    assert_eq!(note["note"]["fields"]["status"], "failed");
+                } else {
+                    assert_eq!(note["note"]["fields"]["sent_ref"], "sms:123");
+                }
+            }
+        }
+    }
 
     #[test]
     fn numbers_match_by_their_digits() {

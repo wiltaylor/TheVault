@@ -523,6 +523,8 @@ fn note_files(vault: &Vault) -> Result<Vec<(String, String)>> {
 
 /// The write path of one vault.
 pub struct Writer {
+    durable_contexts: Mutex<HashMap<String, script_core::RunContext>>,
+    outbox_contexts: Mutex<HashMap<String, script_core::RunContext>>,
     vault: Vault,
     state: State,
     clock: Arc<dyn Clock>,
@@ -583,6 +585,8 @@ impl Writer {
         feed::reconcile(&vault, &state)?;
         let schema = Schema::load(&vault)?;
         Ok(Writer {
+            durable_contexts: Mutex::new(HashMap::new()),
+            outbox_contexts: Mutex::new(HashMap::new()),
             vault,
             state,
             clock: Arc::new(SystemClock),
@@ -1465,7 +1469,10 @@ impl Writer {
             .as_ref()
             .and_then(created_of)
             .unwrap_or_else(|| now.clone());
-        if !matches!(author, Author::Handler(_) | Author::Task(_)) {
+        if !matches!(
+            author,
+            Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_)
+        ) {
             let issues = computed_writes(ty, &doc, computed_from.or(old_doc.as_ref()));
             if !issues.is_empty() {
                 return Err(Error::Invalid(Invalid { file: path, issues }));
@@ -1562,6 +1569,7 @@ impl Writer {
 
         // Steps 5 and 6, until every note the write changes has run its `before_*` handlers.
         let mut handled = HashSet::new();
+        let submitted: HashSet<_> = changes.iter().map(|change| change.id.clone()).collect();
         let mut authors = HashMap::new();
         let mut changes = self.run_before(changes, &mut handled, &mut authors, author)?;
         let mut inner = self.lock();
@@ -1597,6 +1605,17 @@ impl Writer {
         let mut changes = changes;
         let extra = self.hooks.side_effects(&changes)?;
         changes.extend(extra);
+        // Reference expansion is not an explicit owner edit of the affected note.
+        for change in &changes {
+            if !submitted.contains(&change.id) {
+                authors
+                    .entry(change.id.clone())
+                    .or_insert_with(|| match author {
+                        Author::Session(_) => Author::Task(SERVER_AUTHOR.to_owned()),
+                        _ => author.clone(),
+                    });
+            }
+        }
 
         // Handlers may have changed the notes, so what is written is rendered and checked again,
         // and the terms the notes add to open taxonomies are worked out from what they hold now.
@@ -1665,6 +1684,19 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
+        // Provenance publication must precede every file commit and all of its
+        // fallible version/index follow-up. A failure aborts the whole save here,
+        // so it cannot silently skip unrelated committed notes' after-handlers.
+        let mut owner_outbox = Vec::new();
+        for r in &rendered {
+            if let Some(context) = self.remember_outbox_context(
+                &r.change,
+                authors.get(&r.change.id).unwrap_or(author),
+                !submitted.contains(&r.change.id),
+            )? {
+                owner_outbox.push((r.change.id.clone(), context));
+            }
+        }
         let (generation, automation) = {
             let _acting = activity::acting_as(author);
             match inner.commit_hook.as_mut() {
@@ -1673,6 +1705,15 @@ impl Writer {
             }
         };
 
+        // Only committed owner edits replace old admissions. On a reference
+        // failure the item retains the conservative old+new references, but the
+        // other committed notes must still receive their hooks/notifications.
+        let mut outbox_error = None;
+        for (id, context) in owner_outbox {
+            if let Err(error) = self.finish_owner_outbox_context(&id, &context) {
+                outbox_error.get_or_insert(error);
+            }
+        }
         let mut saved = Vec::with_capacity(rendered.len());
         // What each note's activity entry says (activity Y2), and the titles of the notes
         // deleted, read before the index forgets them.
@@ -1862,6 +1903,9 @@ impl Writer {
         self.hooks.after(&saved, &hook_author, &inner.schema);
         self.people_to_contacts(&people);
         self.outbox_notifications(&items);
+        if let Some(error) = outbox_error {
+            return Err(error);
+        }
         Ok(saved)
     }
 
@@ -1956,6 +2000,19 @@ impl Writer {
     }
 
     fn check_gmail_metadata_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
+        if let Author::GmailSentCopy(id) = author
+            && change.event == Event::Create
+            && self.state.trash_entry(&change.id)?.is_none()
+            && change.type_name == "email"
+            && change
+                .doc
+                .as_ref()
+                .and_then(|doc| doc.field("gmail_ref"))
+                .and_then(schema::Value::as_str)
+                == Some(id.as_str())
+        {
+            return Ok(());
+        }
         if matches!(author, Author::Session(_))
             || matches!(author, Author::Task(name) if name == "google_gmail")
             || change.doc.is_none()

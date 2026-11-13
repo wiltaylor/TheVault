@@ -126,6 +126,40 @@ fn json_note(fields: serde_json::Value) -> Input {
     Input::Json(json!({ "fields": fields }))
 }
 
+#[test]
+fn current_handler_for_held_outbox_finishes_without_polling_forever() {
+    let dir = tempfile::tempdir().unwrap();
+    let (writer, handlers) = open(dir.path(), false);
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let email = writer
+        .create("email", &json_note(json!({"title":"Received"})), &user())
+        .unwrap();
+    let item = writer.create("outbox", &json_note(json!({"title":"Reply", "kind":"email", "status":"draft", "to":["ann@example.com"], "in_reply_to":email.id})), &user()).unwrap();
+    for job in writer.state().queued_jobs().unwrap() {
+        writer
+            .state()
+            .finish_job(job.id, Ok(()), "fixture")
+            .unwrap();
+    }
+    writer.state().set_automation_stopped(true).unwrap();
+    writer.state().set_automation_stopped(false).unwrap();
+    writer
+        .delete(&email.id, Some(&email.version), &user())
+        .unwrap();
+    let jobs = writer.state().queued_jobs().unwrap();
+    assert!(!jobs.is_empty());
+    handlers.start(&writer);
+    let until = Instant::now() + Duration::from_secs(30);
+    while !writer.state().queued_jobs().unwrap().is_empty() {
+        assert!(Instant::now() < until, "held Outbox job kept polling");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(writer.outbox_run_context(&item.id).is_err());
+    assert!(writer.state().failed_jobs().unwrap().iter().any(|job| matches!(&job.status, state::JobStatus::Failed(message) if message.contains("held: Outbox"))));
+}
+
 fn interrupted_outbox_restart(kind: &str, action: &str) {
     let dir = tempfile::tempdir().unwrap();
     let (writer, handlers) = open(dir.path(), false);
@@ -362,21 +396,37 @@ fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
         .create("report", &json_note(json!({ "title": "Q3" })), &user())
         .unwrap();
     // A token save: two quick saves by one browser session would merge into one version.
-    let saved = writer
-        .update(
-            &created.id,
-            &json_note(json!({ "title": "Q3 final" })),
-            Some(&created.version),
-            &Author::Token("test".into()),
-        )
-        .unwrap();
+    let context = script::RunContext::default();
+    let generation = writer.state().admit_automation().unwrap();
+    context.capture_stop_generation(generation);
+    let saved = context.scope(|| {
+        writer
+            .update(
+                &created.id,
+                &json_note(json!({ "title": "Q3 final" })),
+                Some(&created.version),
+                &Author::Token("test".into()),
+            )
+            .unwrap()
+    });
+    context.restrict();
     assert_eq!(writer.state().queued_jobs().unwrap().len(), 1);
     assert_eq!(writer.history(&saved.id).unwrap().len(), 2);
     drop(writer);
     drop(handlers);
+    drop(context);
 
     // The next start runs it.
-    let (writer, _handlers) = open(dir.path(), true);
+    let (writer, handlers) = open(dir.path(), false);
+    let (send, recv) = std::sync::mpsc::channel();
+    writer.set_commit_hook(Some(Box::new(move |_| {
+        let _ = send.send(script::RunContext::current());
+        std::ops::ControlFlow::Continue(())
+    })));
+    handlers.start(&writer);
+    let recovered = recv.recv_timeout(Duration::from_secs(30)).unwrap().unwrap();
+    assert!(recovered.is_restricted());
+    assert_eq!(recovered.stop_generation(), Some(generation));
     let deadline = Instant::now() + Duration::from_secs(300);
     while writer.history(&saved.id).unwrap().len() < 3 {
         assert!(Instant::now() < deadline, "the queued job never ran");
@@ -390,6 +440,262 @@ fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
         thread::sleep(Duration::from_millis(50));
     }
     assert!(writer.state().failed_jobs().unwrap().is_empty());
+}
+
+#[test]
+fn unreadable_handler_reference_fails_visibly_without_running_script() {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let (writer, handlers) = open(dir.path(), false);
+    let created = writer
+        .create("report", &json_note(json!({"title":"Pending"})), &user())
+        .unwrap();
+    writer
+        .update(
+            &created.id,
+            &json_note(json!({"title":"Queued"})),
+            Some(&created.version),
+            &Author::Token("test".into()),
+        )
+        .unwrap();
+    let jobs = writer.state().queued_jobs().unwrap();
+    assert_eq!(jobs.len(), 1);
+    let id = writer
+        .state()
+        .queue_jobs_with_provenance(&[jobs[0].payload.clone()], "unreadable-handler")
+        .unwrap()[0];
+    writer
+        .state()
+        .finish_job(jobs[0].id, Ok(()), "fixture replacement")
+        .unwrap();
+    drop(writer);
+    drop(handlers);
+    let (writer, handlers) = open(dir.path(), false);
+    let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let capture = commits.clone();
+    writer.set_commit_hook(Some(Box::new(move |_| {
+        capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::ops::ControlFlow::Continue(())
+    })));
+    handlers.start(&writer);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let entries = writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap();
+        if writer
+            .state()
+            .failed_jobs()
+            .unwrap()
+            .iter()
+            .any(|job| job.id == id)
+            && entries.items.iter().any(|entry| {
+                entry.kind == "run.recovery_unavailable"
+                    && entry.subject.as_deref() == Some("unreadable-handler")
+            })
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "handler recovery was not audited"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        writer
+            .state()
+            .queued_jobs()
+            .unwrap()
+            .iter()
+            .all(|job| job.id != id)
+    );
+    assert_eq!(writer.state().failed_jobs().unwrap().len(), 1);
+    assert_eq!(commits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(writer.history(&created.id).unwrap().len(), 2);
+}
+
+#[test]
+fn outbox_stop_resume_holds_old_jobs_and_owner_ready_sends() {
+    let dir = tempfile::tempdir().unwrap();
+    let (writer, handlers) = open(dir.path(), false);
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    // Stand-in delivery writes through the real handler/Writer commit boundary.
+    std::fs::write(dir.path().join("scripts/outbox_send.ws"), r#"use vault
+fn after_create(note: Value) -> Result[(), string] { after_update(note) }
+fn after_update(note: Value) -> Result[(), string] {
+    let id = note.get("id").unwrap().as_string().unwrap()
+    let current = vault::get(id)?
+    let status = current.get("note").unwrap().get("fields").unwrap().get("status").unwrap().as_string().unwrap()
+    if status == "ready" {
+        let patched = vault::patch(id, Value::Map(#{ "status": Value::String("sending"), "error": Value::String("stand-in sent") }), "")?
+    }
+    Ok(())
+}
+fn reconcile_send(note: Value) -> Result[(), string] { Ok(()) }
+fn reconcile_delete(note: Value) -> Result[(), string] { Ok(()) }
+"#).unwrap();
+    let item = writer.create("outbox", &json_note(json!({"title":"Before Stop", "kind":"email", "status":"ready", "to":["ann@example.com"]})), &user()).unwrap();
+    writer.state().set_automation_stopped(true).unwrap();
+    writer.state().set_automation_stopped(false).unwrap();
+    handlers.start(&writer);
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        if writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap()
+            .items
+            .iter()
+            .any(|a| a.kind == "run.recovery_stale" && a.summary.contains(&item.id))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "old Outbox job was not visibly held"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread::sleep(Duration::from_millis(2200));
+    assert_eq!(writer.history(&item.id).unwrap().len(), 1);
+    let held = writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    assert_eq!(
+        held.items
+            .iter()
+            .filter(|a| a.kind == "run.recovery_stale" && a.summary.contains(&item.id))
+            .count(),
+        1
+    );
+    let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    body["fields"]["title"] = json!("Owner authorizes ready");
+    writer
+        .update(&item.id, &Input::Json(body), Some(&item.version), &user())
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        let note = writer.read(&item.id).unwrap();
+        if writer::doc_to_json(&note.doc)["fields"]["status"] == "sending" {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "owner-ready delivery did not commit"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let failed = writer.state().failed_jobs().unwrap();
+    assert!(!failed.is_empty());
+    assert!(failed.iter().all(|job| matches!(&job.status, state::JobStatus::Failed(message) if message.contains("held: stale admission"))));
+    assert!(
+        writer
+            .state()
+            .queued_jobs()
+            .unwrap()
+            .iter()
+            .all(|job| !failed.iter().any(|old| old.id == job.id))
+    );
+}
+
+#[test]
+fn legacy_handler_is_held_once_until_owner_edit_creates_fresh_work() {
+    unavailable_handler_is_held_once_until_owner_edit(false);
+}
+
+#[test]
+fn unreadable_handler_is_held_once_until_owner_edit_creates_fresh_work() {
+    unavailable_handler_is_held_once_until_owner_edit(true);
+}
+
+fn unavailable_handler_is_held_once_until_owner_edit(unreadable: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let (writer, handlers) = open(dir.path(), false);
+    let item = writer
+        .create("report", &json_note(json!({"title":"Old"})), &user())
+        .unwrap();
+    let item = writer
+        .update(
+            &item.id,
+            &json_note(json!({"title":"Legacy queued"})),
+            Some(&item.version),
+            &Author::Token("fixture".into()),
+        )
+        .unwrap();
+    let old = writer.state().queued_jobs().unwrap().remove(0);
+    let legacy = writer
+        .state()
+        .queue_jobs_with_provenance(&[old.payload], if unreadable { "missing-run" } else { "" })
+        .unwrap()[0];
+    writer
+        .state()
+        .finish_job(old.id, Ok(()), "fixture")
+        .unwrap();
+    handlers.start(&writer);
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        if writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap()
+            .items
+            .iter()
+            .any(|a| {
+                a.kind == "run.recovery_unavailable"
+                    && a.summary.contains(&format!("Handler job {legacy} "))
+            })
+        {
+            break;
+        }
+        assert!(Instant::now() < until, "legacy work was not visibly held");
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread::sleep(Duration::from_millis(2200));
+    let entries = writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    let held: Vec<_> = entries
+        .items
+        .iter()
+        .filter(|a| a.kind == "run.recovery_unavailable")
+        .collect();
+    assert_eq!(held.len(), 1);
+    assert!(held[0].summary.contains(&item.id));
+    assert!(held[0].summary.contains("review"));
+    assert!(held[0].summary.contains("editing the note as owner"));
+    assert_eq!(writer.history(&item.id).unwrap().len(), 2);
+    writer
+        .update(
+            &item.id,
+            &json_note(json!({"title":"Owner released"})),
+            Some(&item.version),
+            &user(),
+        )
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        if writer::doc_to_json(&writer.read(&item.id).unwrap().doc)["fields"]["review"] == "seen" {
+            break;
+        }
+        assert!(Instant::now() < until, "fresh owner handler did not commit");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        writer
+            .state()
+            .queued_jobs()
+            .unwrap()
+            .iter()
+            .all(|j| j.id != legacy)
+    );
+    assert!(writer.state().failed_jobs().unwrap().iter().any(|job| job.id == legacy && matches!(&job.status, state::JobStatus::Failed(message) if message.contains("held: provenance unavailable"))));
 }
 
 #[test]

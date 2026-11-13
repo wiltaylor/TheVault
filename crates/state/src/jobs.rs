@@ -5,9 +5,14 @@
 //! when it starts again. A job that ran is removed; one that failed stays, with its message and
 //! log, as the record of the failure.
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::{Error, Result, State};
+
+pub(crate) const PROVENANCE_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS handler_provenance (job_id INTEGER PRIMARY KEY, run_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS outbox_provenance (note_id TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(note_id,run_id));
+";
 
 /// Where a job is in the queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +36,15 @@ pub struct HandlerJob {
 impl State {
     /// Queue one job per payload, in order, in one transaction.
     pub fn queue_jobs(&self, payloads: &[String]) -> Result<Vec<i64>> {
+        self.queue_jobs_with_provenance(payloads, "")
+    }
+
+    /// Host-only reference, published atomically with the opaque script payload.
+    pub fn queue_jobs_with_provenance(
+        &self,
+        payloads: &[String],
+        run_id: &str,
+    ) -> Result<Vec<i64>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let now = self.now();
@@ -40,10 +54,94 @@ impl State {
                 "INSERT INTO handler_jobs (payload, queued_ms) VALUES (?1, ?2)",
                 params![p, now],
             )?;
-            ids.push(tx.last_insert_rowid());
+            let id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT OR REPLACE INTO handler_provenance VALUES (?1,?2)",
+                params![id, run_id],
+            )?;
+            ids.push(id);
         }
         tx.commit()?;
         Ok(ids)
+    }
+
+    pub fn handler_provenance(&self, job_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT run_id FROM handler_provenance WHERE job_id=?1",
+                [job_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn handler_recovery_subject(&self, job_id: i64) -> Result<String> {
+        let (payload, queued): (String, i64) = self.conn().query_row(
+            "SELECT payload,queued_ms FROM handler_jobs WHERE id=?1",
+            [job_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let p: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
+        Ok(format!(
+            "Handler job {job_id} queued {queued}, script {}, note {} {} (release by editing the note as owner)",
+            p["script"].as_str().unwrap_or("unknown"),
+            p["type"].as_str().unwrap_or("unknown"),
+            p["id"].as_str().unwrap_or("unknown")
+        ))
+    }
+
+    pub fn outbox_provenance(&self, note_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT run_id FROM outbox_provenance WHERE note_id=?1 ORDER BY run_id")?;
+        Ok(stmt
+            .query_map([note_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn append_outbox_provenance(
+        &self,
+        note_id: &str,
+        run_id: &str,
+        created: bool,
+    ) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        if !created {
+            tx.execute("INSERT OR IGNORE INTO outbox_provenance SELECT ?1,'' WHERE NOT EXISTS(SELECT 1 FROM outbox_provenance WHERE note_id=?1)", [note_id])?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO outbox_provenance VALUES (?1,?2)",
+            params![note_id, run_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn remove_outbox_provenance(&self, note_id: &str) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM outbox_provenance WHERE note_id=?1", [note_id])?;
+        Ok(())
+    }
+
+    /// Host-only owner action replaces an item's previous automation admission.
+    pub fn replace_outbox_provenance(&self, note_id: &str, run_id: &str) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM outbox_provenance WHERE note_id=?1", [note_id])?;
+        tx.execute(
+            "INSERT INTO outbox_provenance VALUES (?1,?2)",
+            params![note_id, run_id],
+        )?;
+        for kind in ["run.recovery_stale", "run.recovery_unavailable"] {
+            tx.execute(
+                "DELETE FROM meta WHERE key=?1",
+                [format!("run-audit:{kind}:Outbox note {note_id}")],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Record a job that failed before it could be queued, such as one past the depth limit.
@@ -75,7 +173,8 @@ impl State {
         outcome: std::result::Result<(), String>,
         log: &str,
     ) -> Result<()> {
-        let conn = self.conn();
+        let mut conn = self.conn();
+        let conn = conn.transaction()?;
         let changed = match outcome {
             Ok(()) => conn.execute(
                 "DELETE FROM handler_jobs WHERE id = ?1 AND status = 'queued'",
@@ -90,6 +189,8 @@ impl State {
         if changed == 0 {
             return Err(Error::Corrupt(format!("handler job {id} is not queued")));
         }
+        conn.execute("DELETE FROM handler_provenance WHERE job_id=?1 AND NOT EXISTS(SELECT 1 FROM handler_jobs WHERE id=?1)", [id])?;
+        conn.commit()?;
         Ok(())
     }
 

@@ -179,6 +179,142 @@ fn drafted_title(label: &str, count: usize) -> String {
 }
 
 impl Writer {
+    /// Publish before the file commit, including updates of sealed old items.
+    /// A failed save may leave extra conservative provenance, never less.
+    pub(crate) fn remember_outbox_context(
+        &self,
+        saved: &crate::NoteChange,
+        author: &Author,
+        implied: bool,
+    ) -> crate::Result<Option<script_core::RunContext>> {
+        if saved.type_name == "outbox" {
+            if saved.event == crate::Event::Delete {
+                self.state.remove_outbox_provenance(&saved.id)?;
+                let removed = self
+                    .outbox_contexts
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&saved.id);
+                drop(removed);
+                return Ok(None);
+            }
+            let context = script_core::RunContext::current().unwrap_or_default();
+            let mut contexts = self
+                .outbox_contexts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let owner = matches!(author, Author::Session(_));
+            if owner {
+                // An explicit owner write authorizes a new attempt. It is not
+                // automation and must not inherit the previous item's admission.
+            } else if let Some(old) = contexts.get(&saved.id) {
+                context.merge(old);
+            } else if saved.event != crate::Event::Create {
+                // Older references stay durable even if recovery is unavailable.
+                // Do not cache a replacement that would hide them.
+                let ids = self.state.outbox_provenance(&saved.id)?;
+                if ids.is_empty() || ids.iter().any(|id| id.is_empty()) {
+                    self.state.record_unavailable_run_for(
+                        &saved.id,
+                        &format!("Outbox note {}", saved.id),
+                    )?;
+                    if implied {
+                        self.state.append_outbox_provenance(&saved.id, "", false)?;
+                        return Ok(None);
+                    }
+                    return Err(state::Error::Corrupt(format!(
+                        "Outbox provenance unavailable for {}",
+                        saved.id
+                    ))
+                    .into());
+                }
+                for id in ids {
+                    context.merge(
+                        &self.recover_run_context_for(&id, &format!("Outbox note {}", saved.id))?,
+                    );
+                }
+            }
+            self.publish_run_context(&context, |state, run_id| {
+                state.append_outbox_provenance(
+                    &saved.id,
+                    run_id,
+                    saved.event == crate::Event::Create,
+                )
+            })?;
+            if owner {
+                // Keep old durable references until the owner edit has committed.
+                // A failed file write must not authorize the old item contents.
+                // Invalidate any cache that would hide the appended reference.
+                contexts.remove(&saved.id);
+                return Ok(Some(context));
+            }
+            contexts.insert(saved.id.clone(), context);
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn finish_owner_outbox_context(
+        &self,
+        id: &str,
+        context: &script_core::RunContext,
+    ) -> crate::Result<()> {
+        let mut contexts = self
+            .outbox_contexts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.publish_run_context(context, |state, run_id| {
+            state.replace_outbox_provenance(id, run_id)
+        })?;
+        contexts.insert(id.to_owned(), context.clone());
+        Ok(())
+    }
+
+    /// Each recovered send/delete/receipt uses this item's context, not the job
+    /// that happened to discover it. Retain live owners to avoid false recovery.
+    pub fn outbox_run_context(&self, id: &str) -> state::Result<script_core::RunContext> {
+        let mut contexts = self
+            .outbox_contexts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(context) = contexts.get(id) {
+            self.check_outbox_context(id, context)?;
+            return Ok(context.clone());
+        }
+        let ids = self.state.outbox_provenance(id)?;
+        if ids.is_empty() {
+            self.state
+                .record_unavailable_run_for(id, &format!("Outbox note {id}"))?;
+            return Err(state::Error::Corrupt(
+                "Outbox provenance unavailable".into(),
+            ));
+        }
+        let context = script_core::RunContext::default();
+        for run_id in ids {
+            context.merge(&self.recover_run_context_for(&run_id, &format!("Outbox note {id}"))?);
+        }
+        contexts.insert(id.to_owned(), context.clone());
+        self.check_outbox_context(id, &context)?;
+        Ok(context)
+    }
+
+    fn check_outbox_context(
+        &self,
+        id: &str,
+        context: &script_core::RunContext,
+    ) -> state::Result<()> {
+        if context
+            .stop_generation()
+            .is_none_or(|g| self.state.automation_commit(g).is_err())
+        {
+            self.state
+                .record_stale_run_for(id, &format!("Outbox note {id}"))?;
+            return Err(state::Error::Corrupt(
+                "Outbox item held until an owner action after Resume".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Apply admission limits under the writer's write lock. Refused automatic sends stay drafts.
     pub(crate) fn limit_outbox(
         &self,
@@ -475,7 +611,7 @@ impl Writer {
         let drafted_by = match author {
             Author::Agent(name) | Author::AgentMail(name) => name.as_str(),
             Author::Session(_) | Author::Token(_) => DRAFTED_BY_USER,
-            Author::Handler(_) | Author::Task(_) => return,
+            Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_) => return,
         };
         if text(doc, "drafted_by").is_none_or(str::is_empty) {
             set(doc, "drafted_by", drafted_by);
@@ -713,9 +849,13 @@ fn outbox_rule(
                 }
             }
         }
-        Author::Handler(name) | Author::Task(name) => {
+        Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_) => {
+            let name = match author {
+                Author::Handler(name) | Author::Task(name) => name.as_str(),
+                _ => "google_gmail",
+            };
             let label = match author {
-                Author::Handler(_) => format!("handler {name}"),
+                Author::Handler(_) | Author::GmailSentCopy(_) => format!("handler {name}"),
                 _ => format!("task {name}"),
             };
             let Some(old) = old else {

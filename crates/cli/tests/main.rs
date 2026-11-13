@@ -5,4 +5,5 @@
 mod agent_install;
 mod cli;
 mod gitsync;
+mod history_repair;
 mod thread_history;

@@ -65,6 +65,18 @@ describe("View original", () => {
     expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
   });
 
+  it("closes with Escape immediately after the focused remote-image button disappears", async () => {
+    render(() => <ViewOriginalButton id="01JB8Z4K2MQ7V3X9T5R6W8Y2ZA" />);
+    fireEvent.click(screen.getByRole("button", { name: "View original" }));
+    const load = await screen.findByRole("button", { name: "Load remote images" });
+    load.focus();
+    fireEvent.click(load);
+    expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" }));
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("knows a page with remote images", () => {
     expect(hasRemoteImages(PAGE)).toBe(true);
     expect(hasRemoteImages('<img src="data:image/png;base64,AA">')).toBe(false);

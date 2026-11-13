@@ -8,7 +8,7 @@ main:
 
 # Everything a change must pass before it can merge, the release scripts' tests too. Playwright runs separately in test-e2e
 [group('ci')]
-check: cargo-lock-check rust-tests-declared rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test emulator-harness-test release-test
+check: cargo-lock-check rust-tests-declared rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test desktop-node-test emulator-harness-test release-test
 
 # Check that all workspace lockfiles match their manifests without network access
 [group('ci')]
@@ -76,6 +76,11 @@ web-typecheck: web-deps-install
 [group('ci')]
 web-test: web-deps-install
 	pnpm -C web test
+
+# Test the desktop setup, page and capability guards without installing packages
+[group('ci')]
+desktop-node-test: (require-tool "node")
+	node --test --test-reporter=tap apps/desktop/src-tauri/src/*.test.cjs
 
 # Install the Android emulator harness's node packages from its lockfile (TV-67)
 [private]

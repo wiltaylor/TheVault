@@ -66,6 +66,29 @@ struct Args {
 /// Script worker threads for scheduled tasks.
 const SCRIPT_WORKERS: usize = 4;
 
+fn ownership_or_warn<T>(result: std::io::Result<T>) -> anyhow::Result<Option<T>> {
+    match result {
+        Ok(owner) => Ok(Some(owner)),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(error).context("locking vault ownership")
+        }
+        Err(error) => {
+            eprintln!(
+                "warning: cannot lock vault ownership: {error}; starting without ownership lock"
+            );
+            Ok(None)
+        }
+    }
+}
+
+#[test]
+fn unsupported_ownership_lock_allows_startup_but_contention_refuses() {
+    let error = std::io::Error::new(std::io::ErrorKind::Unsupported, "injected flock failure");
+    assert!(ownership_or_warn::<()>(Err(error)).unwrap().is_none());
+    assert!(ownership_or_warn::<()>(Err(std::io::ErrorKind::WouldBlock.into())).is_err());
+    assert_eq!(ownership_or_warn(Ok(7)).unwrap(), Some(7));
+}
+
 fn main() -> anyhow::Result<()> {
     // Classifier trails use the AI tracing target. Keep them visible by default, with
     // RUST_LOG available to the operator, and do not disturb an existing subscriber.
@@ -93,6 +116,8 @@ fn main() -> anyhow::Result<()> {
     {
         bail!("web folder {} has no index.html", web.display());
     }
+    std::fs::create_dir_all(args.vault.join(".vault"))?;
+    let _owner = ownership_or_warn(store::lock_owner(&args.vault))?;
     let vault = store::Vault::init(&args.vault)
         .with_context(|| format!("opening vault {}", args.vault.display()))?;
     let clients = args
@@ -288,6 +313,7 @@ async fn serve(
         let root = Arc::new(web);
         app = app.fallback(move |req| api::web::serve(root.clone(), req));
     }
+    app = app.layer(axum::middleware::from_fn(api::web::hsts));
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

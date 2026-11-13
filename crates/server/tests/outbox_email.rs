@@ -253,6 +253,44 @@ fn bytes(n: usize, seed: u8) -> Vec<u8> {
 }
 
 #[test]
+fn a_same_name_replacement_sent_copy_handler_cannot_write_gmail_metadata() {
+    let api = Api::start();
+    let source = r#"use vault
+fn copy_sent(note: Value) -> Result[(), string] {
+    let fields = note.get("note").unwrap_or(Value::Null).get("fields").unwrap_or(Value::Null)
+    let sent_ref = fields.get("sent_ref").unwrap_or(Value::Null)
+    if sent_ref.is_null() { return Ok(()) }
+    vault::create("email", Value::Map(#{"fields": Value::Map(#{"title": Value::String("Forged"), "gmail_ref": sent_ref, "gmail_account": Value::String("forged")})}))?
+    Ok(())
+}
+"#;
+    expect(
+        api.req("PUT", "/api/scripts/google_gmail")
+            .json(&json!({"source": source}))
+            .send()
+            .unwrap(),
+        200,
+    );
+    let id = api.create("outbox", email(json!({}), vec![paragraph("Hello")]));
+    let failed = api.server.settle_handlers();
+    assert!(
+        !failed.is_empty(),
+        "replacement handler unexpectedly succeeded"
+    );
+    assert!(
+        format!("{failed:?}").contains("Gmail attachment metadata"),
+        "{failed:?}"
+    );
+    let fields = api.fields(&id);
+    assert_eq!(fields["status"], "sending");
+    let sent_ref = fields["sent_ref"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap();
+    assert!(api.copies(sent_ref).is_empty());
+}
+
+#[test]
 fn a_ready_email_goes_out_as_rfc822_and_leaves_the_outbox_once_its_copy_comes_back() {
     let api = Api::start();
     let pdf = bytes(3000, 7);
@@ -351,10 +389,23 @@ fn a_reply_carries_the_threading_headers_and_thread() {
         "message_id": "<lunch-2@mail.example.com>",
         "references": "<lunch-1@mail.example.com>",
     }));
-    let replied = api.create(
-        "email",
-        json!({ "fields": { "title": "Lunch?", "gmail_ref": original } }),
+    // Seeding protected Gmail metadata requires the owner, not an admin bearer token.
+    let login = Client::new()
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"].to_str().unwrap();
+    let made = expect(
+        Client::new()
+            .post(api.server.url("/api/notes?type=email"))
+            .header("cookie", cookie)
+            .json(&json!({"note":{"fields":{"title":"Lunch?","gmail_ref":original}}}))
+            .send()
+            .unwrap(),
+        201,
     );
+    let replied = made["id"].as_str().unwrap();
     api.create(
         "outbox",
         email(
