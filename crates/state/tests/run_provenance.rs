@@ -20,6 +20,7 @@ fn restart_preserves_restriction_and_original_admission() {
     let s = open(&path);
     let old = s.admit_automation().unwrap();
     let restricted = s.create_run_provenance(true, Some(old)).unwrap();
+    s.seal_run_provenance(restricted.id()).unwrap();
     let clean = s.create_run_provenance(false, None).unwrap();
     s.seal_run_provenance(clean.id()).unwrap();
     drop(s);
@@ -63,6 +64,7 @@ fn existing_references_keep_late_restrictions_and_oldest_generation() {
     let newer = s.admit_automation().unwrap();
     s.update_run_provenance(b.id(), true, Some(newer)).unwrap();
     s.update_run_provenance(c.id(), false, None).unwrap();
+    s.seal_run_provenance(a.id()).unwrap();
     drop(s);
     let s = open(&path);
     for id in [a.id(), b.id(), c.id()] {
@@ -125,9 +127,10 @@ fn failed_join_rolls_back_and_retry_keeps_both_histories() {
     assert!(s.join_run_provenance(a.id(), b.id()).is_err());
     let unchanged = s.load_run_provenance(a.id());
     assert!(unchanged.is_restricted()); // active, even though the update rolled back
-    assert_eq!(unchanged.stop_generation(), None);
+    assert!(s.automation_commit(unchanged.stop_generation().unwrap()).is_err());
     conn.execute_batch("DROP TRIGGER fail_link").unwrap();
     s.join_run_provenance(a.id(), b.id()).unwrap();
+    s.seal_run_provenance(a.id()).unwrap();
     for id in [a.id(), b.id()] {
         let joined = s.load_run_provenance(id);
         assert!(joined.is_restricted());
@@ -157,6 +160,38 @@ fn failed_update_is_reported_and_can_be_retried() {
 }
 
 #[test]
+fn final_snapshot_and_seal_are_one_transaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let s = open(&path);
+    let old = s.admit_automation().unwrap();
+    let a = s.lease_run_provenance(false, None).unwrap();
+    let b = s.lease_run_provenance(false, None).unwrap();
+    let ids = [a.id().to_owned(), b.id().to_owned()];
+    let leases = [a, b];
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER fail_seal BEFORE UPDATE OF sealed ON run_provenance
+         BEGIN SELECT RAISE(ABORT, 'injected seal failure'); END;",
+    ).unwrap();
+    assert!(state::RunProvenanceLease::seal_all(&leases, true, Some(old)).is_err());
+    for id in &ids {
+        let recovered = s.load_run_provenance(id);
+        assert!(!recovered.is_sealed());
+        assert!(recovered.is_restricted());
+        assert!(s.automation_commit(recovered.stop_generation().unwrap()).is_err());
+    }
+    conn.execute_batch("DROP TRIGGER fail_seal").unwrap();
+    state::RunProvenanceLease::seal_all(&leases, true, Some(old)).unwrap();
+    for id in &ids {
+        let recovered = s.load_run_provenance(id);
+        assert!(recovered.is_sealed());
+        assert!(recovered.is_restricted());
+        assert_eq!(recovered.stop_generation(), Some(old));
+    }
+}
+
+#[test]
 fn crash_before_restriction_recovers_conservatively_and_sealed_clean_stays_clean() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
@@ -170,19 +205,19 @@ fn crash_before_restriction_recovers_conservatively_and_sealed_clean_stays_clean
     let recovered = s.load_run_provenance(active.id());
     assert!(recovered.is_restricted());
     assert!(!recovered.is_sealed());
-    assert_eq!(recovered.stop_generation(), Some(generation));
+    assert!(s.automation_commit(recovered.stop_generation().unwrap()).is_err());
     drop(s.automation_commit(generation).unwrap());
     let clean = s.load_run_provenance(sealed.id());
     assert!(!clean.is_restricted());
     assert!(clean.is_sealed());
+    assert_eq!(clean.stop_generation(), Some(generation));
     s.set_automation_stopped(true).unwrap();
     s.set_automation_stopped(false).unwrap();
     drop(s);
     let s = open(&path);
     for id in [active.id(), sealed.id()] {
         let recovered = s.load_run_provenance(id);
-        assert_eq!(recovered.stop_generation(), Some(generation));
-        assert!(s.automation_commit(generation).is_err());
+        assert!(s.automation_commit(recovered.stop_generation().unwrap()).is_err());
     }
 }
 

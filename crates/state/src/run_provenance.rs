@@ -5,6 +5,7 @@
 //! the oldest admission. The database transaction serializes joins and updates.
 
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::{Connection, params};
 
@@ -48,7 +49,9 @@ impl RunProvenance {
         self.sealed
     }
 
-    fn unknown(id: &str) -> Self {
+    /// Fail-closed provenance when the caller cannot safely read or re-arm it.
+    /// This issues only a permanently stale identity, never a valid admission.
+    pub fn unavailable(id: &str) -> Self {
         Self {
             id: id.to_owned(),
             restricted: true,
@@ -56,6 +59,76 @@ impl RunProvenance {
             sealed: false,
         }
     }
+}
+
+/// An unsealed durable identity owned by one live RunContext component.
+/// Not cloneable: transfer it on live joins, then seal all owned identities
+/// together when the last live context disappears. Dropping without sealing is
+/// safe and deliberately leaves recovery restricted/stale.
+pub struct RunProvenanceLease {
+    id: String,
+    conn: Arc<Mutex<Connection>>,
+}
+
+impl std::fmt::Debug for RunProvenanceLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunProvenanceLease").field("id", &self.id).finish()
+    }
+}
+
+impl RunProvenanceLease {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn belongs_to(&self, state: &State) -> bool {
+        Arc::ptr_eq(&self.conn, &state.conn)
+    }
+
+    /// Atomically store the final live snapshot, join all durable references,
+    /// and seal. Call only after every live owner is gone. Failure rolls back
+    /// the whole seal, so no reference can restore a partial final snapshot.
+    pub fn seal_all(
+        leases: &[Self],
+        mut restricted: bool,
+        mut generation: Option<Generation>,
+    ) -> Result<()> {
+        let Some(first) = leases.first() else {
+            return Ok(());
+        };
+        if leases.iter().any(|lease| !Arc::ptr_eq(&lease.conn, &first.conn)) {
+            return Err(Error::Corrupt("run provenance uses multiple State authorities".into()));
+        }
+        let mut conn = first.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.transaction()?;
+        let mut roots = BTreeSet::new();
+        for lease in leases {
+            let (root, snapshot) = resolve(&tx, &lease.id)?;
+            restricted |= snapshot.restricted;
+            generation = oldest(generation, snapshot.generation);
+            roots.insert(root);
+        }
+        let root = roots.first().expect("at least one lease");
+        for other in &roots {
+            tx.execute(
+                "UPDATE run_provenance SET restricted=?2,stop_generation=?3,parent=?4 WHERE id=?1",
+                params![other, restricted, generation.map(Generation::stored), (other != root).then_some(root)],
+            )?;
+        }
+        seal_component(&tx, root)?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+fn seal_component(conn: &Connection, root: &str) -> Result<()> {
+    conn.execute(
+        "WITH RECURSIVE members(id) AS (
+            SELECT ?1 UNION SELECT p.id FROM run_provenance p JOIN members m ON p.parent=m.id
+         ) UPDATE run_provenance SET sealed=1 WHERE id IN (SELECT id FROM members)",
+        [root],
+    )?;
+    Ok(())
 }
 
 fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
@@ -125,6 +198,38 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
 }
 
 impl State {
+    /// Start an unsealed lifecycle before a queue publishes this ID.
+    pub fn lease_run_provenance(
+        &self,
+        restricted: bool,
+        generation: Option<Generation>,
+    ) -> Result<RunProvenanceLease> {
+        let snapshot = self.create_run_provenance(restricted, generation)?;
+        Ok(RunProvenanceLease {
+            id: snapshot.id,
+            conn: self.conn.clone(),
+        })
+    }
+
+    /// Recover and re-arm an existing identity in one transaction, before any
+    /// new live owner can gain provenance. Owners must reuse their live context
+    /// registry instead of repeatedly resuming the same ID within a process.
+    pub fn resume_run_provenance(&self, id: &str) -> Result<(RunProvenance, RunProvenanceLease)> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let (root, mut snapshot) = resolve(&tx, id)?;
+        if !snapshot.sealed {
+            snapshot.restricted = true;
+            snapshot.generation = Some(Generation::stale());
+        }
+        tx.execute("UPDATE run_provenance SET sealed=0 WHERE id=?1", [root])?;
+        tx.commit()?;
+        Ok((snapshot, RunProvenanceLease {
+            id: id.to_owned(),
+            conn: self.conn.clone(),
+        }))
+    }
+
     /// Allocate host provenance before publishing a durable work reference.
     /// The generation must be an existing State-issued credential.
     pub fn create_run_provenance(
@@ -148,15 +253,20 @@ impl State {
     /// Recover from host-owned storage, failing closed on any read/format error.
     /// Unknown provenance is restricted AND stale, even after Stop/Resume.
     /// An interrupted unsealed run is restricted because exposure may have
-    /// happened after its last successful write. Sealed unrestricted runs stay
-    /// unrestricted. A readable record retains its recorded admission identity.
+    /// happened after its last successful write. It is also stale: a later join
+    /// may have lowered its generation without reaching storage. Sealed records
+    /// restore exactly as sealed. Recovery callers must durably record stale
+    /// work for the owner, never silently discard an interrupted automation.
     pub fn load_run_provenance(&self, id: &str) -> RunProvenance {
         resolve(&self.conn(), id)
             .map(|(_, mut snapshot)| {
-                snapshot.restricted |= !snapshot.sealed;
+                if !snapshot.sealed {
+                    snapshot.restricted = true;
+                    snapshot.generation = Some(Generation::stale());
+                }
                 snapshot
             })
-            .unwrap_or_else(|_| RunProvenance::unknown(id))
+            .unwrap_or_else(|_| RunProvenance::unavailable(id))
     }
 
     /// Seal only after no live context can gain restriction or join another run.
@@ -167,12 +277,7 @@ impl State {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let (root, _) = resolve(&tx, id)?;
-        tx.execute(
-            "WITH RECURSIVE members(id) AS (
-                SELECT ?1 UNION SELECT p.id FROM run_provenance p JOIN members m ON p.parent=m.id
-             ) UPDATE run_provenance SET sealed=1 WHERE id IN (SELECT id FROM members)",
-            [root],
-        )?;
+        seal_component(&tx, &root)?;
         tx.commit()?;
         Ok(())
     }

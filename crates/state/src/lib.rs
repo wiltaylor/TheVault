@@ -71,7 +71,7 @@ pub use notifications::{
     READ_RETENTION_MS, SourceLimit, SourceMatch, is_app_path,
 };
 pub use pins::{PinEntry, PinKind, PinNode};
-pub use run_provenance::RunProvenance;
+pub use run_provenance::{RunProvenance, RunProvenanceLease};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{LoginInfo, LoginSecret, SecretInfo, SecretKey, canonical_origin, key_file_path};
 pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck};
@@ -171,7 +171,7 @@ impl Clock for SystemClock {
 /// An open `state.db`.
 pub struct State {
     automation_gate: Mutex<()>,
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     key: Option<SecretKey>,
     clock: Arc<dyn Clock>,
     events: Events,
@@ -526,7 +526,7 @@ impl State {
         let now = clock.now_ms();
         Ok(Self {
             automation_gate: Mutex::new(()),
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             key,
             clock,
             events: Events::default(),

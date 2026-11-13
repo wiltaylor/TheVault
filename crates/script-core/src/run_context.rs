@@ -16,6 +16,23 @@ struct State {
     restricted: bool,
     stop_generation: Option<Generation>,
     parent: Option<RunContext>,
+    durable: Vec<state::RunProvenanceLease>,
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        // Leases move to the root on every join. The final Arc owner is gone,
+        // so no live descendant can gain more provenance. No JOIN/State lock
+        // is held during this database transaction. Failure leaves every row
+        // unsealed and recovery restricted/stale, never a partial clean seal.
+        if let Err(error) = state::RunProvenanceLease::seal_all(
+            &self.durable,
+            self.restricted,
+            self.stop_generation,
+        ) {
+            eprintln!("sealing run provenance: {error}");
+        }
+    }
 }
 
 // Serializes root lookup, joins and mutations. No user code, writer lock,
@@ -64,6 +81,7 @@ impl RunContext {
         let mut b = other.0.lock().unwrap_or_else(|e| e.into_inner());
         a.restricted |= b.restricted;
         a.stop_generation = oldest(a.stop_generation, b.stop_generation);
+        a.durable.append(&mut b.durable);
         b.parent = Some(root.clone());
     }
 
@@ -102,6 +120,44 @@ impl RunContext {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .stop_generation
+    }
+
+    /// Persist an active marker before publishing a durable work reference.
+    /// All later mutations stay live until the last context owner disappears,
+    /// when the complete snapshot is sealed atomically. A crash or failed seal
+    /// restores restricted AND stale, including failed late-generation joins.
+    pub fn persist(&self, database: &state::State) -> state::Result<String> {
+        let (restricted, generation) = {
+            let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+            let root = self.root();
+            let state = root.0.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(lease) = state.durable.iter().find(|lease| lease.belongs_to(database)) {
+                return Ok(lease.id().to_owned());
+            }
+            (state.restricted, state.stop_generation)
+        };
+        // Never hold JOIN while waiting for SQLite or the writer.
+        let lease = database.lease_run_provenance(restricted, generation)?;
+        let id = lease.id().to_owned();
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).durable.push(lease);
+        Ok(id)
+    }
+
+    /// Recover outside unrelated ambient scopes. Unknown/unreadable storage
+    /// returns restricted/stale without inventing an admission. Queue owners
+    /// must durably record this recovery and retain a live-context registry.
+    pub fn recover(database: &state::State, id: &str) -> Self {
+        let (snapshot, durable) = match database.resume_run_provenance(id) {
+            Ok((snapshot, lease)) => (snapshot, vec![lease]),
+            Err(_) => (state::RunProvenance::unavailable(id), Vec::new()),
+        };
+        Self(Arc::new(Mutex::new(State {
+            restricted: snapshot.is_restricted(),
+            stop_generation: snapshot.stop_generation(),
+            parent: None,
+            durable,
+        })))
     }
 
     /// Capture the synchronous caller's context before crossing a worker boundary.
@@ -145,6 +201,107 @@ fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
 #[cfg(test)]
 mod tests {
     use super::RunContext;
+
+    #[test]
+    fn durable_identity_seals_only_after_last_live_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let database = state::State::open(&path, None).unwrap();
+        let generation = database.admit_automation().unwrap();
+        let parent = RunContext::default();
+        parent.capture_stop_generation(generation);
+        let id = parent.persist(&database).unwrap();
+        assert_eq!(parent.persist(&database).unwrap(), id);
+        let child = parent.clone();
+        parent.restrict(); // after publication, not a snapshot at enqueue
+        drop(parent);
+        let active = database.load_run_provenance(&id);
+        assert!(!active.is_sealed());
+        assert!(active.is_restricted());
+        assert!(database.automation_commit(active.stop_generation().unwrap()).is_err());
+        drop(child);
+        drop(database);
+        let database = state::State::open(&path, None).unwrap();
+        let sealed = database.load_run_provenance(&id);
+        assert!(sealed.is_sealed());
+        assert!(sealed.is_restricted());
+        assert_eq!(sealed.stop_generation(), Some(generation));
+    }
+
+    #[test]
+    fn durable_join_seals_every_old_reference_with_oldest_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let old = database.admit_automation().unwrap();
+        database.set_automation_stopped(false).unwrap();
+        let new = database.admit_automation().unwrap();
+        let a = RunContext::default();
+        let b = RunContext::default();
+        a.capture_stop_generation(new);
+        b.capture_stop_generation(old);
+        let a_id = a.persist(&database).unwrap();
+        let b_id = b.persist(&database).unwrap();
+        a.scope(|| b.scope(|| b.restrict()));
+        drop(a);
+        assert!(!database.load_run_provenance(&a_id).is_sealed());
+        drop(b);
+        for id in [&a_id, &b_id] {
+            let sealed = database.load_run_provenance(id);
+            assert!(sealed.is_sealed());
+            assert!(sealed.is_restricted());
+            assert_eq!(sealed.stop_generation(), Some(old));
+            assert!(database.automation_commit(old).is_err());
+        }
+    }
+
+    #[test]
+    fn sealed_unrestricted_recovery_rearms_before_new_exposure() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let context = RunContext::default();
+        let id = context.persist(&database).unwrap();
+        drop(context);
+        assert!(!database.load_run_provenance(&id).is_restricted());
+        let recovered = RunContext::recover(&database, &id);
+        assert!(!recovered.is_restricted());
+        assert_eq!(recovered.stop_generation(), None);
+        assert!(!database.load_run_provenance(&id).is_sealed());
+        recovered.restrict();
+        drop(recovered);
+        assert!(database.load_run_provenance(&id).is_restricted());
+        assert!(database.load_run_provenance(&id).is_sealed());
+    }
+
+    #[test]
+    fn unknown_and_interrupted_recovery_never_acquire_fresh_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let generation = database.admit_automation().unwrap();
+        let active = database.create_run_provenance(false, Some(generation)).unwrap();
+        for id in ["missing", active.id()] {
+            let recovered = RunContext::recover(&database, id);
+            assert!(recovered.is_restricted());
+            assert!(database.automation_commit(recovered.stop_generation().unwrap()).is_err());
+            recovered.capture_stop_generation(generation);
+            assert!(database.automation_commit(recovered.stop_generation().unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn mixed_storage_authorities_leave_unsealed_records_instead_of_partial_seal() {
+        let dir = tempfile::tempdir().unwrap();
+        let a_db = state::State::open(&dir.path().join("a.db"), None).unwrap();
+        let b_db = state::State::open(&dir.path().join("b.db"), None).unwrap();
+        let a = RunContext::default();
+        let b = RunContext::default();
+        let a_id = a.persist(&a_db).unwrap();
+        let b_id = b.persist(&b_db).unwrap();
+        a.scope(|| b.scope(|| {}));
+        drop(a);
+        drop(b);
+        assert!(!a_db.load_run_provenance(&a_id).is_sealed());
+        assert!(!b_db.load_run_provenance(&b_id).is_sealed());
+    }
 
     #[test]
     fn descendants_share_late_restriction_and_oldest_generation() {
