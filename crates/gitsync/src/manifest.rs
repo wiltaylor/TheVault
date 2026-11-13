@@ -65,6 +65,8 @@ pub struct AssetEntry {
 pub struct DefEntry {
     pub name: String,
     pub path: String,
+    /// SHA256 of the published plaintext. Required, including on older format-2 peers.
+    pub sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +113,8 @@ impl Manifest {
                 "legacy manifest refused; upgrade every peer and republish".into(),
             ));
         }
-        serde_json::from_slice(&json).map_err(|e| Error::Malformed(format!("manifest: {e}")))
+        serde_json::from_slice(&json).map_err(|e| Error::Malformed(format!(
+            "manifest: {e}; upgrade every peer and republish"
+        )))
     }
 }

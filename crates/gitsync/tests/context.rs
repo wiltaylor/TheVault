@@ -38,6 +38,7 @@ fn retry_assets(count: usize, repair: bool) {
     manifest.types.push(DefEntry {
         name: "memo".into(),
         path: layout.type_def("memo"),
+        sha256: gitsync::pack::sha256_hex(MEMO.as_bytes()),
     });
     let mut files = BTreeMap::from([(
         layout.type_def("memo"),
@@ -165,6 +166,7 @@ fn missing_manifest_blob(kind: &str) {
     manifest.types.push(DefEntry {
         name: "memo".into(),
         path: layout.type_def("memo"),
+        sha256: gitsync::pack::sha256_hex(MEMO.as_bytes()),
     });
     manifest.notes.push(NoteEntry {
         id: id.into(),
@@ -251,6 +253,7 @@ fn altered_context_and_manifest_are_refused_then_upgraded_peer_imports() {
     manifest.types.push(DefEntry {
         name: "memo".into(),
         path: layout.type_def("memo"),
+        sha256: gitsync::pack::sha256_hex(MEMO.as_bytes()),
     });
     manifest.notes.push(NoteEntry {
         id: id.into(),

@@ -82,6 +82,7 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
                     manifest.types.push(gitsync::DefEntry {
                         name: name.into(),
                         path: layout.type_def(name),
+                        sha256: gitsync::pack::sha256_hex(text.as_bytes()),
                     });
                     files.insert(
                         layout.type_def(name),
@@ -91,6 +92,7 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
                 manifest.types.push(gitsync::DefEntry {
                     name: "memo".into(),
                     path: layout.type_def("memo"),
+                    sha256: gitsync::pack::sha256_hex(MEMO.as_bytes()),
                 });
                 files.insert(
                     layout.type_def("memo"),
@@ -153,6 +155,7 @@ fn peer_note_over_thread(legacy_row: bool) {
     manifest.types.push(gitsync::DefEntry {
         name: "memo".into(),
         path: layout.type_def("memo"),
+        sha256: gitsync::pack::sha256_hex(MEMO.as_bytes()),
     });
     files.insert(
         layout.type_def("memo"),
@@ -264,6 +267,7 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     manifest.types.push(gitsync::DefEntry {
         name: "agent_thread".into(),
         path: layout.type_def("agent_thread"),
+        sha256: gitsync::pack::sha256_hex(s(&b.get("/api/types/agent_thread")["wcl"]).as_bytes()),
     });
     let mut files = BTreeMap::new();
     files.insert(
@@ -316,6 +320,7 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     old_manifest.types.push(gitsync::DefEntry {
         name: "agent_thread".into(),
         path: own_layout.type_def("agent_thread"),
+        sha256: gitsync::pack::sha256_hex(s(&thread_type["wcl"]).as_bytes()),
     });
     let mut old_files = BTreeMap::new();
     old_files.insert(
@@ -442,6 +447,7 @@ fn peer_type_admission_refuses_capabilities_and_mismatched_names() {
         manifest.types.push(gitsync::DefEntry {
             name: "plain".into(),
             path: layout.type_def("plain"),
+            sha256: gitsync::pack::sha256_hex(source.as_bytes()),
         });
         manifest.notes.push(gitsync::NoteEntry {
             id: id.into(),

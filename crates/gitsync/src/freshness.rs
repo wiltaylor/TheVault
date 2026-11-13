@@ -52,15 +52,17 @@ fn save(state: &State, name: &str, sequence: u64, hash: &str) -> Result<()> {
 }
 
 /// The caller holds the vault's round lock, including across the push.
-pub(crate) fn publication(state: &State, peer: &str, hash: &str) -> Result<u64> {
+pub(crate) fn publication(state: &State, peer: &str, hash: &str, remote_sequence: u64) -> Result<u64> {
     let name = format!("gitsync_freshness_publish_{peer}");
     let sequence = match load(state, &name)? {
-        Some(old) if old.hash == hash => return Ok(old.sequence),
+        Some(old) if old.hash == hash && old.sequence >= remote_sequence => return Ok(old.sequence),
         Some(old) => old
             .sequence
+            .max(remote_sequence)
             .checked_add(1)
             .ok_or_else(|| Error::Sync("git-sync sequence exhausted".into()))?,
-        None => 1,
+        None => remote_sequence.checked_add(1)
+            .ok_or_else(|| Error::Sync("git-sync sequence exhausted".into()))?,
     };
     // Reserve before push. A failed push may leave a harmless gap, never reuse a number.
     save(state, &name, sequence, hash)?;
@@ -111,7 +113,7 @@ mod tests {
                         let _lock = lock(root).unwrap();
                         let key = state::SecretKey::load_file(key_file).unwrap();
                         let state = State::open(database, Some(key)).unwrap();
-                        publication(&state, "publisher", &crate::pack::sha256_hex(&[i])).unwrap()
+                        publication(&state, "publisher", &crate::pack::sha256_hex(&[i]), 0).unwrap()
                     })
                 })
                 .collect();
@@ -128,7 +130,10 @@ mod tests {
         )
         .unwrap();
         let hash = crate::pack::sha256_hex(b"after restart");
-        assert_eq!(publication(&state, "publisher", &hash).unwrap(), 9);
-        assert_eq!(publication(&state, "publisher", &hash).unwrap(), 9);
+        assert_eq!(publication(&state, "publisher", &hash, 0).unwrap(), 9);
+        assert_eq!(publication(&state, "publisher", &hash, 9).unwrap(), 9);
+        assert_eq!(publication(&state, "publisher", &hash, 40).unwrap(), 41);
+        assert_eq!(publication(&state, "restored", &hash, 50).unwrap(), 51);
+        assert!(publication(&state, "exhausted", &hash, u64::MAX).is_err());
     }
 }
