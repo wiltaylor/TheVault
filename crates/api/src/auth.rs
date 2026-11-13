@@ -656,7 +656,7 @@ pub(crate) fn guard_stream<S>(
     credential: state::StreamCredential,
 ) -> impl futures_util::Stream<Item = S::Item> + Send
 where
-    S: futures_util::Stream + Send + 'static,
+    S: futures_util::Stream + Send,
     S::Item: Send,
 {
     use futures_util::StreamExt;

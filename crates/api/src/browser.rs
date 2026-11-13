@@ -307,18 +307,15 @@ async fn websocket(desktop: &Url, upstream: &str, mut req: Request) -> Response 
         if !rest.is_empty() && client.write_all(&rest).await.is_err() {
             return;
         }
-        let relay = tokio::io::copy_bidirectional(&mut client, &mut conn);
         if let Some(credential) = credential {
-            use futures_util::StreamExt;
-            let guard =
-                crate::auth::guard_stream(futures_util::stream::pending::<()>(), credential);
-            tokio::pin!(guard);
+            let (client_read, client_write) = tokio::io::split(client);
+            let (server_read, server_write) = conn.into_split();
             tokio::select! {
-                _ = guard.next() => {},
-                _ = relay => {},
+                _ = guarded_copy(client_read, server_write, credential.clone()) => {},
+                _ = guarded_copy(server_read, client_write, credential) => {},
             }
         } else {
-            let _ = relay.await;
+            let _ = tokio::io::copy_bidirectional(&mut client, &mut conn).await;
         }
     });
     let mut res = Response::builder()
@@ -334,6 +331,32 @@ async fn websocket(desktop: &Url, upstream: &str, mut req: Request) -> Response 
     }
     res.body(Body::empty())
         .unwrap_or_else(|_| bad_gateway("the browser box's desktop answered the websocket badly"))
+}
+
+/// Gate both directions independently so a pending credential check cannot leave the relay
+/// forwarding bytes on a cached decision.
+async fn guarded_copy<R, W>(reader: R, mut writer: W, credential: state::StreamCredential)
+where
+    R: tokio::io::AsyncRead + Unpin + Send,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use futures_util::StreamExt;
+    let chunks = futures_util::stream::unfold(reader, |mut reader| async move {
+        let mut bytes = vec![0; 16 * 1024];
+        let len = reader.read(&mut bytes).await.ok()?;
+        if len == 0 {
+            return None;
+        }
+        bytes.truncate(len);
+        Some((bytes, reader))
+    });
+    let chunks = crate::auth::guard_stream(chunks, credential);
+    tokio::pin!(chunks);
+    while let Some(bytes) = chunks.next().await {
+        if writer.write_all(&bytes).await.is_err() {
+            break;
+        }
+    }
 }
 
 /// Reads an HTTP answer's head, through the blank line, and whatever came after it.
@@ -376,6 +399,27 @@ fn parse_head(head: &[u8]) -> Option<(u16, Vec<(String, String)>)> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn upgraded_relay_stops_forwarding_after_revoke() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let (_, secret) = db.create_token("relay", state::Scope::Read).unwrap();
+        let (mut input, reader) = tokio::io::duplex(64);
+        let (writer, mut output) = tokio::io::duplex(64);
+        let task = tokio::spawn(guarded_copy(
+            reader,
+            writer,
+            db.stream_credential(&secret, true),
+        ));
+        input.write_all(b"live").await.unwrap();
+        let mut bytes = [0; 4];
+        output.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"live");
+        db.revoke_token("relay").unwrap();
+        assert_eq!(output.read(&mut bytes).await.unwrap(), 0);
+        task.await.unwrap();
+    }
+
     use super::*;
 
     #[test]
