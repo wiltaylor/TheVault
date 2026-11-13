@@ -481,12 +481,24 @@ mod tests {
         let w = Writer::open(vault, state).unwrap();
         w.put_type("email", "label = \"Email\"\nfield attachments { kind = \"list\" items = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
         w.activate_agent_safety().unwrap();
-        let asset = w.put_asset("invoice.csv", b"amount\n12\n".to_vec()).unwrap();
-        let note = w.create("email", &writer::Input::Json(json!({"fields":{"title":"Incoming", "attachments":[asset.id]}})), &state::Author::Session("owner".into())).unwrap();
+        let asset = w
+            .put_asset("invoice.csv", b"amount\n12\n".to_vec())
+            .unwrap();
+        let note = w
+            .create(
+                "email",
+                &writer::Input::Json(
+                    json!({"fields":{"title":"Incoming", "attachments":[asset.id]}}),
+                ),
+                &state::Author::Session("owner".into()),
+            )
+            .unwrap();
         let hash = w.agent_safety(&note.id).unwrap().fingerprint;
-        w.release_agent_safety(&note.id, &hash, &state::Author::Session("owner".into())).unwrap();
+        w.release_agent_safety(&note.id, &hash, &state::Author::Session("owner".into()))
+            .unwrap();
         let context = script_core::RunContext::default();
-        let result = context.scope(|| read_asset(&w, &json!({"id":asset.id}), true, &Images::default()));
+        let result =
+            context.scope(|| read_asset(&w, &json!({"id":asset.id}), true, &Images::default()));
         assert!(!result.is_error, "{}", result.content);
         assert!(result.content.contains("12"));
         assert!(context.is_restricted());
