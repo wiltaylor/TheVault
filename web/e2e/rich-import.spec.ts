@@ -263,6 +263,6 @@ test("an imported newsletter shows as rich blocks and View original opens it in 
   await expect(original.locator('meta[http-equiv="Content-Security-Policy"]')).toHaveAttribute("content", /img-src data: https:;/);
   await expect.poll(() => original.locator("img[alt='Hero photo']").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(2);
   expect(remoteRequests).toBe(1);
-  await page.keyboard.press("Escape");
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).toBeHidden();
 });
