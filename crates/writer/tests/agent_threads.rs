@@ -294,7 +294,9 @@ fn gmail_sent_copy_is_only_a_fresh_matching_email_create() {
         &Author::Session("owner".into()),
     )
     .unwrap();
-    assert!(w.restore_from_trash(&note.id, &author).is_err());
+    // Restoring unchanged metadata remains permitted by the ordinary guard.
+    // The capability exception itself must not authorize changed restore data.
+    w.restore_from_trash(&note.id, &author).unwrap();
 }
 
 fn open(root: &Path, key: Option<SecretKey>) -> Writer {
