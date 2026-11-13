@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS run_provenance (
     stop_generation INTEGER,
     parent TEXT
 );
+CREATE TABLE IF NOT EXISTS run_provenance_leases (
+    token TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL
+);
 ";
 
 /// A snapshot read by State, not an admission minted by a caller.
@@ -67,6 +71,7 @@ impl RunProvenance {
 /// safe and deliberately leaves recovery restricted/stale.
 pub struct RunProvenanceLease {
     id: String,
+    token: String,
     conn: Arc<Mutex<Connection>>,
 }
 
@@ -110,6 +115,13 @@ impl RunProvenanceLease {
         let tx = conn.transaction()?;
         let mut roots = BTreeSet::new();
         for lease in leases {
+            if tx.execute(
+                "DELETE FROM run_provenance_leases WHERE token=?1 AND run_id=?2",
+                params![lease.token, lease.id],
+            )? != 1
+            {
+                return Err(Error::Corrupt("run provenance lease already released".into()));
+            }
             let (root, snapshot) = resolve(&tx, &lease.id)?;
             restricted |= snapshot.restricted;
             generation = oldest(generation, snapshot.generation);
@@ -127,13 +139,18 @@ impl RunProvenanceLease {
                 ],
             )?;
         }
-        seal_component(&tx, root)?;
+        if !has_live_leases(&tx, root)? {
+            seal_component(&tx, root)?;
+        }
         tx.commit()?;
         Ok(())
     }
 }
 
 fn seal_component(conn: &Connection, root: &str) -> Result<()> {
+    if has_live_leases(conn, root)? {
+        return Err(Error::Corrupt("run provenance still has live leases".into()));
+    }
     conn.execute(
         "WITH RECURSIVE members(id) AS (
             SELECT ?1 UNION SELECT p.id FROM run_provenance p JOIN members m ON p.parent=m.id
@@ -141,6 +158,17 @@ fn seal_component(conn: &Connection, root: &str) -> Result<()> {
         [root],
     )?;
     Ok(())
+}
+
+fn has_live_leases(conn: &Connection, root: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "WITH RECURSIVE members(id) AS (
+            SELECT ?1 UNION SELECT p.id FROM run_provenance p JOIN members m ON p.parent=m.id
+         ) SELECT EXISTS(SELECT 1 FROM run_provenance_leases
+                         WHERE run_id IN (SELECT id FROM members))",
+        [root],
+        |row| row.get(0),
+    )?)
 }
 
 fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
@@ -217,8 +245,14 @@ impl State {
         generation: Option<Generation>,
     ) -> Result<RunProvenanceLease> {
         let snapshot = self.create_run_provenance(restricted, generation)?;
+        let token = ulid::Ulid::new().to_string();
+        self.conn().execute(
+            "INSERT INTO run_provenance_leases(token,run_id) VALUES (?1,?2)",
+            params![token, snapshot.id],
+        )?;
         Ok(RunProvenanceLease {
             id: snapshot.id,
+            token,
             conn: self.conn.clone(),
         })
     }
@@ -235,11 +269,17 @@ impl State {
             snapshot.generation = Some(Generation::stale());
         }
         tx.execute("UPDATE run_provenance SET sealed=0 WHERE id=?1", [root])?;
+        let token = ulid::Ulid::new().to_string();
+        tx.execute(
+            "INSERT INTO run_provenance_leases(token,run_id) VALUES (?1,?2)",
+            params![token, id],
+        )?;
         tx.commit()?;
         Ok((
             snapshot,
             RunProvenanceLease {
                 id: id.to_owned(),
+                token,
                 conn: self.conn.clone(),
             },
         ))

@@ -14,6 +14,68 @@ fn open(path: &std::path::Path) -> State {
 }
 
 #[test]
+fn joined_component_waits_for_both_live_owners_across_connections() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let s = open(&path);
+    let other = open(&path);
+    let a = s.create_run_provenance(false, None).unwrap();
+    let b = s.create_run_provenance(false, None).unwrap();
+    s.join_run_provenance(a.id(), b.id()).unwrap();
+    s.seal_run_provenance(a.id()).unwrap();
+    let (_, left) = s.resume_run_provenance(a.id()).unwrap();
+    let (_, right) = other.resume_run_provenance(b.id()).unwrap();
+    assert!(s.seal_run_provenance(a.id()).is_err());
+    state::RunProvenanceLease::seal_all(&[left], false, None).unwrap();
+    for id in [a.id(), b.id()] {
+        let active = s.load_run_provenance(id);
+        assert!(!active.is_sealed());
+        assert!(active.is_restricted());
+        assert!(s.automation_commit(active.stop_generation().unwrap()).is_err());
+    }
+    state::RunProvenanceLease::seal_all(&[right], true, None).unwrap();
+    for id in [a.id(), b.id()] {
+        assert!(s.load_run_provenance(id).is_sealed());
+        assert!(s.load_run_provenance(id).is_restricted());
+    }
+}
+
+#[test]
+fn abandoned_lease_cannot_be_sealed_by_another_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let s = open(&path);
+    let lease = s.lease_run_provenance(false, None).unwrap();
+    let id = lease.id().to_owned();
+    std::mem::forget(lease);
+    drop(s);
+    let s = open(&path);
+    let (_, second) = s.resume_run_provenance(&id).unwrap();
+    state::RunProvenanceLease::seal_all(&[second], false, None).unwrap();
+    assert!(!s.load_run_provenance(&id).is_sealed());
+    assert!(s.seal_run_provenance(&id).is_err());
+}
+
+#[test]
+fn migration_from_31_preserves_sealed_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let s = open(&path);
+    let p = s.create_run_provenance(false, None).unwrap();
+    s.seal_run_provenance(p.id()).unwrap();
+    drop(s);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE run_provenance_leases; PRAGMA user_version=31;").unwrap();
+    drop(conn);
+    let s = open(&path);
+    assert!(s.load_run_provenance(p.id()).is_sealed());
+    assert!(!s.load_run_provenance(p.id()).is_restricted());
+    let (_, lease) = s.resume_run_provenance(p.id()).unwrap();
+    state::RunProvenanceLease::seal_all(&[lease], false, None).unwrap();
+    assert!(s.load_run_provenance(p.id()).is_sealed());
+}
+
+#[test]
 fn restart_preserves_restriction_and_original_admission() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
