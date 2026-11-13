@@ -193,6 +193,7 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "94f9b68f9e0f6a9bcb001ce06304c1a791fb5dad6bb5eb5ed1cbead2d8997c51",
             "07fca002b04da1462058d2959114609243cf4068dec3dcd383f1bc93d641b2d4",
             "97e5f92bf1f17aa8d653678b50af23f0fdbc6ea435d9f7e31c13b592ad2f7265",
+            "e9e1178f8588bfdedd94ce2676a354622bed0b63be1e98a34bfd1835efe8517a",
         ],
     },
     // Mail actions back to Gmail, named by the shipped `email` type's handlers (TV-25).
