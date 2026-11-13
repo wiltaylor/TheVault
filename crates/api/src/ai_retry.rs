@@ -60,6 +60,7 @@ impl Waits {
 #[derive(Clone)]
 pub(crate) struct CapacityRetry {
     pub(crate) waits: Waits,
+    run_context: script::RunContext,
     writer: Arc<Writer>,
     /// The run's thread, which names its record.
     thread: String,
@@ -74,9 +75,11 @@ impl CapacityRetry {
         writer: Arc<Writer>,
         thread: &str,
         report: crate::ai_chat::Report,
+        run_context: script::RunContext,
     ) -> CapacityRetry {
         CapacityRetry {
             waits,
+            run_context: run_context.inherit_current(),
             writer,
             thread: thread.to_owned(),
             report,
@@ -114,7 +117,7 @@ impl CapacityRetry {
             .push(line.clone());
         let w = self.writer.clone();
         let thread = self.thread.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        let _ = crate::ai_chat::blocking(&self.run_context, move || {
             if let Err(e) = w.state().append_agent_run_log(&thread, &line) {
                 eprintln!("agent run on thread {thread}: recording a wait: {e}");
             }

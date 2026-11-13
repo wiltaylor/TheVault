@@ -253,7 +253,13 @@ pub(crate) async fn run_unattended(
     run_context: RunContext,
 ) -> Unattended {
     let report: Report = Arc::default();
-    let retry = CapacityRetry::new(waits, w.clone(), thread, report.clone());
+    let retry = CapacityRetry::new(
+        waits,
+        w.clone(),
+        thread,
+        report.clone(),
+        run_context.clone(),
+    );
     let body = ChatBody {
         account: None,
         provider: None,
