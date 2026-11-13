@@ -460,6 +460,8 @@ fn build() -> Built {
         );
     let google = Routes::new()
         .get("/api/integrations/google", google::status)
+        .get("/api/integrations/google/attachments/{id}", google::attachments::preview)
+        .post("/api/integrations/google/attachments/{id}", google::attachments::fetch)
         .put("/api/integrations/google/settings", google::put_settings)
         .post("/api/integrations/google/start", google::start)
         .post("/api/integrations/google/finish", google::finish)

@@ -533,6 +533,8 @@ fn safety_rest_read_route_inventory() {
     actual.sort_unstable();
     actual.dedup();
     let expected = [
+        // TV-266: owner session metadata only, no provider calls or asset content.
+        "/api/integrations/google/attachments/{id}",
         "/agent/install.sh",
         "/api/activity",
         // TV-151: session-only summary, never held content to tokens or agents.

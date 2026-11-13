@@ -1004,6 +1004,29 @@ fn save(ctx: Ctx, id: string) -> Result[(), string] {
     if assets.len() > 0 {
         fields["attachments"] = Value::List(assets)
     }
+    // Keep the identity of skipped parts without downloading their bytes. Binding to
+    // the connected account prevents an old note selecting a part of a new account.
+    let deferred: List[Value] = []
+    let parts = new_parts()
+    walk(payload, parts)
+    for part in parts.files {
+        let body = part.get("body").unwrap_or(Value::Null)
+        if int_of(body, "size") > max_attachment() && text_of(body, "attachmentId") != "" {
+            deferred.push(Value::String(json::to_string(Value::Map(#{
+                "part": Value::String(text_of(part, "partId")),
+                "attachment": Value::String(text_of(body, "attachmentId")),
+                "filename": Value::String(file_name(part)),
+                "size": Value::Int(int_of(body, "size")),
+            }))))
+        }
+    }
+    if deferred.len() > 0 {
+        fields["gmail_deferred_parts"] = Value::List(deferred)
+        match secrets::get("google_account") {
+            Ok(account) => fields["gmail_account"] = Value::String(account),
+            Err(_) => {},
+        }
+    }
     fields["converter"] = Value::Int(converter_version())
     if body.inline.len() > 0 {
         fields["inline_images"] = Value::List(body.inline)
