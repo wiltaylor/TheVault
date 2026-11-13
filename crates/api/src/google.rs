@@ -17,10 +17,11 @@
 //!   exist, and starts a run of each on its own thread. It answers once the runs are marked
 //!   running, never waiting on them (ticket 113). An error from Google is a 400 carrying
 //!   Google's message.
-//! - `POST /api/integrations/google/disconnect` deletes the three credential secrets and
-//!   `google_account`, pauses the tasks, keeps `google_settings` without its `scopes`, and clears
-//!   the cursors in both
-//!   state secrets, so a later connection lists everything again.
+//! - `POST /api/integrations/google/disconnect` pauses the tasks, revokes the refresh token at
+//!   Google, deletes the three credential secrets and `google_account`, keeps `google_settings`
+//!   without its `scopes`, and clears the cursors in both state secrets, so a later connection
+//!   lists everything again. A remote revocation failure does not stop local disconnect; the
+//!   answer carries a sanitized `revocation_warning` instead of claiming Google revoked it.
 //! - `PUT /api/integrations/google/settings` saves `{ gmail_mode, gmail_labels,
 //!   gmail_window_days, gmail_backfill_to, calendars, default_calendar }` into `google_settings`,
 //!   keeping its `endpoints`. `gmail_mode` is `labels` or `all`, the window 1 to 3650 days, the
@@ -87,6 +88,8 @@ const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 /// Google's userinfo endpoint.
 const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
+/// Google's token revocation endpoint.
+const REVOCATION_URL: &str = "https://oauth2.googleapis.com/revoke";
 
 /// Where a loopback flow sends the browser: a fixed port on the user's own machine, where
 /// nothing listens, so the browser shows an error page whose address holds the code.
@@ -148,6 +151,7 @@ struct Pending {
 struct Endpoints {
     token: String,
     userinfo: String,
+    revoke: String,
     dict: Option<Map<String, Value>>,
 }
 
@@ -168,6 +172,7 @@ impl Endpoints {
         Endpoints {
             token: get("token", TOKEN_URL),
             userinfo: get("userinfo", USERINFO_URL),
+            revoke: get("revoke", REVOCATION_URL),
             dict,
         }
     }
@@ -456,6 +461,41 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
 
 /// `POST /api/integrations/google/disconnect`.
 pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
+    // Stop new scheduled runs before revoking the credential they use.
+    let s = g.scheduler.clone();
+    tokio::task::spawn_blocking(move || {
+        for (task, _, _) in TASKS {
+            s.set_paused(task, true)?;
+        }
+        Ok::<_, scheduler::Error>(())
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
+
+    // Keep the credential in memory only for the revocation request. Neither the endpoint's
+    // response nor reqwest's error reaches the caller: either can contain sensitive text.
+    let credential = on_writer(&g, |w| {
+        let refresh = w.state().get_secret(REFRESH_TOKEN)?;
+        let revoke = Endpoints::of(&settings(w)?).revoke;
+        Ok(refresh.map(|token| (token, revoke)))
+    })
+    .await;
+    let mut revocation_unconfirmed = credential.is_err();
+    if let Ok(Some((refresh, revoke))) = credential {
+        let revoked = g
+            .http
+            .post(revoke)
+            .form(&[
+                ("token", refresh.as_str()),
+                ("token_type_hint", "refresh_token"),
+            ])
+            .send()
+            .await;
+        if !matches!(revoked, Ok(res) if res.status().is_success()) {
+            revocation_unconfirmed = true;
+        }
+    }
+
     on_writer(&g, |w| {
         for name in SECRETS.into_iter().chain([ACCOUNT]) {
             delete_secret(w, name)?;
@@ -477,23 +517,26 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
             writer::google::write_object(w.state(), name, &state)?;
         }
         // The scopes belong to the connection.
-        let mut s = object(w, SETTINGS)?;
-        if s.remove(SCOPES_KEY).is_some() {
-            writer::google::write_object(w.state(), SETTINGS, &s)?;
+        match object(w, SETTINGS) {
+            Ok(mut s) => {
+                if s.remove(SCOPES_KEY).is_some() {
+                    writer::google::write_object(w.state(), SETTINGS, &s)?;
+                }
+            }
+            // Unreadable settings cannot retain connection scopes or serve status reads.
+            // Deletion needs no decryption key, just like the other credential cleanup.
+            Err(_) => delete_secret(w, SETTINGS)?,
         }
         Ok(())
     })
     .await?;
-    let s = g.scheduler.clone();
-    tokio::task::spawn_blocking(move || {
-        for (task, _, _) in TASKS {
-            s.set_paused(task, true)?;
-        }
-        Ok::<_, scheduler::Error>(())
-    })
-    .await
-    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
-    status_of(&g).await.map(Json)
+    let mut out = status_of(&g).await?;
+    if revocation_unconfirmed {
+        out["revocation_warning"] = json!(
+            "Disconnected locally and paused Gmail and Calendar, but Google did not confirm token revocation. Revoke TheVault in your Google account security settings."
+        );
+    }
+    Ok(Json(out))
 }
 
 #[derive(Deserialize)]

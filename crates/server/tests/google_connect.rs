@@ -10,7 +10,9 @@ use reqwest::{Url, redirect};
 use serde_json::{Value, json};
 use testkit::{
     FakeGoogle, TestServer,
-    fake_google::{DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET},
+    fake_google::{
+        DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN,
+    },
 };
 
 /// The Google secrets a connection leaves, by name.
@@ -68,6 +70,7 @@ impl Api {
         let client = Client::builder()
             .default_headers(headers)
             .redirect(redirect::Policy::none())
+            .timeout(Duration::from_secs(60))
             .build()
             .unwrap();
         Api {
@@ -481,6 +484,19 @@ fn disconnect_deletes_the_sign_in_and_account_keeps_the_settings_and_clears_the_
         StatusCode::OK,
     );
     assert_eq!(out["connected"], false);
+    assert!(out.get("revocation_warning").is_none(), "{out}");
+    let revoked = api.google.requests_to("/revoke");
+    assert_eq!(revoked.len(), 1, "{revoked:?}");
+    assert_eq!(revoked[0].method, "POST");
+    assert_eq!(
+        revoked[0].form("token").as_deref(),
+        Some(DEFAULT_REFRESH_TOKEN)
+    );
+    assert_eq!(
+        revoked[0].form("token_type_hint").as_deref(),
+        Some("refresh_token")
+    );
+    assert_eq!(api.google.revoked(), [DEFAULT_REFRESH_TOKEN]);
     assert_eq!(
         api.secrets(),
         [
@@ -521,6 +537,153 @@ fn disconnect_deletes_the_sign_in_and_account_keeps_the_settings_and_clears_the_
             .unwrap(),
         StatusCode::OK,
     );
+    assert_eq!(api.google.requests_to("/revoke").len(), 1);
+    assert_eq!(
+        api.client
+            .post(api.google.endpoints()["token"].as_str().unwrap())
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("client_id", DEFAULT_CLIENT_ID),
+                ("client_secret", DEFAULT_CLIENT_SECRET),
+                ("refresh_token", DEFAULT_REFRESH_TOKEN),
+            ])
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
+fn disconnect_completes_locally_with_a_sanitized_warning_when_revocation_fails() {
+    let api = Api::with_google(FakeGoogle::builder().revoke_error(true).start());
+    api.tasks(false);
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+
+    let out = expect(
+        api.post("/api/integrations/google/disconnect")
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(out["connected"], false);
+    let warning = out["revocation_warning"].as_str().unwrap();
+    assert!(warning.contains("Disconnected locally"), "{warning}");
+    assert!(warning.contains("did not confirm"), "{warning}");
+    assert!(!warning.contains(DEFAULT_REFRESH_TOKEN), "{warning}");
+    assert_eq!(api.google.requests_to("/revoke").len(), 1);
+    assert!(api.google.revoked().is_empty());
+    assert!(!api.secrets().contains(&"google_refresh_token".to_owned()));
+    for task in TASKS {
+        assert!(api.paused(task));
+    }
+}
+
+#[test]
+fn disconnect_completes_locally_when_refresh_token_is_undecryptable() {
+    disconnect_with_undecryptable_secret("google_refresh_token");
+}
+
+#[test]
+fn disconnect_completes_locally_when_settings_are_undecryptable() {
+    disconnect_with_undecryptable_secret("google_settings");
+}
+
+fn disconnect_with_undecryptable_secret(name: &str) {
+    let api = Api::start();
+    api.tasks(false);
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+    let db = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
+    assert_eq!(
+        db.execute("UPDATE secrets SET ciphertext=x'00' WHERE name=?1", [name],)
+            .unwrap(),
+        1
+    );
+    drop(db);
+
+    let out = expect(
+        api.post("/api/integrations/google/disconnect")
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(out["connected"], false);
+    assert_eq!(out["account"], Value::Null);
+    assert_eq!(
+        out["revocation_warning"],
+        "Disconnected locally and paused Gmail and Calendar, but Google did not confirm token revocation. Revoke TheVault in your Google account security settings."
+    );
+    let remaining = api.secrets();
+    for secret in SECRETS {
+        if secret != "google_settings" || name == "google_settings" {
+            assert!(!remaining.contains(&secret.to_owned()), "{remaining:?}");
+        }
+    }
+    for task in TASKS {
+        assert!(api.paused(task));
+    }
+    assert!(api.google.requests_to("/revoke").is_empty());
+}
+
+#[test]
+fn disconnect_times_out_revocation_and_still_completes_locally() {
+    let api = Api::with_google(
+        FakeGoogle::builder()
+            .revoke_delay(Duration::from_secs(31))
+            .start(),
+    );
+    api.tasks(false);
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+
+    let began = Instant::now();
+    let out = expect(
+        api.post("/api/integrations/google/disconnect")
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert!(began.elapsed() >= Duration::from_secs(30));
+    assert!(out["revocation_warning"].is_string(), "{out}");
+    assert_eq!(out["connected"], false);
+    assert_eq!(api.google.requests_to("/revoke").len(), 1);
+    for task in TASKS {
+        assert!(api.paused(task));
+    }
+}
+
+#[test]
+fn disconnect_does_not_hide_a_local_cleanup_failure_after_revocation() {
+    let api = Api::start();
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+    api.put_secret(
+        "google_gmail_state",
+        &json!({ "history_id": "42" }).to_string(),
+    );
+    let db = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
+    db.execute(
+        "CREATE TRIGGER fail_google_cleanup BEFORE UPDATE ON secrets
+         WHEN OLD.name = 'google_gmail_state' BEGIN SELECT RAISE(FAIL, 'test cleanup failure'); END",
+        [],
+    )
+    .unwrap();
+    drop(db);
+
+    expect(
+        api.post("/api/integrations/google/disconnect")
+            .send()
+            .unwrap(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    );
+    assert_eq!(api.google.revoked(), [DEFAULT_REFRESH_TOKEN]);
+    assert!(!api.secrets().contains(&"google_refresh_token".to_owned()));
 }
 
 #[test]

@@ -188,8 +188,22 @@ describe("GoogleCard", () => {
     expect(confirm).toHaveBeenCalled();
     expect(await screen.findByRole("button", { name: "Connect Google" })).toBeTruthy();
     expect(screen.queryByText(/Connected as/)).toBeNull();
+    expect(screen.getByText("Disconnected. The Gmail and Calendar sync are paused.")).toBeTruthy();
     expect(screen.getByRole("row", { name: /Gmail/ }).textContent).toContain("Paused");
     confirm.mockRestore();
+  });
+
+  it("shows a warning when Google did not confirm revocation during local disconnect", async () => {
+    const warning = "Disconnected locally, but Google did not confirm token revocation.";
+    googleStatus.mockResolvedValue(connected);
+    googleDisconnect.mockResolvedValue({ ...disconnected, revocation_warning: warning });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    expect(await screen.findByText(warning)).toBeTruthy();
+    expect(screen.queryByText("Disconnected. The Gmail and Calendar sync are paused.")).toBeNull();
+    expect(await screen.findByRole("button", { name: "Connect Google" })).toBeTruthy();
   });
 
   it("asks a connection without gmail.send to connect again, and connects again", async () => {

@@ -885,6 +885,8 @@ export interface GoogleStatus {
   can_modify?: boolean;
   /** The connected address, from the `google_account` secret. */
   account: string | null;
+  /** Disconnect only: local cleanup completed, but Google did not confirm token revocation. */
+  revocation_warning?: string;
   /** The settings, the defaults where none are saved. */
   settings: GoogleSettings;
   gmail: GoogleSide;
@@ -2140,7 +2142,7 @@ export const api = {
     request<{ auth_url: string }>("POST", "/api/integrations/google/start", { client_id, client_secret, redirect }),
   /** Finish signing in with the address Google sent the browser to. */
   googleFinish: (url: string) => request<GoogleStatus>("POST", "/api/integrations/google/finish", { url }),
-  /** Delete the Google secrets and pause the sync. */
+  /** Revoke the refresh token, delete the Google secrets and pause the sync. */
   googleDisconnect: () => request<GoogleStatus>("POST", "/api/integrations/google/disconnect"),
   /** Save what the Google sync pulls. */
   googleSaveSettings: (settings: GoogleSettings) =>

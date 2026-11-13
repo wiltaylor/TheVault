@@ -21,8 +21,11 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 
-use super::{FakeGoogle, FakeGoogleBuilder, Shared, TOKEN_PATH, USERINFO_PATH, lock};
+use super::{
+    FakeGoogle, FakeGoogleBuilder, REVOCATION_PATH, Shared, TOKEN_PATH, USERINFO_PATH, lock,
+};
 use crate::standin::{Reply, Request, url_pairs};
 
 /// The client id the fake accepts unless [`FakeGoogleBuilder::client`] says otherwise.
@@ -46,6 +49,8 @@ pub(super) struct Config {
     refresh_token: String,
     account: String,
     invalid_grant: bool,
+    revoke_error: bool,
+    revoke_delay: Option<Duration>,
 }
 
 impl Default for Config {
@@ -56,6 +61,8 @@ impl Default for Config {
             refresh_token: DEFAULT_REFRESH_TOKEN.to_owned(),
             account: DEFAULT_ACCOUNT.to_owned(),
             invalid_grant: false,
+            revoke_error: false,
+            revoke_delay: None,
         }
     }
 }
@@ -85,6 +92,18 @@ impl FakeGoogleBuilder {
         self.oauth.invalid_grant = on;
         self
     }
+
+    /// Make the revocation endpoint answer an error whose body echoes the submitted token.
+    pub fn revoke_error(mut self, on: bool) -> Self {
+        self.oauth.revoke_error = on;
+        self
+    }
+
+    /// Hold each revocation request for `delay` before answering.
+    pub fn revoke_delay(mut self, delay: Duration) -> Self {
+        self.oauth.revoke_delay = Some(delay);
+        self
+    }
 }
 
 /// A code [`FakeGoogle::consent`] issued and the token endpoint has not yet exchanged.
@@ -102,6 +121,7 @@ pub(super) struct State {
     config: Config,
     codes: Vec<Code>,
     access_tokens: Vec<String>,
+    revoked: Vec<String>,
     issued: usize,
 }
 
@@ -111,6 +131,7 @@ impl State {
             config,
             codes: Vec::new(),
             access_tokens: Vec::new(),
+            revoked: Vec::new(),
             issued: 0,
         }
     }
@@ -153,6 +174,11 @@ impl FakeGoogle {
     /// Every access token the token endpoint has issued, oldest first.
     pub fn access_tokens(&self) -> Vec<String> {
         self.oauth().access_tokens.clone()
+    }
+
+    /// Every refresh token the revocation endpoint accepted, oldest first.
+    pub fn revoked(&self) -> Vec<String> {
+        self.oauth().revoked.clone()
     }
 }
 
@@ -206,6 +232,7 @@ fn encode(s: &str) -> String {
 pub(super) fn handle(shared: &Shared, request: &Request) -> Option<Reply> {
     match (request.method.as_str(), request.route()) {
         ("POST", TOKEN_PATH) => Some(token(&mut lock(&shared.oauth), request)),
+        ("POST", REVOCATION_PATH) => Some(revoke(shared, request)),
         ("GET", AUTH_PATH) => {
             let query = request
                 .path
@@ -243,6 +270,27 @@ fn oauth_error(status: u16, error: &str, description: &str) -> Reply {
     )
 }
 
+fn revoke(shared: &Shared, request: &Request) -> Reply {
+    super::hold(|| lock(&shared.oauth).config.revoke_delay);
+    let form = request
+        .header("content-type")
+        .is_some_and(|c| c.starts_with("application/x-www-form-urlencoded"));
+    if !form {
+        return oauth_error(
+            400,
+            "invalid_request",
+            "The request body must be application/x-www-form-urlencoded.",
+        );
+    }
+    let token = request.form("token").unwrap_or_default();
+    let mut oauth = lock(&shared.oauth);
+    if oauth.config.revoke_error {
+        return oauth_error(400, "invalid_token", &format!("Could not revoke {token}."));
+    }
+    oauth.revoked.push(token);
+    Reply::text(200, "")
+}
+
 fn token(oauth: &mut State, request: &Request) -> Reply {
     let form = request
         .header("content-type")
@@ -262,7 +310,11 @@ fn token(oauth: &mut State, request: &Request) -> Reply {
     }
     match field("grant_type").as_str() {
         "refresh_token" => {
-            if oauth.config.invalid_grant || field("refresh_token") != oauth.config.refresh_token {
+            let refresh = field("refresh_token");
+            if oauth.config.invalid_grant
+                || refresh != oauth.config.refresh_token
+                || oauth.revoked.iter().any(|token| token == &refresh)
+            {
                 return oauth_error(400, "invalid_grant", "Token has been expired or revoked.");
             }
             let access = oauth.next("access-token");
