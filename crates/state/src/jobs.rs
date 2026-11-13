@@ -134,6 +134,12 @@ impl State {
             "INSERT INTO outbox_provenance VALUES (?1,?2)",
             params![note_id, run_id],
         )?;
+        for kind in ["run.recovery_stale", "run.recovery_unavailable"] {
+            tx.execute(
+                "DELETE FROM meta WHERE key=?1",
+                [format!("run-audit:{kind}:Outbox note {note_id}")],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }

@@ -16,6 +16,79 @@ fn setup() -> (tempfile::TempDir, Writer) {
 }
 
 #[test]
+fn upgrade_holds_queued_legacy_work_once_with_actionable_subjects() {
+    let (dir, writer) = setup();
+    let handler = writer
+        .state()
+        .queue_jobs(&[
+            serde_json::json!({"script":"review", "type":"item", "id":"legacy-note"}).to_string(),
+        ])
+        .unwrap()[0];
+    let trigger = writer
+        .state()
+        .enqueue_trigger("legacy-agent", "nightly", Some("legacy-note"), "{}", 0)
+        .unwrap()
+        .unwrap();
+    drop(writer);
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    conn.execute_batch("DROP TABLE handler_provenance; DROP TABLE outbox_provenance; DROP TABLE trigger_provenance; PRAGMA user_version=32;").unwrap();
+    drop(conn);
+    for _ in 0..2 {
+        let vault = Vault::open(dir.path()).unwrap();
+        let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let writer = Writer::open(vault, state).unwrap();
+        assert!(
+            writer
+                .state()
+                .handler_provenance(handler)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            writer
+                .state()
+                .trigger_provenance(trigger)
+                .unwrap()
+                .is_empty()
+        );
+        for subject in [
+            writer.state().handler_recovery_subject(handler).unwrap(),
+            writer.state().trigger_recovery_subject(trigger).unwrap(),
+        ] {
+            for _ in 0..3 {
+                assert!(writer.recover_run_context_for("", &subject).is_err());
+            }
+        }
+        let activity = writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap();
+        let held: Vec<_> = activity
+            .items
+            .iter()
+            .filter(|a| a.kind == "run.recovery_unavailable")
+            .collect();
+        assert_eq!(held.len(), 2);
+        assert!(held.iter().all(|a| a.summary.contains("legacy-note")));
+        assert!(held.iter().any(
+            |a| a.summary.contains("review") && a.summary.contains("editing the note as owner")
+        ));
+        assert!(
+            held.iter().any(|a| a.summary.contains("legacy-agent")
+                && a.summary.contains("manual run or backfill"))
+        );
+        assert!(
+            writer
+                .state()
+                .queued_jobs()
+                .unwrap()
+                .iter()
+                .any(|j| j.id == handler)
+        );
+    }
+}
+
+#[test]
 fn failed_recovery_audit_releases_each_new_lease() {
     let (dir, w) = setup();
     let context = script_core::RunContext::default();
@@ -101,7 +174,7 @@ fn outbox_reference_failure_aborts_before_any_file_commit() {
             "title":"Not committed", "kind":"email", "status":"sending", "to":["ann@example.com"]
         }})) },
     ], false, &Author::Session("owner".into())));
-    assert!(result.is_err());
+    assert!(!result.unwrap().ok);
     assert!(writer.list(Some("outbox")).unwrap().is_empty());
     assert!(writer.list(Some("item")).unwrap().is_empty());
     conn.execute_batch("DROP TRIGGER refuse_outbox_reference;")
@@ -141,20 +214,21 @@ fn first_outbox_update_after_restart_publishes_before_post_commit_failure() {
     let changed = Input::Json(
         serde_json::json!({"fields": {"title":"New", "kind":"email", "status":"draft", "to":["ann@example.com"]}}),
     );
-    assert!(
-        update
-            .scope(|| writer.update(
+    let error = update
+        .scope(|| {
+            writer.update(
                 &item.id,
                 &changed,
                 Some(&item.version),
-                &Author::Handler("test".into())
-            ))
-            .is_err()
-    );
+                &Author::Token("automation-test".into()),
+            )
+        })
+        .unwrap_err();
     assert!(
         std::fs::read_to_string(dir.path().join(format!("notes/outbox/{}.wcl", item.id)))
             .unwrap()
-            .contains("New")
+            .contains("New"),
+        "unexpected pre-file error: {error}"
     );
     let ids = writer.state().outbox_provenance(&item.id).unwrap();
     assert!(!ids.is_empty());
@@ -206,16 +280,17 @@ fn outbox_owner_action_replaces_stale_admission_but_automation_cannot() {
     let ready = Input::Json(
         serde_json::json!({"fields": {"title":"Held", "kind":"email", "status":"ready", "to":["ann@example.com"]}}),
     );
-    assert!(
-        automation
-            .scope(|| writer.update(
-                &item.id,
-                &ready,
-                Some(&item.version),
-                &Author::Handler("test".into())
-            ))
-            .is_err()
-    );
+    let mut automated = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    automated["fields"]["error"] = serde_json::json!("automated attempt");
+    assert!(matches!(
+        automation.scope(|| writer.update(
+            &item.id,
+            &Input::Json(automated),
+            Some(&item.version),
+            &Author::Handler("test".into())
+        )),
+        Err(Error::State(state::Error::AutomationRefused))
+    ));
     let fresh = script_core::RunContext::default();
     fresh
         .scope(|| {

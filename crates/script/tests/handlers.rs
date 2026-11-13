@@ -476,6 +476,165 @@ fn unreadable_handler_reference_stays_pending_and_visible_without_running_script
 }
 
 #[test]
+fn outbox_stop_resume_holds_old_jobs_and_owner_ready_sends() {
+    let dir = tempfile::tempdir().unwrap();
+    let (writer, handlers) = open(dir.path(), false);
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    // Stand-in delivery writes through the real handler/Writer commit boundary.
+    std::fs::write(dir.path().join("scripts/outbox_send.ws"), r#"use vault
+fn after_create(note: Value) -> Result[(), string] { after_update(note) }
+fn after_update(note: Value) -> Result[(), string] {
+    let id = note.get("id").unwrap().as_string().unwrap()
+    let current = vault::get(id)?
+    let status = current.get("fields").unwrap().get("status").unwrap().as_string().unwrap()
+    if status == "ready" {
+        vault::patch(id, Value::Map(#{ "status": Value::String("sending"), "error": Value::String("stand-in sent") }), "")?
+    }
+    Ok(())
+}
+fn reconcile_send(note: Value) -> Result[(), string] { Ok(()) }
+fn reconcile_delete(note: Value) -> Result[(), string] { Ok(()) }
+"#).unwrap();
+    let item = writer.create("outbox", &json_note(json!({"title":"Before Stop", "kind":"email", "status":"ready", "to":["ann@example.com"]})), &user()).unwrap();
+    writer.state().set_automation_stopped(true).unwrap();
+    writer.state().set_automation_stopped(false).unwrap();
+    handlers.start(&writer);
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        if writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap()
+            .items
+            .iter()
+            .any(|a| a.kind == "run.recovery_stale" && a.summary.contains(&item.id))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "old Outbox job was not visibly held"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread::sleep(Duration::from_millis(2200));
+    assert_eq!(writer.history(&item.id).unwrap().len(), 1);
+    let held = writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    assert_eq!(
+        held.items
+            .iter()
+            .filter(|a| a.kind == "run.recovery_stale" && a.summary.contains(&item.id))
+            .count(),
+        1
+    );
+    let mut body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    body["fields"]["title"] = json!("Owner authorizes ready");
+    writer
+        .update(&item.id, &Input::Json(body), Some(&item.version), &user())
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        let note = writer.read(&item.id).unwrap();
+        if writer::doc_to_json(&note.doc)["fields"]["status"] == "sending" {
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "owner-ready delivery did not commit"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(writer.state().failed_jobs().unwrap().is_empty());
+}
+
+#[test]
+fn legacy_handler_is_held_once_until_owner_edit_creates_fresh_work() {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let (writer, handlers) = open(dir.path(), false);
+    let item = writer
+        .create("report", &json_note(json!({"title":"Old"})), &user())
+        .unwrap();
+    let item = writer
+        .update(
+            &item.id,
+            &json_note(json!({"title":"Legacy queued"})),
+            Some(&item.version),
+            &Author::Token("fixture".into()),
+        )
+        .unwrap();
+    let old = writer.state().queued_jobs().unwrap().remove(0);
+    let legacy = writer.state().queue_jobs(&[old.payload]).unwrap()[0];
+    writer
+        .state()
+        .finish_job(old.id, Ok(()), "fixture")
+        .unwrap();
+    handlers.start(&writer);
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        if writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap()
+            .items
+            .iter()
+            .any(|a| {
+                a.kind == "run.recovery_unavailable"
+                    && a.summary.contains(&format!("Handler job {legacy} "))
+            })
+        {
+            break;
+        }
+        assert!(Instant::now() < until, "legacy work was not visibly held");
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread::sleep(Duration::from_millis(2200));
+    let entries = writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    let held: Vec<_> = entries
+        .items
+        .iter()
+        .filter(|a| a.kind == "run.recovery_unavailable")
+        .collect();
+    assert_eq!(held.len(), 1);
+    assert!(held[0].summary.contains(&item.id));
+    assert!(held[0].summary.contains("review"));
+    assert!(held[0].summary.contains("editing the note as owner"));
+    assert_eq!(writer.history(&item.id).unwrap().len(), 2);
+    writer
+        .update(
+            &item.id,
+            &json_note(json!({"title":"Owner released"})),
+            Some(&item.version),
+            &user(),
+        )
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        if writer::doc_to_json(&writer.read(&item.id).unwrap().doc)["fields"]["review"] == "seen" {
+            break;
+        }
+        assert!(Instant::now() < until, "fresh owner handler did not commit");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        writer
+            .state()
+            .queued_jobs()
+            .unwrap()
+            .iter()
+            .any(|j| j.id == legacy)
+    );
+}
+
+#[test]
 fn a_note_a_before_handler_creates_commits_with_the_write_or_not_at_all() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());

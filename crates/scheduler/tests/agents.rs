@@ -675,6 +675,8 @@ fn unavailable_agent_queue_is_visible_pending_and_never_executed() {
         .unwrap()
         .0;
     r.scheduler.tick();
+    r.scheduler.tick();
+    r.scheduler.tick();
     assert!(r.fake.turns().is_empty());
     assert!(
         r.writer
@@ -689,12 +691,15 @@ fn unavailable_agent_queue_is_visible_pending_and_never_executed() {
         .state()
         .activity(&state::ActivityFilter::default())
         .unwrap();
-    assert!(
-        entries
-            .items
-            .iter()
-            .any(|a| a.kind == "run.recovery_unavailable")
-    );
+    let held: Vec<_> = entries
+        .items
+        .iter()
+        .filter(|a| a.kind == "run.recovery_unavailable")
+        .collect();
+    assert_eq!(held.len(), 1);
+    assert!(held[0].summary.contains("owl"));
+    assert!(held[0].summary.contains("nightly"));
+    assert!(held[0].summary.contains("manual run or backfill"));
 }
 
 #[test]
