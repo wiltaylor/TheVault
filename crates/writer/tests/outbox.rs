@@ -70,7 +70,9 @@ fn outside_text_automatic_ready_stays_draft_and_owner_review_gets_fresh_provenan
     let w = open(dir.path());
     let context = script_core::RunContext::default();
     context.restrict();
-    let id = context.scope(|| create(&w, &agent("sender"), email(json!({"status":"ready"})))).unwrap();
+    let id = context
+        .scope(|| create(&w, &agent("sender"), email(json!({"status":"ready"}))))
+        .unwrap();
     assert_eq!(status(&w, &id), "draft");
     assert!(w.outbox_run_context(&id).is_err());
     edit(&w, &id, &user(), json!({"status":"ready"})).unwrap();
@@ -84,7 +86,9 @@ fn late_outbox_restriction_remains_gated_after_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
     let context = script_core::RunContext::default();
-    let id = context.scope(|| create(&w, &agent("sender"), email(json!({"status":"ready"})))).unwrap();
+    let id = context
+        .scope(|| create(&w, &agent("sender"), email(json!({"status":"ready"}))))
+        .unwrap();
     assert_eq!(status(&w, &id), "ready");
     context.restrict();
     assert!(w.outbox_run_context(&id).is_err());

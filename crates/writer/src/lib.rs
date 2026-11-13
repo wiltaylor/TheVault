@@ -53,8 +53,8 @@ mod inbox;
 mod note;
 mod notify;
 pub mod outbox;
-mod outside_text;
 mod outbox_sms;
+mod outside_text;
 mod purge;
 mod queryviews;
 mod refs;
@@ -1709,7 +1709,10 @@ impl Writer {
             // Side-effect hooks and provenance joins may have exposed outside text.
             // Recheck the complete rendered write immediately before committing it.
             for r in &rendered {
-                self.check_outside_text_write(&r.change, authors.get(&r.change.id).unwrap_or(author))?;
+                self.check_outside_text_write(
+                    &r.change,
+                    authors.get(&r.change.id).unwrap_or(author),
+                )?;
             }
             let _acting = activity::acting_as(author);
             match inner.commit_hook.as_mut() {
@@ -1948,7 +1951,10 @@ impl Writer {
         author: &Author,
         dry_run: bool,
     ) -> Result<Vec<NoteChange>> {
-        *self.staging_slot() = Some(StagedChanges { changes: Vec::new(), dry_run });
+        *self.staging_slot() = Some(StagedChanges {
+            changes: Vec::new(),
+            dry_run,
+        });
         let ran = (|| -> Result<()> {
             for change in &mut changes {
                 if handled.insert((change.id.clone(), change.event)) {

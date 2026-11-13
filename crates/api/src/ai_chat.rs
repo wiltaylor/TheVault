@@ -3947,21 +3947,43 @@ fn run_tool(
                 return false;
             }
             let current = p["note_id"].as_str().and_then(|id| w.read(id).ok());
-            let kind = current.as_ref().map(|n| n.type_name.as_str())
+            let kind = current
+                .as_ref()
+                .map(|n| n.type_name.as_str())
                 .unwrap_or_else(|| p["type"].as_str().unwrap_or_default());
-            let by = change_author(author, &agent.name, rule.is_some(), kind == "email", gmail_actions, kind == "outbox");
+            let by = change_author(
+                author,
+                &agent.name,
+                rule.is_some(),
+                kind == "email",
+                gmail_actions,
+                kind == "outbox",
+            );
             let op = match p["op"].as_str() {
                 Some("delete") => writer::Event::Delete,
                 Some("create") => writer::Event::Create,
                 _ => writer::Event::Update,
             };
-            let next = p.get("after").and_then(|v| Input::Json(v.clone()).parse("proposal.wcl").ok());
-            writer::outside_text_sensitive(kind, op, current.as_ref().map(|n| &n.doc), next.as_ref(), &by)
+            let next = p
+                .get("after")
+                .and_then(|v| Input::Json(v.clone()).parse("proposal.wcl").ok());
+            writer::outside_text_sensitive(
+                kind,
+                op,
+                current.as_ref().map(|n| &n.doc),
+                next.as_ref(),
+                &by,
+            )
         });
         if held_destructive {
             w.state().record_activity(
-                state::NewActivity::new("run.outside_text_refused", "automation", author, script_core::OUTSIDE_TEXT_REFUSAL)
-                    .detail(json!({"action":"proposal_held"})),
+                state::NewActivity::new(
+                    "run.outside_text_refused",
+                    "automation",
+                    author,
+                    script_core::OUTSIDE_TEXT_REFUSAL,
+                )
+                .detail(json!({"action":"proposal_held"})),
             );
         }
     }
