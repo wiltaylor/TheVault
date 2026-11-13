@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use chrono::TimeZone;
 use gitsync::GitSync;
-use script::{Host, Job, Kind};
+use script::{Host, Job, Kind, RunContext};
 use state::{Clock, RunOutcome, TaskRun};
 use writer::Writer;
 
@@ -137,8 +137,14 @@ struct Slot {
     def: std::result::Result<TaskDef, String>,
     next_fire: Option<i64>,
     /// The attempt number of the waiting retry and when it is due.
-    retry: Option<(u32, i64)>,
+    retry: Option<Retry>,
     running: bool,
+}
+
+struct Retry {
+    attempt: u32,
+    due_ms: i64,
+    context: RunContext,
 }
 
 #[derive(Default)]
@@ -354,7 +360,7 @@ impl Scheduler {
             (
                 slot.def.clone(),
                 slot.next_fire.filter(|_| !paused),
-                slot.retry,
+                slot.retry.as_ref().map(|r| (r.attempt, r.due_ms)),
                 slot.running,
             )
         };
@@ -385,7 +391,9 @@ impl Scheduler {
             }
             let handles: Vec<_> = due
                 .into_iter()
-                .map(|(def, attempt)| s.spawn(move || self.run(&def, attempt)))
+                .map(|(def, attempt, context)| {
+                    s.spawn(move || self.run(&def, attempt, context))
+                })
                 .collect();
             handles
                 .into_iter()
@@ -397,8 +405,13 @@ impl Scheduler {
     /// Run task `name` now, as a first attempt, whether or not it is paused. A failure schedules
     /// retries as a scheduled run's does. Returns the run record.
     pub fn trigger(&self, name: &str) -> Result<TaskRun> {
+        self.trigger_with_context(name, RunContext::current().unwrap_or_default())
+    }
+
+    /// Trigger with the caller's live provenance, including across async boundaries.
+    pub fn trigger_with_context(&self, name: &str, context: RunContext) -> Result<TaskRun> {
         let def = self.claim(name)?;
-        self.run(&def, 1)
+        self.run(&def, 1, context)
             .ok_or_else(|| Error::Running(name.to_owned()))
             .and_then(|r| self.writer.state().run(r.id)?.ok_or(Error::NoTask(r.task)))
     }
@@ -408,6 +421,15 @@ impl Scheduler {
     /// status reports `running` from the moment this returns, and the record's id reads the run
     /// as it goes and once it ends.
     pub fn trigger_in_background(self: &Arc<Self>, name: &str) -> Result<TaskRun> {
+        self.trigger_in_background_with_context(name, RunContext::current().unwrap_or_default())
+    }
+
+    /// Background trigger retaining the same live context through every retry.
+    pub fn trigger_in_background_with_context(
+        self: &Arc<Self>,
+        name: &str,
+        context: RunContext,
+    ) -> Result<TaskRun> {
         let def = self.claim(name)?;
         // No record or no thread, no run: let the task run again.
         let release = |e: Error| {
@@ -432,7 +454,7 @@ impl Scheduler {
         let s = self.clone();
         let spawned = thread::Builder::new()
             .name(format!("task-{name}"))
-            .spawn(move || s.finish(&def, 1, Ok(id)));
+            .spawn(move || s.finish(&def, 1, Ok(id), context));
         if let Err(e) = spawned {
             let message = format!("could not start a thread for it: {e}");
             let _ = state.finish_run(id, &RunOutcome::Failed(message.clone()));
@@ -565,9 +587,9 @@ impl Scheduler {
             if let Some(g) = self.gitsync_due() {
                 g.start();
             }
-            for (def, attempt) in self.take_due() {
+            for (def, attempt, context) in self.take_due() {
                 let s = self.clone();
-                thread::spawn(move || s.run(&def, attempt));
+                thread::spawn(move || s.run(&def, attempt, context));
             }
             for job in self.agent_starts() {
                 let s = self.clone();
@@ -584,7 +606,10 @@ impl Scheduler {
                 .filter(|s| !s.running)
                 .flat_map(|s| {
                     let paused = s.def.as_ref().is_ok_and(|d| d.paused);
-                    [s.next_fire.filter(|_| !paused), s.retry.map(|(_, at)| at)]
+                    [
+                        s.next_fire.filter(|_| !paused),
+                        s.retry.as_ref().map(|r| r.due_ms),
+                    ]
                 })
                 .flatten()
                 .chain(plan.agents.next_due(now))
@@ -602,7 +627,7 @@ impl Scheduler {
 
     /// Mark every due task running and return what to run: a waiting retry when one is due,
     /// otherwise a scheduled firing.
-    fn take_due(&self) -> Vec<(TaskDef, u32)> {
+    fn take_due(&self) -> Vec<(TaskDef, u32, RunContext)> {
         let now = self.clock.now_ms();
         let mut plan = self.plan();
         let mut due = Vec::new();
@@ -615,27 +640,27 @@ impl Scheduler {
             if fires {
                 slot.next_fire = def.next_after(now);
             }
-            let attempt = if fires && !def.paused {
-                1
-            } else if let Some((attempt, at)) = slot.retry
-                && at <= now
+            let (attempt, context) = if fires && !def.paused {
+                (1, RunContext::default())
+            } else if let Some(retry) = &slot.retry
+                && retry.due_ms <= now
             {
-                attempt
+                (retry.attempt, retry.context.clone())
             } else {
                 continue;
             };
             slot.retry = None;
             slot.running = true;
-            due.push((def.clone(), attempt));
+            due.push((def.clone(), attempt, context));
         }
         due
     }
 
     /// Run one attempt of a task already marked running, record it, and schedule a retry when it
     /// failed and has retries left. `None` only when `state.db` could not record the run.
-    fn run(&self, def: &TaskDef, attempt: u32) -> Option<TaskRun> {
+    fn run(&self, def: &TaskDef, attempt: u32, context: RunContext) -> Option<TaskRun> {
         let id = self.writer.state().start_run(&def.name, attempt);
-        self.finish(def, attempt, id)
+        self.finish(def, attempt, id, context)
     }
 
     /// [`Scheduler::run`] for a run whose record `id` is already started.
@@ -644,8 +669,12 @@ impl Scheduler {
         def: &TaskDef,
         attempt: u32,
         id: state::Result<state::RunId>,
+        context: RunContext,
     ) -> Option<TaskRun> {
-        let record = id.map_err(Error::from).and_then(|id| self.attempt(def, id));
+        let record = context.scope(|| {
+            id.map_err(Error::from)
+                .and_then(|id| self.attempt(def, id, &context))
+        });
         let failed = !matches!(
             record.as_ref().map(|r| &r.outcome),
             Ok(RunOutcome::Succeeded)
@@ -659,7 +688,11 @@ impl Scheduler {
             slot.running = false;
             if failed && attempt <= def.retries && slot.def.as_ref() == Ok(def) {
                 let delay = i64::try_from(def.backoff(attempt).as_millis()).unwrap_or(i64::MAX);
-                slot.retry = Some((attempt + 1, self.clock.now_ms().saturating_add(delay)));
+                slot.retry = Some(Retry {
+                    attempt: attempt + 1,
+                    due_ms: self.clock.now_ms().saturating_add(delay),
+                    context,
+                });
                 retrying = true;
             }
         }
@@ -707,7 +740,7 @@ impl Scheduler {
     }
 
     /// Run the script of `def` for the started run record `id`, and record how it ended.
-    fn attempt(&self, def: &TaskDef, id: state::RunId) -> Result<TaskRun> {
+    fn attempt(&self, def: &TaskDef, id: state::RunId, context: &RunContext) -> Result<TaskRun> {
         let state = self.writer.state();
         let by = state::Author::Task(def.name.clone());
         // The Google syncs are tasks; their runs are sync activity (activity Y2).
@@ -739,6 +772,7 @@ impl Scheduler {
         let outcome = match self.writer.read_script(&def.script) {
             Ok(source) => {
                 let mut job = Job::new(Kind::Task, &def.script, &source, &def.function);
+                job.run_context = context.clone();
                 job.allow_domains = def.allow_domains.clone();
                 job.secrets = def.secrets.clone();
                 job.read_paths = def.read_paths.clone();
