@@ -394,7 +394,7 @@ fn restricted_http_methods_and_recovered_context_cannot_escape() {
     context.restrict();
     let id = context.persist(f.writer.state()).unwrap();
     drop(context);
-    let recovered = script::RunContext::recover(f.writer.state(), &id);
+    let recovered = script::RunContext::recover(f.writer.state(), &id).unwrap();
     assert!(recovered.is_restricted());
     for method in ["GET", "POST", "DELETE", "PATCH"] {
         let src = format!(
