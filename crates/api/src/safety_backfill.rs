@@ -58,7 +58,7 @@ fn config(w: &Writer) -> Result<(String, Classifier, ai::Account), ApiError> {
         .clone();
     if account.kind != ai::Kind::OpenAiCompatible {
         return Err(ApiError::bad_request(
-            "An OpenAI-compatible decisions account is required",
+            "Agent safety could not start. In Settings > AI, configure an OpenAI-compatible account with a Decisions endpoint (such as OpenRouter with an /api/v1 base URL), then set the account field in classifiers/agent_safety.wcl to that account's name. ChatGPT, direct OpenAI and Anthropic accounts cannot run this safety pass. Incoming notes remain held from agents until cleared or explicitly released.",
         ));
     }
     Ok((source, classifier, account))

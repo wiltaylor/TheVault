@@ -15,6 +15,16 @@ use crate::required_scope;
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
+        "/api/classifiers",
+        "Owner-session-only local classifier diagnostics, no provider calls",
+    ),
+    (
+        "PUT",
+        "/api/classifiers/{name}/account",
+        "Owner-session-only classifier account field edit, no provider calls",
+    ),
+    (
+        "GET",
         "/api/agent-safety/backfill",
         "Session-only one-time backfill progress and summary",
     ),

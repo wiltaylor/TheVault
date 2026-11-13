@@ -12,6 +12,7 @@ import {
 } from "../api";
 import { Spinner } from "../components/SyncStatus";
 import { errorText } from "./TypeEditor";
+import { ClassifierSettings } from "./ClassifierSettings";
 
 // Settings > AI (accounts A11): a table of named AI accounts, each of one kind (accounts A1) that
 // the server lists with its label, default URL and default window. Add picks a kind first, then
@@ -869,6 +870,7 @@ export function Ai() {
               </p>
             </Show>
             <AccountsCard status={s()} onStatus={setStatus} />
+            <ClassifierSettings status={s()} />
             <ContextCard status={s()} onStatus={setStatus} />
           </>
         )}

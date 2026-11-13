@@ -37,6 +37,9 @@ const GENERATION_FILE: &str = "generation";
 pub enum Change {
     /// Create or replace a file. A `.wcl` file must be data-only and is stored in canonical form.
     Write { path: String, contents: Vec<u8> },
+    /// A narrow classifier Settings edit. Still data-only, but preserve source formatting.
+    /// Only a direct `classifiers/*.wcl` path is accepted.
+    ClassifierAccount { path: String, contents: Vec<u8> },
     /// Create or replace a file with the contents of `file`, a file outside the vault, which the
     /// commit moves into the journal rather than reading it into memory: a large asset received
     /// over the network. A file on the vault's filesystem is renamed; another is copied, then
@@ -70,9 +73,10 @@ impl Change {
     /// The vault path the change writes or removes.
     pub fn path(&self) -> &str {
         match self {
-            Change::Write { path, .. } | Change::Stage { path, .. } | Change::Delete { path } => {
-                path
-            }
+            Change::Write { path, .. }
+            | Change::ClassifierAccount { path, .. }
+            | Change::Stage { path, .. }
+            | Change::Delete { path } => path,
         }
     }
 }
@@ -132,7 +136,8 @@ impl Vault {
             let mut ops = Vec::with_capacity(changes.len());
             for (n, change) in changes.into_iter().enumerate() {
                 match change {
-                    Change::Write { path, contents } => {
+                    Change::Write { path, contents }
+                    | Change::ClassifierAccount { path, contents } => {
                         let name = n.to_string();
                         write_synced(&txn.join(&name), &contents)?;
                         ops.push(Op::Write { path, staged: name });
@@ -194,6 +199,24 @@ impl Vault {
             }
             let real = self.contain(&self.resolve(&path)?)?;
             out.push(match change {
+                Change::ClassifierAccount { path, contents } => {
+                    if !path
+                        .strip_prefix("classifiers/")
+                        .is_some_and(|name| !name.contains('/') && name.ends_with(".wcl"))
+                    {
+                        return Err(Error::InvalidPath {
+                            path,
+                            reason: "classifier account edit requires a classifier file".into(),
+                        });
+                    }
+                    let text =
+                        String::from_utf8(contents).map_err(|_| Error::NotUtf8(path.clone()))?;
+                    crate::parse_data_only(&text, &path)?;
+                    Change::ClassifierAccount {
+                        path,
+                        contents: text.into_bytes(),
+                    }
+                }
                 Change::Write { path, contents } if is_wcl(&path) => {
                     let text =
                         String::from_utf8(contents).map_err(|_| Error::NotUtf8(path.clone()))?;
