@@ -637,7 +637,6 @@ template default { tab Main { slot title } }
 "#,
             )
             .unwrap();
-            std::fs::write(vault.join("classifiers/incoming.wcl"), config).unwrap();
         },
         &["--test-clock".as_ref(), "2026-11-13T12:00:00Z".as_ref()],
     );
@@ -655,6 +654,9 @@ template default { tab Main { slot title } }
         .send()
         .unwrap();
     assert!(result.status().is_success(), "{}", result.text().unwrap());
+    // Introduce the fixture binding only after its account exists. A pre-existing
+    // dangling name is now deliberately pinned missing by account creation.
+    std::fs::write(server.vault_path().join("classifiers/incoming.wcl"), config).unwrap();
     (server, client)
 }
 
