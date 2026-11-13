@@ -1,3 +1,5 @@
+/src/tv-260/crates/server/tests/sync.rs:
+
 //! S1: the sync handshake, the change feed over every kind of vault file, device writes that
 //! always add a version, and base versions that survive pruning (D20, D27, D29).
 
@@ -128,25 +130,53 @@ fn device_calendar_upload_create_and_replace_deny_forged_metadata() {
         for field in ["google_ref = \"forged\"", "send_updates = true"] {
             let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
             let body = json!({"wcl": format!("title = \"forged\"\n{field}\n")});
-            let denied = device.put(server.url(&format!("/api/notes/{id}?type={ty}")))
-                .header("If-None-Match", "*").json(&body).send().unwrap();
+            let denied = device
+                .put(server.url(&format!("/api/notes/{id}?type={ty}")))
+                .header("If-None-Match", "*")
+                .json(&body)
+                .send()
+                .unwrap();
             assert!(!denied.status().is_success());
-            assert_eq!(owner.get(server.url(&format!("/api/notes/{id}"))).send().unwrap().status(), 404);
-            let made = send(owner.post(server.url(&format!("/api/notes?type={ty}")))
-                .json(&json!({"wcl": "title = \"original\"\n"})), 201);
+            assert_eq!(
+                owner
+                    .get(server.url(&format!("/api/notes/{id}")))
+                    .send()
+                    .unwrap()
+                    .status(),
+                404
+            );
+            let made = send(
+                owner
+                    .post(server.url(&format!("/api/notes?type={ty}")))
+                    .json(&json!({"wcl": "title = \"original\"\n"})),
+                201,
+            );
             let id = made["id"].as_str().unwrap();
             let versions = history(&owner, &server, id);
-            let denied = device.put(server.url(&format!("/api/notes/{id}")))
-                .header("If-Match", format!("\"{}\"", made["version"].as_str().unwrap()))
-                .json(&body).send().unwrap();
+            let denied = device
+                .put(server.url(&format!("/api/notes/{id}")))
+                .header(
+                    "If-Match",
+                    format!("\"{}\"", made["version"].as_str().unwrap()),
+                )
+                .json(&body)
+                .send()
+                .unwrap();
             assert!(!denied.status().is_success());
             let after = send(owner.get(server.url(&format!("/api/notes/{id}"))), 200);
             assert_eq!(after["wcl"], made["wcl"]);
             assert_eq!(after["version"], made["version"]);
             assert_eq!(history(&owner, &server, id), versions);
-            send(device.put(server.url(&format!("/api/notes/{id}")))
-                .header("If-Match", format!("\"{}\"", made["version"].as_str().unwrap()))
-                .json(&json!({"wcl": "title = \"allowed\"\n"})), 200);
+            send(
+                device
+                    .put(server.url(&format!("/api/notes/{id}")))
+                    .header(
+                        "If-Match",
+                        format!("\"{}\"", made["version"].as_str().unwrap()),
+                    )
+                    .json(&json!({"wcl": "title = \"allowed\"\n"})),
+                200,
+            );
         }
     }
 }
