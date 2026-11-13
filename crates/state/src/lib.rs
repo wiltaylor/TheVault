@@ -9,6 +9,7 @@
 mod activity;
 mod ai_usage;
 mod approval_quota;
+pub mod automation;
 pub use ai_usage::{AI_USAGE_RETENTION_MS, AiUsageDaily};
 pub use approval_quota::{ApprovalBudget, ApprovalReservation};
 mod agent_calls;
@@ -19,6 +20,7 @@ mod changes;
 mod classifiers;
 mod commands;
 mod devices;
+pub mod diagnostics;
 mod events;
 mod gitsync;
 mod history;
@@ -141,6 +143,8 @@ pub enum Error {
     },
     #[error("state.db is corrupt: {0}")]
     Corrupt(String),
+    #[error("automation stopped or stale generation")]
+    AutomationRefused,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -164,6 +168,7 @@ impl Clock for SystemClock {
 
 /// An open `state.db`.
 pub struct State {
+    automation_gate: Mutex<()>,
     conn: Mutex<Connection>,
     key: Option<SecretKey>,
     clock: Arc<dyn Clock>,
@@ -174,7 +179,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 29;
+const SCHEMA_VERSION: i64 = 30;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -518,6 +523,7 @@ impl State {
         // leave it be.
         let now = clock.now_ms();
         Ok(Self {
+            automation_gate: Mutex::new(()),
             conn: Mutex::new(conn),
             key,
             clock,
@@ -693,7 +699,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=28 => {
+        0..=29 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -819,6 +825,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             }
             tx.execute_batch(ai_usage::SCHEMA)?;
             tx.execute_batch(approval_quota::SCHEMA)?;
+            tx.execute_batch(automation::SCHEMA)?;
             let has_expiry: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tokens') WHERE name='expires_ms')",
                 [],

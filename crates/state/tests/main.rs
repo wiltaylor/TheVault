@@ -3,7 +3,8 @@
 //! `cargo test -p state --test main <module>::`.
 
 /// The schema version the current build migrates every older `state.db` to.
-const EXPECTED_SCHEMA_VERSION: i64 = 29;
+const EXPECTED_SCHEMA_VERSION: i64 = 30;
+mod automation;
 
 mod activity;
 mod ai_usage;
@@ -12,6 +13,7 @@ mod changes;
 mod classifiers;
 mod commands;
 mod devices;
+mod diagnostics;
 mod gitsync;
 mod login_origins;
 mod sessions;

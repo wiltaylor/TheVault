@@ -11,6 +11,7 @@ mod ai_accounts;
 mod archive;
 mod asset_use;
 mod atomic;
+mod automation;
 mod canvas;
 mod code_blocks;
 mod columns;

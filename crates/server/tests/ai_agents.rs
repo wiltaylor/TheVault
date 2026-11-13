@@ -611,6 +611,106 @@ fn an_agent_cannot_give_another_agent_more_than_it_has_or_change_itself() {
 }
 
 #[test]
+fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({}));
+    api.put_agent("clerk", CLERK);
+    api.put_agent("helper", HELPER);
+    let rules = HELPER.replace(
+        "permissions {",
+        "permissions {\n  approval_rule {\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"status\"]\n    daily_cap = 1\n  }",
+    );
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let cookie = login.headers()[reqwest::header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let accepted = api
+        .client
+        .put(api.server.url("/api/agents/helper"))
+        .header("cookie", cookie)
+        .header("content-type", "text/plain")
+        .body(rules.clone())
+        .send()
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let saved = api.agent_wcl("helper").unwrap();
+    let parsed = schema::Agent::parse("helper", &saved).unwrap();
+    assert_eq!(parsed.permissions.approval_rules.len(), 1);
+    assert_eq!(parsed.permissions.approval_rules[0].daily_cap, 1);
+    let expanded = rules.replace(
+        "permissions {",
+        "permissions {\n  approval_rule {\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"title\"]\n    daily_cap = 2\n  }",
+    );
+
+    let denied = api
+        .client
+        .put(api.server.url("/api/agents/helper"))
+        .bearer_auth(api.token())
+        .header("content-type", "text/plain")
+        .body(expanded.clone())
+        .send()
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+    let body: Value = denied.json().unwrap();
+    assert_eq!(body["error"], "invalid");
+    assert_eq!(body["issues"][0]["at"], "permissions.approval_rules");
+    assert_eq!(
+        body["issues"][0]["message"],
+        "only an owner session may change automatic approval rules"
+    );
+    assert_eq!(api.agent_wcl("helper").unwrap(), saved);
+
+    // Legacy admin install codes redeem as write-scoped agent tokens.
+    let denied = api
+        .client
+        .put(api.server.url("/api/agents/helper"))
+        .bearer_auth(api.token_of("agent-clerk", "admin"))
+        .header("content-type", "text/plain")
+        .body(expanded.clone())
+        .send()
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let body: Value = denied.json().unwrap();
+    assert_eq!(body["error"], "forbidden");
+    assert_eq!(
+        body["message"],
+        "this needs the admin scope; the token has write"
+    );
+    assert_eq!(api.agent_wcl("helper").unwrap(), saved);
+
+    // Propose itself rejects rules. Alter a real pending proposal to exercise Apply's
+    // independent escalation check, rather than merely the tool's earlier refusal.
+    let events = api.one(
+        &fake,
+        Some("clerk"),
+        "propose_agent_change",
+        json!({"name": "helper", "wcl": HELPER}),
+    );
+    let mut proposal = last(&events, "agent_proposal").clone();
+    assert_eq!(proposal["proposer"], "clerk");
+    proposal["after"] = json!(expanded);
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert_eq!(
+        body["message"],
+        "it would give agent helper more than Clerk has: automatic approval rules require a session owner"
+    );
+    assert_eq!(api.agent_wcl("helper").unwrap(), saved);
+}
+
+#[test]
 fn agent_proposal_apply_rechecks_change_permission_escalation() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
