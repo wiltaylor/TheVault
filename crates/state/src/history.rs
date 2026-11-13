@@ -34,7 +34,9 @@ const SNAPSHOT_HEADER: usize = 44;
 
 fn encode_snapshot(content: &[u8]) -> Result<Vec<u8>> {
     if content.len() > MAX_SNAPSHOT_BYTES {
-        return Err(Error::Corrupt("history snapshot exceeds 64 MiB limit".into()));
+        return Err(Error::Corrupt(
+            "history snapshot exceeds 64 MiB limit".into(),
+        ));
     }
     let mut blob = Vec::with_capacity(SNAPSHOT_HEADER);
     blob.extend_from_slice(SNAPSHOT_MAGIC);
@@ -50,8 +52,13 @@ fn decode_snapshot(blob: &[u8]) -> Result<Vec<u8>> {
         return Err(corrupt());
     }
     let size = u64::from_le_bytes(blob[4..12].try_into().map_err(|_| corrupt())?);
-    if size > MAX_SNAPSHOT_BYTES as u64 || blob.len() > lz4_flex::block::get_maximum_output_size(MAX_SNAPSHOT_BYTES) + SNAPSHOT_HEADER {
-        return Err(Error::Corrupt("history snapshot exceeds 64 MiB limit".into()));
+    if size > MAX_SNAPSHOT_BYTES as u64
+        || blob.len()
+            > lz4_flex::block::get_maximum_output_size(MAX_SNAPSHOT_BYTES) + SNAPSHOT_HEADER
+    {
+        return Err(Error::Corrupt(
+            "history snapshot exceeds 64 MiB limit".into(),
+        ));
     }
     // Never trust the decoder's size prefix. A fixed output slice bounds allocation and
     // work is bounded by both the input and output lengths of one LZ4 block.
@@ -75,7 +82,8 @@ pub(crate) fn snapshot_column(row: &rusqlite::Row<'_>, index: usize) -> rusqlite
             _ => Err(Error::Corrupt("invalid history content type".into())),
         }
     };
-    decode().map_err(|err| rusqlite::Error::FromSqlConversionFailure(index, Type::Blob, Box::new(err)))
+    decode()
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(index, Type::Blob, Box::new(err)))
 }
 
 /// A deleted note waiting in the trash.
@@ -561,7 +569,10 @@ mod snapshot_tests {
             (0..=255).collect(),
             vec![42; 4 * 1024 * 1024],
         ] {
-            assert_eq!(decode_snapshot(&encode_snapshot(&bytes).unwrap()).unwrap(), bytes);
+            assert_eq!(
+                decode_snapshot(&encode_snapshot(&bytes).unwrap()).unwrap(),
+                bytes
+            );
         }
     }
 
@@ -570,7 +581,12 @@ mod snapshot_tests {
         let blob = encode_snapshot(&vec![0; 1024 * 1024]).unwrap();
         let mut bomb = blob.clone();
         bomb[4..12].copy_from_slice(&((MAX_SNAPSHOT_BYTES as u64) + 1).to_le_bytes());
-        assert!(decode_snapshot(&bomb).unwrap_err().to_string().contains("limit"));
+        assert!(
+            decode_snapshot(&bomb)
+                .unwrap_err()
+                .to_string()
+                .contains("limit")
+        );
         // A tiny declared output must not let an expanding block allocate more.
         bomb[4..12].copy_from_slice(&1u64.to_le_bytes());
         assert!(decode_snapshot(&bomb).is_err());

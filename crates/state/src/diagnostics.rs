@@ -35,9 +35,14 @@ pub fn state_size(path: &Path, warning_threshold_bytes: u64) -> crate::Result<St
     // Also works on pre-compression databases, without migrating them.
     let has_sizes: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info('versions') WHERE name='content_bytes')",
-        [], |r| r.get(0),
+        [],
+        |r| r.get(0),
     )?;
-    let bytes = if has_sizes { "COALESCE(content_bytes, length(CAST(content AS BLOB)))" } else { "length(CAST(content AS BLOB))" };
+    let bytes = if has_sizes {
+        "COALESCE(content_bytes, length(CAST(content AS BLOB)))"
+    } else {
+        "length(CAST(content AS BLOB))"
+    };
     let mut stmt = conn.prepare(&format!(
         "SELECT note_type, COUNT(*), SUM({bytes}), SUM(length(CAST(content AS BLOB)))
          FROM versions GROUP BY note_type ORDER BY note_type"
