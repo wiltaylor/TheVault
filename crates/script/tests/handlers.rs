@@ -488,7 +488,7 @@ fn after_create(note: Value) -> Result[(), string] { after_update(note) }
 fn after_update(note: Value) -> Result[(), string] {
     let id = note.get("id").unwrap().as_string().unwrap()
     let current = vault::get(id)?
-    let status = current.get("fields").unwrap().get("status").unwrap().as_string().unwrap()
+    let status = current.get("note").unwrap().get("fields").unwrap().get("status").unwrap().as_string().unwrap()
     if status == "ready" {
         let patched = vault::patch(id, Value::Map(#{ "status": Value::String("sending"), "error": Value::String("stand-in sent") }), "")?
     }
