@@ -703,17 +703,30 @@ where
 }
 
 /// Opt-in stage timings for TV-277. Never records credentials or response data.
+/// Release builds contain no timing or environment lookup code.
+#[cfg(debug_assertions)]
 pub(crate) struct Profile(&'static str, Option<std::time::Instant>);
 
+#[cfg(not(debug_assertions))]
+pub(crate) struct Profile;
+
 impl Profile {
+    #[cfg(debug_assertions)]
     pub(crate) fn new(stage: &'static str) -> Self {
         Self(
             stage,
             std::env::var_os("VAULT_QUERY_PROFILE").map(|_| std::time::Instant::now()),
         )
     }
+
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    pub(crate) fn new(_stage: &'static str) -> Self {
+        Self
+    }
 }
 
+#[cfg(debug_assertions)]
 impl Drop for Profile {
     fn drop(&mut self) {
         if let Some(start) = self.1 {
