@@ -29,6 +29,7 @@ it("is collapsed with no provider/action calls and requires explicit valid price
 
 it("shows exact estimate and fingerprint, approves only that preview, and shows durable failures", async () => {
   render(() => <ScamHistory />);
+  screen.getByLabelText("Historical scam run").setAttribute("open", "");
   fireEvent.input(screen.getByLabelText("Estimated USD per decision"), { target: { value: "0.25" } });
   fireEvent.click(screen.getByText("Preview historical scam run"));
   await screen.findByText("consent-digest");
@@ -36,20 +37,25 @@ it("shows exact estimate and fingerprint, approves only that preview, and shows 
   expect(screen.getByText(/Estimated total:/).textContent).toContain("$1.5 USD");
   fireEvent.click(screen.getByText("Approve historical scam run"));
   await waitFor(() => expect(approve).toHaveBeenCalledWith("consent-digest", 30, 0.25));
+  await waitFor(() => expect(screen.getByText("Refresh scam run progress")).not.toBeDisabled());
   fireEvent.click(screen.getByText("Refresh scam run progress"));
   await screen.findByText("fixture: provider_failed");
 });
 
 it("invalidates approval when either input changes or the server refuses a stale preview", async () => {
   render(() => <ScamHistory />);
+  screen.getByLabelText("Historical scam run").setAttribute("open", "");
   fireEvent.input(screen.getByLabelText("Estimated USD per decision"), { target: { value: "0.25" } });
   fireEvent.click(screen.getByText("Preview historical scam run")); await screen.findByText("consent-digest");
+  await waitFor(() => expect(screen.getByLabelText("Historical days")).not.toBeDisabled());
   fireEvent.input(screen.getByLabelText("Historical days"), { target: { value: "31" } });
   expect(screen.queryByText("Approve historical scam run")).toBeNull();
   fireEvent.click(screen.getByText("Preview historical scam run")); await screen.findByText("consent-digest");
+  await waitFor(() => expect(screen.getByLabelText("Estimated USD per decision")).not.toBeDisabled());
   fireEvent.input(screen.getByLabelText("Estimated USD per decision"), { target: { value: "0.5" } });
   expect(screen.queryByText("Approve historical scam run")).toBeNull();
   fireEvent.click(screen.getByText("Preview historical scam run")); await screen.findByText("consent-digest");
+  await waitFor(() => expect(screen.getByText("Approve historical scam run")).not.toBeDisabled());
   approve.mockRejectedValue(new Error("stale_preview"));
   fireEvent.click(screen.getByText("Approve historical scam run")); await screen.findByRole("alert");
   expect(screen.queryByText("Approve historical scam run")).toBeNull();
