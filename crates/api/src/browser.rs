@@ -297,6 +297,7 @@ async fn websocket(desktop: &Url, upstream: &str, mut req: Request) -> Response 
             "the browser box's desktop refused the websocket with {status}"
         ));
     }
+    let credential = req.extensions().get::<state::StreamCredential>().cloned();
     let on_upgrade = hyper::upgrade::on(&mut req);
     tokio::spawn(async move {
         let Ok(client) = on_upgrade.await else {
@@ -306,7 +307,18 @@ async fn websocket(desktop: &Url, upstream: &str, mut req: Request) -> Response 
         if !rest.is_empty() && client.write_all(&rest).await.is_err() {
             return;
         }
-        let _ = tokio::io::copy_bidirectional(&mut client, &mut conn).await;
+        let relay = tokio::io::copy_bidirectional(&mut client, &mut conn);
+        if let Some(credential) = credential {
+            use futures_util::StreamExt;
+            let guard = crate::auth::guard_stream(futures_util::stream::pending::<()>(), credential);
+            tokio::pin!(guard);
+            tokio::select! {
+                _ = guard.next() => {},
+                _ = relay => {},
+            }
+        } else {
+            let _ = relay.await;
+        }
     });
     let mut res = Response::builder()
         .status(StatusCode::SWITCHING_PROTOCOLS)

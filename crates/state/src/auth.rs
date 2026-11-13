@@ -209,7 +209,10 @@ impl State {
             .execute("DELETE FROM tokens WHERE name = ?1", [name])?
         {
             0 => Err(Error::UnknownToken(name.to_owned())),
-            _ => Ok(()),
+            _ => {
+                self.credential_changes.send_replace(());
+                Ok(())
+            }
         }
     }
 
@@ -300,6 +303,7 @@ impl State {
         )?;
         tx.execute("DELETE FROM sessions", [])?;
         tx.commit()?;
+        self.credential_changes.send_replace(());
         Ok(())
     }
 

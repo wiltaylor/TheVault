@@ -31,7 +31,47 @@ fn id_hash(id: &str) -> String {
     to_hex(&Sha256::digest(id.as_bytes()))
 }
 
+/// Read-only credential checks for a long-lived response. Keeps only a hash, never the secret.
+#[derive(Clone)]
+pub struct StreamCredential {
+    conn: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    clock: std::sync::Arc<dyn crate::Clock>,
+    hash: rusqlite::types::Value,
+    token: bool,
+    pub changes: tokio::sync::watch::Receiver<()>,
+}
+
+impl StreamCredential {
+    /// Does not renew a session or record token/device usage.
+    pub fn is_valid(&self) -> Result<bool> {
+        let sql = if self.token {
+            "SELECT EXISTS(SELECT 1 FROM tokens WHERE secret_hash = ?1 AND (expires_ms IS NULL OR expires_ms > ?2))"
+        } else {
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE id_hash = ?1 AND expires_ms > ?2)"
+        };
+        Ok(self.conn.lock().expect("state connection").query_row(
+            sql,
+            params![self.hash, self.clock.now_ms()],
+            |r| r.get(0),
+        )?)
+    }
+}
+
 impl State {
+    /// Subscribe before starting a response, so a concurrent revocation cannot be missed.
+    pub fn stream_credential(&self, secret: &str, token: bool) -> StreamCredential {
+        StreamCredential {
+            conn: self.conn.clone(),
+            clock: self.clock.clone(),
+            hash: if token {
+                rusqlite::types::Value::Blob(Sha256::digest(secret.as_bytes()).to_vec())
+            } else {
+                rusqlite::types::Value::Text(id_hash(secret))
+            },
+            token,
+            changes: self.credential_changes.subscribe(),
+        }
+    }
     /// Starts a session and returns its id, which is shown once, and when it expires. Expired
     /// sessions are removed on the way.
     pub fn create_session(&self, user_agent: Option<&str>) -> Result<(String, i64)> {
@@ -94,12 +134,15 @@ impl State {
         let removed = self
             .conn()
             .execute("DELETE FROM sessions WHERE id_hash = ?1", [id_hash(id)])?;
+        self.credential_changes.send_replace(());
         Ok(removed > 0)
     }
 
     /// Ends every session, logging every browser out. Answers how many there were.
     pub fn end_all_sessions(&self) -> Result<usize> {
-        Ok(self.conn().execute("DELETE FROM sessions", [])?)
+        let removed = self.conn().execute("DELETE FROM sessions", [])?;
+        self.credential_changes.send_replace(());
+        Ok(removed)
     }
 
     /// Removes the sessions that have expired. Answers how many.
