@@ -1178,3 +1178,44 @@ fn an_accounts_secrets_take_names_the_secrets_route_accepts() {
     );
     assert_eq!(api.account("Claude")["key_set"], true);
 }
+
+#[test]
+fn classifier_diagnostics_and_selection_never_refresh_chatgpt() {
+    let api = Api::start();
+    let id = api.plan();
+    api.put(&format!("/api/secrets/{}", ai::chatgpt_secret(&id)),
+        json!({"value":json!({"client_id":"oaiapp_test","access_token":"expired",
+            "refresh_token":api.siwc.refresh_token(),"expires_ms":1,"account":"test"}).to_string()}));
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let before = api.siwc.requests().len();
+    api.client
+        .get(api.server.url("/api/classifiers"))
+        .header("cookie", cookie)
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(
+        api.client
+            .put(api.server.url("/api/classifiers/scam/account"))
+            .header("cookie", cookie)
+            .json(&json!({"account":id}))
+            .send()
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(api.siwc.requests().len(), before);
+    assert_eq!(api.siwc.refresh_count(), 0);
+}

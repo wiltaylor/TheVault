@@ -57,6 +57,58 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
         .unwrap()
         .json()
         .unwrap();
+    let paired: Value = client
+        .post(server.url("/api/devices/pair"))
+        .json(&json!({"password":testkit::PASSWORD,"name":"phone","platform":"android"}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let issued: Value = client
+        .post(server.url("/api/agent-codes"))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"cli","scope":"write"}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    let agent: Value = client
+        .post(server.url("/api/agent-codes/redeem"))
+        .json(&json!({"code":issued["code"]}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    for token in [
+        paired["token"].as_str().unwrap(),
+        agent["token"].as_str().unwrap(),
+    ] {
+        assert_eq!(
+            client
+                .get(server.url(path))
+                .bearer_auth(token)
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+        assert_eq!(
+            client
+                .put(server.url("/api/classifiers/incoming/account"))
+                .bearer_auth(token)
+                .json(&json!({"account":"anything"}))
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+    }
     for (name, kind, base) in [
         ("OpenRouter", "openai_compatible", fake.base_url()),
         (
@@ -92,6 +144,20 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
         .json()
         .unwrap();
     let choices = diagnostics["accounts"].as_array().unwrap();
+    fn no_credentials(value: &Value) {
+        match value {
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    assert!(!["base_url", "headers", "key"].contains(&key.as_str()));
+                    no_credentials(value);
+                }
+            }
+            Value::Array(values) => values.iter().for_each(no_credentials),
+            _ => {}
+        }
+    }
+    no_credentials(&diagnostics);
+    assert!(!diagnostics.to_string().contains(FakeDecisions::KEY));
     assert_eq!(choices.len(), 2);
     assert!(
         choices
@@ -101,6 +167,16 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
     let selected = choices.iter().find(|a| a["name"] == "OpenRouter").unwrap()["id"]
         .as_str()
         .unwrap();
+    assert_eq!(
+        client
+            .put(server.url("/api/classifiers/Bad-Name/account"))
+            .header("cookie", &cookie)
+            .json(&json!({"account":selected}))
+            .send()
+            .unwrap()
+            .status(),
+        400
+    );
     let invalid = diagnostics["classifiers"]
         .as_array()
         .unwrap()
@@ -156,6 +232,77 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
         .json()
         .unwrap();
     assert_eq!(before["default"], after["default"]);
+    // Both newly selected IDs and pre-existing name bindings follow a rename.
+    let router = choices.iter().find(|a| a["name"] == "router").unwrap()["id"]
+        .as_str()
+        .unwrap();
+    std::fs::write(server.vault_path().join("classifiers/legacy.wcl"), CONFIG).unwrap();
+    for (id, name) in [(selected, "renamed"), (router, "legacy renamed")] {
+        client
+            .put(server.url(&format!("/api/integrations/ai/accounts/{id}")))
+            .header("cookie", &cookie)
+            .json(&json!({"name":name,"kind":"openai_compatible","base_url":fake.base_url()}))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    }
+    let read = || -> Value {
+        client
+            .get(server.url(path))
+            .header("cookie", &cookie)
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    let renamed = read();
+    for (name, id) in [("incoming", selected), ("legacy", router)] {
+        let row = renamed["classifiers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap();
+        assert_eq!(row["resolved_account_id"], id);
+    }
+    // A different account taking the former name must not inherit the legacy binding.
+    client
+        .put(server.url(&format!("/api/integrations/ai/accounts/{selected}")))
+        .header("cookie", &cookie)
+        .json(&json!({"name":"router","kind":"openai_compatible","base_url":fake.base_url()}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    client
+        .delete(server.url(&format!("/api/integrations/ai/accounts/{router}")))
+        .header("cookie", &cookie)
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    client
+        .post(server.url("/api/integrations/ai/accounts"))
+        .header("cookie", &cookie)
+        .json(
+            &json!({"name":"legacy renamed","kind":"openai_compatible","base_url":fake.base_url()}),
+        )
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let deleted = read();
+    let legacy = deleted["classifiers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "legacy")
+        .unwrap();
+    assert_eq!(legacy["reason"], "missing_account");
+    assert!(legacy.get("resolved_account_id").is_none());
     assert!(fake.requests().is_empty(), "setup must not call Decisions");
 }
 

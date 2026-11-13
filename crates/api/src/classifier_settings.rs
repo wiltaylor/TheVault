@@ -153,8 +153,11 @@ pub async fn select(
 
 /// Pin legacy name bindings before the name can be reused. Deleted IDs fail closed.
 pub(crate) fn pin_account(w: &Writer, accounts: &Accounts, id: &str) -> Result<(), ApiError> {
-    for entry in std::fs::read_dir(w.vault().root().join("classifiers"))? {
-        let entry = entry?;
+    for entry in std::fs::read_dir(w.vault().root().join("classifiers"))
+        .map_err(|_| ApiError::bad_request("Cannot read classifier definitions"))?
+    {
+        let entry =
+            entry.map_err(|_| ApiError::bad_request("Cannot read classifier definitions"))?;
         let file = entry.file_name();
         let Some(name) = file.to_str().and_then(|s| s.strip_suffix(".wcl")) else {
             continue;
