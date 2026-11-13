@@ -383,10 +383,23 @@ fn a_reply_carries_the_threading_headers_and_thread() {
         "message_id": "<lunch-2@mail.example.com>",
         "references": "<lunch-1@mail.example.com>",
     }));
-    let replied = api.create(
-        "email",
-        json!({ "fields": { "title": "Lunch?", "gmail_ref": original } }),
+    // Seeding protected Gmail metadata requires the owner, not an admin bearer token.
+    let login = Client::new()
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"].to_str().unwrap();
+    let made = expect(
+        Client::new()
+            .post(api.server.url("/api/notes?type=email"))
+            .header("cookie", cookie)
+            .json(&json!({"note":{"fields":{"title":"Lunch?","gmail_ref":original}}}))
+            .send()
+            .unwrap(),
+        201,
     );
+    let replied = made["id"].as_str().unwrap();
     api.create(
         "outbox",
         email(
