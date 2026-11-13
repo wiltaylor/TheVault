@@ -144,7 +144,13 @@ impl Tray {
         let separator2 = PredefinedMenuItem::separator(app)?;
         let quit = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
         let unpair = MenuItem::with_id(app, UNPAIR, "Unpair this device…", true, None::<&str>)?;
-        let confirm_unpair = MenuItem::with_id(app, CONFIRM_UNPAIR, "Confirm unpair and quit (restart to pair again)", false, None::<&str>)?;
+        let confirm_unpair = MenuItem::with_id(
+            app,
+            CONFIRM_UNPAIR,
+            "Confirm unpair and quit (restart to pair again)",
+            false,
+            None::<&str>,
+        )?;
         let mut items: Vec<&dyn IsMenuItem<Wry>> = vec![
             &capture,
             &open,
@@ -157,7 +163,12 @@ impl Tray {
         if let Some(item) = &app_menu {
             items.push(item);
         }
-        items.extend([&separator2 as &dyn IsMenuItem<Wry>, &unpair, &confirm_unpair, &quit]);
+        items.extend([
+            &separator2 as &dyn IsMenuItem<Wry>,
+            &unpair,
+            &confirm_unpair,
+            &quit,
+        ]);
         let menu = Menu::with_items(app, &items)?;
         let icon = TrayIconBuilder::with_id("main")
             .icon(plain_icon())

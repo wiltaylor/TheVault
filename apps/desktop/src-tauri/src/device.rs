@@ -343,7 +343,11 @@ mod tests {
             };
             save(dir.path(), &old).unwrap();
             tokens.set("old", "old-token").unwrap();
-            assert!(pair(dir.path(), &NoTokens, &req).unwrap_err().contains("already paired"));
+            assert!(
+                pair(dir.path(), &NoTokens, &req)
+                    .unwrap_err()
+                    .contains("already paired")
+            );
             assert_eq!(load(dir.path()).unwrap(), Some(old));
             assert_eq!(tokens.get("old").unwrap(), "old-token");
             unpair(dir.path(), &tokens).unwrap();
