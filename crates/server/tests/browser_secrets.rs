@@ -1,7 +1,7 @@
 //! Login metadata content-boundary inventory and the 5,000-row performance contract.
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use testkit::{PASSWORD, TestServer};
 
 #[test]
