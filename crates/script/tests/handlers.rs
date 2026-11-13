@@ -130,15 +130,24 @@ fn json_note(fields: serde_json::Value) -> Input {
 fn current_handler_for_held_outbox_finishes_without_polling_forever() {
     let dir = tempfile::tempdir().unwrap();
     let (writer, handlers) = open(dir.path(), false);
-    writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
-    let email = writer.create("email", &json_note(json!({"title":"Received"})), &user()).unwrap();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let email = writer
+        .create("email", &json_note(json!({"title":"Received"})), &user())
+        .unwrap();
     let item = writer.create("outbox", &json_note(json!({"title":"Reply", "kind":"email", "status":"draft", "to":["ann@example.com"], "in_reply_to":email.id})), &user()).unwrap();
     for job in writer.state().queued_jobs().unwrap() {
-        writer.state().finish_job(job.id, Ok(()), "fixture").unwrap();
+        writer
+            .state()
+            .finish_job(job.id, Ok(()), "fixture")
+            .unwrap();
     }
     writer.state().set_automation_stopped(true).unwrap();
     writer.state().set_automation_stopped(false).unwrap();
-    writer.delete(&email.id, Some(&email.version), &user()).unwrap();
+    writer
+        .delete(&email.id, Some(&email.version), &user())
+        .unwrap();
     let jobs = writer.state().queued_jobs().unwrap();
     assert!(!jobs.is_empty());
     handlers.start(&writer);
