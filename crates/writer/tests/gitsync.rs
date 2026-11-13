@@ -362,13 +362,13 @@ template default {
 fn peer_admission_does_not_change_owner_created_handlers() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path(), Recorder::default());
-    let source = "label = \"Local\"\nhandler after_create { script = \"fake\" }\n";
-    w.put_type("local", source).unwrap();
+    let source = format!("{NOTE_TYPE}\nhandler after_create {{ script = \"fake\" }}\n");
+    w.put_type("local", &source).unwrap();
     let before = w.read_type("local").unwrap();
     assert!(!w.put_type_if_missing("local", NOTE_TYPE).unwrap());
     assert_eq!(w.read_type("local").unwrap(), before);
     assert_eq!(w.schema().type_def("local").unwrap().handlers.len(), 1);
-    assert!(w.put_type_if_missing("peer", source).is_err());
+    assert!(w.put_type_if_missing("peer", &source).is_err());
     assert!(w.schema().type_def("peer").is_none());
     assert!(!dir.path().join("types/peer.wcl").exists());
 }

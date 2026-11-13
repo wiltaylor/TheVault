@@ -433,7 +433,7 @@ fn peer_type_admission_refuses_capabilities_and_mismatched_names() {
         });
         let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
         let text = "title = \"Peer\"\n";
-        let source = format!("label = \"Plain\"\n{declaration}\n");
+        let source = format!("{MEMO}\n{declaration}\n");
         manifest.types.push(gitsync::DefEntry {
             name: "plain".into(),
             path: layout.type_def("plain"),
