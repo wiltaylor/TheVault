@@ -33,15 +33,38 @@ fn calendar_home_feed_is_trusted_but_device_upload_metadata_is_denied() {
     });
     let admin = Admin::of(&server);
     let device = Device::pair(&server, "calendar");
-    let made = admin.call("POST", "/api/notes?type=event", Some(json!({"wcl": "title = \"home\"\ngoogle_ref = \"real\"\n"})), 201);
+    let made = admin.call(
+        "POST",
+        "/api/notes?type=event",
+        Some(json!({"wcl": "title = \"home\"\ngoogle_ref = \"real\"\n"})),
+        201,
+    );
     let id = made["id"].as_str().unwrap();
     device.sync();
     let local = device.embedded.writer().read(id).unwrap();
-    assert_eq!(local.doc.field("google_ref").and_then(schema::Value::as_str), Some("real"));
+    assert_eq!(
+        local
+            .doc
+            .field("google_ref")
+            .and_then(schema::Value::as_str),
+        Some("real")
+    );
     // Offline edits are locally owner-authored. The home server must still
     // reject the paired token's upload before any handler or commit.
-    device.embedded.writer().update(id, &writer::Input::Wcl("title = \"forged\"\ngoogle_ref = \"forged\"\n".into()), Some(&local.version), &state::Author::Session("owner".into())).unwrap();
-    let engine = device.embedded.sync_engine(device.remote.clone(), AssetPolicy::desktop()).unwrap();
+    device
+        .embedded
+        .writer()
+        .update(
+            id,
+            &writer::Input::Wcl("title = \"forged\"\ngoogle_ref = \"forged\"\n".into()),
+            Some(&local.version),
+            &state::Author::Session("owner".into()),
+        )
+        .unwrap();
+    let engine = device
+        .embedded
+        .sync_engine(device.remote.clone(), AssetPolicy::desktop())
+        .unwrap();
     let result = std::thread::scope(|s| s.spawn(|| engine.sync()).join().unwrap());
     assert!(result.is_err(), "{result:?}");
     let unchanged = admin.call("GET", &format!("/api/notes/{id}"), None, 200);

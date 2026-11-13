@@ -22,16 +22,36 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
         let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
         // Seed a local note through the owner API when testing replacement.
         let id = if let Some(ty) = initial_type {
-            let made = b.call("POST", &format!("/api/notes?type={ty}"), Some(json!({"wcl": "title = \"local\"\n"})), 201);
+            let made = b.call(
+                "POST",
+                &format!("/api/notes?type={ty}"),
+                Some(json!({"wcl": "title = \"local\"\n"})),
+                201,
+            );
             s(&made["id"]).to_owned()
-        } else { id.to_owned() };
+        } else {
+            id.to_owned()
+        };
         let before = b.note(&id);
         let publish = |text: &str| {
             let layout = Layout::new(&key, "calendar-peer");
-            let mut manifest = Manifest::new(Named { vault_id: "calendar-peer".into(), name: "peer".into() });
-            manifest.notes.push(gitsync::NoteEntry { id: id.clone(), note_type: "event".into(), origin: "calendar-peer".into(), hash: gitsync::pack::sha256_hex(text.as_bytes()), path: layout.note(&id), assets: vec![] });
+            let mut manifest = Manifest::new(Named {
+                vault_id: "calendar-peer".into(),
+                name: "peer".into(),
+            });
+            manifest.notes.push(gitsync::NoteEntry {
+                id: id.clone(),
+                note_type: "event".into(),
+                origin: "calendar-peer".into(),
+                hash: gitsync::pack::sha256_hex(text.as_bytes()),
+                path: layout.note(&id),
+                assets: vec![],
+            });
             let mut files = BTreeMap::new();
-            files.insert(layout.note(&id), gitsync::pack::seal_note(&key, "event", text.as_bytes()));
+            files.insert(
+                layout.note(&id),
+                gitsync::pack::seal_note(&key, "event", text.as_bytes()),
+            );
             files.insert(layout.manifest(), manifest.seal(&key));
             let tmp = tempfile::tempdir().unwrap();
             let git = Git::new(tmp.path().join("repo"), Auth::None).unwrap();
@@ -42,11 +62,17 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
         };
         publish("title = \"peer\"\ngoogle_ref = \"forged\"\n");
         let report = b.sync();
-        assert!(!report["warnings"].as_array().unwrap().is_empty(), "{report}");
+        assert!(
+            !report["warnings"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
         assert_eq!(b.note(&id), before);
         publish("title = \"allowed\"\n");
         let report = b.sync();
-        assert!(report["warnings"].as_array().unwrap().is_empty(), "{report}");
+        assert!(
+            report["warnings"].as_array().unwrap().is_empty(),
+            "{report}"
+        );
         assert_eq!(b.field(&id, "title"), "allowed");
     }
 }

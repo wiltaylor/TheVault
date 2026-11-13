@@ -267,21 +267,31 @@ impl Writer {
         }
         // Metadata on a non-calendar note has never been admitted as calendar
         // metadata. Carrying it across a type transition is a new capability.
-        let previous = old.as_ref().filter(|(ty, _)| calendar(ty)).map(|(_, doc)| doc);
+        let previous = old
+            .as_ref()
+            .filter(|(ty, _)| calendar(ty))
+            .map(|(_, doc)| doc);
         let changed = [
-            "google_ref", "etag", "attendees", "attendees_raw", "my_response", "status",
+            "google_ref",
+            "etag",
+            "attendees",
+            "attendees_raw",
+            "my_response",
+            "status",
         ]
         .into_iter()
         .any(|name| next.field(name) != previous.and_then(|doc| doc.field(name)));
         let snapshots = |doc: &schema::Doc| {
-            doc.blocks.iter()
+            doc.blocks
+                .iter()
                 .filter(|b| b.kind == "dict" && b.label() == Some("snapshot"))
-                .cloned().collect::<Vec<_>>()
+                .cloned()
+                .collect::<Vec<_>>()
         };
         let snapshot_changed = snapshots(next) != previous.map(snapshots).unwrap_or_default();
         let send = next.field("send_updates");
-        let send_changed = send.is_some()
-            && send != previous.and_then(|doc| doc.field("send_updates"));
+        let send_changed =
+            send.is_some() && send != previous.and_then(|doc| doc.field("send_updates"));
         if changed || snapshot_changed || send_changed {
             return Err(Error::Rejected(
                 "remote writes may not change protected calendar metadata or send_updates".into(),
