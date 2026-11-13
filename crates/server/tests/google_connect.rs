@@ -733,8 +733,10 @@ fn disconnect_completes_with_a_missing_key_file() {
         db.set_secret(name, "{}").unwrap();
     }
     drop(db);
-    let missing = vault.path().join("missing.key");
-    let server = TestServer::start_existing(vault, &token, &[("VAULT_SECRET_KEY_FILE", &missing)]);
+    // An explicitly configured missing key refuses server startup. The supported no-key
+    // mode is an absent default key, isolated from the user's real configuration.
+    let missing = vault.path().join("missing-config");
+    let server = TestServer::start_existing(vault, &token, &[("XDG_CONFIG_HOME", &missing)]);
     let out = expect(
         Client::new()
             .post(server.url("/api/integrations/google/disconnect"))
