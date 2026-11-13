@@ -184,7 +184,7 @@ fn revoking_a_token_closes_an_open_event_stream() {
             .send()
             .unwrap(),
     );
-    api.call("DELETE", "/api/tokens/stream-reader", None, 200);
+    api.call("DELETE", "/api/tokens/stream-reader", None, 204);
     let deadline = Instant::now() + Duration::from_secs(6);
     loop {
         match stream
