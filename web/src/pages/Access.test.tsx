@@ -77,6 +77,7 @@ it("sends optional expiry and shows the returned expiry without redisplaying lis
   expect(screen.queryByLabelText("Token secret")).toBeNull();
   fireEvent.input(screen.getByLabelText("Expiry (local time, optional)"), { target: { value: "" } });
   fireEvent.input(screen.getByLabelText("Name"), { target: { value: "cli2" } });
+  await waitFor(() => expect((screen.getByRole("button", { name: "Create token" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Create token" }));
   await waitFor(() => expect(createToken).toHaveBeenLastCalledWith("cli2", "read", null));
 });
