@@ -131,6 +131,17 @@ describe("the Dispatched page", () => {
     await waitFor(() => expect(within(fresh).queryByRole("img", { name: "Not opened yet" })).toBeNull());
   });
 
+  it("keeps a row, and the review it holds, across a refresh that returns fresh objects", async () => {
+    const waiting = () => ({ threads: [row({ id: "01JW", state: "needs_you", pending: 2, title: "Batch" })] });
+    dispatched.mockResolvedValueOnce(waiting()).mockResolvedValueOnce(waiting());
+    render(() => <Dispatched />);
+    const before = await screen.findByRole("button", { name: "Review by kind" });
+    bumpTurns();
+    await waitFor(() => expect(dispatched).toHaveBeenCalledTimes(2));
+    // The same element: the row was not built again, so an open preview is not lost.
+    expect(screen.getByRole("button", { name: "Review by kind" })).toBe(before);
+  });
+
   it("reads again when a turn starts or ends", async () => {
     dispatched.mockResolvedValue({ threads: [row({ state: "active", running: true })] });
     render(() => <Dispatched />);
