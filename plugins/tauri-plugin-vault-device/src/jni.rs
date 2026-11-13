@@ -119,6 +119,7 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_pair<'local>
     password: JString<'local>,
     code: JString<'local>,
     name: JString<'local>,
+    confirm_http: jni::sys::jboolean,
 ) -> jstring {
     answer(&mut env, |env| {
         let url = required(env, &server_url, "serverUrl")?;
@@ -128,7 +129,11 @@ pub extern "system" fn Java_dev_wiltaylor_thevault_device_VaultCore_pair<'local>
             (None, Some(c)) => Secret::Code(c),
             _ => anyhow::bail!("pair with either a password or a pairing code"),
         };
-        let paired = pair::pair(&url, &secret, &name)?;
+        let paired = if confirm_http != 0 {
+            pair::pair_confirmed(&url, &secret, &name)?
+        } else {
+            pair::pair(&url, &secret, &name)?
+        };
         Ok(Some(serde_json::to_string(&paired)?))
     })
 }

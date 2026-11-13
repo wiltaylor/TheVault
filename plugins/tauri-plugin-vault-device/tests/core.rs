@@ -78,7 +78,7 @@ impl Admin {
     }
 
     fn pair(&self, name: &str) -> Paired {
-        pair::pair(
+        pair::pair_confirmed(
             &self.server.base_url(),
             &Secret::Password(PASSWORD.to_owned()),
             name,
@@ -128,19 +128,19 @@ fn pairs_by_password_and_by_code_and_refuses_bad_secrets() {
     let admin = Admin::start();
     let url = format!("{}/", admin.server.base_url());
 
-    let by_password = pair::pair(&url, &Secret::Password(PASSWORD.into()), "Pixel").unwrap();
+    let by_password = pair::pair_confirmed(&url, &Secret::Password(PASSWORD.into()), "Pixel").unwrap();
     assert_eq!(by_password.server_url, admin.server.base_url());
     assert_eq!(by_password.device_name, "Pixel");
     assert!(!by_password.token.is_empty());
 
-    let wrong = pair::pair(&url, &Secret::Password("nope".into()), "Pixel").unwrap_err();
+    let wrong = pair::pair_confirmed(&url, &Secret::Password("nope".into()), "Pixel").unwrap_err();
     assert!(wrong.to_string().contains("wrong password"), "{wrong}");
 
     let issued = admin.send("POST", "/api/devices/pair-codes", Some(json!({})));
     let code = issued["code"].as_str().unwrap();
-    let by_code = pair::pair(&url, &Secret::Code(code.into()), "Tablet").unwrap();
+    let by_code = pair::pair_confirmed(&url, &Secret::Code(code.into()), "Tablet").unwrap();
     assert_ne!(by_code.device_id, by_password.device_id);
-    let again = pair::pair(&url, &Secret::Code(code.into()), "Tablet").unwrap_err();
+    let again = pair::pair_confirmed(&url, &Secret::Code(code.into()), "Tablet").unwrap_err();
     assert!(again.to_string().contains("pairing code"), "{again}");
 
     let devices = admin.send("GET", "/api/devices", None);
@@ -156,7 +156,7 @@ fn pairs_by_password_and_by_code_and_refuses_bad_secrets() {
     );
     assert!(devices["devices"][0]["platform"] == "android", "{devices}");
 
-    let unreachable = pair::pair(
+    let unreachable = pair::pair_confirmed(
         "http://127.0.0.1:9",
         &Secret::Password(PASSWORD.into()),
         "Pixel",

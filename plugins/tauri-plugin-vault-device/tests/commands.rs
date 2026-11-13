@@ -126,7 +126,7 @@ fn commands_run_only_when_declared_and_switched_on_and_every_result_is_reported(
             OsStr::new("2026-01-05T00:30:00Z"),
         ],
     );
-    let p = pair::pair(
+    let p = pair::pair_confirmed(
         &server.base_url(),
         &Secret::Password(PASSWORD.to_owned()),
         "Pixel",
@@ -308,7 +308,7 @@ impl DeviceData for CallLog {
 #[test]
 fn import_history_from_settings_runs_on_the_phone_and_reports_its_result() {
     let server = TestServer::start_seeded(seed);
-    let p = pair::pair(
+    let p = pair::pair_confirmed(
         &server.base_url(),
         &Secret::Password(PASSWORD.to_owned()),
         "Pixel",

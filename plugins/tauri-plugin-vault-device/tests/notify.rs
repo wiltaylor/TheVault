@@ -32,7 +32,7 @@ fn admin(server: &TestServer, method: &str, path: &str, body: Option<Value>) -> 
 }
 
 fn paired(server: &TestServer) -> Link {
-    let p = pair::pair(
+    let p = pair::pair_confirmed(
         &server.base_url(),
         &Secret::Password(PASSWORD.to_owned()),
         "Pixel",
