@@ -80,16 +80,22 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
                         name: name.into(),
                         path: layout.type_def(name),
                     });
-                    files.insert(layout.type_def(name), key.seal(text.as_bytes()));
+                    files.insert(
+                        layout.type_def(name),
+                        key.seal(&layout.type_def(name), text.as_bytes()),
+                    );
                 }
                 manifest.types.push(gitsync::DefEntry {
                     name: "memo".into(),
                     path: layout.type_def("memo"),
                 });
-                files.insert(layout.type_def("memo"), key.seal(MEMO.as_bytes()));
+                files.insert(
+                    layout.type_def("memo"),
+                    key.seal(&layout.type_def("memo"), MEMO.as_bytes()),
+                );
                 files.insert(
                     layout.note(&id),
-                    gitsync::pack::seal_note(&key, ty, text.as_bytes()),
+                    gitsync::pack::seal_note(&key, &layout.note(&id), ty, text.as_bytes()),
                 );
                 files.insert(layout.manifest(), manifest.seal(&key));
                 let tmp = tempfile::tempdir().unwrap();
