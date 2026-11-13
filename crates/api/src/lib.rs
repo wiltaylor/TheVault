@@ -104,6 +104,7 @@ mod batch;
 mod brave;
 mod browser;
 mod browser_redaction;
+mod classifier_settings;
 pub mod classifiers;
 mod defs;
 mod devices;
@@ -120,7 +121,6 @@ mod original;
 mod pins;
 mod query;
 mod safety_backfill;
-mod classifier_settings;
 mod script_tools;
 mod skills;
 mod sync;
@@ -252,7 +252,10 @@ fn build() -> Built {
         .get("/api/openapi.json", openapi::serve)
         .get("/api/schema", inspect::schema)
         .get("/api/classifiers", classifier_settings::read)
-        .put("/api/classifiers/{name}/account", classifier_settings::select)
+        .put(
+            "/api/classifiers/{name}/account",
+            classifier_settings::select,
+        )
         .get("/api/notes", notes::list)
         .get("/api/agent-safety/held", notes::held_agent_notes)
         .post("/api/inbox/triage", inbox::triage)

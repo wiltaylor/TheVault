@@ -4,6 +4,8 @@ import { errorText } from "./TypeEditor";
 
 const reasons: Record<string, string> = {
   invalid_definition: "Invalid classifier definition. Check its WCL configuration and filter.",
+  invalid_filter: "Invalid classifier filter. Repair the where condition in its WCL file.",
+  credential_unavailable: "Cannot read the stored API key. Check the server's secrets key configuration.",
   missing_account: "No matching account. Select an account below.",
   incompatible_kind: "This account cannot run Decisions. Select an OpenAI-compatible /api/v1 account below.",
   invalid_endpoint: "Decisions need an OpenAI-compatible account with an /api/v1 base URL, such as OpenRouter.",

@@ -8,43 +8,132 @@ use testkit::{FakeDecisions, Reply, TestServer};
 fn settings_are_session_only_and_repair_only_the_account_without_calls() {
     let fake = FakeDecisions::start();
     let (server, client) = setup(&fake, CONFIG);
-    std::fs::write(server.vault_path().join("classifiers/broken.wcl"), "not valid WCL").unwrap();
+    std::fs::write(
+        server.vault_path().join("classifiers/broken.wcl"),
+        "not valid WCL",
+    )
+    .unwrap();
     let path = "/api/classifiers";
     assert_eq!(client.get(server.url(path)).send().unwrap().status(), 401);
-    assert_eq!(client.get(server.url(path)).bearer_auth(server.admin_token()).send().unwrap().status(), 403);
-    assert_eq!(client.put(server.url("/api/classifiers/incoming/account")).bearer_auth(server.admin_token())
-        .json(&json!({"account":"anything"})).send().unwrap().status(), 403);
-    let login = client.post(server.url("/api/login")).json(&json!({"password":testkit::PASSWORD}))
-        .send().unwrap().error_for_status().unwrap();
-    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
-    let before: Value = client.get(server.url("/api/integrations/ai")).header("cookie", &cookie)
-        .send().unwrap().json().unwrap();
-    for (name, kind, base) in [("OpenRouter", "openai_compatible", fake.base_url()),
-        ("wrong endpoint", "openai_compatible", "https://example.invalid/v1".into()),
-        ("ChatGPT", "chatgpt", String::new())] {
+    assert_eq!(
+        client
+            .get(server.url(path))
+            .bearer_auth(server.admin_token())
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        client
+            .put(server.url("/api/classifiers/incoming/account"))
+            .bearer_auth(server.admin_token())
+            .json(&json!({"account":"anything"}))
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
+    let login = client
+        .post(server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let before: Value = client
+        .get(server.url("/api/integrations/ai"))
+        .header("cookie", &cookie)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    for (name, kind, base) in [
+        ("OpenRouter", "openai_compatible", fake.base_url()),
+        (
+            "wrong endpoint",
+            "openai_compatible",
+            "https://example.invalid/v1".into(),
+        ),
+        ("ChatGPT", "chatgpt", String::new()),
+    ] {
         let mut input = json!({"name":name,"kind":kind});
-        if !base.is_empty() { input["base_url"] = json!(base); }
-        let response = client.post(server.url("/api/integrations/ai/accounts")).header("cookie", &cookie)
-            .json(&input).send().unwrap();
-        assert!(response.status().is_success(), "{}", response.text().unwrap());
+        if !base.is_empty() {
+            input["base_url"] = json!(base);
+        }
+        let response = client
+            .post(server.url("/api/integrations/ai/accounts"))
+            .header("cookie", &cookie)
+            .json(&input)
+            .send()
+            .unwrap();
+        assert!(
+            response.status().is_success(),
+            "{}",
+            response.text().unwrap()
+        );
     }
-    let diagnostics: Value = client.get(server.url(path)).header("cookie", &cookie).send().unwrap()
-        .error_for_status().unwrap().json().unwrap();
+    let diagnostics: Value = client
+        .get(server.url(path))
+        .header("cookie", &cookie)
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
     let choices = diagnostics["accounts"].as_array().unwrap();
     assert_eq!(choices.len(), 2);
-    assert!(choices.iter().all(|a| a["name"] == "router" || a["name"] == "OpenRouter"));
-    let selected = choices.iter().find(|a| a["name"] == "OpenRouter").unwrap()["id"].as_str().unwrap();
-    let invalid = diagnostics["classifiers"].as_array().unwrap().iter().find(|c| c["name"] == "broken").unwrap();
+    assert!(
+        choices
+            .iter()
+            .all(|a| a["name"] == "router" || a["name"] == "OpenRouter")
+    );
+    let selected = choices.iter().find(|a| a["name"] == "OpenRouter").unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let invalid = diagnostics["classifiers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "broken")
+        .unwrap();
     assert_eq!(invalid["reason"], "invalid_definition");
-    let result = client.put(server.url("/api/classifiers/incoming/account")).header("cookie", &cookie)
-        .json(&json!({"account": selected})).send().unwrap();
+    let result = client
+        .put(server.url("/api/classifiers/incoming/account"))
+        .header("cookie", &cookie)
+        .json(&json!({"account": selected}))
+        .send()
+        .unwrap();
     assert!(result.status().is_success(), "{}", result.text().unwrap());
-    assert_eq!(std::fs::read_to_string(server.vault_path().join("classifiers/incoming.wcl")).unwrap(),
-        CONFIG.replace("account = \"router\"", "account = \"OpenRouter\""));
-    assert_eq!(client.put(server.url("/api/classifiers/incoming/account")).header("cookie", &cookie)
-        .json(&json!({"account":"not an id"})).send().unwrap().status(), 400);
-    let after: Value = client.get(server.url("/api/integrations/ai")).header("cookie", &cookie)
-        .send().unwrap().json().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(server.vault_path().join("classifiers/incoming.wcl")).unwrap(),
+        CONFIG.replace("account = \"router\"", "account = \"OpenRouter\"")
+    );
+    assert_eq!(
+        client
+            .put(server.url("/api/classifiers/incoming/account"))
+            .header("cookie", &cookie)
+            .json(&json!({"account":"not an id"}))
+            .send()
+            .unwrap()
+            .status(),
+        400
+    );
+    let after: Value = client
+        .get(server.url("/api/integrations/ai"))
+        .header("cookie", &cookie)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
     assert_eq!(before["default"], after["default"]);
     assert!(fake.requests().is_empty(), "setup must not call Decisions");
 }
@@ -63,6 +152,7 @@ fn provider_token_counts_survive_success_and_failure() {
     let note = create(&server, &client, "incoming");
     wait_trail(&server, note["id"].as_str().unwrap());
     let state = state::State::open(&server.vault_path().join(".vault/state.db"), None).unwrap();
+    assert_eq!(state.meta("classifier_last_outcome:incoming").unwrap().as_deref(), Some("provider_failed"));
     let rows = state.ai_usage_daily().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].purpose, "classifier");

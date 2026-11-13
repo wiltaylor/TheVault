@@ -643,7 +643,11 @@ fn safety_rest_mutation_route_inventory() {
     actual.sort_unstable();
     actual.dedup();
     let reviewed = [
-        ("put", "/api/classifiers/{name}/account", "owner session only, local account field edit, no note content"),
+        (
+            "put",
+            "/api/classifiers/{name}/account",
+            "owner session only, local account field edit, no note content",
+        ),
         ("delete", "/api/agents/{name}", "admin scope required"),
         (
             "delete",

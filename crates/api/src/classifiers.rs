@@ -411,7 +411,11 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
     // Persist before sending. An interrupted attempt is never represented as a success.
     last_outcome(writer, config, "attempting");
     let mut result = decisions::decide(&credential, &request, Duration::from_secs(30));
-    let mut outcome = if result.is_ok() { "succeeded" } else { "provider_failed" };
+    let mut outcome = if result.is_ok() {
+        "succeeded"
+    } else {
+        "provider_failed"
+    };
     let usage = result.as_ref().map_or_else(
         |e| e.usage,
         |r| ai::Usage {
@@ -504,7 +508,11 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
 }
 
 fn last_outcome(writer: &Writer, config: &Classifier, outcome: &str) {
-    if writer.state().set_meta(&format!("classifier_last_outcome:{}", config.name), outcome).is_err() {
+    if writer
+        .state()
+        .set_meta(&format!("classifier_last_outcome:{}", config.name), outcome)
+        .is_err()
+    {
         tracing::error!(target: "ai", "classifier: outcome=error:diagnostic_write");
     }
 }

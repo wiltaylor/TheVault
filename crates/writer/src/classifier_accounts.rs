@@ -48,16 +48,23 @@ mod tests {
     #[test]
     fn preserves_every_byte_outside_account_field() {
         let source = format!("# before\naccount  = \"old\" # after\n{DEFINITION}");
-        assert_eq!(account_source("scam", &source, "OpenRouter").unwrap(),
-            format!("# before\naccount = \"OpenRouter\" # after\n{DEFINITION}"));
-        assert_eq!(account_source("scam", DEFINITION, "OpenRouter").unwrap(),
-            format!("account = \"OpenRouter\"\n{DEFINITION}"));
+        assert_eq!(
+            account_source("scam", &source, "OpenRouter").unwrap(),
+            format!("# before\naccount = \"OpenRouter\" # after\n{DEFINITION}")
+        );
+        assert_eq!(
+            account_source("scam", DEFINITION, "OpenRouter").unwrap(),
+            format!("account = \"OpenRouter\"\n{DEFINITION}")
+        );
     }
 
     #[test]
     fn quotes_account_and_refuses_invalid_definition() {
         let text = account_source("scam", DEFINITION, "Router \"two\"").unwrap();
-        assert_eq!(Classifier::parse("scam", &text).unwrap().account.as_deref(), Some("Router \"two\""));
+        assert_eq!(
+            Classifier::parse("scam", &text).unwrap().account.as_deref(),
+            Some("Router \"two\"")
+        );
         assert!(account_source("scam", "broken", "OpenRouter").is_err());
     }
 }
