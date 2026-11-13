@@ -21,7 +21,11 @@ fn setup(fake: &FakeDecisions) -> (TestServer, Client, String) {
             )
             .unwrap();
             std::fs::create_dir_all(vault.join("taxonomies")).unwrap();
-            std::fs::write(vault.join("taxonomies/gmail_label.wcl"), include_str!("../../writer/defaults/taxonomies/gmail_label.wcl")).unwrap();
+            std::fs::write(
+                vault.join("taxonomies/gmail_label.wcl"),
+                include_str!("../../writer/defaults/taxonomies/gmail_label.wcl"),
+            )
+            .unwrap();
             std::fs::create_dir_all(vault.join("notes/email")).unwrap();
             for (i, id) in IDS.iter().enumerate() {
                 std::fs::write(
@@ -35,7 +39,13 @@ fn setup(fake: &FakeDecisions) -> (TestServer, Client, String) {
                 ("E", "labels = [\"system/DRAFT\"]"),
                 ("F", "scam_probability = 0.9"),
             ] {
-                std::fs::write(vault.join(format!("notes/email/01JB8Z4K2MQ7V3X9T5R6W8Y2Z{suffix}.wcl")), format!("title = \"Excluded fixture\"\nsent = \"2026-11-01T12:00:00Z\"\n{extra}\n")).unwrap();
+                std::fs::write(
+                    vault.join(format!("notes/email/01JB8Z4K2MQ7V3X9T5R6W8Y2Z{suffix}.wcl")),
+                    format!(
+                        "title = \"Excluded fixture\"\nsent = \"2026-11-01T12:00:00Z\"\n{extra}\n"
+                    ),
+                )
+                .unwrap();
             }
         },
         &["--test-clock".as_ref(), "2026-11-13T12:00:00Z".as_ref()],

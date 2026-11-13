@@ -4,7 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const preview = vi.fn();
 const approve = vi.fn();
 const progress = vi.fn();
-vi.mock("../api", () => ({ api: { scamHistoryPreview: preview, scamHistoryApprove: approve, scamHistoryProgress: progress } }));
+vi.mock("../api", async (original) => ({
+  ...await original<typeof import("../api")>(),
+  api: { scamHistoryPreview: preview, scamHistoryApprove: approve, scamHistoryProgress: progress },
+}));
 const { ScamHistory } = await import("./ScamHistory");
 const shown = { fingerprint: "consent-digest", days: 30, until_ms: 0, count: 3, account: "Fake router", model: "jev", decisions_per_item: 2, unit_price: 0.25, estimated_usd: 1.5 };
 beforeEach(() => {
