@@ -4,11 +4,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::SyncKey;
+use crate::layout::Layout;
 use crate::{Error, Result};
 
 /// The gitsync format this build writes. A manifest with a larger `format` comes from a newer
 /// build, and its branch is skipped (D21).
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -85,14 +86,14 @@ impl Manifest {
     /// The manifest as a blob.
     pub fn seal(&self, key: &SyncKey) -> Vec<u8> {
         let json = serde_json::to_vec(self).expect("a manifest always serialises");
-        key.seal(&json)
+        key.seal(&Layout::new(key, &self.instance.vault_id).manifest(), &json)
     }
 
     /// Reads a manifest blob. A blob from another key is [`Error::KeyMismatch`], and a manifest
     /// whose format is newer than [`FORMAT`] is [`Error::NewerFormat`], checked before the rest is
     /// read since a newer format may change its shape.
-    pub fn open(key: &SyncKey, blob: &[u8]) -> Result<Self> {
-        let json = key.open(blob)?;
+    pub fn open(key: &SyncKey, layout: &Layout<'_>, blob: &[u8]) -> Result<Self> {
+        let json = key.open(&layout.manifest(), blob)?;
         let probe: FormatOnly = serde_json::from_slice(&json)
             .map_err(|e| Error::Malformed(format!("manifest: {e}")))?;
         if probe.format > FORMAT {
@@ -100,6 +101,11 @@ impl Manifest {
                 found: probe.format,
                 supported: FORMAT,
             });
+        }
+        if probe.format != FORMAT {
+            return Err(Error::Malformed(
+                "legacy manifest refused; upgrade every peer and republish".into(),
+            ));
         }
         serde_json::from_slice(&json).map_err(|e| Error::Malformed(format!("manifest: {e}")))
     }
