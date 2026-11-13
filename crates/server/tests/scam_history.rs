@@ -17,9 +17,11 @@ fn setup(fake: &FakeDecisions) -> (TestServer, Client, String) {
             std::fs::create_dir_all(vault.join("types")).unwrap();
             std::fs::write(
                 vault.join("types/email.wcl"),
-                include_str!("../../writer/defaults/email.wcl"),
+                "label = \"Email\"\nfield sent { kind = \"datetime\" }\nfield labels { kind = \"list\" items = \"taxonomy\" taxonomy = \"gmail_label\" }\nfield scam_probability { kind = \"float\" }\nfield communication_category { kind = \"string\" }\ntemplate default { tab Main { slot title } }\n",
             )
             .unwrap();
+            std::fs::create_dir_all(vault.join("taxonomies")).unwrap();
+            std::fs::write(vault.join("taxonomies/gmail_label.wcl"), include_str!("../../writer/defaults/taxonomies/gmail_label.wcl")).unwrap();
             std::fs::create_dir_all(vault.join("notes/email")).unwrap();
             for (i, id) in IDS.iter().enumerate() {
                 std::fs::write(
