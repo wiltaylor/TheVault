@@ -24,7 +24,7 @@ for (const message of [null, "The home feed is not authenticated over plain HTTP
       },
     };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, "page.js"), "utf8"), {
-      window, document, location: { protocol: "vault:" },
+      window, document, location: { protocol: "vault:", pathname: "/" },
       fetch: async (url, options) => {
         assert.equal(url, "/_desktop/http-warning");
         assert.equal(options.method, "POST");
