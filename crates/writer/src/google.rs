@@ -28,6 +28,7 @@ pub const ACCOUNT: &str = "google_account";
 pub fn default_settings() -> Map<String, Value> {
     let Value::Object(m) = json!({
         "gmail_mode": "labels",
+        "gmail_remote_images": false,
         "gmail_labels": [],
         "gmail_window_days": 90,
         "gmail_backfill_to": null,
