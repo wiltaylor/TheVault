@@ -1972,7 +1972,8 @@ impl Writer {
             let field = |doc: Option<&schema::Doc>| doc.and_then(|d| d.field(name)).cloned();
             if field(change.doc.as_ref()) != field(old.as_ref()) {
                 return Err(Error::Rejected(
-                    "only the owner session or Gmail import may change Gmail attachment metadata".into(),
+                    "only the owner session or Gmail import may change Gmail attachment metadata"
+                        .into(),
                 ));
             }
         }
