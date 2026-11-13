@@ -443,7 +443,10 @@ pub fn run_round(
     paths: &Paths,
 ) -> Result<Report> {
     std::fs::create_dir_all(&paths.dir)?;
-    let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true)
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
         .open(paths.dir.join("freshness.lock"))?;
     lock.lock()?;
     let key = secrets
@@ -706,11 +709,18 @@ impl Round<'_> {
                 }
             }
         }
-        let tree_hash = self.git.tree_of(&format!("refs/remotes/origin/{name}"))
-            .map_err(Skip::new)?.ok_or_else(|| Skip::new("missing peer tree"))?;
+        let tree_hash = self
+            .git
+            .tree_of(&format!("refs/remotes/origin/{name}"))
+            .map_err(Skip::new)?
+            .ok_or_else(|| Skip::new("missing peer tree"))?;
         let fingerprint = pack::sha256_hex(tree_hash.as_bytes());
-        if let Err(e) = crate::freshness::receive(self.w.state(), &peer, manifest.sequence, &fingerprint) {
-            self.report.warnings.push(format!("peer freshness check failed: {e}"));
+        if let Err(e) =
+            crate::freshness::receive(self.w.state(), &peer, manifest.sequence, &fingerprint)
+        {
+            self.report
+                .warnings
+                .push(format!("peer freshness check failed: {e}"));
             return Err(named(e.to_string()));
         }
         Ok(Branch {
