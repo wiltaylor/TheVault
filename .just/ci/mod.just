@@ -58,7 +58,7 @@ rust-tests-declared:
 # Run every Rust test
 [group('ci')]
 rust-test: (require-tool "cargo")
-	cargo test --workspace
+	cargo test --workspace --no-fail-fast
 
 # Typecheck the web client
 [group('ci')]
