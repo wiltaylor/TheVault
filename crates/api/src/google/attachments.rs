@@ -459,6 +459,13 @@ mod tests {
     }
 
     #[test]
+    fn selection_refuses_unknown_fields() {
+        assert!(serde_json::from_value::<Selection>(json!({
+            "account":"fake", "message":"message", "part":"part", "filename":"forged"
+        })).is_err());
+    }
+
+    #[test]
     fn identifiers_are_single_segments() {
         assert_eq!(segment("a/b?x#z"), "a%2Fb%3Fx%23z");
     }
