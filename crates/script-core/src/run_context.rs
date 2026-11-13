@@ -31,6 +31,11 @@ impl Drop for State {
             self.stop_generation,
         ) {
             eprintln!("sealing run provenance: {error}");
+            for lease in &self.durable {
+                if let Err(error) = lease.record_seal_failure() {
+                    eprintln!("recording failed run seal: {error}");
+                }
+            }
         }
     }
 }
@@ -85,6 +90,11 @@ impl RunContext {
         b.parent = Some(root.clone());
     }
 
+    /// Merge host-owned queue provenance without inheriting an unrelated caller.
+    pub fn merge(&self, other: &Self) {
+        self.join(other);
+    }
+
     /// Mark outside-text exposure. All existing clones observe this change.
     pub fn restrict(&self) {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
@@ -127,6 +137,9 @@ impl RunContext {
     /// when the complete snapshot is sealed atomically. A crash or failed seal
     /// restores restricted AND stale, including failed late-generation joins.
     pub fn persist(&self, database: &state::State) -> state::Result<String> {
+        // Capture before publication, not after restart. This observes Stop
+        // without refusing work, and never replaces an older admission.
+        self.capture_stop_generation(database.run_provenance_generation()?);
         let (restricted, generation) = {
             let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
             let root = self.root();
@@ -154,19 +167,37 @@ impl RunContext {
     }
 
     /// Recover outside unrelated ambient scopes. Unknown/unreadable storage
-    /// returns restricted/stale without inventing an admission. Queue owners
-    /// must durably record this recovery and retain a live-context registry.
-    pub fn recover(database: &state::State, id: &str) -> Self {
-        let (snapshot, durable) = match database.resume_run_provenance(id) {
-            Ok((snapshot, lease)) => (snapshot, vec![lease]),
-            Err(_) => (state::RunProvenance::unavailable(id), Vec::new()),
+    /// returns an error, never a runnable context without a lease. The failed
+    /// recovery is recorded in activity. Queue owners must retain the queued
+    /// record on error (including audit failure) and use a live-context registry.
+    pub fn recover(database: &state::State, id: &str) -> state::Result<Self> {
+        Self::recover_for(database, id, id)
+    }
+
+    /// The host queue supplies its subject, never the script's claimed identity.
+    pub fn recover_for(database: &state::State, id: &str, subject: &str) -> state::Result<Self> {
+        let (snapshot, lease) = match database.resume_run_provenance(id) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                database.record_unavailable_run_for(id, subject)?;
+                return Err(error);
+            }
         };
-        Self(Arc::new(Mutex::new(State {
+        // Own the lease before the fallible audit. An audit failure drops this
+        // context and releases its token with the conservative recovered values.
+        let context = Self(Arc::new(Mutex::new(State {
             restricted: snapshot.is_restricted(),
             stop_generation: snapshot.stop_generation(),
             parent: None,
-            durable,
-        })))
+            durable: vec![lease],
+        })));
+        if snapshot
+            .stop_generation()
+            .is_none_or(|generation| database.automation_commit(generation).is_err())
+        {
+            database.record_stale_run_for(id, subject)?;
+        }
+        Ok(context)
     }
 
     /// Capture the synchronous caller's context before crossing a worker boundary.
@@ -186,14 +217,21 @@ impl RunContext {
     /// Never return an async future from this closure or hold this scope over await.
     /// Unrelated nested contexts join permanently, including existing clones.
     pub fn scope<T>(&self, f: impl FnOnce() -> T) -> T {
+        if let Some(parent) = Self::current() {
+            parent.join(self);
+        }
+        self.scope_recovered(f)
+    }
+
+    /// Host recovery boundary for an independently recorded queue/Outbox item.
+    /// Unlike `scope`, this does not join an unrelated ambient run. Never use it
+    /// for descendants or script-selected contexts, nor across an await.
+    pub fn scope_recovered<T>(&self, f: impl FnOnce() -> T) -> T {
         struct Restore(Option<RunContext>);
         impl Drop for Restore {
             fn drop(&mut self) {
                 CURRENT.with(|slot| *slot.borrow_mut() = self.0.take());
             }
-        }
-        if let Some(parent) = Self::current() {
-            parent.join(self);
         }
         let _restore = Restore(CURRENT.with(|slot| slot.replace(Some(self.clone()))));
         f()
@@ -210,6 +248,94 @@ fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
 #[cfg(test)]
 mod tests {
     use super::RunContext;
+
+    #[test]
+    fn independent_recovery_scope_restores_caller_without_joining_on_panic() {
+        let caller = RunContext::default();
+        let recovered = RunContext::default();
+        recovered.restrict();
+        caller.scope(|| {
+            let result = std::panic::catch_unwind(|| {
+                recovered.scope_recovered(|| {
+                    assert_eq!(RunContext::current(), Some(recovered.clone()));
+                    panic!("injected recovery failure");
+                });
+            });
+            assert!(result.is_err());
+            assert_eq!(RunContext::current(), Some(caller.clone()));
+            assert!(!caller.is_restricted());
+            assert_ne!(caller, recovered);
+        });
+        assert!(RunContext::current().is_none());
+    }
+
+    #[test]
+    fn recovered_component_is_not_sealed_while_another_owner_is_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let a = RunContext::default();
+        let b = RunContext::default();
+        let a_id = a.persist(&database).unwrap();
+        let b_id = b.persist(&database).unwrap();
+        a.scope(|| b.scope(|| {}));
+        drop(a);
+        drop(b);
+        let a = RunContext::recover(&database, &a_id).unwrap();
+        let b = RunContext::recover(&database, &b_id).unwrap();
+        drop(a);
+        b.restrict();
+        for id in [&a_id, &b_id] {
+            let snapshot = database.load_run_provenance(id);
+            assert!(!snapshot.is_sealed());
+            assert!(snapshot.is_restricted());
+            assert!(
+                database
+                    .automation_commit(snapshot.stop_generation().unwrap())
+                    .is_err()
+            );
+        }
+        drop(b);
+        for id in [&a_id, &b_id] {
+            assert!(database.load_run_provenance(id).is_sealed());
+            assert!(database.load_run_provenance(id).is_restricted());
+        }
+    }
+
+    #[test]
+    fn concurrent_persist_and_join_keep_every_reference_restricted() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let parent = RunContext::default();
+        let children: Vec<_> = (0..16).map(|_| RunContext::default()).collect();
+        let barrier = std::sync::Barrier::new(children.len());
+        let ids = std::thread::scope(|scope| {
+            let threads: Vec<_> = children
+                .iter()
+                .map(|child| {
+                    let database = &database;
+                    let parent = &parent;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        let id = child.persist(database).unwrap();
+                        parent.scope(|| child.scope(|| child.restrict()));
+                        id
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        drop(children);
+        drop(parent);
+        for id in ids {
+            let snapshot = database.load_run_provenance(&id);
+            assert!(snapshot.is_sealed());
+            assert!(snapshot.is_restricted());
+        }
+    }
 
     #[test]
     fn durable_identity_seals_only_after_last_live_descendant() {
@@ -272,17 +398,41 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
         let context = RunContext::default();
+        let generation = database.admit_automation().unwrap();
         let id = context.persist(&database).unwrap();
         drop(context);
         assert!(!database.load_run_provenance(&id).is_restricted());
-        let recovered = RunContext::recover(&database, &id);
+        let recovered = RunContext::recover(&database, &id).unwrap();
         assert!(!recovered.is_restricted());
-        assert_eq!(recovered.stop_generation(), None);
+        assert_eq!(recovered.stop_generation(), Some(generation));
         assert!(!database.load_run_provenance(&id).is_sealed());
         recovered.restrict();
         drop(recovered);
         assert!(database.load_run_provenance(&id).is_restricted());
         assert!(database.load_run_provenance(&id).is_sealed());
+    }
+
+    #[test]
+    fn persisted_admission_cannot_be_revived_by_stop_and_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let before = RunContext::default();
+        let before_id = before.persist(&database).unwrap();
+        drop(before);
+        database.set_automation_stopped(true).unwrap();
+        let during = RunContext::default();
+        let during_id = during.persist(&database).unwrap(); // provenance, not enforcement
+        drop(during);
+        database.set_automation_stopped(false).unwrap();
+        for id in [before_id, during_id] {
+            let recovered = RunContext::recover(&database, &id).unwrap();
+            recovered.capture_stop_generation(database.admit_automation().unwrap());
+            assert!(
+                database
+                    .automation_commit(recovered.stop_generation().unwrap())
+                    .is_err()
+            );
+        }
     }
 
     #[test]
@@ -293,8 +443,15 @@ mod tests {
         let active = database
             .create_run_provenance(false, Some(generation))
             .unwrap();
-        for id in ["missing", active.id()] {
-            let recovered = RunContext::recover(&database, id);
+        assert!(RunContext::recover(&database, "missing").is_err());
+        let activity = database
+            .activity(&state::ActivityFilter::default())
+            .unwrap();
+        assert_eq!(activity.items[0].kind, "run.recovery_unavailable");
+        assert_eq!(activity.items[0].subject.as_deref(), Some("missing"));
+        {
+            let id = active.id();
+            let recovered = RunContext::recover(&database, id).unwrap();
             assert!(recovered.is_restricted());
             assert!(
                 database
@@ -324,6 +481,14 @@ mod tests {
         drop(b);
         assert!(!a_db.load_run_provenance(&a_id).is_sealed());
         assert!(!b_db.load_run_provenance(&b_id).is_sealed());
+        for (database, id) in [(&a_db, &a_id), (&b_db, &b_id)] {
+            let activity = database
+                .activity(&state::ActivityFilter::default())
+                .unwrap();
+            assert_eq!(activity.items.len(), 1);
+            assert_eq!(activity.items[0].kind, "run.seal_failed");
+            assert_eq!(activity.items[0].subject.as_ref(), Some(id));
+        }
     }
 
     #[test]

@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS trigger_queue_drops (agent TEXT PRIMARY KEY, count IN
 CREATE TABLE IF NOT EXISTS trigger_backfill_previews (id TEXT PRIMARY KEY, principal TEXT NOT NULL, agent TEXT NOT NULL, trigger TEXT NOT NULL, payload TEXT NOT NULL, expires_ms INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS trigger_events (note TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS trigger_legacy_runs (run_id INTEGER PRIMARY KEY, agent TEXT NOT NULL, trigger TEXT NOT NULL, matched INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS trigger_provenance (
+ job_id INTEGER NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(job_id,run_id)
+);
 ";
 
 /// Preserve pre-queue success records from the first user message of each recorded thread.
@@ -90,6 +93,37 @@ pub struct TriggerJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_pruning_rolls_back_job_deletion_when_reference_cleanup_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = State::open(&dir.path().join("state.db"), None).unwrap();
+        let id = s.enqueue_trigger("a", "t", None, "{}", 0).unwrap().unwrap();
+        let conn = s.conn();
+        conn.execute(
+            "UPDATE trigger_jobs SET status='succeeded' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO trigger_provenance VALUES (?1,'old')", [id])
+            .unwrap();
+        conn.execute_batch("CREATE TRIGGER refuse_prune BEFORE DELETE ON trigger_provenance BEGIN SELECT RAISE(ABORT,'injected cleanup failure'); END;").unwrap();
+        assert!(prune_terminal(&conn).is_err());
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM trigger_jobs WHERE id=?1", [id], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        conn.execute_batch("DROP TRIGGER refuse_prune").unwrap();
+        prune_terminal(&conn).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM trigger_provenance", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn mail_triage_batch_membership_survives_restart_and_failed_batches_can_be_selected() {
@@ -496,7 +530,19 @@ pub struct TriggerQueueStats {
 }
 
 fn prune_terminal(conn: &rusqlite::Connection) -> Result<()> {
+    // Some callers already own the queue transaction. Otherwise start one so
+    // a crash cannot leave references attached to a subsequently reused row ID.
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction()?;
+        prune_terminal(&tx)?;
+        tx.commit()?;
+        return Ok(());
+    }
     conn.execute("DELETE FROM trigger_jobs WHERE status IN ('succeeded','failed','expired','cancelled') AND (note IS NULL OR (id NOT IN (SELECT max(id) FROM trigger_jobs WHERE note IS NOT NULL AND status IN ('succeeded','failed','expired','cancelled') GROUP BY agent,trigger,note) AND id NOT IN (SELECT max(id) FROM trigger_jobs WHERE note IS NOT NULL AND status='succeeded' GROUP BY agent,trigger,note)))", [])?;
+    conn.execute(
+        "DELETE FROM trigger_provenance WHERE job_id NOT IN (SELECT id FROM trigger_jobs)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -598,7 +644,10 @@ impl State {
         payload: &str,
         due: i64,
     ) -> Result<Option<i64>> {
-        self.enqueue_trigger_inner(agent, trigger, note, payload, due, false)
+        Ok(self
+            .enqueue_trigger_inner(agent, trigger, note, payload, due, (false, None))?
+            .filter(|(_, inserted)| *inserted)
+            .map(|(id, _)| id))
     }
 
     pub fn enqueue_backfill(
@@ -609,7 +658,52 @@ impl State {
         payload: &str,
         due: i64,
     ) -> Result<Option<i64>> {
-        self.enqueue_trigger_inner(agent, trigger, note, payload, due, true)
+        Ok(self
+            .enqueue_trigger_inner(agent, trigger, note, payload, due, (true, None))?
+            .filter(|(_, inserted)| *inserted)
+            .map(|(id, _)| id))
+    }
+
+    /// Publish host-owned provenance in the same transaction as the work. A
+    /// deduplicated payload retains every previous reference, never replaces it.
+    /// The result includes the existing ID and whether a new row was inserted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enqueue_trigger_with_provenance(
+        &self,
+        agent: &str,
+        trigger: &str,
+        note: Option<&str>,
+        payload: &str,
+        due: i64,
+        only_missing: bool,
+        run_id: &str,
+    ) -> Result<Option<(i64, bool)>> {
+        self.enqueue_trigger_inner(
+            agent,
+            trigger,
+            note,
+            payload,
+            due,
+            (only_missing, Some(run_id)),
+        )
+    }
+
+    pub fn trigger_provenance(&self, job_id: i64) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT run_id FROM trigger_provenance WHERE job_id=?1 ORDER BY run_id")?;
+        Ok(stmt
+            .query_map([job_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Registry retention follows durable status, including persistence retries.
+    pub fn live_trigger_provenance(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT DISTINCT p.run_id FROM trigger_provenance p JOIN trigger_jobs j ON j.id=p.job_id WHERE j.status IN ('waiting','admitted','running')")?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     fn enqueue_trigger_inner(
@@ -619,14 +713,31 @@ impl State {
         note: Option<&str>,
         payload: &str,
         due: i64,
-        only_missing: bool,
-    ) -> Result<Option<i64>> {
+        options: (bool, Option<&str>),
+    ) -> Result<Option<(i64, bool)>> {
+        let (only_missing, provenance) = options;
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         if let Some(note) = note {
             let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND ((?4 AND status IN ('succeeded','waiting','admitted','running')) OR (NOT ?4 AND status IN ('waiting','admitted'))))", params![agent, trigger, note, only_missing], |r| r.get(0))?;
             if exists {
                 if !only_missing {
+                    let waiting: Option<i64> = tx.query_row("SELECT id FROM trigger_jobs WHERE agent=?1 AND trigger=?2 AND note=?3 AND status='waiting'", params![agent,trigger,note], |r| r.get(0)).optional()?;
+                    if let Some(id) = waiting {
+                        // Empty is an explicit legacy/unavailable reference. It
+                        // cannot be laundered by a new event during deduplication.
+                        tx.execute("INSERT OR IGNORE INTO trigger_provenance SELECT ?1,'' WHERE NOT EXISTS(SELECT 1 FROM trigger_provenance WHERE job_id=?1)", [id])?;
+                        tx.execute(
+                            "INSERT OR IGNORE INTO trigger_provenance VALUES (?1,?2)",
+                            params![id, provenance.unwrap_or("")],
+                        )?;
+                        tx.execute(
+                            "UPDATE trigger_jobs SET payload=?2,due_ms=max(due_ms,?3) WHERE id=?1",
+                            params![id, payload, due],
+                        )?;
+                        tx.commit()?;
+                        return Ok(Some((id, false)));
+                    }
                     tx.execute("UPDATE trigger_jobs SET payload=?4,due_ms=max(due_ms,?5) WHERE agent=?1 AND trigger=?2 AND note=?3 AND status='waiting'", params![agent,trigger,note,payload,due])?;
                 }
                 tx.commit()?;
@@ -645,8 +756,12 @@ impl State {
         }
         tx.execute("INSERT INTO trigger_jobs(agent,trigger,note,payload,queued_ms,due_ms) VALUES (?1,?2,?3,?4,?5,?6)", params![agent,trigger,note,payload,self.now(),due])?;
         let id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO trigger_provenance VALUES (?1,?2)",
+            params![id, provenance.unwrap_or("")],
+        )?;
         tx.commit()?;
-        Ok(Some(id))
+        Ok(Some((id, true)))
     }
 
     pub fn trigger_record_exists(&self, agent: &str, trigger: &str, note: &str) -> Result<bool> {
@@ -667,6 +782,15 @@ impl State {
         self.conn().execute("UPDATE trigger_jobs SET status='failed', message='interrupted run, outcome unknown; not replayed' WHERE status='running'", [])?;
         prune_terminal(&self.conn())?;
         Ok(())
+    }
+
+    pub fn trigger_recovery_subject(&self, id: i64) -> Result<String> {
+        Ok(self.conn().query_row(
+            "SELECT agent,trigger,note,queued_ms FROM trigger_jobs WHERE id=?1", [id], |r| {
+                Ok(format!("Trigger job {id} queued {}, agent {}, trigger {}, note {} (release by manual run or backfill)",
+                    r.get::<_, i64>(3)?, r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?.unwrap_or_default()))
+            },
+        )?)
     }
 
     pub fn due_trigger_jobs(&self, now: i64) -> Result<Vec<TriggerJob>> {

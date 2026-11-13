@@ -154,6 +154,49 @@ struct Rig {
 }
 
 impl Rig {
+    fn reopen(self) -> Rig {
+        let Rig {
+            _dir: dir,
+            clock,
+            writer,
+            scheduler,
+            fake,
+        } = self;
+        let old_writer = Arc::downgrade(&writer);
+        drop(scheduler);
+        drop(writer);
+        drop(fake);
+        assert!(old_writer.upgrade().is_none(), "old Writer must be closed");
+        let vault = store::Vault::open(dir.path()).unwrap();
+        let state =
+            State::open_with_clock(&vault.server_dir().join("state.db"), None, clock.clone())
+                .unwrap();
+        let (hooks, binding) = TriggerHooks::wrap(Box::new(NoHooks));
+        let writer = Arc::new(
+            Writer::open(vault, state)
+                .unwrap()
+                .with_clock(clock.clone())
+                .with_hooks(hooks),
+        );
+        let host = Arc::new(Host::new(
+            writer.clone(),
+            1,
+            Limits::default(),
+            Ai::unavailable(),
+        ));
+        let scheduler = Scheduler::new(writer.clone(), host, clock.clone()).unwrap();
+        binding.bind(&scheduler);
+        let fake = Arc::new(Fake::default());
+        scheduler.set_agent_runner(fake.clone());
+        Rig {
+            _dir: dir,
+            clock,
+            writer,
+            scheduler,
+            fake,
+        }
+    }
+
     fn new() -> Rig {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("types")).unwrap();
@@ -348,9 +391,9 @@ fn due_agent_jobs_are_independent_of_the_tick_callers_scope() {
     let contexts = r.fake.contexts.lock().unwrap();
     assert_eq!(contexts.len(), 1);
     assert_ne!(contexts[0], parent);
-    assert_ne!(contexts[0].stop_generation(), Some(generation));
-    // Legacy durable recovery is fail-closed, not evidence of caller inheritance.
-    assert!(contexts[0].is_restricted());
+    assert_eq!(contexts[0].stop_generation(), Some(generation));
+    // A fresh scheduled run captures its own admission, not the caller's context.
+    assert!(!contexts[0].is_restricted());
     assert_eq!(parent.stop_generation(), Some(generation));
     assert_eq!(r.fake.turns().len(), 1);
 }
@@ -510,9 +553,19 @@ fn backfill_refuses_delete_only_and_queued_ops_are_rechecked() {
     for (trigger, op) in [("opened", "create"), ("gone", "delete")] {
         let payload =
             json!({"prompt":"original", "title":"Roof", "type":"memo", "op":op}).to_string();
+        let context = script::RunContext::default();
+        let run_id = context.persist(r.writer.state()).unwrap();
         r.writer
             .state()
-            .enqueue_trigger("watcher", trigger, Some(&id), &payload, r.clock.now_ms())
+            .enqueue_trigger_with_provenance(
+                "watcher",
+                trigger,
+                Some(&id),
+                &payload,
+                r.clock.now_ms(),
+                false,
+                &run_id,
+            )
             .unwrap();
     }
     r.agent(
@@ -537,6 +590,292 @@ fn backfill_refuses_delete_only_and_queued_ops_are_rechecked() {
             .waiting,
         0
     );
+}
+
+#[test]
+fn recovered_agent_queue_retains_restriction_generation_and_visible_staleness() {
+    for (interrupted, stopped) in [(false, false), (false, true), (true, false), (true, true)] {
+        let r = Rig::new();
+        r.agent("owl", NIGHTLY);
+        let context = script::RunContext::default();
+        let run_id = context.persist(r.writer.state()).unwrap();
+        let generation = context.stop_generation();
+        let payload = json!({"title":"recovered", "prompt":"queued"}).to_string();
+        r.writer
+            .state()
+            .enqueue_trigger_with_provenance(
+                "owl",
+                "nightly",
+                None,
+                &payload,
+                r.clock.now_ms(),
+                false,
+                &run_id,
+            )
+            .unwrap();
+        context.restrict(); // exposure after publication must survive recovery
+        if interrupted {
+            std::mem::forget(context);
+        } else {
+            drop(context);
+        }
+        let r = r.reopen();
+        if stopped {
+            r.writer.state().set_automation_stopped(true).unwrap();
+            r.writer.state().set_automation_stopped(false).unwrap();
+        }
+        // A new Writer, State connection and Scheduler consume the durable job.
+        r.scheduler.tick();
+        let contexts = r.fake.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1);
+        assert!(contexts[0].is_restricted());
+        if !interrupted {
+            assert_eq!(contexts[0].stop_generation(), generation);
+        }
+        assert_eq!(
+            r.writer
+                .state()
+                .automation_commit(contexts[0].stop_generation().unwrap())
+                .is_err(),
+            interrupted || stopped
+        );
+        let entries = r
+            .writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap();
+        assert_eq!(
+            entries
+                .items
+                .iter()
+                .any(|a| a.kind == "run.recovery_stale" && a.subject.as_deref() == Some(&run_id)),
+            interrupted || stopped
+        );
+    }
+}
+
+#[test]
+fn unavailable_agent_queue_is_visible_pending_and_never_executed() {
+    let r = Rig::new();
+    r.agent("owl", NIGHTLY);
+    let payload = json!({"title":"unavailable", "prompt":"queued"}).to_string();
+    let id = r
+        .writer
+        .state()
+        .enqueue_trigger_with_provenance(
+            "owl",
+            "nightly",
+            None,
+            &payload,
+            r.clock.now_ms(),
+            false,
+            "unreadable",
+        )
+        .unwrap()
+        .unwrap()
+        .0;
+    r.scheduler.tick();
+    r.scheduler.tick();
+    r.scheduler.tick();
+    assert!(r.fake.turns().is_empty());
+    assert!(
+        r.writer
+            .state()
+            .due_trigger_jobs(r.clock.now_ms())
+            .unwrap()
+            .iter()
+            .any(|j| j.id == id)
+    );
+    let entries = r
+        .writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    let held: Vec<_> = entries
+        .items
+        .iter()
+        .filter(|a| a.kind == "run.recovery_unavailable")
+        .collect();
+    assert_eq!(held.len(), 1);
+    assert!(held[0].summary.contains("owl"));
+    assert!(held[0].summary.contains("nightly"));
+    assert!(held[0].summary.contains("manual run or backfill"));
+}
+
+#[test]
+fn legacy_trigger_hold_does_not_poison_owner_backfill() {
+    let r = Rig::new();
+    let note = r.create("memo", "Legacy", "open", &user());
+    r.agent("watcher", WATCHER);
+    let payload =
+        json!({"title":"legacy", "prompt":"queued", "type":"memo", "op":"create"}).to_string();
+    r.writer
+        .state()
+        .enqueue_trigger("watcher", "opened", Some(&note), &payload, r.clock.now_ms())
+        .unwrap()
+        .unwrap();
+    r.scheduler.tick();
+    r.scheduler.tick();
+    assert!(r.fake.turns().is_empty());
+    assert_eq!(
+        r.writer
+            .state()
+            .trigger_queue_stats("watcher")
+            .unwrap()
+            .failed,
+        1
+    );
+    let held = r
+        .writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    assert_eq!(
+        held.items
+            .iter()
+            .filter(|a| a.kind == "run.recovery_unavailable" && a.summary.contains(&note))
+            .count(),
+        1
+    );
+    assert_eq!(
+        r.scheduler
+            .trigger_backfill("watcher", "opened", &[(note, "memo".into())])
+            .unwrap(),
+        1
+    );
+    r.scheduler.tick();
+    assert_eq!(r.fake.turns().len(), 1);
+    let contexts = r.fake.contexts.lock().unwrap();
+    assert!(
+        r.writer
+            .state()
+            .automation_commit(contexts[0].stop_generation().unwrap())
+            .is_ok()
+    );
+}
+
+#[test]
+fn agent_recovery_storage_and_audit_failures_keep_work_pending_until_retry() {
+    for audit_failure in [false, true] {
+        let r = Rig::new();
+        r.agent("owl", NIGHTLY);
+        let context = script::RunContext::default();
+        context.restrict();
+        let run_id = context.persist(r.writer.state()).unwrap();
+        let id = r
+            .writer
+            .state()
+            .enqueue_trigger_with_provenance(
+                "owl",
+                "nightly",
+                None,
+                &json!({"title":"pending", "prompt":"queued"}).to_string(),
+                r.clock.now_ms(),
+                false,
+                &run_id,
+            )
+            .unwrap()
+            .unwrap()
+            .0;
+        drop(context);
+        let r = r.reopen();
+        r.writer.state().set_automation_stopped(true).unwrap();
+        r.writer.state().set_automation_stopped(false).unwrap();
+        let conn = rusqlite::Connection::open(r._dir.path().join(".vault/state.db")).unwrap();
+        let table = if audit_failure {
+            "activity"
+        } else {
+            "run_provenance_leases"
+        };
+        conn.execute_batch(&format!("CREATE TRIGGER refuse_recovery BEFORE INSERT ON {table} BEGIN SELECT RAISE(FAIL,'injected recovery failure'); END;")).unwrap();
+        r.scheduler.tick();
+        assert!(r.fake.threads.lock().unwrap().is_empty());
+        assert!(r.fake.turns().is_empty());
+        assert!(
+            r.writer
+                .state()
+                .due_trigger_jobs(r.clock.now_ms())
+                .unwrap()
+                .iter()
+                .any(|j| j.id == id)
+        );
+        if !audit_failure {
+            assert!(
+                r.writer
+                    .state()
+                    .activity(&state::ActivityFilter::default())
+                    .unwrap()
+                    .items
+                    .iter()
+                    .any(|a| a.kind == "run.recovery_unavailable"
+                        && a.subject.as_deref() == Some(&run_id))
+            );
+        }
+        conn.execute_batch("DROP TRIGGER refuse_recovery;").unwrap();
+        r.advance(31);
+        assert_eq!(r.fake.turns().len(), 1);
+        let contexts = r.fake.contexts.lock().unwrap();
+        assert!(contexts[0].is_restricted());
+        assert!(
+            r.writer
+                .state()
+                .automation_commit(contexts[0].stop_generation().unwrap())
+                .is_err()
+        );
+        assert!(
+            r.writer
+                .state()
+                .activity(&state::ActivityFilter::default())
+                .unwrap()
+                .items
+                .iter()
+                .any(|a| a.kind == "run.recovery_stale" && a.subject.as_deref() == Some(&run_id))
+        );
+    }
+}
+
+#[test]
+fn restricted_agent_dedup_and_provider_retry_never_replace_older_provenance() {
+    let r = Rig::new();
+    r.agent("watcher", WATCHER);
+    let note = r.create("memo", "Dedup", "open", &Author::Agent("other".into()));
+    let older = script::RunContext::default();
+    older.restrict();
+    let generation = r.writer.state().admit_automation().unwrap();
+    older.capture_stop_generation(generation);
+    let fresh = script::RunContext::default();
+    let mut ids = Vec::new();
+    for (context, prompt) in [(&older, "older"), (&fresh, "replacement")] {
+        let result = r
+            .writer
+            .publish_run_context(context, |state, run_id| {
+                ids.push(run_id.to_owned());
+                state.enqueue_trigger_with_provenance(
+                    "watcher",
+                    "opened",
+                    Some(&note),
+                    &json!({"title":"Dedup", "prompt":prompt, "type":"memo", "op":"update"})
+                        .to_string(),
+                    r.clock.now_ms(),
+                    false,
+                    run_id,
+                )
+            })
+            .unwrap();
+        assert!(result.is_some());
+    }
+    *r.fake.fail.lock().unwrap() = Some("transient provider failure".into());
+    r.scheduler.tick();
+    assert_eq!(r.fake.turns().len(), 1);
+    assert_eq!(r.fake.turns()[0].2, "replacement");
+    *r.fake.fail.lock().unwrap() = None;
+    r.advance(61);
+    assert_eq!(r.fake.turns().len(), 2);
+    for context in r.fake.contexts.lock().unwrap().iter() {
+        assert!(context.is_restricted());
+        assert_eq!(context.stop_generation(), Some(generation));
+    }
+    assert_eq!(ids.len(), 2);
 }
 
 #[test]
