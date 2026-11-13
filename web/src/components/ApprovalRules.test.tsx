@@ -39,19 +39,39 @@ it("shows rules read-only on the phone without edit controls", () => {
 it.each([
   { change_types: ["task"] },
   { types: ["task"] },
+  { types: ["task"], change_types: ["email"] },
   { change_fields: { email: ["subject"] } },
   { change_fields: { email: [] } },
 ])("shows rules outside change permissions as never applicable: %j", (limits) => {
   render(() => <ApprovalRules permissions={{ ...permissions, ...limits, approval_rules: [
     { operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 },
   ] }} editable={false} set={vi.fn()} />);
-  expect(screen.getByText(/never applies \(outside this agent's change permissions\)/)).toBeTruthy();
+  expect(screen.getByText(/never applies: outside this agent's change permissions or excluded type/)).toBeTruthy();
+  expect(screen.queryByText(/subject to server limits/)).toBeNull();
+});
+
+it("shows the applicable fields for a partially overlapping rule", () => {
+  render(() => <ApprovalRules permissions={{ ...permissions, approval_rules: [
+    { operation: "update", note_type: "email", fields: ["processed", "subject"], daily_cap: 200 },
+  ] }} editable={false} set={vi.fn()} />);
+  expect(screen.getByText(/applies only to: processed; subject to server limits/)).toBeTruthy();
+  expect(screen.queryByText(/never applies/)).toBeNull();
+});
+
+it.each(["event", "event_series", "outbox", "agent_thread", "agent_memory"])("shows excluded type %s as never applicable", (note_type) => {
+  render(() => <ApprovalRules permissions={{ types: [note_type], change_types: [note_type], approval_rules: [
+    { operation: "update", note_type, fields: ["title"], daily_cap: 200 },
+  ] }} editable={false} set={vi.fn()} />);
+  const row = screen.getByText(/never applies:/).textContent!;
+  expect(row).not.toContain("((");
+  expect(row).not.toContain("))");
   expect(screen.queryByText(/subject to server limits/)).toBeNull();
 });
 
 it("discloses attempted-update caps and unattended incoming-mail approvals", () => {
   render(() => <ApprovalRules permissions={permissions} editable={false} set={vi.fn()} />);
   expect(screen.getByText(/Caps count attempted updates/).textContent).toContain("released only when the write provably did not happen");
+  expect(screen.getByText(/Caps count attempted updates/).textContent).toContain("stay counted against their UTC day across restarts and cannot be retried");
   const disclosure = screen.getByText(/A rule also approves its matching update/).textContent;
   expect(disclosure).toContain("unattended runs started by incoming mail");
   expect(disclosure).toContain("without a matching rule is refused or held");
