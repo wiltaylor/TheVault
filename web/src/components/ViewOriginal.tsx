@@ -80,7 +80,11 @@ function OriginalDialog(props: { id: string; onClose: () => void }) {
           <header class="capture-head">
             <h2 id="original-heading">Original</h2>
             <Show when={consent() && !remote() && hasRemoteImages(html() ?? "")}>
-              <button type="button" class="original-remote" onClick={() => setRemote(true)}>
+              <button type="button" class="original-remote" onClick={() => {
+                // Keep keyboard events inside the dialog when this button disappears.
+                close.focus();
+                setRemote(true);
+              }}>
                 Load remote images
               </button>
             </Show>
