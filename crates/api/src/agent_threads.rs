@@ -1226,13 +1226,22 @@ pub(crate) async fn redact_response(
     if path.starts_with("/api/assets/") || (!json && !wcl) {
         return Ok(response);
     }
+    let profile = crate::auth::Profile::new("redaction_buffer");
     let (mut parts, body) = response.into_parts();
     let bytes = axum::body::to_bytes(body, REDACTION_LIMIT).await.map_err(|_| ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "response_too_large", "This response exceeds the 32 MiB Login-metadata scan limit. Narrow the query or use an owner session."))?;
+    drop(profile);
     let text = std::str::from_utf8(&bytes).map_err(|_| redaction_error())?;
     let text = if json {
+        let profile = crate::auth::Profile::new("redaction_parse");
         let mut value: Value = serde_json::from_str(text).map_err(|_| redaction_error())?;
+        drop(profile);
+        let profile = crate::auth::Profile::new("redaction_scan");
         redact_content(&mut value)?;
-        value.to_string()
+        drop(profile);
+        let profile = crate::auth::Profile::new("redaction_serialize");
+        let text = value.to_string();
+        drop(profile);
+        text
     } else {
         let type_name = parts
             .headers

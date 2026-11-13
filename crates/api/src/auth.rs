@@ -559,10 +559,13 @@ pub async fn authenticate(
     let Some(needed) = required_scope(req.method(), req.uri().path()) else {
         return next.run(req).await;
     };
+    let profile = Profile::new("identify");
     let granted = match identify(&sessions, req.headers()).await {
         Ok(g) => g,
         Err(e) => return e.into_response(),
     };
+    drop(profile);
+    let profile = Profile::new("scope_and_read_gate");
     if is_human_only(req.method(), req.uri().path())
         && !matches!(granted.author, Author::Session(_))
     {
@@ -595,10 +598,12 @@ pub async fn authenticate(
     {
         return e.into_response();
     }
+    drop(profile);
     let response_author = granted.author.clone();
     let response_path = req.uri().path().to_owned();
     let trusted = req.extensions().get::<TrustedProxy>().is_some_and(|p| p.0);
     let secure_cookie = sessions.site_https || request_is_https(req.headers(), req.uri(), trusted);
+    let profile = Profile::new("stream_credential");
     let credential = if let Some(value) = req.headers().get(header::AUTHORIZATION) {
         value
             .to_str()
@@ -613,6 +618,7 @@ pub async fn authenticate(
     } else {
         session_id(req.headers()).map(|id| sessions.writer.state().stream_credential(&id, false))
     };
+    drop(profile);
     if let Some(credential) = &credential {
         req.extensions_mut().insert(credential.clone());
     }
@@ -680,6 +686,7 @@ where
                 if let Some(item) = item {
                     return item.map(|item| (item, (stream, credential, timer)));
                 }
+                let profile = Profile::new("stream_check");
                 let check = credential.clone();
                 if !tokio::task::spawn_blocking(move || check.is_valid())
                     .await
@@ -689,9 +696,27 @@ where
                 {
                     return None;
                 }
+                drop(profile);
             }
         },
     )
+}
+
+/// Opt-in stage timings for TV-277. Never records credentials or response data.
+pub(crate) struct Profile(&'static str, Option<std::time::Instant>);
+
+impl Profile {
+    pub(crate) fn new(stage: &'static str) -> Self {
+        Self(stage, std::env::var_os("VAULT_QUERY_PROFILE").map(|_| std::time::Instant::now()))
+    }
+}
+
+impl Drop for Profile {
+    fn drop(&mut self) {
+        if let Some(start) = self.1 {
+            eprintln!("TV277 {} {}", self.0, start.elapsed().as_nanos());
+        }
+    }
 }
 
 /// Middleware for [`crate::owner_router`]: every request is the owner's session.

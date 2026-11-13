@@ -263,10 +263,12 @@ fn browser_secrets_five_thousand_row_agent_query_is_within_twice_session_time() 
         .unwrap();
     let token = token["token"].as_str().unwrap();
     let query = |agent: bool| {
+        eprintln!("TV277 query agent={agent}");
         let began = Instant::now();
         let mut cursor = None::<String>;
         let mut rows = 0;
         loop {
+            eprintln!("TV277 page agent={agent} rows={rows}");
             let mut params = vec![
                 ("q", "from benchmark sort title".to_owned()),
                 ("page_size", "1000".to_owned()),

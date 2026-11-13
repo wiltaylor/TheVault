@@ -32,13 +32,17 @@ fn budgeted_query(
         size: page.size,
     };
     loop {
+        let profile = crate::auth::Profile::new("query_engine");
         let result = query::run(q, ctx, &page)?;
+        drop(profile);
         if manager || result.rows.len() <= 1 {
             return Ok(result);
         }
+        let profile = crate::auth::Profile::new("budget_serialization");
         let bytes = serde_json::to_vec(&result)
             .map_err(|_| ApiError::bad_request("query result could not be serialized"))?
             .len();
+        drop(profile);
         if bytes <= PAGE_BYTE_BUDGET {
             return Ok(result);
         }
@@ -150,8 +154,11 @@ async fn run_page(
         size: page_size.unwrap_or(DEFAULT_PAGE).min(query::MAX_PAGE),
     };
     let result = tokio::task::spawn_blocking(move || {
+        let profile = crate::auth::Profile::new("permission");
         let manager = crate::tasks::may_manage_login_secrets(&w, &author)?;
+        drop(profile);
         w.read_index(|index, schema| {
+            let profile = crate::auth::Profile::new("safety_exclusions");
             let excluded = if agent {
                 Some(
                     w.agent_excluded_notes(index)
@@ -164,6 +171,7 @@ async fn run_page(
             } else {
                 None
             };
+            drop(profile);
             let mut ctx = query::Context::new(index, schema);
             ctx.excluded_notes = excluded.as_ref();
             ctx.this = this;
@@ -172,8 +180,10 @@ async fn run_page(
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
+    let profile = crate::auth::Profile::new("row_serialization");
     let mut result = serde_json::to_value(result)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
+    drop(profile);
     if agent {
         result["notice"] = json!("some notes may be held");
     }
