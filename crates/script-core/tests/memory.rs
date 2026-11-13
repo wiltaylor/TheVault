@@ -101,16 +101,29 @@ fn explicit_default_and_prebuilt_job_cannot_escape_restricted_caller() {
     context.restrict();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let host = Host::with_extensions(
-        Arc::new(Memory::default()), 1, limits(),
-        &ContextProbe { barrier: Arc::new(std::sync::Barrier::new(1)), seen: seen.clone() },
+        Arc::new(Memory::default()),
+        1,
+        limits(),
+        &ContextProbe {
+            barrier: Arc::new(std::sync::Barrier::new(1)),
+            seen: seen.clone(),
+        },
     );
-    let mut job = Job::new(Kind::Task, "probe", "use probe\nfn run() -> Result[bool, string] { probe::context() }\n", "run");
+    let mut job = Job::new(
+        Kind::Task,
+        "probe",
+        "use probe\nfn run() -> Result[bool, string] { probe::context() }\n",
+        "run",
+    );
     context.scope(|| job.set_run_context(script_core::RunContext::default()));
     assert_eq!(job.run_context(), &context);
     job.set_run_context(script_core::RunContext::default());
     assert_eq!(host.run(job.clone()).result.unwrap(), json!(true));
     let prebuilt = Job::new(Kind::Task, "probe", &job.source, "run");
-    assert_eq!(context.scope(|| host.run(prebuilt)).result.unwrap(), json!(true));
+    assert_eq!(
+        context.scope(|| host.run(prebuilt)).result.unwrap(),
+        json!(true)
+    );
     assert!(seen.lock().unwrap().iter().all(|c| c == &context));
 }
 

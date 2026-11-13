@@ -179,10 +179,13 @@ fn explicit_default_cannot_escape_restricted_caller_at_admission() {
         parent.capture_stop_generation(generation);
         parent.scope(|| {
             if background {
-                f.scheduler.trigger_in_background_with_context("probe", RunContext::default())
+                f.scheduler
+                    .trigger_in_background_with_context("probe", RunContext::default())
             } else {
-                f.scheduler.trigger_with_context("probe", RunContext::default())
-            }.unwrap();
+                f.scheduler
+                    .trigger_with_context("probe", RunContext::default())
+            }
+            .unwrap();
         });
         let seen = f.observe();
         assert_eq!(seen.context, parent);

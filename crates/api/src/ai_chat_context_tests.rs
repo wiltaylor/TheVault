@@ -27,11 +27,24 @@ struct Runner {
 }
 
 impl AgentRunner for Runner {
-    fn open_thread(&self, agent: &Agent, origin: &str, title: &str, notes: &[String]) -> Result<String, String> {
+    fn open_thread(
+        &self,
+        agent: &Agent,
+        origin: &str,
+        title: &str,
+        notes: &[String],
+    ) -> Result<String, String> {
         self.real.open_thread(agent, origin, title, notes)
     }
 
-    fn run_turn(&self, agent: &Agent, thread: &str, prompt: &str, scope: Option<Scope>, caller: Option<&Author>) -> TurnReport {
+    fn run_turn(
+        &self,
+        agent: &Agent,
+        thread: &str,
+        prompt: &str,
+        scope: Option<Scope>,
+        caller: Option<&Author>,
+    ) -> TurnReport {
         assert_eq!(RunContext::current(), Some(self.context.clone()));
         let report = self.real.run_turn(agent, thread, prompt, scope, caller);
         self.finished.send(report.clone()).unwrap();
@@ -43,22 +56,46 @@ impl AgentRunner for Runner {
 fn restricted_agent_and_subagent_turns_share_context_without_refusal() {
     let dir = tempfile::tempdir().unwrap();
     let vault = store::Vault::init(dir.path()).unwrap();
-    std::fs::write(dir.path().join("types/item.wcl"),
-        "label = \"Item\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n").unwrap();
-    let state = state::State::open(&vault.server_dir().join("state.db"), Some(state::SecretKey::generate())).unwrap();
+    std::fs::write(
+        dir.path().join("types/item.wcl"),
+        "label = \"Item\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n",
+    )
+    .unwrap();
+    let state = state::State::open(
+        &vault.server_dir().join("state.db"),
+        Some(state::SecretKey::generate()),
+    )
+    .unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let w = Arc::new(Writer::open(vault, state).unwrap().with_hooks(Box::new(Probe(seen.clone()))));
+    let w = Arc::new(
+        Writer::open(vault, state)
+            .unwrap()
+            .with_hooks(Box::new(Probe(seen.clone()))),
+    );
+    w.ensure_built_in_types().unwrap();
     let fake = FakeAnthropic::start();
-    AiSeed::new().account(TestAccount::anthropic(&fake).model("claude-test")).store(w.state());
-    w.put_agent("lead", r#"label = "Lead"
+    AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model("claude-test"))
+        .store(w.state());
+    w.put_agent(
+        "lead",
+        r#"label = "Lead"
 permissions {
   tools = ["propose_create"]
   confirm { notes = false }
   subagents { allow = true }
 }
-"#, |_| Vec::new()).unwrap();
-    let create = |id: &str, title: &str| AnthropicMessage::new().tool_use(id, "propose_create",
-        json!({"type": "item", "note": json!({"fields": {"title": title}}).to_string()}));
+"#,
+        |_| Vec::new(),
+    )
+    .unwrap();
+    let create = |id: &str, title: &str| {
+        AnthropicMessage::new().tool_use(
+            id,
+            "propose_create",
+            json!({"type": "item", "note": json!({"fields": {"title": title}}).to_string()}),
+        )
+    };
     fake.push(create("parent", "Parent note"));
     fake.push(AnthropicMessage::new().tool_use("child", "start_subagent", json!({
         "task": "Make a note", "instructions": null, "agent": null, "permissions": null, "model": null
@@ -71,13 +108,31 @@ permissions {
     let generation = w.state().admit_automation().unwrap();
     context.capture_stop_generation(generation);
     let (finished, result) = sync::channel();
-    let host = Arc::new(script::Host::new(w.clone(), 1, script::Limits::default(), script::Ai::of(&w)));
-    let scheduler = scheduler::Scheduler::new(w.clone(), host, Arc::new(state::SystemClock)).unwrap();
+    let host = Arc::new(script::Host::new(
+        w.clone(),
+        1,
+        script::Limits::default(),
+        script::Ai::of(&w),
+    ));
+    let scheduler =
+        scheduler::Scheduler::new(w.clone(), host, Arc::new(state::SystemClock)).unwrap();
     scheduler.set_agent_runner(Arc::new(Runner {
         real: crate::agent_runs::TriggerRunner::new(w, crate::ai_retry::Waits::instant()),
-        context: context.clone(), finished,
+        context: context.clone(),
+        finished,
     }));
-    context.scope(|| scheduler.dispatch("lead", &[], "Provenance", "Make parent and child notes", Scope::Admin, Author::Session("owner".into()))).unwrap();
+    context
+        .scope(|| {
+            scheduler.dispatch(
+                "lead",
+                &[],
+                "Provenance",
+                "Make parent and child notes",
+                Scope::Admin,
+                Author::Session("owner".into()),
+            )
+        })
+        .unwrap();
     let report = result.recv_timeout(Duration::from_secs(30)).unwrap();
     assert!(report.outcome.is_ok(), "{report:?}");
     let observations = seen.lock().unwrap();
