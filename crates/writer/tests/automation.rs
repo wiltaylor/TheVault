@@ -55,7 +55,10 @@ fn stopped_and_stale_commits_leave_files_history_and_index_unchanged() {
         });
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(w.history(&note.id).unwrap().len(), history);
-        assert_eq!(w.read_index(|i, _| i.generation().unwrap()), index_generation);
+        assert_eq!(
+            w.read_index(|i, _| i.generation().unwrap()),
+            index_generation
+        );
         assert_eq!(w.definition_changes(), definitions);
         assert_eq!(
             w.current_version(&note.id).unwrap().as_deref(),
