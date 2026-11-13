@@ -40,7 +40,8 @@ impl State {
     }
 
     fn automation_lock(&self) -> Result<MutexGuard<'_, ()>> {
-        Ok(self.automation_gate
+        Ok(self
+            .automation_gate
             .lock()
             .unwrap_or_else(|e| e.into_inner()))
     }

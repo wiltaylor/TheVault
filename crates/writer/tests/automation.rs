@@ -160,7 +160,10 @@ fn stale_asset_type_and_agent_commits_write_nothing() {
             Err(Error::State(state::Error::AutomationRefused))
         ));
         assert!(matches!(
-            w.put_type("stale", "label = \"Stale\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n"),
+            w.put_type(
+                "stale",
+                "label = \"Stale\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n"
+            ),
             Err(Error::State(state::Error::AutomationRefused))
         ));
         assert!(matches!(
@@ -183,10 +186,17 @@ fn nested_scopes_keep_oldest_generation_and_restore_outer_context() {
     w.state().set_automation_stopped(true).unwrap();
     w.state().set_automation_stopped(false).unwrap();
     let new = w.state().admit_automation().unwrap();
-    let write = || w.commit_checked::<Error>(|_| Ok(vec![Change::write("scripts/nested.ws", b"ok")]));
+    let write =
+        || w.commit_checked::<Error>(|_| Ok(vec![Change::write("scripts/nested.ws", b"ok")]));
     w.with_automation(old, || {
-        assert!(matches!(w.with_automation(new, write), Err(Error::State(state::Error::AutomationRefused))));
-        assert!(matches!(write(), Err(Error::State(state::Error::AutomationRefused))));
+        assert!(matches!(
+            w.with_automation(new, write),
+            Err(Error::State(state::Error::AutomationRefused))
+        ));
+        assert!(matches!(
+            write(),
+            Err(Error::State(state::Error::AutomationRefused))
+        ));
     });
     assert!(!dir.path().join("scripts/nested.ws").exists());
     w.with_automation(new, write).unwrap();
@@ -214,7 +224,13 @@ fn stop_waits_for_scoped_commit_then_refuses_next_commit() {
     })));
     let worker = w.clone();
     let commit = std::thread::spawn(move || {
-        worker.with_automation(generation, || worker.create("item", &Input::Wcl("title = \"First\"\n".into()), &Author::Agent("run".into())))
+        worker.with_automation(generation, || {
+            worker.create(
+                "item",
+                &Input::Wcl("title = \"First\"\n".into()),
+                &Author::Agent("run".into()),
+            )
+        })
     });
     entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     let (started_tx, started_rx) = mpsc::channel();
@@ -234,5 +250,12 @@ fn stop_waits_for_scoped_commit_then_refuses_next_commit() {
     stop.join().unwrap();
     assert_eq!(w.history(&saved.id).unwrap().len(), 1);
     w.set_commit_hook(None);
-    assert!(matches!(w.with_automation(generation, || w.create("item", &Input::Wcl("title = \"Next\"\n".into()), &Author::Agent("run".into()))), Err(Error::State(state::Error::AutomationRefused))));
+    assert!(matches!(
+        w.with_automation(generation, || w.create(
+            "item",
+            &Input::Wcl("title = \"Next\"\n".into()),
+            &Author::Agent("run".into())
+        )),
+        Err(Error::State(state::Error::AutomationRefused))
+    ));
 }

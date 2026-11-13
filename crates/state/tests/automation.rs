@@ -87,5 +87,11 @@ fn poisoned_commit_gate_still_allows_durable_stop() {
     assert!(state.admit_automation().is_err());
     assert!(state.automation_commit(generation).is_err());
     drop(state);
-    assert!(State::open(&path, None).unwrap().automation_state().unwrap().stopped);
+    assert!(
+        State::open(&path, None)
+            .unwrap()
+            .automation_state()
+            .unwrap()
+            .stopped
+    );
 }

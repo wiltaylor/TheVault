@@ -123,7 +123,8 @@ impl Writer {
 
     /// Commit `files` and journal the synced ones in the change feed. Returns the generation.
     pub(crate) fn commit(&self, files: Vec<Change>) -> Result<u64> {
-        self.commit_scoped(files).map(|(generation, _guard)| generation)
+        self.commit_scoped(files)
+            .map(|(generation, _guard)| generation)
     }
 
     /// Keep the gate through the caller's local history/index updates.
