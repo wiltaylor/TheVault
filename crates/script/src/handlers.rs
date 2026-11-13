@@ -486,7 +486,13 @@ impl Shared {
                                 match writer.outbox_run_context(id) {
                                     Ok(item) => context.merge(&item),
                                     Err(error) => {
-                                        eprintln!("recovering queued Outbox provenance: {error}");
+                                        let held = writer.state().handler_recovery_subject(job.id).and_then(|subject| {
+                                            writer.state().record_unavailable_run_for(id, &subject)?;
+                                            writer.state().finish_job(job.id, Err(format!("held: Outbox {id} provenance unavailable; release by editing the note as owner")), "")
+                                        });
+                                        if let Err(hold_error) = held {
+                                            eprintln!("holding queued Outbox job: {error}; {hold_error}");
+                                        }
                                         return;
                                     }
                                 }
