@@ -23,7 +23,7 @@
 //!
 //! | Module | Paths | Endpoint key |
 //! |--------|-------|--------------|
-//! | `oauth` | `/token`, `/oauth2/v3/userinfo`, the consent page `/o/oauth2/v2/auth` | `token`, `userinfo` |
+//! | `oauth` | `/token`, `/revoke`, `/oauth2/v3/userinfo`, the consent page `/o/oauth2/v2/auth` | `token`, `revoke`, `userinfo` |
 //! | `gmail` | under `/gmail/v1`, and `/upload/gmail/v1` for sending | `gmail` |
 //! | `calendar` | under `/calendar/v3` | `calendar` |
 //!
@@ -58,6 +58,9 @@ use crate::standin::{Reply, Request, read_request, write_reply};
 
 /// The path of the token endpoint.
 pub const TOKEN_PATH: &str = "/token";
+
+/// The path of the token revocation endpoint.
+pub const REVOCATION_PATH: &str = "/revoke";
 
 /// The path of the userinfo endpoint.
 pub const USERINFO_PATH: &str = "/oauth2/v3/userinfo";
@@ -154,10 +157,11 @@ impl FakeGoogle {
     }
 
     /// The `endpoints` object of the `google_settings` secret pointing at this server: keys `token`,
-    /// `userinfo`, `gmail` and `calendar`.
+    /// `revoke`, `userinfo`, `gmail` and `calendar`.
     pub fn endpoints(&self) -> Value {
         json!({
             "token": self.url(TOKEN_PATH),
+            "revoke": self.url(REVOCATION_PATH),
             "userinfo": self.url(USERINFO_PATH),
             "gmail": self.url(GMAIL_PATH),
             "calendar": self.url(CALENDAR_PATH),

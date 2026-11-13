@@ -272,8 +272,9 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
   function disconnect() {
     if (!confirm("Disconnect Google? The sync stops and TheVault forgets the sign-in. Notes already synced stay.")) return;
     void act("disconnect", async () => {
-      setStatus(await api.googleDisconnect());
-      setNotice("Disconnected. The Gmail and Calendar sync are paused.");
+      const out = await api.googleDisconnect();
+      setStatus(out);
+      setNotice(out.revocation_warning ?? "Disconnected. The Gmail and Calendar sync are paused.");
     });
   }
 

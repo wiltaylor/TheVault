@@ -71,6 +71,7 @@ fn the_endpoints_point_at_the_fake_on_its_own_port() {
     let endpoints = google.endpoints();
     let base = google.base_url();
     assert_eq!(endpoints["token"], format!("{base}/token"));
+    assert_eq!(endpoints["revoke"], format!("{base}/revoke"));
     assert_eq!(endpoints["userinfo"], format!("{base}/oauth2/v3/userinfo"));
     assert_eq!(endpoints["gmail"], format!("{base}/gmail/v1"));
     assert_eq!(endpoints["calendar"], format!("{base}/calendar/v3"));
@@ -185,6 +186,21 @@ fn a_refresh_issues_a_new_access_token_and_no_refresh_token() {
         (status, body["error"].as_str()),
         (400, Some("invalid_request"))
     );
+}
+
+#[test]
+fn revocation_accepts_a_form_and_invalidates_the_refresh_token() {
+    let google = FakeGoogle::start();
+    let (status, _) = post_form(
+        google.endpoints()["revoke"].as_str().unwrap(),
+        &[
+            ("token", DEFAULT_REFRESH_TOKEN),
+            ("token_type_hint", "refresh_token"),
+        ],
+    );
+    assert_eq!(status, 200);
+    assert_eq!(google.revoked(), [DEFAULT_REFRESH_TOKEN]);
+    assert_eq!(refresh(&google, DEFAULT_REFRESH_TOKEN).0, 400);
 }
 
 #[test]

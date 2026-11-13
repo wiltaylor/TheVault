@@ -796,7 +796,7 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "POST",
         "/api/integrations/google/disconnect",
-        "Delete the Google sign-in and account, pause the sync and clear its cursors",
+        "Pause the sync, revoke the refresh token at Google, delete the local sign-in and clear its cursors; a remote failure returns a warning",
     ),
     (
         "GET",

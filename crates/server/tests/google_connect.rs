@@ -10,7 +10,9 @@ use reqwest::{Url, redirect};
 use serde_json::{Value, json};
 use testkit::{
     FakeGoogle, TestServer,
-    fake_google::{DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET},
+    fake_google::{
+        DEFAULT_ACCOUNT, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, DEFAULT_REFRESH_TOKEN,
+    },
 };
 
 /// The Google secrets a connection leaves, by name.
@@ -481,6 +483,19 @@ fn disconnect_deletes_the_sign_in_and_account_keeps_the_settings_and_clears_the_
         StatusCode::OK,
     );
     assert_eq!(out["connected"], false);
+    assert!(out.get("revocation_warning").is_none(), "{out}");
+    let revoked = api.google.requests_to("/revoke");
+    assert_eq!(revoked.len(), 1, "{revoked:?}");
+    assert_eq!(revoked[0].method, "POST");
+    assert_eq!(
+        revoked[0].form("token").as_deref(),
+        Some(DEFAULT_REFRESH_TOKEN)
+    );
+    assert_eq!(
+        revoked[0].form("token_type_hint").as_deref(),
+        Some("refresh_token")
+    );
+    assert_eq!(api.google.revoked(), [DEFAULT_REFRESH_TOKEN]);
     assert_eq!(
         api.secrets(),
         [
@@ -521,6 +536,94 @@ fn disconnect_deletes_the_sign_in_and_account_keeps_the_settings_and_clears_the_
             .unwrap(),
         StatusCode::OK,
     );
+    assert_eq!(api.google.requests_to("/revoke").len(), 1);
+    assert_eq!(
+        api.client
+            .post(api.google.endpoints()["token"].as_str().unwrap())
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("client_id", DEFAULT_CLIENT_ID),
+                ("client_secret", DEFAULT_CLIENT_SECRET),
+                ("refresh_token", DEFAULT_REFRESH_TOKEN),
+            ])
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
+fn disconnect_completes_locally_with_a_sanitized_warning_when_revocation_fails() {
+    let api = Api::with_google(FakeGoogle::builder().revoke_error(true).start());
+    api.tasks(false);
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+
+    let out = expect(
+        api.post("/api/integrations/google/disconnect")
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(out["connected"], false);
+    let warning = out["revocation_warning"].as_str().unwrap();
+    assert!(warning.contains("Disconnected locally"), "{warning}");
+    assert!(warning.contains("did not confirm"), "{warning}");
+    assert!(!warning.contains(DEFAULT_REFRESH_TOKEN), "{warning}");
+    assert_eq!(api.google.requests_to("/revoke").len(), 1);
+    assert!(api.google.revoked().is_empty());
+    assert!(!api.secrets().contains(&"google_refresh_token".to_owned()));
+    for task in TASKS {
+        assert!(api.paused(task));
+    }
+}
+
+#[test]
+fn disconnect_times_out_revocation_and_still_completes_locally() {
+    let api = Api::with_google(
+        FakeGoogle::builder()
+            .revoke_delay(Duration::from_secs(31))
+            .start(),
+    );
+    api.tasks(false);
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+
+    let began = Instant::now();
+    let out = expect(
+        api.post("/api/integrations/google/disconnect")
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert!(began.elapsed() >= Duration::from_secs(30));
+    assert!(out["revocation_warning"].is_string(), "{out}");
+    assert_eq!(out["connected"], false);
+    assert_eq!(api.google.requests_to("/revoke").len(), 1);
+    for task in TASKS {
+        assert!(api.paused(task));
+    }
+}
+
+#[test]
+fn disconnect_does_not_hide_a_local_cleanup_failure_after_revocation() {
+    let api = Api::start();
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+    api.put_secret("google_gmail_state", "not JSON");
+
+    expect(
+        api.post("/api/integrations/google/disconnect")
+            .send()
+            .unwrap(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    );
+    assert_eq!(api.google.revoked(), [DEFAULT_REFRESH_TOKEN]);
+    assert!(!api.secrets().contains(&"google_refresh_token".to_owned()));
 }
 
 #[test]
