@@ -74,7 +74,7 @@ pub use pins::{PinEntry, PinKind, PinNode};
 pub use run_provenance::{RunProvenance, RunProvenanceLease};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{LoginInfo, LoginSecret, SecretInfo, SecretKey, canonical_origin, key_file_path};
-pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck};
+pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck, StreamCredential};
 pub use shipped::ShippedRecord;
 
 /// Errors from `state.db`.
@@ -170,6 +170,7 @@ impl Clock for SystemClock {
 
 /// An open `state.db`.
 pub struct State {
+    credential_changes: tokio::sync::watch::Sender<()>,
     automation_gate: Mutex<()>,
     conn: Arc<Mutex<Connection>>,
     key: Option<SecretKey>,
@@ -530,6 +531,7 @@ impl State {
             key,
             clock,
             events: Events::default(),
+            credential_changes: tokio::sync::watch::channel(()).0,
             activity_pruned: AtomicI64::new(now),
             pin_changes: std::sync::atomic::AtomicU64::new(0),
         })

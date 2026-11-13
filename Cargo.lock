@@ -170,6 +170,7 @@ dependencies = [
  "query",
  "regex",
  "reqwest",
+ "rusqlite",
  "scheduler",
  "schema",
  "script",
