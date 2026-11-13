@@ -27,6 +27,7 @@
 //! and event repeat in it.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::thread;
 use std::time::Duration;
@@ -38,7 +39,7 @@ use writer::{
     Event, Hooks, Input, Migration, NoteChange, Saved, ScriptRole, Writer, doc_to_json, note_path,
 };
 
-use crate::{Ai, Host, Job, Kind, Limits, Vault, current_job};
+use crate::{Ai, Host, Job, Kind, Limits, RunContext, Vault, current_job};
 
 /// The most handler runs one chain may hold (D9, D30).
 pub const MAX_DEPTH: usize = 8;
@@ -164,6 +165,8 @@ struct Shared {
     /// The chain of `before_*` runs in the write in progress, `None` between writes. Writes run
     /// one at a time, so there is one.
     active: Mutex<Option<Vec<Link>>>,
+    /// Live provenance is not part of the script-controlled payload.
+    contexts: Mutex<HashMap<i64, RunContext>>,
     /// Set when jobs were queued, to wake the queue thread.
     wake: (Mutex<bool>, Condvar),
 }
@@ -203,6 +206,7 @@ impl Handlers {
                 after: Host::new(vault, AFTER_WORKERS, limits, after_ai),
                 binding,
                 active: Mutex::new(None),
+                contexts: Mutex::new(HashMap::new()),
                 wake: (Mutex::new(false), Condvar::new()),
             }),
         }
@@ -259,6 +263,14 @@ fn record_failure(
         e = e.subject("note", id);
     }
     writer.state().record_activity(e);
+}
+
+// A restart has lost the live identity. Do not claim that recovered work is
+// unrestricted, and do not manufacture a stop admission from a payload number.
+fn recovered_context() -> RunContext {
+    let context = RunContext::default();
+    context.restrict();
+    context
 }
 
 impl Shared {
@@ -390,9 +402,22 @@ impl Shared {
         if queue.is_empty() {
             return;
         }
-        if let Err(e) = writer.state().queue_jobs(&queue) {
-            eprintln!("queueing after_* handlers: {e}");
-            return;
+        {
+            // Publish the durable rows and live contexts atomically relative to
+            // the queue worker's lookup. No context lock is held during work.
+            let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
+            match writer.state().queue_jobs(&queue) {
+                Ok(ids) => {
+                    let context = RunContext::current().unwrap_or_default();
+                    for id in ids {
+                        contexts.insert(id, context.clone());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("queueing after_* handlers: {e}");
+                    return;
+                }
+            }
         }
         let (flag, cv) = &self.wake;
         *flag.lock().unwrap_or_else(|e| e.into_inner()) = true;
@@ -402,8 +427,10 @@ impl Shared {
     /// The queue thread: run queued jobs, oldest first, until the writer is gone.
     fn run_queue(&self) {
         if let Ok(writer) = self.writer() {
-            self.recover_sends(&writer, true);
-            self.recover_deletes(&writer);
+            recovered_context().scope(|| {
+                self.recover_sends(&writer, true);
+                self.recover_deletes(&writer);
+            });
         }
         loop {
             let Ok(writer) = self.writer() else {
@@ -412,72 +439,78 @@ impl Shared {
             match writer.state().queued_jobs() {
                 Ok(jobs) => {
                     for job in jobs {
-                        let payload: Json =
-                            serde_json::from_str(&job.payload).unwrap_or(Json::Null);
-                        if payload["type"] == "outbox" {
-                            let id = payload["id"].as_str().unwrap_or_default();
-                            match writer.state().outbox_deadline(id) {
-                                Ok(Some(at)) if writer.now_ms() < at => continue,
-                                Err(e) => {
-                                    eprintln!("outbox deadline: {e}");
-                                    continue;
+                        let context = self.contexts.lock().unwrap_or_else(|e| e.into_inner())
+                            .get(&job.id).cloned().unwrap_or_else(recovered_context);
+                        context.scope(|| {
+                            let payload: Json =
+                                serde_json::from_str(&job.payload).unwrap_or(Json::Null);
+                            if payload["type"] == "outbox" {
+                                let id = payload["id"].as_str().unwrap_or_default();
+                                match writer.state().outbox_deadline(id) {
+                                    Ok(Some(at)) if writer.now_ms() < at => return,
+                                    Err(e) => {
+                                        eprintln!("outbox deadline: {e}");
+                                        return;
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
-                        }
-                        if payload["type"] == "outbox"
-                            && payload["script"] == "outbox_send"
-                            && let Some(id) = payload["id"].as_str()
-                            && let Ok(note) = writer.read(id)
-                            && doc_to_json(&note.doc)["fields"]["status"] == "ready"
-                        {
-                            self.recover_sends(&writer, false);
-                            self.recover_deletes(&writer);
-                        }
-                        let (outcome, log) = self.run_job(&writer, &job.payload);
-                        if let Err(message) = &outcome {
-                            // A deadline faults the script before it can record its normal
-                            // Outbox error. Preserve the delete target and expose manual retry.
                             if payload["type"] == "outbox"
                                 && payload["script"] == "outbox_send"
                                 && let Some(id) = payload["id"].as_str()
                                 && let Ok(note) = writer.read(id)
+                                && doc_to_json(&note.doc)["fields"]["status"] == "ready"
                             {
-                                let body = doc_to_json(&note.doc);
-                                let fields = &body["fields"];
-                                if fields["kind"] == "event"
-                                    && fields["event_action"] == "delete"
-                                    && fields["status"] == "sending"
-                                    && fields["sent_at"].as_str().unwrap_or_default().is_empty()
+                                self.recover_sends(&writer, false);
+                                self.recover_deletes(&writer);
+                            }
+                            let (outcome, log) = self.run_job(&writer, &job.payload);
+                            if let Err(message) = &outcome {
+                                // A deadline faults the script before it can record its normal
+                                // Outbox error. Preserve the delete target and expose manual retry.
+                                if payload["type"] == "outbox"
+                                    && payload["script"] == "outbox_send"
+                                    && let Some(id) = payload["id"].as_str()
+                                    && let Ok(note) = writer.read(id)
                                 {
-                                    let mut body = body;
-                                    body["fields"]["status"] = json!("failed");
-                                    body["fields"]["error"] = json!(message);
-                                    if let Err(e) = writer.update(
-                                        id,
-                                        &Input::Json(body),
-                                        Some(&note.version),
-                                        &Author::Handler("outbox_send".into()),
-                                    ) {
-                                        eprintln!("recording failed Outbox deletion: {e}");
+                                    let body = doc_to_json(&note.doc);
+                                    let fields = &body["fields"];
+                                    if fields["kind"] == "event"
+                                        && fields["event_action"] == "delete"
+                                        && fields["status"] == "sending"
+                                        && fields["sent_at"].as_str().unwrap_or_default().is_empty()
+                                    {
+                                        let mut body = body;
+                                        body["fields"]["status"] = json!("failed");
+                                        body["fields"]["error"] = json!(message);
+                                        if let Err(e) = writer.update(
+                                            id,
+                                            &Input::Json(body),
+                                            Some(&note.version),
+                                            &Author::Handler("outbox_send".into()),
+                                        ) {
+                                            eprintln!("recording failed Outbox deletion: {e}");
+                                        }
                                     }
                                 }
+                                eprintln!("after_* handler job {} failed: {message}", job.id);
+                                let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
+                                let s = |k: &str| p[k].as_str().unwrap_or_default().to_owned();
+                                record_failure(
+                                    &writer,
+                                    &s("script"),
+                                    &s("event"),
+                                    &s("type"),
+                                    &s("id"),
+                                    message,
+                                );
                             }
-                            eprintln!("after_* handler job {} failed: {message}", job.id);
-                            let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
-                            let s = |k: &str| p[k].as_str().unwrap_or_default().to_owned();
-                            record_failure(
-                                &writer,
-                                &s("script"),
-                                &s("event"),
-                                &s("type"),
-                                &s("id"),
-                                message,
-                            );
-                        }
-                        if let Err(e) = writer.state().finish_job(job.id, outcome, &log) {
-                            eprintln!("recording handler job {}: {e}", job.id);
-                        }
+                            if let Err(e) = writer.state().finish_job(job.id, outcome, &log) {
+                                eprintln!("recording handler job {}: {e}", job.id);
+                            } else {
+                                self.contexts.lock().unwrap_or_else(|e| e.into_inner()).remove(&job.id);
+                            }
+                        });
                     }
                 }
                 Err(e) => eprintln!("reading the handler queue: {e}"),
