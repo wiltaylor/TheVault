@@ -648,7 +648,10 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
     let parsed = schema::Agent::parse("helper", &saved).unwrap();
     assert_eq!(parsed.permissions.approval_rules.len(), 1);
     assert_eq!(parsed.permissions.approval_rules[0].daily_cap, 1);
-    let expanded = rules.replace("daily_cap = 1", "daily_cap = 2");
+    let expanded = rules.replace(
+        "permissions {",
+        "permissions {\n  approval_rule {\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"title\"]\n    daily_cap = 2\n  }",
+    );
 
     let denied = api
         .client
@@ -680,7 +683,10 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
     let body: Value = denied.json().unwrap();
     assert_eq!(body["error"], "forbidden");
-    assert_eq!(body["message"], "this needs the admin scope; the token has admin");
+    assert_eq!(
+        body["message"],
+        "this needs the admin scope; the token has admin"
+    );
     assert_eq!(api.agent_wcl("helper").unwrap(), saved);
 
     // Propose itself rejects rules. Alter a real pending proposal to exercise Apply's
