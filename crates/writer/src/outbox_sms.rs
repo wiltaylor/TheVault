@@ -277,7 +277,9 @@ mod tests {
                 let vault = store::Vault::init(dir.path()).unwrap();
                 let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
                 let writer = Writer::open(vault, state).unwrap();
-                writer.upgrade_shipped_defaults(crate::Upkeep::Home).unwrap();
+                writer
+                    .upgrade_shipped_defaults(crate::Upkeep::Home)
+                    .unwrap();
                 let item_context = script_core::RunContext::default();
                 if restricted {
                     item_context.restrict();
@@ -288,7 +290,10 @@ mod tests {
                 let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
                 let capture = observed.clone();
                 writer.set_commit_hook(Some(Box::new(move |_| {
-                    capture.lock().unwrap().push(script_core::RunContext::current().unwrap());
+                    capture
+                        .lock()
+                        .unwrap()
+                        .push(script_core::RunContext::current().unwrap());
                     std::ops::ControlFlow::Continue(())
                 })));
                 let ambient = script_core::RunContext::default();
@@ -296,12 +301,28 @@ mod tests {
                     ambient.restrict();
                 }
                 let command = DeviceCommand {
-                    id: "command-1".into(), device_id: "phone".into(), name: SEND_SMS.into(),
-                    payload: json!({"outbox":item.id,"to":"+61400000002","body":"Receipt"}).to_string(),
-                    created_ms: 0, expires_ms: i64::MAX,
-                    status: if failed { CommandStatus::Failed } else { CommandStatus::Done },
-                    result: Some(if failed { json!({"error":"radio off"}) } else { json!({"device_ref":"sms:123"}) }.to_string()),
-                    source: "test".into(), updated_ms: Some(1),
+                    id: "command-1".into(),
+                    device_id: "phone".into(),
+                    name: SEND_SMS.into(),
+                    payload: json!({"outbox":item.id,"to":"+61400000002","body":"Receipt"})
+                        .to_string(),
+                    created_ms: 0,
+                    expires_ms: i64::MAX,
+                    status: if failed {
+                        CommandStatus::Failed
+                    } else {
+                        CommandStatus::Done
+                    },
+                    result: Some(
+                        if failed {
+                            json!({"error":"radio off"})
+                        } else {
+                            json!({"device_ref":"sms:123"})
+                        }
+                        .to_string(),
+                    ),
+                    source: "test".into(),
+                    updated_ms: Some(1),
                 };
                 ambient.scope(|| {
                     writer.finish_outbox_sms(&command).unwrap();
