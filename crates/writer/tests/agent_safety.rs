@@ -140,7 +140,10 @@ fn query_exposure_covers_selection_link_traversal_groups_and_empty_pages() {
         ("from email select title", true),
         ("from email group by title select title", true),
         ("from memo select link.title", true),
-        ("from memo where link.title == \"absent\" select title", true),
+        (
+            "from memo where link.title == \"absent\" select title",
+            true,
+        ),
         ("from memo select title", false),
     ] {
         let context = script_core::RunContext::default();
