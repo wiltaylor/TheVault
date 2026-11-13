@@ -692,7 +692,7 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
             .unwrap();
         assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
         let body: Value = denied.json().unwrap();
-        assert_eq!(body["error"], "invalid");
+        assert_eq!(body["error"], "invalid", "{name}: {body}");
         assert_eq!(body["issues"].as_array().unwrap().len(), 1);
         assert_eq!(body["issues"][0]["at"], "permissions.approval_rules");
         assert_eq!(
@@ -775,7 +775,7 @@ fn assistant_settings_saves_keep_approval_rules() {
         .next()
         .unwrap();
     let original = api.agent_wcl("assistant").unwrap();
-    let rules = original.replace("permissions {", "permissions {\n  approval_rule {\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"status\"]\n    daily_cap = 1\n  }");
+    let rules = format!("{original}\npermissions {{\n  approval_rule {{\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"status\"]\n    daily_cap = 1\n  }}\n}}\n");
     let response = api
         .client
         .put(api.server.url("/api/agents/assistant"))
