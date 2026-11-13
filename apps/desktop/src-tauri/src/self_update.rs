@@ -307,7 +307,7 @@ impl Updates {
             .endpoints(vec![url])
             .map_err(|e| e.to_string())?
             // Every URL is checked against the paired origin, so do not follow an unchecked redirect.
-            .configure_client(|client| client.redirect(reqwest::redirect::Policy::none()))
+            .configure_client(|client| client.redirect(reqwest_updater::redirect::Policy::none()))
             .executable_path(appimage)
             .timeout(CHECK_TIMEOUT);
         if let Some(key) = test_pubkey() {
