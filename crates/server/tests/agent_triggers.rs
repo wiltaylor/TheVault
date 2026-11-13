@@ -38,10 +38,24 @@ fn outside_text_read_by_subagent_blocks_parent_script_http_and_task_admission() 
     web.route("/outside", testkit::Reply::text(200, "unexpected"));
     let cookie = mail_triage_login(&api);
     let mail = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"CLEARED_INCOMING_FIXTURE", "sent":"2000-01-01T00:00:00Z"}}}));
-    let preview: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"ids":[mail["id"]]}))
-        .error_for_status().unwrap().json().unwrap();
-    safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":preview["preview"],"approve":true}))
-        .error_for_status().unwrap();
+    let preview: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/preview",
+        json!({"ids":[mail["id"]]}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/approve",
+        json!({"preview":preview["preview"],"approve":true}),
+    )
+    .error_for_status()
+    .unwrap();
     api.agent("chief", "label = \"Chief\"\npermissions {\n scripts { run_code = true\n run_saved = true }\n subagents { allow = true }\n}\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Audit\" }\n");
     fake.push(AnthropicMessage::new().tool_use("start", "start_subagent", json!({"task":"Read mail", "instructions":null, "agent":null, "permissions":null,"model":null})));
     fake.push(AnthropicMessage::new().tool_use("read", "get_note", json!({"id":mail["id"]})));
@@ -53,7 +67,12 @@ fn outside_text_read_by_subagent_blocks_parent_script_http_and_task_admission() 
     api.advance("PT35S");
     let requests = fake.message_requests();
     assert_eq!(requests.len(), 6);
-    assert!(requests[2].json().to_string().contains("CLEARED_INCOMING_FIXTURE"));
+    assert!(
+        requests[2]
+            .json()
+            .to_string()
+            .contains("CLEARED_INCOMING_FIXTURE")
+    );
     for index in [4, 5] {
         let request = requests[index].json();
         let result = request["messages"].as_array().unwrap().last().unwrap()["content"].to_string();

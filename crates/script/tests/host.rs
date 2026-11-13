@@ -430,10 +430,21 @@ fn restricted_http_policy_precedes_url_and_allowlist_errors() {
     let f = fixture();
     let context = script::RunContext::default();
     context.restrict();
-    for url in ["not a URL", "file:///not-http", "https://not-allowed.example.test/"] {
-        let src = format!("use http\nfn run() -> Result[int, string] {{ Ok(http::get(\"{url}\", #{{}})?.status) }}\n");
+    for url in [
+        "not a URL",
+        "file:///not-http",
+        "https://not-allowed.example.test/",
+    ] {
+        let src = format!(
+            "use http\nfn run() -> Result[int, string] {{ Ok(http::get(\"{url}\", #{{}})?.status) }}\n"
+        );
         let out = context.scope(|| f.host.run(job(Kind::Task, &src)));
-        assert!(out.result.unwrap_err().to_string().contains(script_core::OUTSIDE_TEXT_REFUSAL));
+        assert!(
+            out.result
+                .unwrap_err()
+                .to_string()
+                .contains(script_core::OUTSIDE_TEXT_REFUSAL)
+        );
     }
 }
 
@@ -442,34 +453,61 @@ fn restricted_html_image_download_never_reaches_the_fake_provider() {
     let f = fixture();
     let web = StandIn::start();
     web.route("/pixel", Reply::text(200, "fake image"));
-    f.writer.state().set_secret("ai_settings", r#"{"fetch_private":true}"#).unwrap();
-    let src = format!(r#"use vault
-fn run() -> Value {{
+    f.writer
+        .state()
+        .set_secret("ai_settings", r#"{"fetch_private":true}"#)
+        .unwrap();
+    let src = format!(
+        r#"use vault
+fn run() -> Result[Value, string] {{
     vault::html_to_blocks("<img src='{}' alt='fixture'>", Value::Map(#{{ "images": Value::String("download") }}))
 }}
-"#, web.url("/pixel"));
+"#,
+        web.url("/pixel")
+    );
     let context = script::RunContext::default();
     context.restrict();
     let out = context.scope(|| f.host.run(job(Kind::Task, &src)));
-    assert!(out.result.unwrap().to_string().contains(script_core::OUTSIDE_TEXT_REFUSAL));
+    assert!(
+        out.result
+            .unwrap()
+            .to_string()
+            .contains(script_core::OUTSIDE_TEXT_REFUSAL)
+    );
     assert!(out.log.contains(script_core::OUTSIDE_TEXT_REFUSAL));
     assert!(web.requests().is_empty());
 }
 
 #[test]
 fn restricted_restart_child() {
-    let Ok(root) = std::env::var("TV245_RESTART_ROOT") else { return; };
+    let Ok(root) = std::env::var("TV245_RESTART_ROOT") else {
+        return;
+    };
     let vault = store::Vault::open(std::path::Path::new(&root)).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
-    let context = script::RunContext::recover(&state, &std::env::var("TV245_RESTART_ID").unwrap()).unwrap();
+    let context =
+        script::RunContext::recover(&state, &std::env::var("TV245_RESTART_ID").unwrap()).unwrap();
     assert!(context.is_restricted());
     let writer = Arc::new(Writer::open(vault, state).unwrap());
-    let host = Host::new(writer.clone() as Arc<dyn Vault>, 1, roomy(), script::Ai::of(&writer));
-    let src = format!("use http\nfn run() -> Result[int, string] {{ Ok(http::get(\"{}\", #{{}})?.status) }}\n", std::env::var("TV245_RESTART_URL").unwrap());
+    let host = Host::new(
+        writer.clone() as Arc<dyn Vault>,
+        1,
+        roomy(),
+        script::Ai::of(&writer),
+    );
+    let src = format!(
+        "use http\nfn run() -> Result[int, string] {{ Ok(http::get(\"{}\", #{{}})?.status) }}\n",
+        std::env::var("TV245_RESTART_URL").unwrap()
+    );
     let mut work = context.scope(|| job(Kind::Task, &src));
     work.allow_domains = vec!["*".into()];
     let out = host.run(work);
-    assert!(out.result.unwrap_err().to_string().contains(script_core::OUTSIDE_TEXT_REFUSAL));
+    assert!(
+        out.result
+            .unwrap_err()
+            .to_string()
+            .contains(script_core::OUTSIDE_TEXT_REFUSAL)
+    );
 }
 
 #[test]
@@ -481,13 +519,22 @@ fn sealed_restriction_blocks_http_in_a_new_process() {
     let id = context.persist(f.writer.state()).unwrap();
     context.restrict();
     drop(context);
+    let Fixture { _dir, writer, host } = f;
+    drop(host);
+    drop(writer);
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "host::restricted_restart_child", "--nocapture"])
-        .env("TV245_RESTART_ROOT", f._dir.path())
+        .env("TV245_RESTART_ROOT", _dir.path())
         .env("TV245_RESTART_ID", id)
         .env("TV245_RESTART_URL", web.url("/restart"))
-        .output().unwrap();
-    assert!(out.status.success(), "{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
     assert!(web.requests().is_empty());
 }
