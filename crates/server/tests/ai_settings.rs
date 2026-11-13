@@ -15,6 +15,41 @@ use testkit::{
 
 const REDIRECT: &str = "http://127.0.0.1:53683/auth/callback";
 
+#[test]
+fn unreadable_accounts_reset_is_confirmed_session_only_and_audited() {
+    let api = Api::start();
+    let client = Client::new();
+    let login = client.post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+    let cookie = login.headers()["set-cookie"].to_str().unwrap()
+        .split(';').next().unwrap();
+    let route = "/api/integrations/ai/accounts/reset";
+    // Invalid JSON must not silently become a readable empty accounts table.
+    api.server.seed_secret("ai_accounts", "not account JSON");
+    let status = client.get(api.server.url("/api/integrations/ai"))
+        .header("cookie", cookie).send().unwrap();
+    assert_eq!(status.status(), 409);
+    assert_eq!(status.json::<Value>().unwrap()["error"], "unreadable_ai_accounts");
+    assert_eq!(api.client.post(api.server.url(route)).json(&json!({"confirm":true}))
+        .send().unwrap().status(), 403);
+    for body in [json!({}), json!({"confirm":false})] {
+        assert_eq!(client.post(api.server.url(route)).header("cookie", cookie)
+            .json(&body).send().unwrap().status(), 400);
+        assert_eq!(api.server.secret("ai_accounts").as_deref(), Some("not account JSON"));
+    }
+    client.post(api.server.url(route)).header("cookie", cookie)
+        .json(&json!({"confirm":true})).send().unwrap().error_for_status().unwrap();
+    let stored: Value = serde_json::from_str(&api.server.secret("ai_accounts").unwrap()).unwrap();
+    assert_eq!(stored["accounts"], json!([]));
+    client.get(api.server.url("/api/integrations/ai")).header("cookie", cookie)
+        .send().unwrap().error_for_status().unwrap();
+    let activity: Value = client.get(api.server.url("/api/activity?q=Reset%20unreadable"))
+        .header("cookie", cookie).send().unwrap().json().unwrap();
+    assert!(activity.to_string().contains("ai.accounts.reset"));
+    assert_eq!(client.post(api.server.url(route)).header("cookie", cookie)
+        .json(&json!({"confirm":true})).send().unwrap().status(), 400);
+}
+
 struct Api {
     server: TestServer,
     client: Client,

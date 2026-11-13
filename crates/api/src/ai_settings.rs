@@ -188,7 +188,43 @@ fn accounts_of(s: &state::State) -> Result<Accounts, ApiError> {
     if !s.has_secret_key() {
         return Ok(Accounts::default());
     }
+    if Accounts::unreadable(s).map_err(api_error)? {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "unreadable_ai_accounts",
+            "The stored AI accounts cannot be read. Reset AI accounts to remove this damaged record. Existing account references will no longer resolve.",
+        ));
+    }
     Accounts::load(s).map_err(api_error)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetAccounts {
+    #[serde(default)]
+    confirm: bool,
+}
+
+pub async fn reset_accounts(
+    State(a): Shared,
+    crate::auth::Caller(author): crate::auth::Caller,
+    Json(b): Json<ResetAccounts>,
+) -> Result<Json<Value>, ApiError> {
+    if !matches!(author, state::Author::Session(_)) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "human_only", "A signed-in owner session is required"));
+    }
+    if !b.confirm {
+        return Err(ApiError::bad_request("Confirm Reset AI accounts first"));
+    }
+    blocking_w(&a, move |w| {
+        if !Accounts::reset_unreadable(w.state()).map_err(api_error)? {
+            return Err(ApiError::bad_request("Only an unreadable AI accounts record can be reset"));
+        }
+        w.state().record_activity(state::NewActivity::new(
+            "ai.accounts.reset", "settings", &author, "Reset unreadable AI accounts",
+        ));
+        Ok(json!({"ok": true}))
+    }).await.map(Json)
 }
 
 /// The account `r` names, by id or name, or a 404.

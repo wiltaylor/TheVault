@@ -1,9 +1,10 @@
 import { Route, Router } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AiAccountStatus, AiStatus } from "../api";
+import { ApiError, type AiAccountStatus, type AiStatus } from "../api";
 
 const aiStatus = vi.fn();
+const aiResetAccounts = vi.fn();
 const classifierSettings = vi.fn();
 const classifierAccount = vi.fn();
 const aiSaveSettings = vi.fn();
@@ -26,6 +27,7 @@ vi.mock("../api", async (orig) => {
     api: {
       ...real.api,
       aiStatus,
+      aiResetAccounts,
       classifierSettings,
       classifierAccount,
       aiSaveSettings,
@@ -108,6 +110,23 @@ const ANTHROPIC_MODELS = {
 };
 
 const AUTH_URL = "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&state=s1";
+
+it("requires explicit confirmation before resetting unreadable accounts and reopens settings", async () => {
+  aiStatus.mockRejectedValueOnce(new ApiError(409, { error: "unreadable_ai_accounts", message: "The stored AI accounts cannot be read." }));
+  aiStatus.mockResolvedValue(status([]));
+  aiResetAccounts.mockResolvedValue({ ok: true });
+  render(() => <Ai />);
+  const reset = await screen.findByRole("button", { name: "Reset AI accounts" });
+  expect(screen.getByRole("alert").textContent).toContain("cannot be read");
+  expect(reset).toBeDisabled();
+  fireEvent.click(reset);
+  expect(aiResetAccounts).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(reset);
+  await screen.findByText("No AI account yet. Add one to use the chat and agents.");
+  expect(aiResetAccounts).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: "Reset AI accounts" })).toBeNull();
+});
 
 beforeEach(() => {
   aiModels.mockResolvedValue(ANTHROPIC_MODELS);

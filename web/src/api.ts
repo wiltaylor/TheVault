@@ -2223,6 +2223,7 @@ export const api = {
   browserStatus: () => request<BrowserStatus>("GET", "/api/integrations/browser"),
   /** Settings > AI: the accounts and the global settings (accounts A7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
+  aiResetAccounts: () => request<{ ok: boolean }>("POST", "/api/integrations/ai/accounts/reset", { confirm: true }),
   classifierSettings: () => request<ClassifierSettings>("GET", "/api/classifiers"),
   scamHistoryPreview: (days: number, price: number) => request<ScamHistoryPreview>("POST", "/api/classifiers/scam/history/preview", { days, estimated_usd_per_decision: price }),
   scamHistoryApprove: (fingerprint: string, days: number, price: number) => request<ScamHistoryProgress>("POST", "/api/classifiers/scam/history/approve", { fingerprint, days, estimated_usd_per_decision: price, approve: true }),

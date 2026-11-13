@@ -200,7 +200,8 @@ impl Accounts {
     /// The stored table, or an empty one when there is none.
     pub fn load(state: &state::State) -> Result<Accounts, AiError> {
         Ok(match state.get_secret(ACCOUNTS).map_err(state_error)? {
-            Some(text) => serde_json::from_str(&text).unwrap_or_default(),
+            Some(text) => serde_json::from_str(&text)
+                .map_err(|_| AiError::invalid("The stored AI accounts record is corrupt"))?,
             None => Accounts::default(),
         })
     }
@@ -208,6 +209,26 @@ impl Accounts {
     pub fn save(&self, state: &state::State) -> Result<(), AiError> {
         let text = serde_json::to_string(self).map_err(|e| AiError::invalid(e.to_string()))?;
         state.set_secret(ACCOUNTS, &text).map_err(state_error)
+    }
+
+    /// Only damaged ciphertext or invalid account JSON permits owner recovery.
+    pub fn unreadable(state: &state::State) -> Result<bool, AiError> {
+        match state.get_secret(ACCOUNTS) {
+            Ok(Some(text)) => Ok(serde_json::from_str::<Accounts>(&text).is_err()),
+            Ok(None) => Ok(false),
+            Err(state::Error::WrongKey { .. } | state::Error::Corrupt(_)) => Ok(true),
+            Err(e) => Err(state_error(e)),
+        }
+    }
+
+    /// Recheck under the same lock as account changes. Never erase a readable table.
+    pub fn reset_unreadable(state: &state::State) -> Result<bool, AiError> {
+        let _one = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        if !Self::unreadable(state)? {
+            return Ok(false);
+        }
+        Self::default().save(state)?;
+        Ok(true)
     }
 
     /// Change the stored table with `f`, as one read, modify and write under a process-wide
