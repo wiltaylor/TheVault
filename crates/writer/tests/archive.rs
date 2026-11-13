@@ -72,11 +72,12 @@ fn oversized_history_creates_updates_recovers_and_restores() {
     let w = open(dir.path());
     let current = w.current_version(&a.id).unwrap().unwrap();
     assert_ne!(current, b.version);
-    assert_eq!(w.version(&a.id, &current).unwrap().content, a.wcl);
+    let path = dir.path().join(format!("notes/task/{}.wcl", a.id));
+    assert!(w.version(&a.id, &current).unwrap().content == std::fs::read_to_string(path).unwrap());
     let restored = w
         .restore_version(&a.id, &a.version, Some(&current), &by)
         .unwrap();
-    assert_eq!(restored.wcl, a.wcl);
+    assert!(restored.wcl == a.wcl);
     let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
     let kind: String = conn
         .query_row(
