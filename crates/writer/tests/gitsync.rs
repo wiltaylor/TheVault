@@ -81,9 +81,9 @@ struct CalendarClock;
 fn calendar_types(w: &Writer) {
     w.put_type("person", include_str!("../defaults/person.wcl"))
         .unwrap();
-    w.put_type("event", include_str!("../defaults/event.wcl"))
-        .unwrap();
     w.put_type("event_series", include_str!("../defaults/event_series.wcl"))
+        .unwrap();
+    w.put_type("event", include_str!("../defaults/event.wcl"))
         .unwrap();
 }
 
