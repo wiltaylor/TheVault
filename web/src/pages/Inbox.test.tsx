@@ -112,7 +112,8 @@ describe("the Inbox", () => {
     // The page has other text inputs (mail triage), so look inside the dialog (TV-273).
     fireEvent.input(within(screen.getByRole("dialog")).getByRole("textbox"), { target: { value: "File it" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByRole("status");
+    // Mail triage keeps an empty status on the page, so wait for the dialog's own (TV-273).
+    await within(screen.getByRole("dialog")).findByRole("status");
     expect(dispatch).toHaveBeenCalledWith("clerk", ["01JN1"], "File it");
   });
 
@@ -192,7 +193,7 @@ describe("the Inbox", () => {
     // The page has other text inputs (mail triage), so look inside the dialog (TV-273).
     fireEvent.input(within(screen.getByRole("dialog")).getByRole("textbox"), { target: { value: "File the quotes" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Sent to Clerk.");
+    expect(await within(screen.getByRole("dialog")).findByRole("status")).toHaveTextContent("Sent to Clerk.");
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith("clerk", ["01JN1", "01JN3"], "File the quotes");
     expect(screen.queryByRole("button", { name: /^Send \d+ notes? to agent$/ })).toBeNull();
