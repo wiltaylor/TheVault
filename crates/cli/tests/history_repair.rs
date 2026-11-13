@@ -121,6 +121,11 @@ fn repair_head_opens_trashes_restores_and_audits() {
     assert!(ok, "{body}");
     assert_eq!(body["actions"][0]["action"], "replace_corrupt_head");
     assert_ne!(body["actions"][0]["replacement"], versions[2]);
+    let state = State::open(&dir.path().join(".vault/state.db"), None).unwrap();
+    let head = state.history(&id).unwrap().into_iter().find(|v| {
+        v.token == body["actions"][0]["replacement"].as_str().unwrap()
+    }).unwrap();
+    assert_eq!(head.content.as_bytes(), std::fs::read(dir.path().join(format!("notes/task/{id}.wcl"))).unwrap());
     let audits: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM activity WHERE kind='history.repair' AND subject=?1",
@@ -191,4 +196,29 @@ fn running_server_holds_ownership() {
     assert!(body.to_string().contains("in use"));
     let (ok, body) = cli(server.vault_path(), &["history-check"]);
     assert!(ok, "{body}");
+}
+
+#[test]
+fn second_note_failure_rolls_back_first_repair_and_audit() {
+    let (dir, first, _) = fixture();
+    let w = open(dir.path());
+    let second = w.create("task", &Input::Wcl("title = \"other\"\n".into()), &Author::Token("fixture".into())).unwrap();
+    drop(w);
+    let mut ids = [first, second.id];
+    ids.sort();
+    let path = dir.path().join(".vault/state.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute("UPDATE versions SET content=x'01' WHERE token IN (SELECT token FROM heads)", []).unwrap();
+    // Abort the second action inside the transaction, after the first note and audit.
+    conn.execute_batch(&format!("CREATE TRIGGER fail_second_repair BEFORE INSERT ON activity WHEN NEW.kind='history.repair' AND NEW.subject='{}' BEGIN SELECT RAISE(ABORT, 'injected second note failure'); END;", ids[1])).unwrap();
+    drop(conn);
+    let before = std::fs::read(&path).unwrap();
+    let (ok, body) = cli(dir.path(), &["history-repair", "--all", "--yes", &ids.join(",")]);
+    assert!(!ok, "{body}");
+    assert!(body.to_string().contains("injected second note failure"), "{body}");
+    assert_eq!(before, std::fs::read(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    let audits: i64 = conn.query_row("SELECT COUNT(*) FROM activity WHERE kind='history.repair'", [], |r| r.get(0)).unwrap();
+    assert_eq!(audits, 0);
+    assert_eq!(state::history_repair::check(&path).unwrap().len(), 2);
 }
