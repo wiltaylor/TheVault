@@ -145,6 +145,7 @@ impl Api {
         assert_eq!(rows.len(), 1, "{stream}\n{drafts}");
         let id = rows[0]["id"].as_str().unwrap().to_owned();
         assert_eq!(self.fields(&id)["drafted_by"], "clerk");
+        self.settle_held();
         id
     }
 
@@ -225,8 +226,12 @@ impl Api {
                 note["note"]["fields"][k] = v.clone();
             }
         }
+        let client = Client::new();
+        let login = client.post(self.server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
+        let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
         expect(
-            self.req("PUT", &format!("/api/notes/{id}"))
+            client.put(self.server.url(&format!("/api/notes/{id}"))).header("cookie", cookie)
                 .json(&json!({ "note": note["note"], "base_version": note["version"] }))
                 .send()
                 .unwrap(),
@@ -239,6 +244,14 @@ impl Api {
     fn settle(&self) {
         let failed = self.server.settle_handlers();
         assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    fn settle_held(&self) {
+        let failed = self.server.settle_handlers();
+        assert!(failed.iter().all(|e| e.starts_with(script::OUTSIDE_TEXT_REFUSAL)
+            || e.starts_with("held: stale admission")), "{failed:#?}");
+        let audit = expect(self.req("GET", "/api/activity?kind=run.outside_text_refused").send().unwrap(), 200);
+        assert!(audit.to_string().contains(script::OUTSIDE_TEXT_REFUSAL), "{audit}");
     }
 
     fn sync(&self) {
@@ -339,15 +352,9 @@ fn restart_during_event_write(update: bool, unlinked: bool) {
     assert_eq!(api.fields(&item)["status"], "sending");
     api.server.restart();
     api.google.set_calendar_delay(None);
-    api.settle();
+    api.settle_held();
     let fields = api.fields(&item);
-    assert_eq!(fields["status"], "failed", "{fields}");
-    assert!(
-        fields["error"]
-            .as_str()
-            .unwrap()
-            .contains("Check interrupted event")
-    );
+    assert_eq!(fields["status"], "sending", "unsealed recovery must remain held: {fields}");
     assert_eq!(
         api.google
             .requests()
@@ -379,11 +386,11 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
     assert_eq!(api.fields(&id)["google_ref"], "standup");
     api.server.restart();
     api.google.set_calendar_delay(None);
-    api.server.settle_handlers();
+    api.settle_held();
     assert_eq!(
         api.fields(&item)["status"],
-        "failed",
-        "interrupted delete must expose manual retry, not remain sending"
+        "sending",
+        "unsealed interrupted delete must remain held until fresh owner review"
     );
     api.google.fail_calendar_writes(None);
     api.retry_delete(&item, &id);
@@ -480,12 +487,13 @@ fn restart_confirmed_delete(phase: u8) {
     )
     .unwrap();
     api.server.restart();
-    api.server.settle_handlers();
-    assert!(
-        api.gone(&item),
-        "Google confirmed and note trashed, but restart lost Outbox completion"
-    );
-    api.assert_trashed(&id);
+    api.settle_held();
+    assert_eq!(api.fields(&item)["status"], "sending", "unsealed recovery cannot finish deletion");
+    if phase == 2 {
+        api.assert_trashed(&id);
+    } else {
+        assert_eq!(api.fields(&id)["google_ref"], "standup");
+    }
     assert_eq!(
         api.google
             .requests()

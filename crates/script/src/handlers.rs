@@ -465,6 +465,21 @@ impl Shared {
                                     .is_ok()
                             {
                                 let id = payload["id"].as_str().unwrap_or_default();
+                                // An old draft job must not merge its restriction
+                                // into a new owner-authorized attempt for the item.
+                                if context.is_restricted() {
+                                    writer.state().record_activity(state::NewActivity::new(
+                                        "run.outside_text_refused", "automation",
+                                        &Author::Handler("outbox_send".into()),
+                                        script_core::OUTSIDE_TEXT_REFUSAL,
+                                    ));
+                                    if let Err(error) = writer.state().finish_job(
+                                        job.id, Err(script_core::OUTSIDE_TEXT_REFUSAL.into()), "",
+                                    ) {
+                                        eprintln!("holding restricted Outbox job: {error}");
+                                    }
+                                    return;
+                                }
                                 // A pre-Stop job must not contaminate a newer
                                 // owner-authorized item by joining its old admission.
                                 if context

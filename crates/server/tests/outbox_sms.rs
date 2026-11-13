@@ -288,7 +288,7 @@ fn error_phrase_without_marker_does_not_accept_late_sms_receipt() {
 }
 
 #[test]
-fn restart_unconfirmed_sms_accepts_late_receipt_without_second_command() {
+fn restart_unconfirmed_sms_holds_late_receipt_without_second_command() {
     let mut api = Api::start();
     let phone = api.phone();
     let id = api.create(&api.admin, "outbox", sms(json!({}), &["Check once"]));
@@ -299,22 +299,9 @@ fn restart_unconfirmed_sms_accepts_late_receipt_without_second_command() {
         .to_owned();
     api.report(&phone, &cid, json!({"status": "delivered"}));
     api.server.restart();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while api.fields(&id)["status"] == "sending" {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "startup recovery did not finish"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
     api.settle();
     let fields = api.fields(&id);
-    assert_eq!(fields["status"], "failed", "{fields}");
-    let error = fields["error"].as_str().unwrap();
-    assert!(
-        error.contains("sms") && error.contains(NUMBER) && error.contains("check before retrying"),
-        "{error}"
-    );
+    assert_eq!(fields["status"], "sending", "unsealed recovery stays held: {fields}");
     assert_eq!(api.commands(&phone, "").len(), 1);
     let copy = api.copy(&phone, "sms:late", NUMBER, "Check once", NOW);
     api.report(
@@ -323,7 +310,7 @@ fn restart_unconfirmed_sms_accepts_late_receipt_without_second_command() {
         json!({"status": "done", "result": {"device_ref": "sms:late"}}),
     );
     api.settle();
-    assert!(api.gone(&id));
+    assert_eq!(api.fields(&id), fields);
     assert_eq!(api.fields(&copy)["device_ref"], "sms:late");
     assert_eq!(api.commands(&phone, "").len(), 1);
 }
