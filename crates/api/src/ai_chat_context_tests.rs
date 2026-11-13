@@ -9,14 +9,15 @@ use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount};
 struct Probe(Arc<Mutex<Vec<(Author, RunContext)>>>);
 
 impl writer::Hooks for Probe {
-    fn before(&self, change: &mut writer::NoteChange, author: &Author) -> Result<(), String> {
-        if change.type_name == "item" {
-            self.0.lock().unwrap().push((
-                author.clone(),
-                RunContext::current().expect("Turn blocking worker context"),
-            ));
+    fn after(&self, saved: &[writer::Saved], author: &Author, _: &schema::Schema) {
+        for change in saved {
+            if change.type_name == "item" {
+                self.0.lock().unwrap().push((
+                    author.clone(),
+                    RunContext::current().expect("Turn blocking worker context"),
+                ));
+            }
         }
-        Ok(())
     }
 }
 
@@ -136,8 +137,16 @@ permissions {
     let report = result.recv_timeout(Duration::from_secs(30)).unwrap();
     assert!(report.outcome.is_ok(), "{report:?}");
     let observations = seen.lock().unwrap();
+    // Observe after-hooks, not previews: both turns committed a real note.
     assert_eq!(observations.len(), 2, "{observations:?}");
-    assert_eq!(observations[1].0, Author::Agent("lead/sub:1".into()));
+    for author in ["lead", "lead/sub:1"] {
+        assert!(
+            observations
+                .iter()
+                .any(|(by, _)| by == &Author::Agent(author.into())),
+            "missing {author}: {observations:?}"
+        );
+    }
     for (_, observed) in observations.iter() {
         assert_eq!(observed, &context);
         assert!(observed.is_restricted());
