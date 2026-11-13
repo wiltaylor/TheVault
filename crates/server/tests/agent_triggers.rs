@@ -557,6 +557,7 @@ fn safety_rest_read_route_inventory() {
         "/api/assets/{id}/usage",
         // TV-252: owner-session-only local setup metadata, no note content.
         "/api/classifiers",
+        "/api/classifiers/scam/history",
         "/api/clients",
         "/api/clients/cli/{target}",
         "/api/clients/latest/{kind}",
@@ -645,6 +646,8 @@ fn safety_rest_mutation_route_inventory() {
     actual.sort_unstable();
     actual.dedup();
     let reviewed = [
+        ("post", "/api/classifiers/scam/history/preview", "owner session only, local count and estimate"),
+        ("post", "/api/classifiers/scam/history/approve", "owner session only, fingerprint-bound scam run"),
         (
             "put",
             "/api/classifiers/{name}/account",

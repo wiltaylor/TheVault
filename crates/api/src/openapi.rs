@@ -13,6 +13,9 @@ use crate::required_scope;
 
 /// Every endpoint: method, path and a one-line summary.
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
+    ("GET", "/api/classifiers/scam/history", "Owner-session historical scam progress"),
+    ("POST", "/api/classifiers/scam/history/preview", "Owner-session zero-call historical scam estimate"),
+    ("POST", "/api/classifiers/scam/history/approve", "Owner-session fingerprint-bound historical scam approval"),
     (
         "GET",
         "/api/integrations/google/attachments/{id}",
