@@ -106,7 +106,9 @@ fn repair_head_opens_trashes_restores_and_audits() {
     .unwrap();
     // Startup invokes recovery only when the projection is behind the file commit.
     let index = Connection::open(dir.path().join(".vault/index.db")).unwrap();
-    index.execute("DELETE FROM meta WHERE key='generation'", []).unwrap();
+    index
+        .execute("DELETE FROM meta WHERE key='generation'", [])
+        .unwrap();
     drop(index);
     assert!(
         Writer::open(
