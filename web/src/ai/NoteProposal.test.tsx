@@ -38,7 +38,7 @@ vi.mock("../api", async (orig) => {
   };
 });
 
-const { ApiError } = await import("../api");
+const { ApiError, api } = await import("../api");
 const { ChatPanel } = await import("./ChatPanel");
 const { newConversation, NOTE_CHANGED, NOTE_GONE } = await import("./store");
 
@@ -85,6 +85,31 @@ afterEach(() => {
 });
 
 describe("note proposals", () => {
+  it("keeps thread proposal actions disabled until the stream ends, without rebuilding the card", async () => {
+    const start = vi.spyOn(api, "agentThreadStart").mockResolvedValue({ id: "thread-proposals" } as Awaited<ReturnType<typeof api.agentThreadStart>>);
+    aiApply.mockResolvedValue({ op: "create", note_id: "01JNEW", version: "v1" });
+    try {
+      const m = render(() => <ChatPanel noteId={() => ""} />);
+      await propose(m, CREATE, DELETE);
+      const card = await m.findByRole("region", { name: "Proposed new note Reading list" });
+      const apply = m.getAllByRole("button", { name: "Apply" })[0]!;
+      expect(apply).toBeDisabled();
+      expect(m.getByRole("button", { name: "Apply all (2)" })).toBeDisabled();
+      live!.onEvent({ event: "text", data: { text: "The answer is here, but the thread is still finishing." } });
+      expect(apply).toBeDisabled();
+      expect(aiApply).not.toHaveBeenCalled();
+      live!.onEvent({ event: "done", data: { stop: "end_turn", messages: [] } });
+      live!.end();
+      await waitFor(() => expect(apply).toBeEnabled());
+      expect(m.getByRole("region", { name: "Proposed new note Reading list" })).toBe(card);
+      expect(m.getByRole("button", { name: "Apply all (2)" })).toBeEnabled();
+      fireEvent.click(apply);
+      await waitFor(() => expect(aiApply).toHaveBeenCalledWith(CREATE));
+    } finally {
+      start.mockRestore();
+    }
+  });
+
   it("creates a proposed note on the server and links to it", async () => {
     aiApply.mockResolvedValue({ op: "create", note_id: "01JNEW", version: "v1" });
     const m = render(() => <ChatPanel noteId={() => ""} />);

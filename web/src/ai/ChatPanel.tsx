@@ -1086,7 +1086,7 @@ function ApplyAll(props: { turn: number; parts: Part[] }) {
         <button
           type="button"
           class="primary"
-          disabled={busy() || props.parts.some((p) => "state" in p && p.state === "applying")}
+          disabled={(!!session.chat.thread && session.chat.streaming) || busy() || props.parts.some((p) => "state" in p && p.state === "applying")}
           onClick={async () => {
             setBusy(true);
             try {
@@ -1504,9 +1504,14 @@ function ReadOnlyProposal(props: { part: Part }) {
 /** One part of an answer: text, a tool step or a sub agent's block, a card, a notice. */
 function PartView(props: { part: Part; parts: readonly Part[]; turn: number; index: number }) {
   const readOnly = useContext(ReadOnly);
+  const session = useChatSession();
   const proposal = () => props.part.kind !== "applied" && "proposal" in props.part;
   return (
     <Show when={!(readOnly && proposal())} fallback={<ReadOnlyProposal part={props.part} />}>
+      {/* A streamed answer is not a finished thread. The server rejects proposal actions until
+          the thread releases its write lock, even after the last text has arrived. Keep the
+          cards mounted while waiting so their previews and selection survive the transition. */}
+      <fieldset class="proposal-lock" disabled={proposal() && !!session.chat.thread && session.chat.streaming}>
       <Switch>
         <Match when={props.part.kind === "text" && props.part}>{(p) => <Markdown text={p().text} />}</Match>
         <Match when={props.part.kind === "tool" && props.part}>
@@ -1545,6 +1550,7 @@ function PartView(props: { part: Part; parts: readonly Part[]; turn: number; ind
           )}
         </Match>
       </Switch>
+      </fieldset>
     </Show>
   );
 }

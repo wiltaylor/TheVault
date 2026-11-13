@@ -3284,7 +3284,8 @@ a.button {
 }
 
 /* The editors of a previewed version sit in a disabled fieldset, which lays out as nothing. */
-fieldset.preview-lock {
+fieldset.preview-lock,
+fieldset.proposal-lock {
   display: contents;
   border: 0;
   margin: 0;
