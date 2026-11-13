@@ -23,24 +23,35 @@ fn run_context_bridges_admission_at_note_and_definition_commits() {
     context.capture_stop_generation(old);
     context.restrict();
     // Restriction alone adds no refusal, and a live admission still commits.
-    context.scope(|| w.put_script("live", "fn run() {}\n")).unwrap();
+    context
+        .scope(|| w.put_script("live", "fn run() {}\n"))
+        .unwrap();
     w.state().set_automation_stopped(true).unwrap();
     w.state().set_automation_stopped(false).unwrap();
     let fresh = w.state().admit_automation().unwrap();
     let child = script_core::RunContext::default();
     child.capture_stop_generation(fresh);
-    let result = context.scope(|| child.scope(|| {
-        w.with_automation(fresh, || w.put_script("stale", "fn run() {}\n"))
-    }));
-    assert!(matches!(result, Err(Error::State(state::Error::AutomationRefused))));
+    let result = context.scope(|| {
+        child.scope(|| w.with_automation(fresh, || w.put_script("stale", "fn run() {}\n")))
+    });
+    assert!(matches!(
+        result,
+        Err(Error::State(state::Error::AutomationRefused))
+    ));
     assert!(!dir.path().join("scripts/stale.ws").exists());
     assert_eq!(child.stop_generation(), Some(old));
     assert!(child.is_restricted());
-    let result = child.scope(|| w.create(
-        "item", &Input::Wcl("title = \"Old\"\n".into()),
-        &Author::Session("test".into()),
+    let result = child.scope(|| {
+        w.create(
+            "item",
+            &Input::Wcl("title = \"Old\"\n".into()),
+            &Author::Session("test".into()),
+        )
+    });
+    assert!(matches!(
+        result,
+        Err(Error::State(state::Error::AutomationRefused))
     ));
-    assert!(matches!(result, Err(Error::State(state::Error::AutomationRefused))));
     // No context or credential is installed after the synchronous closure.
     assert!(script_core::RunContext::current().is_none());
     w.put_script("owner", "fn run() {}\n").unwrap();
@@ -51,7 +62,9 @@ fn empty_run_context_preserves_unscoped_writer_behavior() {
     let (_dir, w) = setup();
     w.state().set_automation_stopped(true).unwrap();
     let context = script_core::RunContext::default();
-    context.scope(|| w.put_script("unscoped", "fn run() {}\n")).unwrap();
+    context
+        .scope(|| w.put_script("unscoped", "fn run() {}\n"))
+        .unwrap();
     assert_eq!(context.stop_generation(), None);
     assert!(!context.is_restricted());
 }

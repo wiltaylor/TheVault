@@ -1,8 +1,8 @@
 //! Host-owned run provenance, separate from script-controlled JSON.
 
+use state::automation::Generation;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
-use state::automation::Generation;
 
 /// Shared monotonic state for one run and all its descendants and retries.
 ///
@@ -40,7 +40,12 @@ impl RunContext {
     fn root(&self) -> Self {
         let mut root = self.clone();
         loop {
-            let parent = root.0.lock().unwrap_or_else(|e| e.into_inner()).parent.clone();
+            let parent = root
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .parent
+                .clone();
             match parent {
                 Some(parent) => root = parent,
                 None => return root,
@@ -52,7 +57,9 @@ impl RunContext {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
         let root = self.root();
         let other = other.root();
-        if Arc::ptr_eq(&root.0, &other.0) { return; }
+        if Arc::ptr_eq(&root.0, &other.0) {
+            return;
+        }
         let mut a = root.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut b = other.0.lock().unwrap_or_else(|e| e.into_inner());
         a.restricted |= b.restricted;
@@ -63,12 +70,20 @@ impl RunContext {
     /// Mark outside-text exposure. All existing clones observe this change.
     pub fn restrict(&self) {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
-        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).restricted = true;
+        self.root()
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .restricted = true;
     }
 
     pub fn is_restricted(&self) -> bool {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
-        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).restricted
+        self.root()
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .restricted
     }
 
     /// Retain the oldest admitted generation, never a later replacement.
@@ -82,7 +97,8 @@ impl RunContext {
 
     pub fn stop_generation(&self) -> Option<Generation> {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
-        self.root().0
+        self.root()
+            .0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .stop_generation
@@ -103,7 +119,9 @@ impl RunContext {
                 CURRENT.with(|slot| *slot.borrow_mut() = self.0.take());
             }
         }
-        if let Some(parent) = Self::current() { parent.join(self); }
+        if let Some(parent) = Self::current() {
+            parent.join(self);
+        }
         let _restore = Restore(CURRENT.with(|slot| slot.replace(Some(self.clone()))));
         f()
     }
@@ -135,9 +153,11 @@ mod tests {
                 let parent = &parent;
                 scope.spawn(move || {
                     child.capture_stop_generation(new);
-                    parent.scope(|| child.scope(|| {
-                        assert_eq!(RunContext::current().unwrap().stop_generation(), Some(old));
-                    }));
+                    parent.scope(|| {
+                        child.scope(|| {
+                            assert_eq!(RunContext::current().unwrap().stop_generation(), Some(old));
+                        })
+                    });
                 });
             }
         });

@@ -37,8 +37,10 @@ impl Writer {
             (Some(a), Some(b)) => Some(a.oldest(b)),
             (a, b) => a.or(b),
         };
-        generation.map(|g| self.with_automation(g, || {
-            self.state.automation_commit(g).map_err(Into::into)
-        })).transpose()
+        generation
+            .map(|g| {
+                self.with_automation(g, || self.state.automation_commit(g).map_err(Into::into))
+            })
+            .transpose()
     }
 }
