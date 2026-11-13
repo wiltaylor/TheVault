@@ -154,6 +154,49 @@ struct Rig {
 }
 
 impl Rig {
+    fn reopen(self) -> Rig {
+        let Rig {
+            _dir: dir,
+            clock,
+            writer,
+            scheduler,
+            fake,
+        } = self;
+        let old_writer = Arc::downgrade(&writer);
+        drop(scheduler);
+        drop(writer);
+        drop(fake);
+        assert!(old_writer.upgrade().is_none(), "old Writer must be closed");
+        let vault = store::Vault::open(dir.path()).unwrap();
+        let state =
+            State::open_with_clock(&vault.server_dir().join("state.db"), None, clock.clone())
+                .unwrap();
+        let (hooks, binding) = TriggerHooks::wrap(Box::new(NoHooks));
+        let writer = Arc::new(
+            Writer::open(vault, state)
+                .unwrap()
+                .with_clock(clock.clone())
+                .with_hooks(hooks),
+        );
+        let host = Arc::new(Host::new(
+            writer.clone(),
+            1,
+            Limits::default(),
+            Ai::unavailable(),
+        ));
+        let scheduler = Scheduler::new(writer.clone(), host, clock.clone()).unwrap();
+        binding.bind(&scheduler);
+        let fake = Arc::new(Fake::default());
+        scheduler.set_agent_runner(fake.clone());
+        Rig {
+            _dir: dir,
+            clock,
+            writer,
+            scheduler,
+            fake,
+        }
+    }
+
     fn new() -> Rig {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("types")).unwrap();
@@ -551,7 +594,7 @@ fn backfill_refuses_delete_only_and_queued_ops_are_rechecked() {
 
 #[test]
 fn recovered_agent_queue_retains_restriction_generation_and_visible_staleness() {
-    for interrupted in [false, true] {
+    for (interrupted, stopped) in [(false, false), (false, true), (true, false), (true, true)] {
         let r = Rig::new();
         r.agent("owl", NIGHTLY);
         let context = script::RunContext::default();
@@ -576,9 +619,12 @@ fn recovered_agent_queue_retains_restriction_generation_and_visible_staleness() 
         } else {
             drop(context);
         }
-        r.writer.state().set_automation_stopped(true).unwrap();
-        r.writer.state().set_automation_stopped(false).unwrap();
-        // The scheduler has never registered this job, just as after restart.
+        let r = r.reopen();
+        if stopped {
+            r.writer.state().set_automation_stopped(true).unwrap();
+            r.writer.state().set_automation_stopped(false).unwrap();
+        }
+        // A new Writer, State connection and Scheduler consume the durable job.
         r.scheduler.tick();
         let contexts = r.fake.contexts.lock().unwrap();
         assert_eq!(contexts.len(), 1);
@@ -586,22 +632,24 @@ fn recovered_agent_queue_retains_restriction_generation_and_visible_staleness() 
         if !interrupted {
             assert_eq!(contexts[0].stop_generation(), generation);
         }
-        assert!(
+        assert_eq!(
             r.writer
                 .state()
                 .automation_commit(contexts[0].stop_generation().unwrap())
-                .is_err()
+                .is_err(),
+            interrupted || stopped
         );
         let entries = r
             .writer
             .state()
             .activity(&state::ActivityFilter::default())
             .unwrap();
-        assert!(
+        assert_eq!(
             entries
                 .items
                 .iter()
-                .any(|a| a.kind == "run.recovery_stale" && a.subject.as_deref() == Some(&run_id))
+                .any(|a| a.kind == "run.recovery_stale" && a.subject.as_deref() == Some(&run_id)),
+            interrupted || stopped
         );
     }
 }
