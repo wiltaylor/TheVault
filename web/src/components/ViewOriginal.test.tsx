@@ -6,7 +6,7 @@ const PAGE = '<p>Hello</p><img src="data:image/png;base64,AA" alt="inline"><img 
 
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, originalHtml: vi.fn(async () => PAGE) };
+  return { ...real, originalHtml: vi.fn(async () => PAGE), api: { ...real.api, googleStatus: vi.fn(async () => ({ settings: { gmail_remote_images: true } })) } };
 });
 
 describe("View original", () => {

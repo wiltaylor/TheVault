@@ -7,7 +7,7 @@
 
 import { Portal } from "solid-js/web";
 import { Show, createResource, createSignal, onCleanup, onMount } from "solid-js";
-import { originalHtml } from "../api";
+import { api, originalHtml } from "../api";
 import { errorText } from "../pages/TypeEditor";
 
 /** The policy of the shown page: no requests but `data:` images and inline styles, and with
@@ -46,6 +46,7 @@ export function ViewOriginalButton(props: { id: string }) {
 
 function OriginalDialog(props: { id: string; onClose: () => void }) {
   const [html] = createResource(() => props.id, originalHtml);
+  const [settings] = createResource(() => api.googleStatus());
   const [remote, setRemote] = createSignal(false);
   let dialog!: HTMLDivElement;
   let close!: HTMLButtonElement;
@@ -77,7 +78,7 @@ function OriginalDialog(props: { id: string; onClose: () => void }) {
         >
           <header class="capture-head">
             <h2 id="original-heading">Original</h2>
-            <Show when={!remote() && hasRemoteImages(html() ?? "")}>
+            <Show when={settings()?.settings.gmail_remote_images === true && !remote() && hasRemoteImages(html() ?? "")}>
               <button type="button" class="original-remote" onClick={() => setRemote(true)}>
                 Load remote images
               </button>
@@ -98,7 +99,7 @@ function OriginalDialog(props: { id: string; onClose: () => void }) {
                 title="The original email"
                 sandbox="allow-popups allow-popups-to-escape-sandbox"
                 referrerpolicy="no-referrer"
-                srcdoc={originalDocument(text(), remote())}
+                srcdoc={originalDocument(text(), settings()?.settings.gmail_remote_images === true && remote())}
                 data-testid="original-frame"
               />
             )}

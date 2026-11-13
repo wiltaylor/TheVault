@@ -873,6 +873,7 @@ export interface GoogleSettings {
   gmail_labels: string[];
   /** How many days back the first pull reaches, 1 to 3650. */
   gmail_window_days: number;
+  gmail_remote_images?: boolean;
   /** A date, `YYYY-MM-DD`, older mail is paged back to, or null. */
   gmail_backfill_to: string | null;
   /** The ids of the Google calendars to pull; never empty. */

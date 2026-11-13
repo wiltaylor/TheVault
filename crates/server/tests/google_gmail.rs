@@ -1115,7 +1115,7 @@ fn inline_data_and_remote_images_are_stored_where_they_stood() {
             { "filename": "notes.txt", "mime": "text/plain", "data": "notes" },
         ],
     }));
-    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all", "gmail_remote_images": true }));
     gmail.fetch_private();
     gmail.run_ok();
     let note = gmail.email("rich");
@@ -1239,7 +1239,7 @@ fn images_on_the_local_network_are_refused_without_fetch_private() {
         "subject": "Local",
         "html": format!(r#"<p>Look</p><img src="{}" alt="Hero">"#, web.url("/hero.png")),
     }));
-    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all", "gmail_remote_images": true }));
     gmail.run_ok();
     let blocks = body_blocks(&gmail.email("local"));
     assert_eq!(
@@ -1249,6 +1249,29 @@ fn images_on_the_local_network_are_refused_without_fetch_private() {
             web.url("/hero.png")
         )
     );
+    assert!(web.requests().is_empty());
+}
+
+#[test]
+fn remote_images_default_off_preserves_data_images() {
+    let web = FakeWeb::start();
+    web.route("/hero.png", image_reply(png(1)));
+    let google = FakeGoogle::start();
+    google.add_message(json!({
+        "id": "private", "labels": ["INBOX"], "at": ago(1),
+        "from": "alex@example.com", "subject": "Private",
+        "html": format!(r#"<img src="data:image/png;base64,{}"><img src="{}">"#, b64(&png(2)), web.url("/hero.png")),
+    }));
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    gmail.fetch_private();
+    gmail.run_ok();
+    let note = gmail.email("private");
+    let blocks = body_blocks(&note);
+    assert_eq!(blocks[0]["kind"], "image");
+    assert_eq!(gmail.asset(blocks[0]["fields"]["asset"].as_str().unwrap()), png(2));
+    assert!(web.requests().is_empty());
+    assert!(note["note"]["fields"].get("images_pending").is_none());
+    gmail.run_ok();
     assert!(web.requests().is_empty());
 }
 
@@ -1265,7 +1288,7 @@ fn images_the_time_budget_leaves_out_wait_for_the_next_run() {
         "subject": "Later",
         "html": format!(r#"<p>Look</p><img src="{}" alt="Hero"><p>Done</p>"#, web.url("/hero.png")),
     }));
-    let gmail = Gmail::start(google, json!({ "gmail_mode": "all", "image_budget": 0 }));
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all", "gmail_remote_images": true, "image_budget": 0 }));
     gmail.fetch_private();
     gmail.run_ok();
     let note = gmail.email("later");
@@ -1279,9 +1302,13 @@ fn images_the_time_budget_leaves_out_wait_for_the_next_run() {
     );
     assert!(web.requests().is_empty());
 
-    // The next run, with time for images, fetches it into its place.
-    gmail.release_safety(&note);
+    // Disabling consent prevents pending completion, even with time available.
     gmail.set_settings(json!({ "gmail_mode": "all" }));
+    gmail.run_ok();
+    assert!(web.requests().is_empty());
+    // The next opted-in run, with time for images, fetches it into its place.
+    gmail.release_safety(&note);
+    gmail.set_settings(json!({ "gmail_mode": "all", "gmail_remote_images": true }));
     gmail.run_ok();
     let note = gmail.email("later");
     assert_eq!(

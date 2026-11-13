@@ -542,6 +542,8 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsBody {
+    #[serde(default)]
+    gmail_remote_images: Option<bool>,
     gmail_mode: String,
     gmail_labels: Vec<String>,
     gmail_window_days: i64,
@@ -568,8 +570,12 @@ fn cleaned(items: Vec<String>) -> Vec<String> {
 /// `PUT /api/integrations/google/settings`.
 pub async fn put_settings(
     State(g): Shared,
+    crate::Caller(author): crate::Caller,
     Json(b): Json<SettingsBody>,
 ) -> Result<Json<Value>, ApiError> {
+    if b.gmail_remote_images.is_some() && !matches!(author, state::Author::Session(_)) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "session_required", "Mail image consent requires an owner session"));
+    }
     if !matches!(b.gmail_mode.as_str(), "labels" | "all") {
         return Err(ApiError::bad_request(format!(
             "gmail_mode must be labels or all, not {:?}",
@@ -606,6 +612,9 @@ pub async fn put_settings(
     let labels = cleaned(b.gmail_labels);
     on_writer(&g, move |w| {
         let mut s = settings(w)?;
+        if let Some(remote) = b.gmail_remote_images {
+            s.insert("gmail_remote_images".into(), json!(remote));
+        }
         s.insert("gmail_mode".into(), json!(b.gmail_mode));
         s.insert("gmail_labels".into(), json!(labels));
         s.insert("gmail_window_days".into(), json!(b.gmail_window_days));
