@@ -113,8 +113,8 @@ impl Manifest {
                 "legacy manifest refused; upgrade every peer and republish".into(),
             ));
         }
-        serde_json::from_slice(&json).map_err(|e| Error::Malformed(format!(
-            "manifest: {e}; upgrade every peer and republish"
-        )))
+        serde_json::from_slice(&json).map_err(|e| {
+            Error::Malformed(format!("manifest: {e}; upgrade every peer and republish"))
+        })
     }
 }

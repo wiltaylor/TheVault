@@ -587,7 +587,10 @@ impl Round<'_> {
                 }
                 let text = self.key.open(&path, &blob).map_err(Skip::new)?;
                 if pack::sha256_hex(&text) != d.sha256 {
-                    return Err(named(format!("definition {} plaintext hash mismatch", d.name)));
+                    return Err(named(format!(
+                        "definition {} plaintext hash mismatch",
+                        d.name
+                    )));
                 }
                 let text = String::from_utf8(text)
                     .map_err(|_| Skip::new(format!("definition {} is not text", d.name)))?;
@@ -711,14 +714,23 @@ impl Round<'_> {
         let mut referenced = BTreeMap::new();
         let manifest_path = layout.manifest();
         for path in std::iter::once(&manifest_path)
-            .chain(manifest.types.iter().chain(&manifest.taxonomies).map(|d| &d.path))
+            .chain(
+                manifest
+                    .types
+                    .iter()
+                    .chain(&manifest.taxonomies)
+                    .map(|d| &d.path),
+            )
             .chain(manifest.notes.iter().map(|n| &n.path))
             .chain(manifest.assets.iter().flat_map(|a| &a.parts))
         {
-            let oid = oids.get(path).ok_or_else(|| named(format!("missing referenced blob: {path}")))?;
+            let oid = oids
+                .get(path)
+                .ok_or_else(|| named(format!("missing referenced blob: {path}")))?;
             referenced.insert(path, oid);
         }
-        let fingerprint = pack::sha256_hex(&serde_json::to_vec(&referenced).expect("references serialize"));
+        let fingerprint =
+            pack::sha256_hex(&serde_json::to_vec(&referenced).expect("references serialize"));
         if let Err(e) =
             crate::freshness::receive(self.w.state(), &peer, manifest.sequence, &fingerprint)
         {
@@ -1308,7 +1320,9 @@ impl Round<'_> {
         let remote_ref = format!("refs/remotes/origin/{branch}");
         let remote_sequence = if self.git.tree_of(&remote_ref)?.is_some() {
             let entries = self.git.read_tree(&remote_ref)?;
-            let entry = entries.iter().find(|e| e.path == layout.manifest() && e.kind == "blob")
+            let entry = entries
+                .iter()
+                .find(|e| e.path == layout.manifest() && e.kind == "blob")
                 .ok_or_else(|| fail("own remote branch has no manifest"))?;
             // Read only the authenticated identity and counter, so an upgrade can
             // republish its own older manifest without definition hashes.
@@ -1329,7 +1343,8 @@ impl Round<'_> {
         } else {
             0
         };
-        manifest.sequence = crate::freshness::publication(state, &self.me, &fingerprint, remote_sequence)?;
+        manifest.sequence =
+            crate::freshness::publication(state, &self.me, &fingerprint, remote_sequence)?;
         files.insert(layout.manifest(), manifest.seal(self.key));
 
         let tree = self.git.write_tree(&files)?;

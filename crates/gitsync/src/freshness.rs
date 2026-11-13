@@ -52,7 +52,12 @@ fn save(state: &State, name: &str, sequence: u64, hash: &str) -> Result<()> {
 }
 
 /// The caller holds the vault's round lock, including across the push.
-pub(crate) fn publication(state: &State, peer: &str, hash: &str, remote_sequence: u64) -> Result<u64> {
+pub(crate) fn publication(
+    state: &State,
+    peer: &str,
+    hash: &str,
+    remote_sequence: u64,
+) -> Result<u64> {
     let name = format!("gitsync_freshness_publish_{peer}");
     let sequence = match load(state, &name)? {
         Some(old) if old.hash == hash && old.sequence >= remote_sequence => return Ok(old.sequence),
@@ -61,7 +66,8 @@ pub(crate) fn publication(state: &State, peer: &str, hash: &str, remote_sequence
             .max(remote_sequence)
             .checked_add(1)
             .ok_or_else(|| Error::Sync("git-sync sequence exhausted".into()))?,
-        None => remote_sequence.checked_add(1)
+        None => remote_sequence
+            .checked_add(1)
             .ok_or_else(|| Error::Sync("git-sync sequence exhausted".into()))?,
     };
     // Reserve before push. A failed push may leave a harmless gap, never reuse a number.
