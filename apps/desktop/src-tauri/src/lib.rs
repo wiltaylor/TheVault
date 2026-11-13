@@ -356,10 +356,12 @@ fn on_tray_menu(app: &AppHandle, id: &str) {
         }
         tray::CONFIRM_UNPAIR if state.unpair_armed.swap(false, Ordering::SeqCst) => {
             state.tray.confirm_unpair(false);
-            match device::unpair(&state.dir, &Keyring) {
+            let dir = state.dir.clone();
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || match device::unpair(&dir, &Keyring) {
                 Ok(()) => app.exit(0),
                 Err(e) => eprintln!("thevault: unpair failed: {e}"),
-            }
+            });
         }
         tray::QUIT => app.exit(0),
         _ => {}
