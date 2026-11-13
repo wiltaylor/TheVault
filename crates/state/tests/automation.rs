@@ -33,19 +33,26 @@ fn migration_from_28_and_29_preserves_rows() {
         let (_, secret) = state.create_token("legacy", state::Scope::Read).unwrap();
         drop(state);
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.execute_batch("DROP TABLE automation_control;").unwrap();
+        conn.execute_batch("DROP TABLE automation_control;")
+            .unwrap();
         if version == 28 {
-            conn.execute_batch("ALTER TABLE tokens DROP COLUMN expires_ms;").unwrap();
+            conn.execute_batch("ALTER TABLE tokens DROP COLUMN expires_ms;")
+                .unwrap();
         }
         conn.pragma_update(None, "user_version", version).unwrap();
         drop(conn);
         let state = State::open(&path, None).unwrap();
-        assert_eq!(state.meta("existing").unwrap().as_deref(), Some("preserved"));
+        assert_eq!(
+            state.meta("existing").unwrap().as_deref(),
+            Some("preserved")
+        );
         assert!(state.authenticate_token(&secret).unwrap().is_some());
         assert!(!state.automation_state().unwrap().stopped);
         assert_eq!(state.automation_state().unwrap().generation, 0);
         let conn = rusqlite::Connection::open(&path).unwrap();
-        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
         assert_eq!(version, crate::EXPECTED_SCHEMA_VERSION);
     }
 }
@@ -57,7 +64,8 @@ fn unreadable_state_refuses_admission_transition_and_commit() {
     let state = State::open(&path, None).unwrap();
     let generation = state.admit_automation().unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE automation_control;").unwrap();
+    conn.execute_batch("DROP TABLE automation_control;")
+        .unwrap();
     assert!(state.automation_state().is_err());
     assert!(state.admit_automation().is_err());
     assert!(state.set_automation_stopped(false).is_err());

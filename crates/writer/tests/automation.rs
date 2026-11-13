@@ -27,16 +27,33 @@ fn stopped_and_stale_commits_leave_files_history_and_index_unchanged() {
             w.state().set_automation_stopped(false).unwrap();
         }
         w.with_automation(generation, || {
-            assert!(w.update(&note.id, &Input::Wcl("title = \"After\"\n".into()), Some(&note.version), &author).is_err());
+            assert!(
+                w.update(
+                    &note.id,
+                    &Input::Wcl("title = \"After\"\n".into()),
+                    Some(&note.version),
+                    &author
+                )
+                .is_err()
+            );
             assert!(w.create("item", &input, &author).is_err());
-            let result: Result<(), Error> = w.commit_checked(|_| Ok(vec![Change::write("scripts/stale.ws", b"stale")]));
+            let result: Result<(), Error> =
+                w.commit_checked(|_| Ok(vec![Change::write("scripts/stale.ws", b"stale")]));
             assert!(result.is_err());
         });
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(w.history(&note.id).unwrap().len(), history);
-        assert_eq!(w.current_version(&note.id).unwrap().as_deref(), Some(note.version.as_str()));
+        assert_eq!(
+            w.current_version(&note.id).unwrap().as_deref(),
+            Some(note.version.as_str())
+        );
         assert!(!dir.path().join("scripts/stale.ws").exists());
-        assert_eq!(std::fs::read_dir(dir.path().join("notes/item")).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("notes/item"))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 }
 
@@ -49,12 +66,15 @@ fn unused_gate_preserves_existing_behavior_and_new_admissions_work() {
     let generation = w.state().admit_automation().unwrap();
     w.with_automation(generation, || {
         w.create("item", &input, &author).unwrap();
-        w.commit_checked::<Error>(|_| Ok(vec![Change::write("scripts/current.ws", b"current")])).unwrap();
+        w.commit_checked::<Error>(|_| Ok(vec![Change::write("scripts/current.ws", b"current")]))
+            .unwrap();
     });
     w.state().set_automation_stopped(true).unwrap();
     // Owner/unscoped operations remain available, independent of the author.
-    w.create("item", &input, &Author::Session("owner".into())).unwrap();
+    w.create("item", &input, &Author::Session("owner".into()))
+        .unwrap();
     w.state().set_automation_stopped(false).unwrap();
     let generation = w.state().admit_automation().unwrap();
-    w.with_automation(generation, || w.create("item", &input, &author)).unwrap();
+    w.with_automation(generation, || w.create("item", &input, &author))
+        .unwrap();
 }

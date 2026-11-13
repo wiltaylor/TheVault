@@ -34,11 +34,11 @@
 //! joins the write in progress, so it commits with it or not at all (D30).
 
 mod activity;
-mod automation;
 pub mod agent_safety;
 mod agent_threads;
 mod asset_use;
 mod assets;
+mod automation;
 mod batch;
 mod builtin;
 mod contacts;

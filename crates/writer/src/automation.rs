@@ -13,7 +13,9 @@ thread_local! {
 struct Scope;
 impl Drop for Scope {
     fn drop(&mut self) {
-        GENERATIONS.with(|g| { g.borrow_mut().pop(); });
+        GENERATIONS.with(|g| {
+            g.borrow_mut().pop();
+        });
     }
 }
 
@@ -30,6 +32,8 @@ impl Writer {
 
     pub(crate) fn automation_commit(&self) -> Result<Option<MutexGuard<'_, ()>>> {
         let generation = GENERATIONS.with(|g| g.borrow().first().copied());
-        generation.map(|g| self.state.automation_commit(g).map_err(Into::into)).transpose()
+        generation
+            .map(|g| self.state.automation_commit(g).map_err(Into::into))
+            .transpose()
     }
 }

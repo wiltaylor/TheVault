@@ -30,12 +30,19 @@ impl State {
         Ok(self.conn().query_row(
             "SELECT stopped, generation FROM automation_control WHERE singleton=1",
             [],
-            |row| Ok(AutomationState { stopped: row.get(0)?, generation: row.get(1)? }),
+            |row| {
+                Ok(AutomationState {
+                    stopped: row.get(0)?,
+                    generation: row.get(1)?,
+                })
+            },
         )?)
     }
 
     fn automation_lock(&self) -> Result<MutexGuard<'_, ()>> {
-        self.automation_gate.lock().map_err(|_| Error::Corrupt("automation gate poisoned".into()))
+        self.automation_gate
+            .lock()
+            .map_err(|_| Error::Corrupt("automation gate poisoned".into()))
     }
 
     pub fn admit_automation(&self) -> Result<Generation> {
@@ -53,11 +60,23 @@ impl State {
         let _gate = self.automation_lock()?;
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let generation: i64 = tx.query_row("SELECT generation FROM automation_control WHERE singleton=1", [], |r| r.get(0))?;
-        let generation = generation.checked_add(1).ok_or_else(|| Error::Corrupt("automation generation exhausted".into()))?;
-        tx.execute("UPDATE automation_control SET stopped=?1, generation=?2 WHERE singleton=1", rusqlite::params![stopped, generation])?;
+        let generation: i64 = tx.query_row(
+            "SELECT generation FROM automation_control WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )?;
+        let generation = generation
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("automation generation exhausted".into()))?;
+        tx.execute(
+            "UPDATE automation_control SET stopped=?1, generation=?2 WHERE singleton=1",
+            rusqlite::params![stopped, generation],
+        )?;
         tx.commit()?;
-        Ok(AutomationState { stopped, generation })
+        Ok(AutomationState {
+            stopped,
+            generation,
+        })
     }
 
     /// Hold only across local mutation, never callbacks, handlers or network I/O.
@@ -65,7 +84,9 @@ impl State {
         let gate = self.automation_lock()?;
         let state = self.automation_state()?;
         if state.stopped || state.generation != generation.0 {
-            return Err(Error::Corrupt("automation stopped or stale generation".into()));
+            return Err(Error::Corrupt(
+                "automation stopped or stale generation".into(),
+            ));
         }
         Ok(gate)
     }
