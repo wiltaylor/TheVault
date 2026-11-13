@@ -103,6 +103,19 @@ field processed {
   default = false
 }
 
+field gmail_account {
+  kind   = "string"
+  label  = "Gmail account"
+  hidden = true
+}
+
+field gmail_deferred_parts {
+  kind   = "list"
+  items  = "string"
+  label  = "Deferred Gmail parts"
+  hidden = true
+}
+
 field gmail_ref {
   kind        = "string"
   label       = "Gmail reference"

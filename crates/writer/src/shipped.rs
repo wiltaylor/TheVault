@@ -183,6 +183,7 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "41fe0334ecdd4e4c2f43403331a36339fb47d236f215f9c6671d41a4f39e2f33",
             "1b2796fa010585134eb1c98c79ee322b1e4d3999deeacfdb061da53204323c88",
             "36b958e98aa54a9816269e28865c2fe712a984b67c974e50d28ddd641382dd07",
+            "7b1f72bf8ed1df0ba11ad7ca0a8d1ac9de7253ad5fb1b2534aad7655aa40e725",
         ],
     },
     ShippedFile {
@@ -192,6 +193,7 @@ pub const SHIPPED_FILES: [ShippedFile; 28] = [
             "94f9b68f9e0f6a9bcb001ce06304c1a791fb5dad6bb5eb5ed1cbead2d8997c51",
             "07fca002b04da1462058d2959114609243cf4068dec3dcd383f1bc93d641b2d4",
             "97e5f92bf1f17aa8d653678b50af23f0fdbc6ea435d9f7e31c13b592ad2f7265",
+            "e9e1178f8588bfdedd94ce2676a354622bed0b63be1e98a34bfd1835efe8517a",
         ],
     },
     // Mail actions back to Gmail, named by the shipped `email` type's handlers (TV-25).

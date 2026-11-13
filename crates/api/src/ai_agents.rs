@@ -548,6 +548,18 @@ pub(crate) fn triggered_agent_changed(p: &Value) -> bool {
     match (parse("before"), parse("after")) {
         (Some(Ok(mut before)), Some(Ok(mut after))) => {
             let triggered = !before.triggers.is_empty() || !after.triggers.is_empty();
+            // Mention dispatch picks the first matching trigger, so its order is semantic.
+            let mentions = |agent: &Agent| {
+                agent
+                    .triggers
+                    .iter()
+                    .filter(|t| matches!(t.when, schema::TriggerWhen::Mention(_)))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            if mentions(&before) != mentions(&after) {
+                return true;
+            }
             before.triggers.sort_by(|a, b| a.name.cmp(&b.name));
             after.triggers.sort_by(|a, b| a.name.cmp(&b.name));
             triggered && before != after
@@ -578,7 +590,7 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value, session: bool) -> Result<Value,
     }
     if triggered_agent_changed(p) && !session {
         return Err(ApplyError::Refused(
-            "Agent trigger changes need a signed-in session Apply.".into(),
+            "Changes to an agent with triggers need a signed-in session Apply.".into(),
         ));
     }
     if p["op"] == "delete" {
@@ -816,6 +828,36 @@ mod tests {
         }
         assert!(!triggered_agent_changed(
             &json!({"name":"helper", "before":trigger, "after":format!("\n{trigger}\n")})
+        ));
+    }
+
+    #[test]
+    fn overlapping_mention_trigger_reorder_is_sensitive() {
+        let first = "trigger first {\n mention = true\n type = \"memo\"\n prompt = \"First.\"\n}\n";
+        let second = "trigger second {\n mention = true\n prompt = \"Second.\"\n}\n";
+        let before = format!("{first}{second}");
+        let after = format!("{second}{first}");
+        assert_eq!(
+            Agent::parse("helper", &before)
+                .unwrap()
+                .mention_trigger("memo")
+                .unwrap()
+                .name,
+            "first"
+        );
+        assert_eq!(
+            Agent::parse("helper", &after)
+                .unwrap()
+                .mention_trigger("memo")
+                .unwrap()
+                .name,
+            "second"
+        );
+        assert!(triggered_agent_changed(
+            &json!({"name":"helper", "before":before, "after":after})
+        ));
+        assert!(!triggered_agent_changed(
+            &json!({"name":"helper", "before":before, "after":format!("\n{before}")})
         ));
     }
 

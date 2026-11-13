@@ -196,6 +196,8 @@ fn a_new_vault_has_the_google_types_with_the_fields_the_spec_lists() {
             "scam_probability",
             "communication_category",
             "processed",
+            "gmail_account",
+            "gmail_deferred_parts",
             "gmail_ref",
             "inline_images",
             "converter",

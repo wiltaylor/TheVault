@@ -52,6 +52,7 @@ mod event_series;
 mod events;
 mod fleeting;
 mod gmail_actions;
+mod gmail_attachment_fetch;
 mod google_calendar;
 mod google_connect;
 mod google_event;

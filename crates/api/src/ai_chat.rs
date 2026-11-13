@@ -253,7 +253,13 @@ pub(crate) async fn run_unattended(
     run_context: RunContext,
 ) -> Unattended {
     let report: Report = Arc::default();
-    let retry = CapacityRetry::new(waits, w.clone(), thread, report.clone());
+    let retry = CapacityRetry::new(
+        waits,
+        w.clone(),
+        thread,
+        report.clone(),
+        run_context.clone(),
+    );
     let body = ChatBody {
         account: None,
         provider: None,
@@ -1994,9 +2000,10 @@ impl Turn {
                         .await;
                     return;
                 }
-                Some(crate::ai_browser::TemporaryProfile(
+                Some(crate::ai_browser::TemporaryProfile::new(
                     b.with_profile(id),
                     self.writer.clone(),
+                    self.run_context.clone(),
                 ))
             } else {
                 None
@@ -2084,13 +2091,15 @@ impl Turn {
             };
             let mut began = Instant::now();
             let trail = |began: Instant, usage: Usage, outcome: Outcome| {
-                if let Err(e) = self.writer.state().record_ai_usage(
-                    &setup.cred.account,
-                    &setup.model,
-                    "agent",
-                    usage.input,
-                    usage.output,
-                ) {
+                if let Err(e) = self.run_context.scope(|| {
+                    self.writer.state().record_ai_usage(
+                        &setup.cred.account,
+                        &setup.model,
+                        "agent",
+                        usage.input,
+                        usage.output,
+                    )
+                }) {
                     eprintln!("ai: recording agent usage: {e}");
                 }
                 let line = ai::trail_line(
@@ -2768,6 +2777,7 @@ impl Turn {
         match call.name.as_str() {
             "browser_fill_secret" => {
                 crate::ai_browser::secret_fill::call(
+                    &self.run_context,
                     b,
                     self.writer.state(),
                     &setup.agent,
@@ -2778,7 +2788,9 @@ impl Turn {
                 )
                 .await
             }
-            "browser_run" => crate::ai_browser::run(b, &call.input, self.writer.state()).await,
+            "browser_run" => {
+                crate::ai_browser::run(&self.run_context, b, &call.input, self.writer.state()).await
+            }
             "browser_capture" => {
                 let direct = setup.direct.downloads;
                 crate::ai_browser::capture(
@@ -2866,13 +2878,15 @@ impl Turn {
         };
         let began = Instant::now();
         let record = |usage: Usage| {
-            if let Err(e) = self.writer.state().record_ai_usage(
-                &setup.cred.account,
-                &setup.model,
-                "agent",
-                usage.input,
-                usage.output,
-            ) {
+            if let Err(e) = self.run_context.scope(|| {
+                self.writer.state().record_ai_usage(
+                    &setup.cred.account,
+                    &setup.model,
+                    "agent",
+                    usage.input,
+                    usage.output,
+                )
+            }) {
                 eprintln!("ai: recording compaction usage: {e}");
             }
         };
@@ -2894,13 +2908,15 @@ impl Turn {
             }
         }
         self.keep_usage(&setup.cred, stream.plan_usage()).await;
-        if let Err(e) = self.writer.state().record_ai_usage(
-            &setup.cred.account,
-            &setup.model,
-            "agent",
-            usage.input,
-            usage.output,
-        ) {
+        if let Err(e) = self.run_context.scope(|| {
+            self.writer.state().record_ai_usage(
+                &setup.cred.account,
+                &setup.model,
+                "agent",
+                usage.input,
+                usage.output,
+            )
+        }) {
             eprintln!("ai: recording compaction usage: {e}");
         }
         let line = ai::trail_line(
@@ -5441,6 +5457,30 @@ mod context_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn blocking_explicit_default_inherits_restricted_caller() {
+        let parent = RunContext::default();
+        parent.restrict();
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let generation = state.admit_automation().unwrap();
+        parent.capture_stop_generation(generation);
+        let worker = parent.scope(|| {
+            blocking(&RunContext::default(), || {
+                let context = RunContext::current().unwrap();
+                let job = script_core::Job::new(script_core::Kind::Task, "child", "", "run");
+                assert_eq!(job.run_context(), &context);
+                context
+            })
+        });
+        assert!(RunContext::current().is_none());
+        let observed = worker.await.unwrap();
+        assert_eq!(observed, parent);
+        assert!(observed.is_restricted());
+        assert_eq!(observed.stop_generation(), Some(generation));
+        assert!(RunContext::current().is_none());
+    }
 
     #[tokio::test]
     async fn blocking_turn_workers_share_late_restriction_and_job_provenance() {

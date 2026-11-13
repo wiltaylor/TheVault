@@ -783,6 +783,76 @@ fn login_backup_contains_only_encrypted_payload_and_restores_it() {
     assert_eq!(state.get_secret("site").unwrap(), None);
 }
 
+/// TV-270: an offline drill, with independent source and recovery key custody.
+#[test]
+fn isolated_off_host_restore_drill() {
+    let source = Vault::offline();
+    let recovery = Vault::offline();
+    let dirs = TempDir::new().unwrap();
+    let dir = tmp_path(&dirs, "synthetic-source");
+    let init = source.ok(&["init", &dir, "--password-stdin"], "synthetic-only\n");
+    let key_path = Path::new(s(&init["key_file"]));
+    let note = Path::new(&dir).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl");
+    std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+    let content = b"title = \"Synthetic restore drill\"\n";
+    std::fs::write(&note, content).unwrap();
+    let db = state::State::open(
+        &Path::new(&dir).join(".vault/state.db"),
+        Some(state::SecretKey::load_file(key_path).unwrap()),
+    )
+    .unwrap();
+    let vault_id = db.vault_id().unwrap();
+    db.set_secret("drill", "synthetic-no-provider-value")
+        .unwrap();
+    drop(db);
+
+    let archive = tmp_path(&dirs, "off-host.sqlar");
+    let made = source.ok(&["backup", &archive, "--vault", &dir], "");
+    assert_eq!(made["key"]["included"], false);
+    let into = tmp_path(&dirs, "fresh-recovery");
+    let restored = recovery.ok(&["restore-backup", &archive, &into], "");
+    assert_eq!(restored["key"]["in_archive"], false);
+    let recovery_key = Path::new(s(&restored["key"]["path"]));
+    assert!(!recovery_key.exists());
+    let restored_db = Path::new(&into).join(".vault/state.db");
+    let missing = state::State::open(&restored_db, None).unwrap();
+    assert!(missing.get_secret("drill").is_err());
+    assert_eq!(missing.vault_id().unwrap(), vault_id);
+    drop(missing);
+
+    // Supply only the synthetic test key, separately from the archive.
+    std::fs::create_dir_all(recovery_key.parent().unwrap()).unwrap();
+    std::fs::copy(key_path, recovery_key).unwrap();
+    let recovered = state::State::open(
+        &restored_db,
+        Some(state::SecretKey::load_file(recovery_key).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        recovered.get_secret("drill").unwrap().as_deref(),
+        Some("synthetic-no-provider-value")
+    );
+    assert_eq!(
+        std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl")).unwrap(),
+        content
+    );
+    drop(recovered);
+
+    let corrupt = tmp_path(&dirs, "corrupt.sqlar");
+    std::fs::write(&corrupt, b"not a SQLite archive").unwrap();
+    let rejected = tmp_path(&dirs, "rejected-recovery");
+    recovery.fails(&["restore-backup", &corrupt, &rejected], "");
+    assert!(!Path::new(&rejected).exists());
+    assert_eq!(
+        std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl")).unwrap(),
+        content
+    );
+    assert_eq!(
+        std::fs::read(key_path).unwrap(),
+        std::fs::read(recovery_key).unwrap()
+    );
+}
+
 /// A vault with no vault id has no key file to find, so `--include-key` fails before it writes
 /// anything, and says to start the server once first (TV-73).
 #[test]

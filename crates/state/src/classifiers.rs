@@ -4,6 +4,22 @@ use rusqlite::OptionalExtension;
 use crate::{Result, State};
 
 impl State {
+    /// A newly fetched attachment needs fresh evidence, even for legacy-allowed mail.
+    /// Hold before publishing bytes or a note edit. Failure afterwards stays held.
+    pub fn hold_for_new_attachment(&self, id: &str) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM meta WHERE key=?1",
+            [format!("agent_safety.legacy.{id}")],
+        )?;
+        let verdict = serde_json::json!({"status":"held", "reason":"content_changed", "fingerprint":"attachment-fetch-pending"}).to_string();
+        tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [format!("agent_safety.note.{id}"), verdict])?;
+        tx.execute("INSERT INTO agent_safety_index(id,fingerprint,held) VALUES (?1,'attachment-fetch-pending',1) ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,held=1", [id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Sticky asset provenance and its owner set are updated in one transaction.
     /// A pre-envelope mark without an owner set stays unknown, never reconstructed.
     pub fn mark_incoming_asset(&self, id: &str, owner: Option<&str>) -> Result<()> {

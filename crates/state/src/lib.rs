@@ -27,6 +27,7 @@ mod history;
 mod jobs;
 mod notifications;
 mod pins;
+mod run_provenance;
 mod runs;
 mod script_secrets;
 mod secrets;
@@ -70,6 +71,7 @@ pub use notifications::{
     READ_RETENTION_MS, SourceLimit, SourceMatch, is_app_path,
 };
 pub use pins::{PinEntry, PinKind, PinNode};
+pub use run_provenance::{RunProvenance, RunProvenanceLease};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{LoginInfo, LoginSecret, SecretInfo, SecretKey, canonical_origin, key_file_path};
 pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck};
@@ -169,7 +171,7 @@ impl Clock for SystemClock {
 /// An open `state.db`.
 pub struct State {
     automation_gate: Mutex<()>,
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     key: Option<SecretKey>,
     clock: Arc<dyn Clock>,
     events: Events,
@@ -179,7 +181,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 30;
+const SCHEMA_VERSION: i64 = 31;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -524,7 +526,7 @@ impl State {
         let now = clock.now_ms();
         Ok(Self {
             automation_gate: Mutex::new(()),
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             key,
             clock,
             events: Events::default(),
@@ -699,7 +701,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=29 => {
+        0..=30 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -826,6 +828,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             tx.execute_batch(ai_usage::SCHEMA)?;
             tx.execute_batch(approval_quota::SCHEMA)?;
             tx.execute_batch(automation::SCHEMA)?;
+            tx.execute_batch(run_provenance::SCHEMA)?;
             let has_expiry: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tokens') WHERE name='expires_ms')",
                 [],

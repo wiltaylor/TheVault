@@ -147,6 +147,7 @@ impl AgentJob {
         &self.run_context
     }
 
+    /// Do not reuse a job or its clones across runs in different scopes: joins are permanent.
     pub fn set_run_context(&mut self, context: script::RunContext) {
         self.run_context.clone().scope(|| {
             self.run_context = context.inherit_current();

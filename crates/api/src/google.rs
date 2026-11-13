@@ -57,6 +57,8 @@ use writer::google::{ACCOUNT, CALENDAR_STATE, GMAIL_STATE, SETTINGS};
 
 use crate::ApiError;
 
+pub(crate) mod attachments;
+
 /// The secrets the sign-in stores and the sync scripts read (google-sync D19).
 pub const CLIENT_ID: &str = "google_client_id";
 pub const CLIENT_SECRET: &str = "google_client_secret";
@@ -110,11 +112,13 @@ pub struct Google {
     scheduler: Arc<Scheduler>,
     pending: Mutex<HashMap<String, Pending>>,
     http: reqwest::Client,
+    attachment_fetch: tokio::sync::Semaphore,
 }
 
 impl Google {
     pub fn new(scheduler: Arc<Scheduler>) -> Google {
         Google {
+            attachment_fetch: tokio::sync::Semaphore::new(1),
             scheduler,
             pending: Mutex::default(),
             http: reqwest::Client::builder()
