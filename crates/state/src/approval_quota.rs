@@ -30,11 +30,24 @@ pub enum ApprovalReservation {
 
 impl State {
     /// Atomically reserves one target against all applicable budgets, even across connections.
-    pub fn reserve_approval(&self, id: &str, agent: &str, rule: &str, destructive: bool, budget: ApprovalBudget) -> Result<ApprovalReservation> {
+    pub fn reserve_approval(
+        &self,
+        id: &str,
+        agent: &str,
+        rule: &str,
+        destructive: bool,
+        budget: ApprovalBudget,
+    ) -> Result<ApprovalReservation> {
         let day = self.now().div_euclid(86_400_000);
         let mut conn = self.conn();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let previous: Option<String> = tx.query_row("SELECT outcome FROM approval_quota WHERE id=?1", [id], |r| r.get(0)).optional()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT outcome FROM approval_quota WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?;
         if previous.as_deref().is_some_and(|s| s != "no_write") {
             return Ok(ApprovalReservation::AlreadyAttempted);
         }
@@ -44,7 +57,9 @@ impl State {
         }
         if destructive {
             let (agent_count, vault_count): (i64, i64) = tx.query_row("SELECT coalesce(sum(agent=?2),0),count(*) FROM approval_quota WHERE day=?1 AND destructive=1 AND outcome!='no_write'", params![day, agent], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            if budget.agent_destructive_daily.unwrap_or(0) <= agent_count || budget.vault_destructive_daily.unwrap_or(0) <= vault_count {
+            if budget.agent_destructive_daily.unwrap_or(0) <= agent_count
+                || budget.vault_destructive_daily.unwrap_or(0) <= vault_count
+            {
                 return Ok(ApprovalReservation::Capped);
             }
         }
@@ -55,8 +70,17 @@ impl State {
 
     /// Only a proven no-write failure releases capacity. An uncertain failure stays reserved.
     pub fn finish_approval(&self, id: &str, succeeded: bool, proven_no_write: bool) -> Result<()> {
-        let outcome = if succeeded { "succeeded" } else if proven_no_write { "no_write" } else { "reserved" };
-        self.conn().execute("UPDATE approval_quota SET outcome=?2 WHERE id=?1 AND outcome='reserved'", params![id, outcome])?;
+        let outcome = if succeeded {
+            "succeeded"
+        } else if proven_no_write {
+            "no_write"
+        } else {
+            "reserved"
+        };
+        self.conn().execute(
+            "UPDATE approval_quota SET outcome=?2 WHERE id=?1 AND outcome='reserved'",
+            params![id, outcome],
+        )?;
         Ok(())
     }
 }

@@ -3778,13 +3778,21 @@ fn run_tool(
     }
     // TV-245/246 own destructive activation and explicit owner caps. Confirmation-off is
     // not an unattended destructive allowance. Keep the proposal reviewable instead.
-    let destructive = out.proposal.as_ref().is_some_and(|(event, p)|
-        *event == "proposal" && matches!(p["op"].as_str(), Some("delete" | "archive")));
-    let rule = if scope.allows(Scope::Write) && !destructive
+    let destructive = out.proposal.as_ref().is_some_and(|(event, p)| {
+        *event == "proposal" && matches!(p["op"].as_str(), Some("delete" | "archive"))
+    });
+    let rule = if scope.allows(Scope::Write)
+        && !destructive
         && agent.permissions.allows_tool(&call.name)
-        && w.agent(&agent.name).is_ok_and(|a| a.permissions.allows_tool(&call.name)) {
-        out.proposal.as_ref().and_then(|(event, p)| approval_rule(w, &agent.name, event, p))
-    } else { None };
+        && w.agent(&agent.name)
+            .is_ok_and(|a| a.permissions.allows_tool(&call.name))
+    {
+        out.proposal
+            .as_ref()
+            .and_then(|(event, p)| approval_rule(w, &agent.name, event, p))
+    } else {
+        None
+    };
     match &out.proposal {
         Some((event, p)) if !destructive && (direct.covers(event, p) || rule.is_some()) => {
             let (event, mut p) = (*event, p.clone());
@@ -3795,17 +3803,30 @@ fn run_tool(
                 // No cap or array position in the bucket: editing a cap cannot reset usage.
                 let bucket = json!([rule.operation, rule.note_type, fields]).to_string();
                 let id = approval_attempt_id(&agent.name, event, &p);
-                let budget = state::ApprovalBudget { rule_daily: rule.daily_cap, agent_destructive_daily: None, vault_destructive_daily: None };
-                match w.state().reserve_approval(&id, &agent.name, &bucket, false, budget) {
-                    Ok(state::ApprovalReservation::Reserved) => {},
+                let budget = state::ApprovalBudget {
+                    rule_daily: rule.daily_cap,
+                    agent_destructive_daily: None,
+                    vault_destructive_daily: None,
+                };
+                match w
+                    .state()
+                    .reserve_approval(&id, &agent.name, &bucket, false, budget)
+                {
+                    Ok(state::ApprovalReservation::Reserved) => {}
                     Ok(state::ApprovalReservation::Capped) => return out,
-                    Ok(state::ApprovalReservation::AlreadyAttempted) => return ToolOut::error("This change was already attempted. Its outcome may be uncertain. Check the target; do not retry."),
+                    Ok(state::ApprovalReservation::AlreadyAttempted) => {
+                        return ToolOut::error(
+                            "This change was already attempted. Its outcome may be uncertain. Check the target; do not retry.",
+                        );
+                    }
                     Err(e) => return ToolOut::error(e.to_string()),
                 }
                 p["_automatic_rule"] = serde_json::to_value(rule).expect("approval rule JSON");
                 p["_automatic_tool"] = json!(call.name);
                 Some(id)
-            } else { None };
+            } else {
+                None
+            };
             // A change made without the user's Apply to an Outbox item is the agent's, whoever
             // runs the turn, so the writer's review rules hold for it (outbox X2).
             let email = event == "proposal"
@@ -3857,20 +3878,35 @@ fn approval_rule(w: &Writer, agent: &str, event: &str, p: &Value) -> Option<sche
         return None;
     }
     let current = w.read(p["note_id"].as_str()?).ok()?;
-    if matches!(current.type_name.as_str(), "event" | "event_series" | "outbox" | "agent_thread" | "agent_memory") {
+    if matches!(
+        current.type_name.as_str(),
+        "event" | "event_series" | "outbox" | "agent_thread" | "agent_memory"
+    ) {
         return None;
     }
     let live = w.agent(agent).ok()?;
-    if !live.enabled { return None; }
+    if !live.enabled {
+        return None;
+    }
     let before = doc_to_json(&current.doc);
     let after = &p["after"];
     // No block changes, even an omitted block list, are field approvals.
-    if before["blocks"] != after["blocks"] { return None; }
+    if before["blocks"] != after["blocks"] {
+        return None;
+    }
     let changes = diff(&before, after);
-    if changes.is_empty() { return None; }
+    if changes.is_empty() {
+        return None;
+    }
     live.permissions.approval_rules.into_iter().find(|rule| {
-        rule.operation == "update" && rule.note_type == current.type_name
-            && changes.iter().all(|c| c["op"] == "field" && c["name"].as_str().is_some_and(|name| rule.fields.iter().any(|f| f == name)))
+        rule.operation == "update"
+            && rule.note_type == current.type_name
+            && changes.iter().all(|c| {
+                c["op"] == "field"
+                    && c["name"]
+                        .as_str()
+                        .is_some_and(|name| rule.fields.iter().any(|f| f == name))
+            })
     })
 }
 
@@ -3903,21 +3939,46 @@ fn approval_attempt_id(agent: &str, event: &str, p: &Value) -> String {
     use sha2::{Digest, Sha256};
     // One attempt per target/base version, independent of model call IDs, rule edits,
     // dry-run timestamps and retry phrasing. Currently only updates reach this path.
-    format!("{:x}", Sha256::digest(json!([agent, event, p["op"], p["note_id"], p["base_version"]]).to_string().as_bytes()))
+    format!(
+        "{:x}",
+        Sha256::digest(
+            json!([agent, event, p["op"], p["note_id"], p["base_version"]])
+                .to_string()
+                .as_bytes()
+        )
+    )
 }
 
 fn approval_proven_no_write(result: &Result<Value, ApplyError>) -> bool {
     // Authorization and proposal-shape checks precede commit_checked_note. Conflict is
     // the pre-write base-version check. Storage/index/state errors are never proof.
-    matches!(result, Err(ApplyError::Invalid(_) | ApplyError::Stale(_) | ApplyError::Refused(_) | ApplyError::Write(writer::Error::Conflict { .. })))
+    matches!(
+        result,
+        Err(ApplyError::Invalid(_)
+            | ApplyError::Stale(_)
+            | ApplyError::Refused(_)
+            | ApplyError::Write(writer::Error::Conflict { .. }))
+    )
 }
 
-fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value, reservation: Option<&str>) -> ToolOut {
+fn make(
+    w: &Writer,
+    author: &Author,
+    event: &str,
+    p: &Value,
+    summary: Value,
+    reservation: Option<&str>,
+) -> ToolOut {
     let result = apply_change(w, author, event, p);
     let proven_no_write = approval_proven_no_write(&result);
     if let Some(id) = reservation
-        && let Err(e) = w.state().finish_approval(id, result.is_ok(), proven_no_write) {
-        return ToolOut::error(format!("Mutation outcome bookkeeping failed: {e}. Check the target; do not retry."));
+        && let Err(e) = w
+            .state()
+            .finish_approval(id, result.is_ok(), proven_no_write)
+    {
+        return ToolOut::error(format!(
+            "Mutation outcome bookkeeping failed: {e}. Check the target; do not retry."
+        ));
     }
     let done = match result {
         Ok(done) => done,
@@ -4135,11 +4196,15 @@ pub(crate) fn authorize_proposal(
         }
         Limits::of(&agent).check_event(w, event, p)?;
         if let Some(saved_rule) = p.get("_automatic_rule") {
-            let live = approval_rule(w, name, event, p)
-                .and_then(|r| serde_json::to_value(r).ok());
+            let live = approval_rule(w, name, event, p).and_then(|r| serde_json::to_value(r).ok());
             if live.as_ref() != Some(saved_rule)
-                || !p["_automatic_tool"].as_str().is_some_and(|t| agent.permissions.allows_tool(t)) {
-                return Err(ApplyError::Refused("Automatic approval rule changed or no longer matches.".into()));
+                || !p["_automatic_tool"]
+                    .as_str()
+                    .is_some_and(|t| agent.permissions.allows_tool(t))
+            {
+                return Err(ApplyError::Refused(
+                    "Automatic approval rule changed or no longer matches.".into(),
+                ));
             }
         }
         if let Some(parent) = p["proposer_parent"].as_str() {
@@ -4150,8 +4215,13 @@ pub(crate) fn authorize_proposal(
             }
             Limits::of(&parent).check_event(w, event, p)?;
             if p.get("_automatic_rule").is_some()
-                && !p["_automatic_tool"].as_str().is_some_and(|t| parent.permissions.allows_tool(t)) {
-                return Err(ApplyError::Refused("The parent no longer permits this tool.".into()));
+                && !p["_automatic_tool"]
+                    .as_str()
+                    .is_some_and(|t| parent.permissions.allows_tool(t))
+            {
+                return Err(ApplyError::Refused(
+                    "The parent no longer permits this tool.".into(),
+                ));
             }
             let ceiling: Limits = serde_json::from_value(p["proposer_limits"].clone())
                 .map_err(|e| ApplyError::Invalid(format!("invalid delegation limits: {e}")))?;
@@ -5209,10 +5279,18 @@ mod tests {
         p["id"] = json!("different-retry-call");
         p["after"]["fields"]["updated"] = json!("later");
         assert_eq!(approval_attempt_id("reader", "proposal", &p), id);
-        assert!(!approval_proven_no_write(&Err(ApplyError::Write(writer::Error::Store(store::Error::Interrupted)))));
-        assert!(!approval_proven_no_write(&Err(ApplyError::Write(writer::Error::Rejected("unclassified writer failure".into())))));
-        assert!(approval_proven_no_write(&Err(ApplyError::Refused("revoked before commit".into()))));
-        assert!(approval_proven_no_write(&Err(ApplyError::Stale("old version".into()))));
+        assert!(!approval_proven_no_write(&Err(ApplyError::Write(
+            writer::Error::Store(store::Error::Interrupted)
+        ))));
+        assert!(!approval_proven_no_write(&Err(ApplyError::Write(
+            writer::Error::Rejected("unclassified writer failure".into())
+        ))));
+        assert!(approval_proven_no_write(&Err(ApplyError::Refused(
+            "revoked before commit".into()
+        ))));
+        assert!(approval_proven_no_write(&Err(ApplyError::Stale(
+            "old version".into()
+        ))));
     }
 
     #[test]
@@ -5225,7 +5303,13 @@ mod tests {
         let source = "permissions {\n approval_rule {\n operation = \"update\"\n type = \"memo\"\n fields = [\"status\"]\n daily_cap = 1\n }\n}\n";
         w.put_agent("reader", source, |_| vec![]).unwrap();
         let author = Author::Session("owner".into());
-        let n = w.create("memo", &Input::Json(json!({"fields":{"title":"One","status":"open"}})), &author).unwrap();
+        let n = w
+            .create(
+                "memo",
+                &Input::Json(json!({"fields":{"title":"One","status":"open"}})),
+                &author,
+            )
+            .unwrap();
         let before = doc_to_json(&w.read(&n.id).unwrap().doc);
         let mut after = before.clone();
         after["fields"]["status"] = json!("closed");
@@ -5233,21 +5317,62 @@ mod tests {
         let rule = approval_rule(&w, "reader", "proposal", &p).unwrap();
         p["_automatic_rule"] = serde_json::to_value(&rule).unwrap();
         p["_automatic_tool"] = json!("propose_fields");
-        let budget = state::ApprovalBudget { rule_daily: 1, agent_destructive_daily: None, vault_destructive_daily: None };
-        assert_eq!(w.state().reserve_approval("attempt", "reader", "r", false, budget).unwrap(), state::ApprovalReservation::Reserved);
+        let budget = state::ApprovalBudget {
+            rule_daily: 1,
+            agent_destructive_daily: None,
+            vault_destructive_daily: None,
+        };
+        assert_eq!(
+            w.state()
+                .reserve_approval("attempt", "reader", "r", false, budget)
+                .unwrap(),
+            state::ApprovalReservation::Reserved
+        );
         // The rule still matches, but the live field permission denies it at commit.
-        let restricted = source.replace("permissions {", "permissions {\n change_fields = { memo: [\"title\"] }");
+        let restricted = source.replace(
+            "permissions {",
+            "permissions {\n change_fields = { memo: [\"title\"] }",
+        );
         w.put_agent("reader", &restricted, |_| vec![]).unwrap();
-        let result = make(&w, &Author::Agent("reader".into()), "proposal", &p, json!({}), Some("attempt"));
+        let result = make(
+            &w,
+            &Author::Agent("reader".into()),
+            "proposal",
+            &p,
+            json!({}),
+            Some("attempt"),
+        );
         assert!(result.is_error);
         assert_eq!(doc_to_json(&w.read(&n.id).unwrap().doc), before);
         // A proven authorization failure did not consume successful-write allowance.
-        assert_eq!(w.state().reserve_approval("attempt", "reader", "r", false, budget).unwrap(), state::ApprovalReservation::Reserved);
+        assert_eq!(
+            w.state()
+                .reserve_approval("attempt", "reader", "r", false, budget)
+                .unwrap(),
+            state::ApprovalReservation::Reserved
+        );
         w.put_agent("reader", source, |_| vec![]).unwrap();
-        let result = make(&w, &Author::Agent("reader".into()), "proposal", &p, json!({}), Some("attempt"));
+        let result = make(
+            &w,
+            &Author::Agent("reader".into()),
+            "proposal",
+            &p,
+            json!({}),
+            Some("attempt"),
+        );
         assert!(!result.is_error, "{}", result.content);
-        assert_eq!(w.state().reserve_approval("attempt", "reader", "r", false, budget).unwrap(), state::ApprovalReservation::AlreadyAttempted);
-        assert_eq!(w.state().reserve_approval("next", "reader", "r", false, budget).unwrap(), state::ApprovalReservation::Capped);
+        assert_eq!(
+            w.state()
+                .reserve_approval("attempt", "reader", "r", false, budget)
+                .unwrap(),
+            state::ApprovalReservation::AlreadyAttempted
+        );
+        assert_eq!(
+            w.state()
+                .reserve_approval("next", "reader", "r", false, budget)
+                .unwrap(),
+            state::ApprovalReservation::Capped
+        );
     }
 
     #[test]

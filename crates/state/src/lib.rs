@@ -9,8 +9,8 @@
 mod activity;
 mod ai_usage;
 mod approval_quota;
-pub use approval_quota::{ApprovalBudget, ApprovalReservation};
 pub use ai_usage::{AI_USAGE_RETENTION_MS, AiUsageDaily};
+pub use approval_quota::{ApprovalBudget, ApprovalReservation};
 mod agent_calls;
 mod agent_queue;
 mod agent_runs;

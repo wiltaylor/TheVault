@@ -37,41 +37,95 @@ fn selective_approval_email_fields_caps_restart_and_destructive_denial() {
     let cookie = mail_triage_login(&api);
     let mut ids = Vec::new();
     for i in 0..2 {
-        let n = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":format!("Mail {i}"),"sent":"2000-01-01T00:00:00Z"}}}));
+        let n = api.send(
+            "POST",
+            "/api/notes?type=email",
+            json!({"note":{"fields":{"title":format!("Mail {i}"),"sent":"2000-01-01T00:00:00Z"}}}),
+        );
         ids.push(n["id"].as_str().unwrap().to_owned());
     }
-    let preview: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"ids":ids})).error_for_status().unwrap().json().unwrap();
-    safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":preview["preview"],"approve":true})).error_for_status().unwrap();
+    let preview: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/preview",
+        json!({"ids":ids}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/approve",
+        json!({"preview":preview["preview"],"approve":true}),
+    )
+    .error_for_status()
+    .unwrap();
     let source = "label = \"Reader\"\npermissions {\n approval_rule {\n operation = \"update\"\n type = \"email\"\n fields = [\"processed\"]\n daily_cap = 1\n }\n approval_rule {\n operation = \"delete\"\n type = \"email\"\n daily_cap = 100\n }\n confirm {\n delete = false\n archive = false\n }\n}\ntrigger any {\n on = [\"create\"]\n type = \"memo\"\n prompt = \"Review it.\"\n}\n";
     // Even an ordinary admin token cannot configure future automatic approval.
-    let denied = api.client.put(api.server.url("/api/agents/reader")).bearer_auth(api.server.admin_token()).header("content-type", "text/plain").body(source).send().unwrap();
+    let denied = api
+        .client
+        .put(api.server.url("/api/agents/reader"))
+        .bearer_auth(api.server.admin_token())
+        .header("content-type", "text/plain")
+        .body(source)
+        .send()
+        .unwrap();
     assert!(!denied.status().is_success());
-    api.client.put(api.server.url("/api/agents/reader")).header("cookie", &cookie).header("content-type", "text/plain").body(source).send().unwrap().error_for_status().unwrap();
+    api.client
+        .put(api.server.url("/api/agents/reader"))
+        .header("cookie", &cookie)
+        .header("content-type", "text/plain")
+        .body(source)
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     let (memo, memo_version) = api.memo("Start", "open");
-    let versions: Vec<Value> = ids.iter().map(|id| api.get(&format!("/api/notes/{id}"))["version"].clone()).collect();
+    let versions: Vec<Value> = ids
+        .iter()
+        .map(|id| api.get(&format!("/api/notes/{id}"))["version"].clone())
+        .collect();
     fake.push(AnthropicMessage::new()
-        .tool_use("allowed", "propose_fields", json!({"id":ids[0],"base_version":versions[0],"fields":{"processed":true}}))
-        .tool_use("capped", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":{"processed":true}}))
-        .tool_use("other-field", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":{"title":"Not approved"}}))
-        .tool_use("other-type", "propose_fields", json!({"id":memo,"base_version":memo_version,"fields":{"status":"closed"}}))
+        .tool_use("allowed", "propose_fields", json!({"id":ids[0],"base_version":versions[0],"fields":json!({"processed":true}).to_string()}))
+        .tool_use("capped", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":json!({"processed":true}).to_string()}))
+        .tool_use("other-field", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":json!({"title":"Not approved"}).to_string()}))
+        .tool_use("other-type", "propose_fields", json!({"id":memo,"base_version":memo_version,"fields":json!({"status":"closed"}).to_string()}))
         .tool_use("delete", "propose_delete", json!({"id":ids[1]}))
-        .tool_use("archive", "propose_archive", json!({"id":ids[1]})));
+        .tool_use("archive", "propose_archive", json!({"id":ids[1],"archived":true})));
     fake.push(AnthropicMessage::text("Review the rest."));
     api.advance("PT31S");
-    assert_eq!(api.get(&format!("/api/notes/{}", ids[0]))["note"]["fields"]["processed"], true);
+    let threads = api.get("/api/agents/reader/threads");
+    let thread = threads["threads"][0]["id"].as_str().unwrap();
+    let transcript = api.get(&format!("/api/agents/reader/threads/{thread}"));
+    assert_eq!(
+        api.get(&format!("/api/notes/{}", ids[0]))["note"]["fields"]["processed"],
+        true,
+        "{transcript}"
+    );
     let unchanged = api.get(&format!("/api/notes/{}", ids[1]));
     assert_ne!(unchanged["note"]["fields"]["processed"], true);
     assert_eq!(unchanged["note"]["fields"]["title"], "Mail 1");
-    assert_eq!(api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["status"], "open");
+    assert_eq!(
+        api.get(&format!("/api/notes/{memo}"))["note"]["fields"]["status"],
+        "open"
+    );
     let threads = api.get("/api/agents/reader/threads");
     let thread = threads["threads"][0]["id"].as_str().unwrap();
-    assert_eq!(api.get(&format!("/api/agents/reader/threads/{thread}"))["pending"], 5);
+    assert_eq!(
+        api.get(&format!("/api/agents/reader/threads/{thread}"))["pending"],
+        5
+    );
     api.server.restart();
     api.memo("After restart", "open");
-    fake.push(AnthropicMessage::new().tool_use("still-capped", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":{"processed":true}})));
+    fake.push(AnthropicMessage::new().tool_use("still-capped", "propose_fields", json!({"id":ids[1],"base_version":versions[1],"fields":json!({"processed":true}).to_string()})));
     fake.push(AnthropicMessage::text("Still needs review."));
     api.advance("PT31S");
-    assert_ne!(api.get(&format!("/api/notes/{}", ids[1]))["note"]["fields"]["processed"], true);
+    assert_ne!(
+        api.get(&format!("/api/notes/{}", ids[1]))["note"]["fields"]["processed"],
+        true
+    );
 }
 
 #[test]

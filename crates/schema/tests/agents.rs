@@ -862,6 +862,11 @@ fn approval_rules_roundtrip_and_fail_closed() {
     assert!(schema::Agent::parse("triage", &source.replace("\"update\"", "\"send\"")).is_err());
     let no_cap = schema::Agent::parse("triage", &source.replace("daily_cap = 200", "")).unwrap();
     assert_eq!(no_cap.permissions.approval_rules[0].daily_cap, 0);
-    assert!(schema::Agent::parse("triage", "").unwrap().permissions.approval_rules.is_empty());
+    assert!(
+        schema::Agent::parse("triage", "")
+            .unwrap()
+            .permissions
+            .approval_rules
+            .is_empty()
+    );
 }
-

@@ -1263,25 +1263,56 @@ impl Reader<'_> {
             let at = format!("permissions.{}", b.kind);
             if b.kind == "approval_rule" {
                 self.c.only_blocks(&b.body, &[], &at);
-                self.known(&b.body, &["operation", "type", "fields", "daily_cap"], &format!("{at}."), "unknown approval rule field");
+                self.known(
+                    &b.body,
+                    &["operation", "type", "fields", "daily_cap"],
+                    &format!("{at}."),
+                    "unknown approval rule field",
+                );
                 if !b.labels.is_empty() {
                     self.c.fail(&at, "takes no labels");
                 }
-                let operation = b.body.field("operation").and_then(Value::as_str).unwrap_or_default();
-                let note_type = b.body.field("type").and_then(Value::as_str).unwrap_or_default();
+                let operation = b
+                    .body
+                    .field("operation")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let note_type = b
+                    .body
+                    .field("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if !matches!(operation, "update" | "archive" | "delete") || !is_name(note_type) {
-                    self.c.fail(&at, "requires operation update/archive/delete and a type name");
+                    self.c.fail(
+                        &at,
+                        "requires operation update/archive/delete and a type name",
+                    );
                 }
-                let fields = self.names(&b.body, "fields", &at, "field").unwrap_or_default();
-                if (operation == "update" && fields.is_empty()) || (operation != "update" && !fields.is_empty()) {
-                    self.c.fail(&at, "update requires explicit fields; destructive rules take no fields");
+                let fields = self
+                    .names(&b.body, "fields", &at, "field")
+                    .unwrap_or_default();
+                if (operation == "update" && fields.is_empty())
+                    || (operation != "update" && !fields.is_empty())
+                {
+                    self.c.fail(
+                        &at,
+                        "update requires explicit fields; destructive rules take no fields",
+                    );
                 }
                 let daily_cap = match b.body.field("daily_cap") {
                     Some(Value::Int(n)) if *n >= 0 => *n,
                     None => 0,
-                    _ => { self.c.fail(&at, "daily_cap must be a nonnegative integer"); 0 }
+                    _ => {
+                        self.c.fail(&at, "daily_cap must be a nonnegative integer");
+                        0
+                    }
                 };
-                p.approval_rules.push(ApprovalRule { operation: operation.into(), note_type: note_type.into(), fields, daily_cap });
+                p.approval_rules.push(ApprovalRule {
+                    operation: operation.into(),
+                    note_type: note_type.into(),
+                    fields,
+                    daily_cap,
+                });
                 continue;
             }
             let switches: &[&str] = match b.kind.as_str() {
