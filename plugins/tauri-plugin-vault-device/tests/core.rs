@@ -128,7 +128,16 @@ fn pairs_by_password_and_by_code_and_refuses_bad_secrets() {
     let admin = Admin::start();
     let url = format!("{}/", admin.server.base_url());
 
-    let by_password = pair::pair_confirmed(&url, &Secret::Password(PASSWORD.into()), "Pixel").unwrap();
+    assert!(pair::pair(&url, &Secret::Password(PASSWORD.into()), "Pixel")
+        .unwrap_err().to_string().contains("confirm"));
+    assert!(pair::pair_confirmed("http://8.8.8.8", &Secret::Password("fake".into()), "Pixel")
+        .unwrap_err().to_string().contains("private LAN"));
+    // Resolve a name rather than trusting its spelling, then connect to the pinned result.
+    let named_url = url.replace("127.0.0.1", "localhost");
+    assert!(pair::pair_confirmed(&named_url, &Secret::Password(PASSWORD.into()), "Named").is_ok());
+
+    let by_password =
+        pair::pair_confirmed(&url, &Secret::Password(PASSWORD.into()), "Pixel").unwrap();
     assert_eq!(by_password.server_url, admin.server.base_url());
     assert_eq!(by_password.device_name, "Pixel");
     assert!(!by_password.token.is_empty());

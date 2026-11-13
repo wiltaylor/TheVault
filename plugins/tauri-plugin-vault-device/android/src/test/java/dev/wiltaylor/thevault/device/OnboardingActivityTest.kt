@@ -61,6 +61,19 @@ class OnboardingActivityTest {
     }
 
     @Test
+    fun httpWithoutConfirmationStoresNothing() {
+        val activity = Robolectric.buildActivity(OnboardingActivity::class.java).setup().get()
+        assertFalse(activity.confirmHttp.isChecked)
+        assertTrue(activity.confirmHttp.text.contains("home feed is not authenticated"))
+        activity.pair(home.url, FakeHome.PASSWORD, null)
+        waitFor { activity.message.text.contains("confirm") }
+        assertTrue(activity.message.text.toString(), activity.message.text.contains("confirm"))
+        assertFalse(PairingStore(context).isPaired)
+        assertFalse(activity.isFinishing)
+        assertFalse(home.requests.contains("POST /api/devices/pair"))
+    }
+
+    @Test
     fun pairingByPasswordStoresTheLinkAndCloses() {
         val controller = Robolectric.buildActivity(OnboardingActivity::class.java).setup()
         val activity = controller.get()
