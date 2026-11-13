@@ -63,6 +63,8 @@ pub enum Error {
     Broken { name: String, message: String },
     #[error("task {0:?} is already running")]
     Running(String),
+    #[error("{0}")]
+    OutsideText(&'static str),
     #[error(transparent)]
     Writer(#[from] writer::Error),
     #[error(transparent)]
@@ -409,6 +411,7 @@ impl Scheduler {
     /// Trigger with the caller's live provenance, including across async boundaries.
     pub fn trigger_with_context(&self, name: &str, context: RunContext) -> Result<TaskRun> {
         let context = context.inherit_current();
+        self.check_task_context(name, &context)?;
         let def = self.claim(name)?;
         self.run(&def, 1, context)
             .ok_or_else(|| Error::Running(name.to_owned()))
@@ -430,6 +433,7 @@ impl Scheduler {
         context: RunContext,
     ) -> Result<TaskRun> {
         let context = context.inherit_current();
+        self.check_task_context(name, &context)?;
         let def = self.claim(name)?;
         // No record or no thread, no run: let the task run again.
         let release = |e: Error| {
@@ -686,7 +690,11 @@ impl Scheduler {
         let mut retrying = false;
         if let Some(slot) = plan.slots.get_mut(&def.name) {
             slot.running = false;
-            if failed && attempt <= def.retries && slot.def.as_ref() == Ok(def) {
+            if failed
+                && !context.is_restricted()
+                && attempt <= def.retries
+                && slot.def.as_ref() == Ok(def)
+            {
                 let delay = i64::try_from(def.backoff(attempt).as_millis()).unwrap_or(i64::MAX);
                 slot.retry = Some(Retry {
                     attempt: attempt + 1,
@@ -739,9 +747,32 @@ impl Scheduler {
         }
     }
 
+    fn check_task_context(&self, name: &str, context: &RunContext) -> Result<()> {
+        if !context.is_restricted() {
+            return Ok(());
+        }
+        self.writer.state().record_activity(
+            state::NewActivity::new(
+                "run.outside_text_refused",
+                "automation",
+                &state::Author::Task(name.to_owned()),
+                script::OUTSIDE_TEXT_REFUSAL,
+            )
+            .subject("task", name)
+            .detail(serde_json::json!({"action": "task_start"})),
+        );
+        Err(Error::OutsideText(script::OUTSIDE_TEXT_REFUSAL))
+    }
+
     /// Run the script of `def` for the started run record `id`, and record how it ended.
     fn attempt(&self, def: &TaskDef, id: state::RunId, context: &RunContext) -> Result<TaskRun> {
         let state = self.writer.state();
+        if let Err(error) = self.check_task_context(&def.name, context) {
+            state.finish_run(id, &RunOutcome::Failed(error.to_string()))?;
+            return state
+                .run(id)?
+                .ok_or(Error::State(state::Error::UnknownRun(id)));
+        }
         let by = state::Author::Task(def.name.clone());
         // The Google syncs are tasks; their runs are sync activity (activity Y2).
         let category = match def.name.as_str() {

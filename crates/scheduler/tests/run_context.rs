@@ -122,16 +122,16 @@ fn task_retries_keep_live_restriction_and_oldest_generation_across_workers() {
     f.writer.state().set_automation_stopped(false).unwrap();
     parent.capture_stop_generation(f.writer.state().admit_automation().unwrap());
     f.scheduler.reload().unwrap();
-    for (delay, attempt) in [(1, 2), (2, 3)] {
-        f.clock.advance(Duration::from_secs(delay));
-        let runs = f.scheduler.tick();
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].attempt, attempt);
-        let seen = f.observe();
-        assert_eq!(seen.context, parent);
-        assert!(seen.restricted);
-        assert_eq!(seen.generation, Some(old));
-    }
+    f.clock.advance(Duration::from_secs(1));
+    let runs = f.scheduler.tick();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].attempt, 2);
+    assert_eq!(
+        runs[0].outcome,
+        RunOutcome::Failed(script::OUTSIDE_TEXT_REFUSAL.into())
+    );
+    assert!(f.seen.lock().unwrap().try_recv().is_err());
+    assert_eq!(parent.stop_generation(), Some(old));
     assert!(f.scheduler.status("probe").unwrap().retry.is_none());
     assert!(RunContext::current().is_none());
 }
@@ -140,9 +140,9 @@ fn task_retries_keep_live_restriction_and_oldest_generation_across_workers() {
 fn scheduled_firing_replaces_retry_with_an_independent_context() {
     let f = Fixture::new();
     let parent = RunContext::default();
-    parent.restrict();
     parent.scope(|| f.scheduler.trigger("probe").unwrap());
     assert_eq!(f.observe().context, parent);
+    parent.restrict();
     f.clock.advance(Duration::from_secs(60));
     let runs = f.scheduler.tick();
     assert_eq!(runs.len(), 1);
@@ -157,7 +157,6 @@ fn scheduled_firing_replaces_retry_with_an_independent_context() {
 fn background_admission_carries_explicit_context_to_writer_callback() {
     let f = Fixture::new();
     let parent = RunContext::default();
-    parent.restrict();
     let generation = f.writer.state().admit_automation().unwrap();
     parent.capture_stop_generation(generation);
     f.scheduler
@@ -165,7 +164,7 @@ fn background_admission_carries_explicit_context_to_writer_callback() {
         .unwrap();
     let seen = f.observe();
     assert_eq!(seen.context, parent);
-    assert!(seen.restricted);
+    assert!(!seen.restricted);
     assert_eq!(seen.generation, Some(generation));
 }
 
@@ -185,11 +184,19 @@ fn explicit_default_cannot_escape_restricted_caller_at_admission() {
                 f.scheduler
                     .trigger_with_context("probe", RunContext::default())
             }
-            .unwrap();
+            .unwrap_err();
         });
-        let seen = f.observe();
-        assert_eq!(seen.context, parent);
-        assert!(seen.restricted);
-        assert_eq!(seen.generation, Some(generation));
+        assert!(f.seen.lock().unwrap().try_recv().is_err());
+        assert!(f.writer.state().runs("probe", 10).unwrap().is_empty());
+        let audit = f
+            .writer
+            .state()
+            .activity(&state::ActivityFilter {
+                kind: Some("run.outside_text_refused".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(audit.items.len(), 1);
+        assert_eq!(audit.items[0].summary, script::OUTSIDE_TEXT_REFUSAL);
     }
 }

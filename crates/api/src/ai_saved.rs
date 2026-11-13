@@ -218,6 +218,7 @@ pub(crate) fn run_task(s: &std::sync::Arc<Scheduler>, input: &Value) -> TaskRan 
                 scheduler::Error::Running(_) => "running",
                 scheduler::Error::NoTask(_) => "not_found",
                 scheduler::Error::Broken { .. } => "invalid",
+                scheduler::Error::OutsideText(_) => "outside_text",
                 _ => "fault",
             };
             return refused(kind, e.to_string(), script);

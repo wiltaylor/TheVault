@@ -46,6 +46,7 @@ impl From<scheduler::Error> for ApiError {
                 ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "task_invalid", message)
             }
             E::Running(_) => ApiError::new(StatusCode::CONFLICT, "task_running", message),
+            E::OutsideText(_) => ApiError::new(StatusCode::FORBIDDEN, "outside_text", message),
             E::Writer(e) => e.into(),
             E::State(e) => e.into(),
         }

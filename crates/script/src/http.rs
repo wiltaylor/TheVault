@@ -18,6 +18,7 @@ use reqwest::{Method, Url};
 use wscript::{Fault, HostError, Module, Script};
 
 use crate::run;
+use script_core::OUTSIDE_TEXT_REFUSAL;
 
 /// What an HTTP call returned. Header names are lower case.
 #[derive(Script, Debug, Clone)]
@@ -32,9 +33,6 @@ pub struct Response {
 }
 
 type Reply = Fault<Result<Response, String>>;
-
-const OUTSIDE_TEXT_REFUSAL: &str =
-    "Action refused: this run has read outside text. Owner review is required.";
 
 pub fn module(client: Client, guarded: Client, ai: crate::Ai) -> Module {
     let mut m = Module::new("http");

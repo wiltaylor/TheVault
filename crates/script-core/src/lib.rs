@@ -43,9 +43,14 @@ use wscript::{CompiledUnit, Context, Fault, HostError, IntoValue, Module, Vm, Vm
 
 pub use device::{DeviceAccess, DeviceData, DeviceExtensions, NoDevice, Switches, device_module};
 pub use run_context::RunContext;
+
 pub use vault::Vault;
 pub use vault_module::vault_module;
 pub use vocab::{Archived, Author};
+
+/// Fixed refusal text for actions that a run exposed to outside text cannot perform.
+pub const OUTSIDE_TEXT_REFUSAL: &str =
+    "Action refused: this run has read outside text. Owner review is required.";
 
 /// Errors from running a script.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
