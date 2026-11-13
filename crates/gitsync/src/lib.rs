@@ -29,6 +29,7 @@ pub use crypto::SyncKey;
 pub use git::{Auth, GITHUB_KNOWN_HOSTS, Git, TreeEntry};
 pub use layout::{Layout, PART_BYTES};
 pub use manifest::{AssetEntry, DefEntry, FORMAT, Instance, Manifest, NoteEntry};
+mod freshness;
 pub use round::{Clash, Paths, Report, Skipped, run_round};
 pub use service::{GitSync, Options};
 pub use settings::{AuthKind, Secrets, Settings, Status};

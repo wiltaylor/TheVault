@@ -15,7 +15,7 @@ hkdf = "0.12"
 hmac = "0.12"
 index.workspace = true
 query.workspace = true
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["process", "fs"] }
 schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true

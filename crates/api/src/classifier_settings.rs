@@ -145,8 +145,32 @@ pub async fn select(
                     "Select an OpenAI-compatible /api/v1 account in Settings > AI",
                 )
             })?;
-        w.set_classifier_account(&name, &account.name)?;
+        w.set_classifier_account(&name, &account.id)?;
         local(w).map(Json)
     })
     .await
+}
+
+/// Pin legacy name bindings before the name can be reused. Deleted IDs fail closed.
+pub(crate) fn pin_account(w: &Writer, accounts: &Accounts, id: &str) -> Result<(), ApiError> {
+    w.pin_classifier_accounts(|reference| {
+        (reference != id && accounts.find(reference).is_some_and(|a| a.id == id))
+            .then(|| id.to_owned())
+    })?;
+    Ok(())
+}
+
+/// A newly introduced name cannot adopt a previously dangling classifier binding.
+pub(crate) fn pin_missing_name(
+    w: &Writer,
+    accounts: &Accounts,
+    name: &str,
+) -> Result<(), ApiError> {
+    let missing = ulid::Ulid::new().to_string();
+    w.pin_classifier_accounts(|reference| {
+        (reference.trim().to_lowercase() == name.trim().to_lowercase()
+            && accounts.find(reference).is_none())
+        .then(|| missing.clone())
+    })?;
+    Ok(())
 }

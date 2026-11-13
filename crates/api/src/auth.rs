@@ -1233,6 +1233,8 @@ mod tests {
 
     #[test]
     fn only_the_trash_purges_are_human_only() {
+        assert!(is_human_only(&Method::GET, "/api/classifiers"));
+        assert!(is_human_only(&Method::PUT, "/api/classifiers/scam/account"));
         assert!(is_human_only(&Method::POST, "/api/trash/empty"));
         assert!(is_human_only(&Method::DELETE, "/api/trash/x"));
         assert!(!is_human_only(&Method::GET, "/api/trash"));
