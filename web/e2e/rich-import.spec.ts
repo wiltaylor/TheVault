@@ -144,8 +144,8 @@ const HTML = [
   '<p><img src="cid:map@mail.example" alt="Trail map" width="200" height="120"></p>',
   "<table><tr><th>Route</th><th>Length</th></tr><tr><td>Ridge loop</td><td>12 km</td></tr><tr><td>Lake path</td><td>5 km</td></tr></table>",
   '<p><a href="https://shop.example.com/maps" style="background-color:#16a34a;padding:8px">Get the maps</a></p>',
-  // On the loopback address, so the server refuses it rather than reaching any network.
-  '<p><img src="http://127.0.0.1:9/hero.jpg" alt="Hero photo" width="560"></p>',
+  // The browser route below serves this image locally, never from the network.
+  '<p><img src="https://images.example.com/hero.jpg" alt="Hero photo" width="560"></p>',
   '<div class="gmail_quote"><div class="gmail_attr">On Mon, Alex Example wrote:</div><blockquote class="gmail_quote">Earlier message text</blockquote></div>',
   "</body></html>",
 ].join("");
@@ -193,6 +193,11 @@ test("an imported newsletter shows as rich blocks and View original opens it in 
   // A request the browser makes for a remote image of the original: the frame's policy blocks
   // it before it leaves, and anything that left would reach a route that aborts it.
   const remote: string[] = [];
+  let remoteRequests = 0;
+  await page.route("https://images.example.com/hero.jpg", async (route) => {
+    remoteRequests++;
+    await route.fulfill({ contentType: "image/png", body: Buffer.from(PNG, "base64") });
+  });
   page.on("requestfailed", (r) => {
     if (r.url().includes("hero.jpg")) remote.push(r.failure()?.errorText ?? "");
   });
@@ -227,9 +232,28 @@ test("an imported newsletter shows as rich blocks and View original opens it in 
   await expect(original.getByRole("heading", { name: "Trails of the week" })).toBeVisible();
   // The inline image is in place in the original too, as a data: URI.
   await expect(original.locator("img[alt='Trail map']")).toHaveAttribute("src", /^data:image\/png;base64,/);
-  // Remote images wait until asked for, and the page never asked for one.
-  await expect(dialog.getByRole("button", { name: "Load remote images" })).toBeVisible();
+  // The default denies consent, so there is no button and CSP blocks remote images.
+  const loadRemote = dialog.getByRole("button", { name: "Load remote images" });
+  await expect(loadRemote).toHaveCount(0);
+  await expect(original.locator('meta[http-equiv="Content-Security-Policy"]')).toHaveAttribute("content", /img-src data:;/);
   expect(remote.every((why) => why === "csp"), JSON.stringify(remote)).toBe(true);
+  expect(remoteRequests).toBe(0);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  // Only an owner session may grant consent. This spec already owns an isolated server
+  // and vault per worker, so its server-wide setting cannot affect parallel specs.
+  const consent = await page.request.put("/api/integrations/google/settings", { data: { gmail_remote_images: true } });
+  expect(consent.ok(), await consent.text()).toBe(true);
+  await pane.getByRole("button", { name: "View original" }).click();
+  await expect(loadRemote).toBeVisible();
+  await expect(original.getByRole("heading", { name: "Trails of the week" })).toBeVisible();
+  expect(remoteRequests).toBe(0);
+  await loadRemote.click();
+  await expect(loadRemote).toHaveCount(0);
+  await expect(original.locator('meta[http-equiv="Content-Security-Policy"]')).toHaveAttribute("content", /img-src data: https:;/);
+  await expect.poll(() => original.locator("img[alt='Hero photo']").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(2);
+  expect(remoteRequests).toBe(1);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 });
