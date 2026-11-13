@@ -632,14 +632,25 @@ test("the conversation follows new text at the end, stops when scrolled up, and 
   await box.press("Enter");
   const scroll = page.locator(".agent-chat [data-testid=ai-scroll]");
   await expect(page.getByText(`Row 60 ${tag}.`)).toBeAttached();
+  // Text precedes thread completion. The activity line and message box can still change height
+  // until then, so measure scrolling only after the same completion boundary as proposal actions.
+  await expect(page.getByRole("list", { name: "Conversation" })).toHaveAttribute("aria-busy", "false");
   const atEnd = () => scroll.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight <= 4);
   await expect.poll(atEnd).toBe(true);
   const grow = () =>
-    scroll.evaluate((el) => {
+    scroll.evaluate((el) => new Promise<void>((resolve) => {
+      const list = el.querySelector("ol")!;
+      // Observe the actual layout, not a fixed delay. The following frame lets the page's
+      // own ResizeObserver and any resulting scroll event finish before the assertion.
+      const resized = new ResizeObserver(() => {
+        resized.disconnect();
+        requestAnimationFrame(() => resolve());
+      });
+      resized.observe(list);
       const li = document.createElement("li");
       li.style.height = "300px";
-      el.querySelector("ol")!.appendChild(li);
-    });
+      list.appendChild(li);
+    }));
   // Scroll the view by `by` pixels or to the end, and wait for the page to see the scroll before
   // anything grows: under load both can fall in one frame, and the scroll then arrives after the
   // growth it came before.
@@ -657,7 +668,6 @@ test("the conversation follows new text at the end, stops when scrolled up, and 
   await scrollView(-40);
   const top = await scroll.evaluate((el) => el.scrollTop);
   await grow();
-  await page.waitForTimeout(200);
   expect(await scroll.evaluate((el) => el.scrollTop)).toBe(top);
   expect(await atEnd()).toBe(false);
 
