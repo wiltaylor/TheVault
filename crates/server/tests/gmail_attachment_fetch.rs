@@ -295,7 +295,8 @@ fn device_restores_imported_email_but_agent_http_restore_remains_held() {
             .unwrap(),
         201,
     );
-    for token in [device["token"].as_str().unwrap()] {
+    {
+        let token = device["token"].as_str().unwrap();
         let before = f.note();
         expect(
             f.client
