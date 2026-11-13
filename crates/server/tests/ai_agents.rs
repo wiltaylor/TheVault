@@ -680,7 +680,7 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
             rules.replace("[\"status\"]", "[\"status\", \"title\"]"),
         ),
         ("helper", HELPER.to_owned()),
-        ("new-helper", rules.clone()),
+        ("new_helper", rules.clone()),
     ] {
         let denied = api
             .client
@@ -700,7 +700,7 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
             "only an owner session may change automatic approval rules"
         );
         assert_eq!(api.agent_wcl("helper").unwrap(), saved);
-        assert!(api.agent_wcl("new-helper").is_none());
+        assert!(api.agent_wcl("new_helper").is_none());
     }
 
     // No proposer, agent, thread or proposal id: only the writer's Token author
