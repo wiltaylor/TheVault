@@ -26,6 +26,13 @@ struct Fixture {
 }
 
 impl Fixture {
+    fn agent_token(&self) -> String {
+        let issued = expect(self.client.post(self.server.url("/api/agent-codes"))
+            .header("cookie", &self.cookie).json(&json!({"name":"metadata-test","scope":"write"})).send().unwrap(), 200);
+        let redeemed = expect(self.client.post(self.server.url("/api/agent-codes/redeem"))
+            .json(&json!({"code":issued["code"]})).send().unwrap(), 200);
+        redeemed["token"].as_str().unwrap().to_owned()
+    }
     fn new() -> Self {
         let google = FakeGoogle::start();
         let bytes = "item,amount\nInvoice,123\n".repeat(40000).into_bytes();
@@ -262,4 +269,51 @@ fn provider_failure_is_fixed_text_and_does_not_store_bytes() {
             .len(),
         1
     );
+}
+
+#[test]
+fn agent_token_cannot_preview_or_fetch() {
+    let f = Fixture::new();
+    let token = f.agent_token();
+    f.google.clear_requests();
+    for method in ["GET", "POST"] {
+        let request = f.client.request(method.parse().unwrap(), f.path()).bearer_auth(&token);
+        let request = if method == "POST" { request.json(&f.selection) } else { request };
+        assert_eq!(expect(request.send().unwrap(), 403)["error"], "session_required");
+    }
+    assert!(f.google.requests().is_empty());
+}
+
+#[test]
+fn metadata_create_and_update_refuse_agent_tokens_and_scripts_but_allow_owner() {
+    let f = Fixture::new();
+    let token = f.agent_token();
+    for field in ["gmail_ref", "gmail_account", "gmail_deferred_parts"] {
+        let value = if field == "gmail_deferred_parts" { json!(["forged"]) } else { json!("forged") };
+        let note = json!({"fields":{"title":"Mail",field:value}});
+        let created = expect(f.client.post(f.server.url("/api/notes"))
+            .header("cookie", &f.cookie).json(&json!({"type":"email","note":{"fields":{"title":"Mail"}}})).send().unwrap(), 201);
+        let id = created["id"].as_str().unwrap();
+        let version = created["version"].as_str().unwrap();
+        for create in [true, false] {
+            let (method, path) = if create { ("POST", f.server.url("/api/notes")) } else { ("PUT", f.server.url(&format!("/api/notes/{id}"))) };
+            let response = f.client.request(method.parse().unwrap(), &path).bearer_auth(&token)
+                .json(&json!({"type":"email","base_version":version,"note":note})).send().unwrap();
+            assert_eq!(expect(response, 422)["error"], "rejected", "{field} create={create}");
+            let expression = if field == "gmail_deferred_parts" { "Value::List([Value::String(\"forged\")])" } else { "Value::String(\"forged\")" };
+            let body = format!("Value::Map(#{{\"fields\": Value::Map(#{{\"title\": Value::String(\"Mail\"), \"{field}\": {expression}}})}})");
+            let action = if create { format!("vault::create(\"email\", {body})?") } else { format!("vault::update(\"{id}\", {body}, \"{version}\")?") };
+            let source = format!("use vault\nfn run() -> Result[string, string] {{\n    {action}\n    Ok(\"unexpected\")\n}}\n");
+            expect(f.client.put(f.server.url("/api/scripts/metadata_probe")).header("cookie", &f.cookie)
+                .json(&json!({"source":source})).send().unwrap(), 200);
+            expect(f.client.put(f.server.url("/api/tasks/metadata_probe")).header("cookie", &f.cookie)
+                .body("schedule = \"0 0 1 1 *\"\nscript = \"metadata_probe\"\npaused = true\n").send().unwrap(), 200);
+            let run = expect(f.client.post(f.server.url("/api/tasks/metadata_probe/run?wait=true"))
+                .header("cookie", &f.cookie).send().unwrap(), 200);
+            assert_eq!(run["outcome"], "failed", "{field} create={create}: {run}");
+            assert!(run.to_string().contains("only the owner session or Gmail import"), "{run}");
+            expect(f.client.request(method.parse().unwrap(), path).header("cookie", &f.cookie)
+                .json(&json!({"type":"email","base_version":version,"note":note})).send().unwrap(), if create {201} else {200});
+        }
+    }
 }
