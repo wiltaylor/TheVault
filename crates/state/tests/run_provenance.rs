@@ -14,6 +14,67 @@ fn open(path: &std::path::Path) -> State {
 }
 
 #[test]
+fn schema_32_upgrade_and_dedup_keep_all_queue_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let s = open(&path);
+    let old = s
+        .enqueue_trigger("a", "t", Some("legacy"), "old", 0)
+        .unwrap()
+        .unwrap();
+    drop(s);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE trigger_provenance; PRAGMA user_version=32;")
+        .unwrap();
+    drop(conn);
+    let s = open(&path);
+    assert_eq!(s.due_trigger_jobs(0).unwrap()[0].id, old);
+    assert!(s.trigger_provenance(old).unwrap().is_empty());
+    let first = s
+        .lease_run_provenance(true, Some(s.admit_automation().unwrap()))
+        .unwrap();
+    let second = s
+        .lease_run_provenance(false, Some(s.admit_automation().unwrap()))
+        .unwrap();
+    let (id, inserted) = s
+        .enqueue_trigger_with_provenance("a", "t", Some("new"), "first", 0, false, first.id())
+        .unwrap()
+        .unwrap();
+    assert!(inserted);
+    assert_eq!(
+        s.enqueue_trigger_with_provenance("a", "t", Some("new"), "second", 0, false, second.id())
+            .unwrap(),
+        Some((id, false))
+    );
+    let ids = s.trigger_provenance(id).unwrap();
+    assert!(ids.contains(&first.id().to_owned()));
+    assert!(ids.contains(&second.id().to_owned()));
+    s.enqueue_trigger_with_provenance("a", "t", Some("legacy"), "new", 0, false, second.id())
+        .unwrap();
+    assert!(s.trigger_provenance(old).unwrap().contains(&String::new()));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_ref BEFORE INSERT ON trigger_provenance BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    assert!(
+        s.enqueue_trigger_with_provenance("a", "t", Some("new"), "lost", 0, false, first.id())
+            .is_err()
+    );
+    assert_eq!(
+        s.due_trigger_jobs(0)
+            .unwrap()
+            .into_iter()
+            .find(|j| j.id == id)
+            .unwrap()
+            .payload,
+        "second"
+    );
+    assert!(
+        s.enqueue_trigger_with_provenance("a", "t", Some("rollback"), "lost", 0, false, first.id())
+            .is_err()
+    );
+    assert_eq!(s.due_trigger_jobs(0).unwrap().len(), 2);
+}
+
+#[test]
 fn failed_seal_is_visible_and_audit_failure_keeps_recovery_fallible() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");

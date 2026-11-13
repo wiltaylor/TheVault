@@ -348,9 +348,9 @@ fn due_agent_jobs_are_independent_of_the_tick_callers_scope() {
     let contexts = r.fake.contexts.lock().unwrap();
     assert_eq!(contexts.len(), 1);
     assert_ne!(contexts[0], parent);
-    assert_ne!(contexts[0].stop_generation(), Some(generation));
-    // Legacy durable recovery is fail-closed, not evidence of caller inheritance.
-    assert!(contexts[0].is_restricted());
+    assert_eq!(contexts[0].stop_generation(), Some(generation));
+    // A fresh scheduled run captures its own admission, not the caller's context.
+    assert!(!contexts[0].is_restricted());
     assert_eq!(parent.stop_generation(), Some(generation));
     assert_eq!(r.fake.turns().len(), 1);
 }
@@ -510,9 +510,19 @@ fn backfill_refuses_delete_only_and_queued_ops_are_rechecked() {
     for (trigger, op) in [("opened", "create"), ("gone", "delete")] {
         let payload =
             json!({"prompt":"original", "title":"Roof", "type":"memo", "op":op}).to_string();
+        let context = script::RunContext::default();
+        let run_id = context.persist(r.writer.state()).unwrap();
         r.writer
             .state()
-            .enqueue_trigger("watcher", trigger, Some(&id), &payload, r.clock.now_ms())
+            .enqueue_trigger_with_provenance(
+                "watcher",
+                trigger,
+                Some(&id),
+                &payload,
+                r.clock.now_ms(),
+                false,
+                &run_id,
+            )
             .unwrap();
     }
     r.agent(
@@ -536,6 +546,106 @@ fn backfill_refuses_delete_only_and_queued_ops_are_rechecked() {
             .unwrap()
             .waiting,
         0
+    );
+}
+
+#[test]
+fn recovered_agent_queue_retains_restriction_generation_and_visible_staleness() {
+    for interrupted in [false, true] {
+        let r = Rig::new();
+        r.agent("owl", NIGHTLY);
+        let context = script::RunContext::default();
+        let run_id = context.persist(r.writer.state()).unwrap();
+        let generation = context.stop_generation();
+        let payload = json!({"title":"recovered", "prompt":"queued"}).to_string();
+        r.writer
+            .state()
+            .enqueue_trigger_with_provenance(
+                "owl",
+                "nightly",
+                None,
+                &payload,
+                r.clock.now_ms(),
+                false,
+                &run_id,
+            )
+            .unwrap();
+        context.restrict(); // exposure after publication must survive recovery
+        if interrupted {
+            std::mem::forget(context);
+        } else {
+            drop(context);
+        }
+        r.writer.state().set_automation_stopped(true).unwrap();
+        r.writer.state().set_automation_stopped(false).unwrap();
+        // The scheduler has never registered this job, just as after restart.
+        r.scheduler.tick();
+        let contexts = r.fake.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1);
+        assert!(contexts[0].is_restricted());
+        if !interrupted {
+            assert_eq!(contexts[0].stop_generation(), generation);
+        }
+        assert!(
+            r.writer
+                .state()
+                .automation_commit(contexts[0].stop_generation().unwrap())
+                .is_err()
+        );
+        let entries = r
+            .writer
+            .state()
+            .activity(&state::ActivityFilter::default())
+            .unwrap();
+        assert!(
+            entries
+                .items
+                .iter()
+                .any(|a| a.kind == "run.recovery_stale" && a.subject.as_deref() == Some(&run_id))
+        );
+    }
+}
+
+#[test]
+fn unavailable_agent_queue_is_visible_pending_and_never_executed() {
+    let r = Rig::new();
+    r.agent("owl", NIGHTLY);
+    let payload = json!({"title":"unavailable", "prompt":"queued"}).to_string();
+    let id = r
+        .writer
+        .state()
+        .enqueue_trigger_with_provenance(
+            "owl",
+            "nightly",
+            None,
+            &payload,
+            r.clock.now_ms(),
+            false,
+            "unreadable",
+        )
+        .unwrap()
+        .unwrap()
+        .0;
+    r.scheduler.tick();
+    assert!(r.fake.turns().is_empty());
+    assert!(
+        r.writer
+            .state()
+            .due_trigger_jobs(r.clock.now_ms())
+            .unwrap()
+            .iter()
+            .any(|j| j.id == id)
+    );
+    let entries = r
+        .writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    assert!(
+        entries
+            .items
+            .iter()
+            .any(|a| a.kind == "run.recovery_unavailable")
     );
 }
 

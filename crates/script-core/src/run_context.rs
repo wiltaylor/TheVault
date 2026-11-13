@@ -90,6 +90,11 @@ impl RunContext {
         b.parent = Some(root.clone());
     }
 
+    /// Merge host-owned queue provenance without inheriting an unrelated caller.
+    pub fn merge(&self, other: &Self) {
+        self.join(other);
+    }
+
     /// Mark outside-text exposure. All existing clones observe this change.
     pub fn restrict(&self) {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
@@ -173,6 +178,12 @@ impl RunContext {
                 return Err(error);
             }
         };
+        if snapshot
+            .stop_generation()
+            .is_none_or(|generation| database.automation_commit(generation).is_err())
+        {
+            database.record_stale_run(id)?;
+        }
         Ok(Self(Arc::new(Mutex::new(State {
             restricted: snapshot.is_restricted(),
             stop_generation: snapshot.stop_generation(),

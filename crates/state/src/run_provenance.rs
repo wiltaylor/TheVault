@@ -276,6 +276,16 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
 }
 
 impl State {
+    pub fn record_stale_run(&self, id: &str) -> Result<()> {
+        record_failure(
+            &mut self.conn(),
+            self.now(),
+            id,
+            "run.recovery_stale",
+            "Queued run recovered with a stale admission; its original provenance was retained",
+        )
+    }
+
     /// Fallible audit before a queue consumes unavailable work. On failure the
     /// caller must leave the queue record pending, never execute it unaudited.
     pub fn record_unavailable_run(&self, id: &str) -> Result<()> {
@@ -327,7 +337,7 @@ impl State {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let (root, mut snapshot) = resolve(&tx, id)?;
-        if !snapshot.sealed {
+        if !snapshot.sealed || snapshot.generation.is_none() {
             snapshot.restricted = true;
             snapshot.generation = Some(Generation::stale());
         }
