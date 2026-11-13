@@ -1541,8 +1541,8 @@ mod tests {
         runtime.block_on(async {
             for (method, uri, body) in [
                 ("GET", "/api/search?q=quokka", ""),
-                ("GET", "/api/query?query=from%20article", ""),
-                ("POST", "/api/query", r#"{"query":"from article"}"#),
+                ("GET", "/api/query?query=from%20*", ""),
+                ("POST", "/api/query", r#"{"query":"from *"}"#),
             ] {
                 let request = axum::http::Request::builder()
                     .method(method)
