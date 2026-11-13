@@ -243,7 +243,16 @@ test("an imported newsletter shows as rich blocks and View original opens it in 
 
   // Only an owner session may grant consent. This spec already owns an isolated server
   // and vault per worker, so its server-wide setting cannot affect parallel specs.
-  const consent = await page.request.put("/api/integrations/google/settings", { data: { gmail_remote_images: true } });
+  const consent = await page.request.put("/api/integrations/google/settings", {
+    data: {
+      gmail_mode: "all",
+      gmail_labels: [],
+      gmail_window_days: 30,
+      calendars: [],
+      default_calendar: "",
+      gmail_remote_images: true,
+    },
+  });
   expect(consent.ok(), await consent.text()).toBe(true);
   await pane.getByRole("button", { name: "View original" }).click();
   await expect(loadRemote).toBeVisible();
