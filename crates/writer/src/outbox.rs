@@ -475,7 +475,7 @@ impl Writer {
         let drafted_by = match author {
             Author::Agent(name) | Author::AgentMail(name) => name.as_str(),
             Author::Session(_) | Author::Token(_) => DRAFTED_BY_USER,
-            Author::Handler(_) | Author::Task(_) => return,
+            Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_) => return,
         };
         if text(doc, "drafted_by").is_none_or(str::is_empty) {
             set(doc, "drafted_by", drafted_by);
@@ -713,7 +713,7 @@ fn outbox_rule(
                 }
             }
         }
-        Author::Handler(name) | Author::Task(name) => {
+        Author::Handler(name) | Author::Task(name) | Author::GmailSentCopy(name) => {
             let label = match author {
                 Author::Handler(_) => format!("handler {name}"),
                 _ => format!("task {name}"),
