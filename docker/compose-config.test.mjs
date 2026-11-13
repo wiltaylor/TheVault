@@ -8,8 +8,8 @@ const example = readFileSync('deploy/.env.example', 'utf8');
 const hasCompose = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
 
 // Scan production sources across all workspace crates, not tests or build.rs.
-// Include constant/closure-based reads conservatively: every VAULT literal in
-// a file using env::var is a candidate, so indirect reads cannot silently escape.
+// Resolve literal reads and named constants, including the browser's local
+// `var` closure. Clap arguments and unrelated VAULT strings are not env::var reads.
 function runtimeKeys(root = 'crates') {
   const keys = new Set();
   function visit(dir) {
@@ -19,7 +19,12 @@ function runtimeKeys(root = 'crates') {
       else if (entry.name.endsWith('.rs')) {
         const rust = readFileSync(path, 'utf8');
         if (!/env\s*::\s*var(?:_os)?\s*\(/.test(rust)) continue;
-        for (const [, key] of rust.matchAll(/"(VAULT_[A-Z0-9_]+)"/g)) {
+        const constants = Object.fromEntries([...rust.matchAll(/const\s+(\w+)\s*:\s*&str\s*=\s*"([^"]+)"/g)]
+          .map(m => [m[1], m[2]]));
+        for (const match of rust.matchAll(/(?:env\s*::\s*var(?:_os)?|\bvar)\s*\(\s*(?:"([^"]+)"|([A-Z][A-Z0-9_]*))\s*\)/g)) {
+          const key = match[1] ?? constants[match[2]];
+          assert.ok(key, `unresolved environment constant ${match[2]} in ${path}`);
+          if (!key.startsWith('VAULT_')) continue;
           if (!key.startsWith('VAULT_TEST_') && key !== 'VAULT_SERVER_BIN') keys.add(key);
         }
       }
