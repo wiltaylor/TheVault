@@ -69,6 +69,8 @@ const ORIGIN: &str = "vault://localhost";
 const SETUP_PATH: &str = "/_desktop/setup";
 
 const SETUP_PAGE: &str = include_str!("setup.html");
+const SETUP_SCRIPT: &str = include_str!("setup.js");
+const SETUP_CSP: &str = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; form-action 'self'";
 
 /// Runs in every page the window loads: the sync badge and the capture hook.
 const PAGE_SCRIPT: &str = include_str!("page.js");
@@ -486,7 +488,12 @@ async fn desktop(state: &App, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     match (request.method().clone(), path) {
         (Method::GET, SETUP_PATH) => Response::builder()
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(header::CONTENT_SECURITY_POLICY, SETUP_CSP)
             .body(SETUP_PAGE.as_bytes().to_vec())
+            .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR)),
+        (Method::GET, "/_desktop/setup.js") => Response::builder()
+            .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
+            .body(SETUP_SCRIPT.as_bytes().to_vec())
             .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR)),
         (Method::GET, "/_desktop/status") => json_response(StatusCode::OK, &status_json(state)),
         (Method::POST, "/_desktop/update/skip") => {

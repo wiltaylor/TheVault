@@ -21,4 +21,11 @@ test('desktop retains signature verification', () => {
   const config = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json'));
   assert.equal(config.plugins.updater.requireSignedVersion, true);
   assert.ok(config.plugins.updater.pubkey);
+  assert.equal(config.plugins.updater.endpoints, undefined);
+});
+
+test('desktop setup uses no inline script', () => {
+  const html = readFileSync('apps/desktop/src-tauri/src/setup.html', 'utf8');
+  assert.match(html, /<script src="\/_desktop\/setup\.js"><\/script>/);
+  assert.doesNotMatch(html, /<script>/);
 });

@@ -123,6 +123,18 @@ pub fn updater_endpoint(install: Install, server: Option<&str>) -> Option<String
     })
 }
 
+/// HTTPS updates are always valid. Plain HTTP is valid only at the origin of the server the user
+/// paired with; the updater's insecure-transport switch never opens another host.
+pub fn transport_allowed(endpoint: &reqwest::Url, server: &str) -> bool {
+    if endpoint.scheme() == "https" {
+        return true;
+    }
+    let Ok(server) = reqwest::Url::parse(server) else {
+        return false;
+    };
+    endpoint.scheme() == "http" && server.scheme() == "http" && endpoint.origin() == server.origin()
+}
+
 /// Whether a newer version the server announces, `found`, is worth downloading: it is not the
 /// one already downloaded and waiting, `ready`, and is newer than the running app, `current`.
 pub fn should_download(current: &str, ready: Option<&str>, found: &str) -> bool {
@@ -466,6 +478,24 @@ mod tests {
             updater_endpoint(Install::Binary, Some("http://vault")),
             None
         );
+    }
+
+    #[test]
+    fn plain_http_updates_use_only_the_paired_origin() {
+        let url = |u| reqwest::Url::parse(u).unwrap();
+        assert!(transport_allowed(&url("https://updates.example/a"), "http://vault:8080"));
+        assert!(transport_allowed(
+            &url("http://vault:8080/api/clients/update/x"),
+            "http://vault:8080"
+        ));
+        assert!(!transport_allowed(
+            &url("http://other.example:8080/api/clients/update/x"),
+            "http://vault:8080"
+        ));
+        assert!(!transport_allowed(
+            &url("http://vault:8081/api/clients/update/x"),
+            "http://vault:8080"
+        ));
     }
 
     #[test]

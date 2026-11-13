@@ -258,12 +258,13 @@ impl Updates {
     fn check(&self, app: &AppHandle, server: Option<&str>, github: &str) {
         let current = app.package_info().version.to_string();
         *lock(&self.error) = None;
-        if let (Some(endpoint), Some(appimage)) = (
+        if let (Some(server), Some(endpoint), Some(appimage)) = (
+            server,
             update::updater_endpoint(self.install, server),
             self.appimage.clone(),
         ) {
             match tauri::async_runtime::block_on(
-                self.self_update(app, &endpoint, appimage, &current),
+                self.self_update(app, &endpoint, server, appimage, &current),
             ) {
                 Ok(true) => {
                     *lock(&self.found) = None;
@@ -291,16 +292,22 @@ impl Updates {
         &self,
         app: &AppHandle,
         endpoint: &str,
+        server: &str,
         appimage: PathBuf,
         current: &str,
     ) -> Result<bool, String> {
-        let url = endpoint
+        let url: reqwest::Url = endpoint
             .parse()
             .map_err(|e| format!("the updater endpoint {endpoint}: {e}"))?;
+        if !update::transport_allowed(&url, server) {
+            return Err("refusing a plain-HTTP update from a host the user did not set".into());
+        }
         let mut builder = app
             .updater_builder()
             .endpoints(vec![url])
             .map_err(|e| e.to_string())?
+            // Every URL is checked against the paired origin, so do not follow an unchecked redirect.
+            .configure_client(|client| client.redirect(reqwest::redirect::Policy::none()))
             .executable_path(appimage)
             .timeout(CHECK_TIMEOUT);
         if let Some(key) = test_pubkey() {
@@ -315,6 +322,9 @@ impl Updates {
             // Nothing newer on the server; anything downloaded before is kept.
             return Ok(lock(&self.ready).is_some());
         };
+        if !update::transport_allowed(&found.download_url, server) {
+            return Err("refusing a plain-HTTP download from a host the user did not set".into());
+        }
         let ready = self.ready_version();
         if !update::should_download(current, ready.as_deref(), &found.version) {
             return Ok(ready.is_some());
@@ -350,7 +360,9 @@ impl Updates {
             return Ok(None);
         };
         let current = app.package_info().version.to_string();
-        match tauri::async_runtime::block_on(self.self_update(app, &endpoint, appimage, &current)) {
+        match tauri::async_runtime::block_on(self.self_update(
+            app, &endpoint, server, appimage, &current,
+        )) {
             Ok(true) => Ok(self.ready_version()),
             Ok(false) => Ok(None),
             Err(e) => {
