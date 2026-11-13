@@ -821,7 +821,7 @@ fn assistant_settings_saves_keep_approval_rules() {
             after.permissions.approval_rules,
             saved.permissions.approval_rules
         );
-        assert_eq!(after.system_prompt, prompt);
+        assert_eq!(after.system_prompt.as_deref(), Some(prompt));
     }
 }
 
