@@ -126,7 +126,7 @@ fn device_calendar_upload_create_and_replace_deny_forged_metadata() {
     let device = bearer(&token);
     for ty in ["event", "event_series"] {
         let recurrence = if ty == "event_series" {
-            "rule = [\"RRULE:FREQ=DAILY;COUNT=1\"]\nstarts = \"2026-03-10\"\nends = \"2026-03-11\"\n"
+            "rule = [\"RRULE:FREQ=DAILY;COUNT=1\"]\nstarts = { start: \"2026-03-10\", end: \"2026-03-11\" }\n"
         } else {
             ""
         };
