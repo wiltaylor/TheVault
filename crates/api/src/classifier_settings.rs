@@ -170,7 +170,7 @@ pub(crate) fn pin_missing_name(
     w.pin_classifier_accounts(|reference| {
         (reference.trim().to_lowercase() == name.trim().to_lowercase()
             && accounts.find(reference).is_none())
-            .then(|| missing.clone())
+        .then(|| missing.clone())
     })?;
     Ok(())
 }
