@@ -1240,6 +1240,7 @@ export interface Token {
   scope: Scope;
   created: number;
   last_used: number | null;
+  expires: number | null;
   secret?: string;
 }
 
@@ -2313,7 +2314,8 @@ export const api = {
   deviceFiles: async () => (await request<{ files: DeviceFileInfo[] }>("GET", "/api/device-files")).files,
   tokens: async () => (await request<{ tokens: Token[] }>("GET", "/api/tokens")).tokens,
   /** Create a token. The answer is the only time its secret is shown. */
-  createToken: (name: string, scope: Scope) => request<Token>("POST", "/api/tokens", { name, scope }),
+  createToken: (name: string, scope: Scope, expires: number | null = null) =>
+    request<Token>("POST", "/api/tokens", { name, scope, expires }),
   revokeToken: (name: string) => request<void>("DELETE", `/api/tokens/${enc(name)}`),
   /** Issue a one-time install code for an AI agent, valid for ten minutes. */
   createAgentCode: (name: string, scope: Scope, serverUrl: string) =>

@@ -166,6 +166,7 @@ impl State {
         }
         let id = self.new_ulid().to_string();
         let token_id = format!("device-{}", id.to_ascii_lowercase());
+        // Paired-device tokens intentionally stay unexpired, unlike agent-code tokens.
         let (token, secret) = self.create_token_kind(&token_id, Scope::Write, "device")?;
         let inserted = self.conn().execute(
             "INSERT INTO devices (id, name, platform, capabilities, token_id, settings, created_ms)

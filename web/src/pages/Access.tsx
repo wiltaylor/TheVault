@@ -1,4 +1,4 @@
-import { For, type JSX, Show, createResource, createSignal } from "solid-js";
+import { For, type JSX, Show, createResource, createSignal, onCleanup, onMount } from "solid-js";
 import { type AgentCode, type Scope, type Token, api } from "../api";
 import { copyText } from "../clipboard";
 import { when } from "../admin/format";
@@ -261,6 +261,7 @@ export function ConnectAgent() {
           {error()}
         </p>
       </Show>
+      <p class="muted">Agent tokens expire 90 days after the install code is redeemed. The install code has a separate 10-minute expiry.</p>
       <Show when={issued()}>
         {(c) => (
           <div class="token-secret" role="region" aria-label="Agent install command">
@@ -294,6 +295,12 @@ export function ConnectAgent() {
  * created it; it is not stored in the browser and the API never returns it again.
  */
 function TokensPage() {
+  const [expiry, setExpiry] = createSignal("");
+  const [now, setNow] = createSignal(Date.now());
+  onMount(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    onCleanup(() => clearInterval(timer));
+  });
   const [tokens, { refetch }] = createResource(api.tokens);
   const [name, setName] = createSignal("");
   const [scope, setScope] = createSignal<Scope>("read");
@@ -307,7 +314,11 @@ function TokensPage() {
     setCreated(null);
     setBusy(true);
     try {
-      setCreated(await api.createToken(name().trim(), scope()));
+      const expires = expiry() ? new Date(expiry()).getTime() : null;
+      if (expires !== null && (!Number.isFinite(expires) || expires <= Date.now() || expires > 253402300799999)) {
+        throw new Error("Expiry must be a future date through year 9999.");
+      }
+      setCreated(await api.createToken(name().trim(), scope(), expires));
       setName("");
       await refetch();
     } catch (e) {
@@ -354,7 +365,11 @@ function TokensPage() {
               )}
             </For>
           </select>
+          <label for="token-expiry">Expiry (local time, optional)</label>
+          <input id="token-expiry" type="datetime-local" value={expiry()}
+            onInput={(e) => setExpiry(e.currentTarget.value)} />
         </div>
+        <p class="muted">Leave expiry blank for no expiry.</p>
         <button type="submit" class="primary" disabled={busy() || !name().trim()}>
           Create token
         </button>
@@ -370,6 +385,7 @@ function TokensPage() {
             <p>
               Copy the secret for <strong>{t().name}</strong> now. It is not shown again.
             </p>
+            <p>Expiry: {t().expires == null ? "No expiry" : when(t().expires!)}</p>
             <div class="actions">
               <input readonly value={t().secret ?? ""} aria-label="Token secret" onFocus={(e) => e.currentTarget.select()} />
               <button type="button" onClick={() => void navigator.clipboard?.writeText(t().secret ?? "")}>
@@ -394,6 +410,8 @@ function TokensPage() {
                   <th>Kind</th>
                   <th>Created</th>
                   <th>Last used</th>
+                  <th>Expiry</th>
+                  <th>Inactivity</th>
                   <th />
                 </tr>
               </thead>
@@ -412,6 +430,12 @@ function TokensPage() {
                       </td>
                       <td>{when(t.created)}</td>
                       <td>{t.last_used === null ? "Never" : when(t.last_used)}</td>
+                      <td>{t.expires == null ? "No expiry" : <>
+                        {when(t.expires)}{t.expires <= now() ? " (Expired)" : ""}
+                      </>}</td>
+                      <td>{now() - (t.last_used ?? t.created) >= 90 * 24 * 60 * 60 * 1000
+                        ? (t.last_used === null ? "Never used in 90 days" : "Inactive for 90 days or more")
+                        : ""}</td>
                       <td>
                         <button type="button" class="danger" onClick={() => void revoke(t.name)}>
                           Revoke
