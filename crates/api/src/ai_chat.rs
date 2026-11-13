@@ -540,9 +540,16 @@ fn withheld_note(agent: &Agent, direct: Direct, trigger: bool) -> Option<String>
     if lines.is_empty() {
         return None;
     }
+    // A trigger's thread keeps note and script proposals for a later Apply (TV-240, TV-271).
+    let kept = if trigger {
+        "Note and script changes you propose wait in this run's thread for the user's Apply. \
+         For the other changes that would only be proposed, this run has no tools"
+    } else {
+        "No one is present to apply a proposal, so this run has no tools for the changes that \
+         would only be proposed"
+    };
     Some(format!(
-        "\n## This run is unattended\n\nNo one is present to apply a proposal, so this run has \
-         no tools for the changes that would only be proposed:\n\n{}\n\nWhen the task needs one \
+        "\n## This run is unattended\n\n{kept}:\n\n{}\n\nWhen the task needs one \
          of them, do not say you have no tool for it. Say which change you would make, and that \
          it needs the user: in a chat with you or a call from a note, where it waits for their \
          Apply, or with that switch turned off on your Permissions tab.\n",
@@ -5294,9 +5301,8 @@ mod tests {
     #[test]
     fn an_unattended_run_names_the_switches_that_hold_its_changes_back() {
         let agent = |wcl: &str| Agent::parse("a", wcl).unwrap();
-        let note = |a: &Agent| {
-            withheld_note(a, Direct::of(confirm_of(a), unattended_scope(a)), false)
-        };
+        let note =
+            |a: &Agent| withheld_note(a, Direct::of(confirm_of(a), unattended_scope(a)), false);
         // Every switch on, every tool: everything is held back, types included.
         let text = note(&agent("label = \"A\"\n")).unwrap();
         assert!(text.contains("## This run is unattended"), "{text}");
@@ -5491,10 +5497,19 @@ mod tests {
         let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
         let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
         let names = |drop: Option<Direct>| -> Vec<String> {
-            turn_tools(ai::Web::default(), false, None, drop, false, false, false, false)
-                .into_iter()
-                .map(|t| t.name)
-                .collect()
+            turn_tools(
+                ai::Web::default(),
+                false,
+                None,
+                drop,
+                false,
+                false,
+                false,
+                false,
+            )
+            .into_iter()
+            .map(|t| t.name)
+            .collect()
         };
         let chat = names(None);
         let trigger = names(Some(direct));
@@ -5526,10 +5541,19 @@ mod tests {
         let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
         let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
         let names = |drop: Option<Direct>| -> Vec<String> {
-            turn_tools(ai::Web::default(), false, None, drop, false, false, false, false)
-                .into_iter()
-                .map(|t| t.name)
-                .collect()
+            turn_tools(
+                ai::Web::default(),
+                false,
+                None,
+                drop,
+                false,
+                false,
+                false,
+                false,
+            )
+            .into_iter()
+            .map(|t| t.name)
+            .collect()
         };
         let chat = names(None);
         let trigger = names(Some(direct));
