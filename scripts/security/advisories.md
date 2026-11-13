@@ -34,3 +34,6 @@ archives. Use `flock` as above and retain stdout JSON and the exit status.
 No scanner installation, database refresh or registry access is authorized by
 the card's fixture tests. Until these inputs and schedule are installed,
 scheduled coverage is **not active** and this slice must not ship as complete.
+
+Scheduling, database refresh and runtime archive inputs are tracked separately
+in TV-307. TV-267 provides the reporter, not an active scheduled service.

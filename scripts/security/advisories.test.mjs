@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { scan, publish, VERSION } from './advisories.mjs';
 
 const vulnerability = { VulnerabilityID: 'CVE-2026-1234', PkgName: 'fixture', InstalledVersion: '1.0', FixedVersion: '2.0', Severity: 'HIGH', Description: 'secret must not escape' };
@@ -43,4 +44,21 @@ test('wrong version and missing runtime archive fail closed', () => {
 });
 test('backlog failure is not green', () => {
   assert.throws(() => publish(scan(fake(), '.', ['fixture.tar']), () => ({status: 1})));
+});
+test('captured Terrarium card-list JSON skips existing advisories', {
+  skip: !process.env.ADVISORY_CARD_LIST_JSON,
+}, () => {
+  const stdout = readFileSync(process.env.ADVISORY_CARD_LIST_JSON, 'utf8');
+  const cards = JSON.parse(stdout);
+  assert.ok(Array.isArray(cards));
+  assert.ok(cards.length > 0);
+  assert.equal(typeof cards[0].id, 'string');
+  let lookups = 0;
+  publish(scan(fake(), '.', ['fixture.tar']), (cmd, args) => {
+    assert.equal(cmd, 'terrarium');
+    assert.equal(args[1], 'ls', 'must not create a duplicate');
+    lookups++;
+    return { status: 0, stdout };
+  });
+  assert.equal(lookups, 1);
 });
