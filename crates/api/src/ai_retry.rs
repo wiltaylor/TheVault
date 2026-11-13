@@ -144,6 +144,62 @@ fn wait_line(sub: Option<usize>, wait: Duration, attempt: usize, of: usize, erro
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn retry_and_subagent_keep_live_context_after_fake_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let writer = Arc::new(Writer::open(vault, state).unwrap());
+        let id = writer.state().start_agent_run("test", "manual").unwrap();
+        writer.state().set_agent_run_thread(id, "thread").unwrap();
+        let context = script::RunContext::default();
+        let generation = writer.state().admit_automation().unwrap();
+        context.capture_stop_generation(generation);
+        let during_wait = context.clone();
+        let waits = Waits {
+            waits: CAPACITY_WAITS.to_vec(),
+            sleep: Arc::new(move |_| {
+                let context = during_wait.clone();
+                Box::pin(async move {
+                    assert!(script::RunContext::current().is_none());
+                    tokio::task::yield_now().await;
+                    context.restrict();
+                })
+            }),
+        };
+        let report = Arc::default();
+        let retry = CapacityRetry::new(
+            waits,
+            writer.clone(),
+            "thread",
+            report,
+            context.clone(),
+        );
+        let sub = retry.for_sub(1);
+        retry.sleep(retry.wait(0).unwrap()).await;
+        for item in [&retry, &sub] {
+            assert_eq!(item.run_context, context);
+            assert!(item.run_context.is_restricted());
+            assert_eq!(item.run_context.stop_generation(), Some(generation));
+            let observed = crate::ai_chat::blocking(&item.run_context, || {
+                script::RunContext::current().unwrap()
+            })
+            .await
+            .unwrap();
+            assert_eq!(observed, context);
+            item.note(
+                0,
+                item.wait(0).unwrap(),
+                &ai::AiError::new(ai::ErrorKind::Unavailable, "fake capacity error"),
+            )
+            .await;
+        }
+        let log = writer.state().agent_run(id).unwrap().unwrap().log;
+        assert_eq!(log.lines().count(), 2);
+        assert!(log.contains("sub agent 1: model at capacity"));
+        assert!(script::RunContext::current().is_none());
+    }
+
     #[test]
     fn the_waits_are_one_two_and_four_minutes() {
         assert_eq!(
