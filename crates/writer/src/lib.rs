@@ -1956,6 +1956,14 @@ impl Writer {
     }
 
     fn check_gmail_metadata_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
+        if let Author::GmailSentCopy(id) = author {
+            if change.type_name == "email"
+                && change.doc.as_ref().and_then(|doc| doc.field("gmail_ref"))
+                    .and_then(schema::Value::as_str) == Some(id.as_str())
+            {
+                return Ok(());
+            }
+        }
         if matches!(author, Author::Session(_))
             || matches!(author, Author::Task(name) if name == "google_gmail")
             || change.doc.is_none()
