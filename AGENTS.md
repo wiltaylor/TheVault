@@ -8,7 +8,9 @@ The flow is in_progress, review, merge_queue, accepted. There is no validating c
 
 Before review, push the card branch and run only targeted checks for the changed areas against that pushed commit on thevault-dev. Never run full `just validate`, `just check` or `just validate-android` per card or before every commit. Upload original test reports with `terrarium test push --card <id>`. Move to review with the branch, commit, commands, exit codes, pass counts and test run IDs. A failed check must be fixed or reported as blocked, not called a pass.
 
-Use one clean checkout per card: `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<card>`. Confirm the checkout identifies the pushed commit. Reuse that path and its cache for every round, keeping logs, reports and generated output inside it. Do not create `/src/<card>-<round>` directories. All git commands run in the sandbox, never on a target. Branch from `origin/next` as `<card-id-lowercase>` and push only the card branch.
+Use one clean checkout per card: `terrarium repo checkout thevault --target thevault-dev --branch <branch> --path /src/<card>`. Before every run, confirm the checked-out commit equals the pushed commit: read `.git/HEAD` and its ref file on the target, or use the HEAD printed by the checkout command. Reuse that path for every round. Write run output, reports, logs and build caches (`CARGO_TARGET_DIR`, web dependency copies) to `/src/<card>-out/`, never into the checkout. Do not create `/src/<card>-<round>` directories. All git commands run in the sandbox, never on a target. Branch from `origin/next` as `<card-id-lowercase>` and push only the card branch.
+
+Never run a formatter inside the tested checkout. Format a copy, apply the change in the sandbox, then push.
 
 GitHub build/test CI is removed. The nine former workflows are deleted.
 One manual sign-only workflow temporarily uses the existing repository
