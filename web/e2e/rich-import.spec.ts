@@ -248,8 +248,8 @@ test("an imported newsletter shows as rich blocks and View original opens it in 
       gmail_mode: "all",
       gmail_labels: [],
       gmail_window_days: 30,
-      calendars: [],
-      default_calendar: "",
+      calendars: ["primary"],
+      default_calendar: "primary",
       gmail_remote_images: true,
     },
   });
