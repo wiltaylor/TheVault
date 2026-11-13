@@ -189,7 +189,7 @@ fn summary(run: &Run) -> Value {
 
 pub async fn progress(State(w): State<Arc<Writer>>, Caller(author): Caller) -> Result<Json<Value>, ApiError> {
     owner(&author)?;
-    blocking(w, |w| Ok(Json(ledger(w)?.runs.last().map(summary).unwrap_or(json!({"status":"not_started","attempts":[]}))))).await
+    blocking(w, |w| Ok::<_, ApiError>(Json(ledger(w)?.runs.last().map(summary).unwrap_or(json!({"status":"not_started","attempts":[]}))))).await
 }
 
 fn spawn(w: Weak<Writer>) -> std::io::Result<()> {
@@ -258,4 +258,25 @@ fn decide(w: &Writer, p: &Preview, item: &Item) -> Result<&'static str, ApiError
     let response = match result { Ok(r) => r, Err(_) => return Ok("provider_failed") };
     crate::classifiers::apply(w,&saved,&c,&response).map_err(|_| stale())?;
     Ok("succeeded")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_owner_sessions_can_approve_not_scripts_tasks_tokens_or_agents() {
+        for author in [Author::Token("admin".into()), Author::Agent("agent-test".into()),
+            Author::Handler("script".into()), Author::Task("scheduled-script".into()), Author::AgentMail("mail".into())] {
+            assert!(owner(&author).is_err());
+        }
+        assert!(owner(&Author::Session("owner".into())).is_ok());
+    }
+
+    #[test]
+    fn historical_routes_are_human_only() {
+        for path in ["/api/classifiers/scam/history", "/api/classifiers/scam/history/preview", "/api/classifiers/scam/history/approve"] {
+            assert!(crate::auth::is_human_only(&axum::http::Method::POST, path));
+        }
+    }
 }

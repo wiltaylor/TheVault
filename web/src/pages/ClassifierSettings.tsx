@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
 import { type AiStatus, type ClassifierSettings as Settings, api } from "../api";
 import { errorText } from "./TypeEditor";
+import { ScamHistory } from "./ScamHistory";
 
 const reasons: Record<string, string> = {
   invalid_definition: "Invalid classifier definition. Check its WCL configuration and filter.",
@@ -54,6 +55,7 @@ export function ClassifierSettings(props: { status: AiStatus }) {
           <p>{row.name === "agent_safety"
             ? "Agent safety sends the safety envelope, including projected note text, attachment text and provenance, to the selected external account and model. Incoming notes remain held from agents until cleared or explicitly released."
             : `This classifier sends configured fields (${row.fields?.join(", ") ?? "unavailable"}) to the selected external account and model. Scam defaults include title, sender, recipients, snippet and body. Unclassified notes still need triage.`}</p>
+          <Show when={row.name === "scam"}><ScamHistory /></Show>
         </section>
       )}</For>}</Show>
       <p>The separate one-time historical safety pass is in <a href="/inbox">Held Inbox</a>. This section does not replay it.</p>

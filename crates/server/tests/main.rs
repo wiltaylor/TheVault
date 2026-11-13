@@ -41,6 +41,7 @@ mod browser_desktop;
 mod browser_secrets;
 mod canvas;
 mod classifiers;
+mod scam_history;
 mod client_ids;
 mod clients;
 mod completeness;
