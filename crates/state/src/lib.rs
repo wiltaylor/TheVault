@@ -837,7 +837,14 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             if !has_expiry {
                 tx.execute_batch("ALTER TABLE tokens ADD COLUMN expires_ms INTEGER;")?;
             }
-            tx.execute_batch("ALTER TABLE versions ADD COLUMN content_bytes INTEGER;")?;
+            let has_content_bytes: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('versions') WHERE name='content_bytes')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_content_bytes {
+                tx.execute_batch("ALTER TABLE versions ADD COLUMN content_bytes INTEGER;")?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())

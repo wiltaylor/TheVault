@@ -15,6 +15,7 @@ mod classifiers;
 mod commands;
 mod devices;
 mod diagnostics;
+mod compressed_history;
 mod gitsync;
 mod login_origins;
 mod sessions;

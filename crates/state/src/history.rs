@@ -548,3 +548,40 @@ fn author_from_parts(kind: &str, name: String) -> Result<Author> {
     Author::from_parts(kind, name)
         .ok_or_else(|| Error::Corrupt(format!("unknown author kind {kind:?}")))
 }
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn byte_exact_text_binary_empty_and_large() {
+        for bytes in [
+            Vec::new(),
+            "text\r\n雪\0é".as_bytes().to_vec(),
+            (0..=255).collect(),
+            vec![42; 4 * 1024 * 1024],
+        ] {
+            assert_eq!(decode_snapshot(&encode_snapshot(&bytes).unwrap()).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn bounded_corrupt_unknown_and_bomb() {
+        let blob = encode_snapshot(&vec![0; 1024 * 1024]).unwrap();
+        let mut bomb = blob.clone();
+        bomb[4..12].copy_from_slice(&((MAX_SNAPSHOT_BYTES as u64) + 1).to_le_bytes());
+        assert!(decode_snapshot(&bomb).unwrap_err().to_string().contains("limit"));
+        // A tiny declared output must not let an expanding block allocate more.
+        bomb[4..12].copy_from_slice(&1u64.to_le_bytes());
+        assert!(decode_snapshot(&bomb).is_err());
+        for n in [0, 1, 4, 12, 43, blob.len() - 1] {
+            assert!(decode_snapshot(&blob[..n]).is_err());
+        }
+        let mut corrupt = blob.clone();
+        corrupt[12] ^= 1;
+        assert!(decode_snapshot(&corrupt).is_err());
+        corrupt[3] = 2;
+        assert!(decode_snapshot(&corrupt).is_err());
+        assert!(encode_snapshot(&vec![0; MAX_SNAPSHOT_BYTES + 1]).is_err());
+    }
+}
