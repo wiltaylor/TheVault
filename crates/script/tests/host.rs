@@ -388,6 +388,25 @@ fn run() -> Result[string, string] {{
 }
 
 #[test]
+fn agent_named_hosts_cannot_reach_local_addresses() {
+    let f = fixture();
+    let api = StandIn::start();
+    api.route("/hook", Reply::json(200, &json!({})));
+    for host in ["localhost".to_owned(), api.host()] {
+        let url = format!("http://{host}:{}/hook", api.addr().port());
+        let src = format!(
+            "use http\nfn run() -> Result[int, string] {{ Ok(http::get(\"{url}\", #{{}})?.status) }}\n"
+        );
+        let mut denied = job(Kind::Task, &src);
+        denied.allow_domains = vec![host];
+        denied.public_only = true;
+        let err = f.host.run(denied).result.unwrap_err();
+        assert!(err.to_string().contains("local network"), "{err}");
+    }
+    assert!(api.requests().is_empty());
+}
+
+#[test]
 fn http_does_not_follow_a_redirect_to_another_host() {
     let f = fixture();
     let api = StandIn::start();

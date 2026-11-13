@@ -147,7 +147,8 @@ fn call(
             "host {host:?} is not on this script's allowlist"
         )));
     }
-    let restricted = public_only && allow.iter().any(|d| d == "*") && !ai.fetch_private();
+    // Agent-proposed named hosts need the same resolved-address check as a wildcard grant.
+    let restricted = public_only && !ai.fetch_private();
     if restricted && ::ai::web::local_literal(&url) {
         return Ok(Err(local_network()));
     }

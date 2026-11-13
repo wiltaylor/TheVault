@@ -223,6 +223,32 @@ impl Api {
     fn apply(&self, change: &Value) -> (StatusCode, Value) {
         self.apply_as(&self.token(), change)
     }
+
+    fn apply_session(&self, change: &Value) -> (StatusCode, Value) {
+        let login = self
+            .client
+            .post(self.server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap();
+        assert_eq!(login.status(), StatusCode::OK);
+        let cookie = login.headers()[reqwest::header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let response = self
+            .client
+            .post(self.server.url("/api/ai/apply"))
+            .header(reqwest::header::COOKIE, cookie)
+            .json(change)
+            .send()
+            .unwrap();
+        let status = response.status();
+        (status, response.json().unwrap_or(Value::Null))
+    }
 }
 
 fn read_events(res: Response) -> Vec<(String, Value)> {
@@ -1078,6 +1104,276 @@ fn the_switch_off_applies_at_once_for_a_write_caller_and_apply_needs_admin() {
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
         assert_eq!(body["error"], "needs_admin");
     }
+}
+
+#[test]
+fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metadata() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({"agents":false}));
+    let scheduled = "label = \"Helper\"\n\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n";
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":scheduled}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert!(api.agent_wcl("helper").is_none());
+
+    // Neither an ordinary admin token nor an agent token can Apply this sensitive change.
+    // A forged client flag and omitted grant metadata do not participate in the decision.
+    let mut forged = proposal.clone();
+    forged["changes_triggers"] = json!(false);
+    forged.as_object_mut().unwrap().remove("grants_run_code");
+    for token in [api.token(), api.token_of("agent-trigger-editor", "admin")] {
+        let (status, body) = api.apply_as(&token, &forged);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        if token == api.token() {
+            assert_eq!(body["error"], "not_permitted");
+            assert_eq!(
+                body["message"],
+                "Agent trigger changes need a signed-in session Apply."
+            );
+        } else {
+            assert_eq!(body["error"], "forbidden");
+        }
+        assert!(api.agent_wcl("helper").is_none());
+    }
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        api.agent_wcl("helper").as_deref(),
+        proposal["after"].as_str()
+    );
+    let scheduled = api.agent_wcl("helper").unwrap();
+
+    // A changed schedule and metadata edits both wait again.
+    let rescheduled = scheduled.replace("0 2 * * *", "0 3 * * *");
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":rescheduled}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert_eq!(api.agent_wcl("helper").as_deref(), Some(scheduled.as_str()));
+    let (status, body) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert_eq!(
+        body["message"],
+        "Agent trigger changes need a signed-in session Apply."
+    );
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let renamed = rescheduled.replace("label = \"Helper\"", "label = \"Renamed\"");
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":renamed}),
+    );
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    let proposal = last(&events, "agent_proposal").clone();
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Removing a definition is sensitive too, including when the target is disabled.
+    let disabled = renamed.replace(
+        "label = \"Renamed\"",
+        "label = \"Renamed\"\nenabled = false",
+    );
+    api.put_agent("helper", &disabled);
+    let without = "label = \"Renamed\"\nenabled = false\n";
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":without}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!api.agent_wcl("helper").unwrap().contains("trigger nightly"));
+}
+
+#[test]
+fn semantic_edits_of_disabled_triggered_agents_wait_and_session_apply_is_thread_bound() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({"agents":false}));
+    let original = "label = \"Helper\"\nenabled = false\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Read.\"\n}\n";
+    for field in [
+        "description = \"Changed\"\n",
+        "icon = \"star\"\n",
+        "system_prompt = \"Changed\"\n",
+        "permissions { tools = []\n}\n",
+    ] {
+        api.put_agent("helper", original);
+        let before = api.agent_wcl("helper").unwrap();
+        let after = format!("{field}{original}");
+        let events = api.one(
+            &fake,
+            None,
+            "propose_agent_change",
+            json!({"name":"helper", "wcl":after}),
+        );
+        let p = last(&events, "agent_proposal");
+        assert!(find(&events, "applied").is_none(), "{events:?}");
+        let (status, body) = api.apply(p);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "not_permitted");
+        assert_eq!(
+            body["message"],
+            "Agent trigger changes need a signed-in session Apply."
+        );
+        assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
+
+        // Use a fresh durable proposal, not a proposal consumed by a refused Apply.
+        let response = api
+            .client
+            .post(api.server.url("/api/agents/assistant/threads"))
+            .bearer_auth(api.token())
+            .json(&json!({}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let thread = response.json::<Value>().unwrap()["id"].clone();
+        fake.push(AnthropicMessage::new().tool_use(
+            "semantic_edit",
+            "propose_agent_change",
+            json!({"name":"helper", "wcl":after}),
+        ));
+        fake.push(AnthropicMessage::text("Waiting."));
+        let response = api
+            .client
+            .post(api.server.url("/api/ai/chat"))
+            .bearer_auth(api.token())
+            .json(&json!({"thread":thread, "messages":[user("Edit helper.")]}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let events = read_events(response);
+        let p = last(&events, "agent_proposal");
+        let mut bound = p.clone();
+        bound["thread"] = thread;
+        let (status, body) = api.apply_session(&bound);
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let committed = api.agent_wcl("helper").unwrap();
+        let (status, body) = api.apply_session(&bound);
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(api.agent_wcl("helper").as_deref(), Some(committed.as_str()));
+    }
+}
+
+#[test]
+fn enabling_and_deleting_triggered_agents_need_session_apply() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({"agents":false}));
+    let disabled = "label = \"Helper\"\nenabled = false\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n";
+    api.put_agent("helper", disabled);
+    let before = api.agent_wcl("helper").unwrap();
+    let enabled = before.replace("enabled = false", "enabled = true");
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":enabled}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
+    let (status, body) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert_eq!(
+        body["message"],
+        "Agent trigger changes need a signed-in session Apply."
+    );
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        api.agent_wcl("helper").as_deref(),
+        proposal["after"].as_str()
+    );
+
+    let before = api.agent_wcl("helper").unwrap();
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_delete",
+        json!({"name":"helper"}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
+    // The delete writer ignores after, so sensitivity must ignore it too.
+    let mut forged = proposal.clone();
+    forged["after"] = json!(before);
+    for change in [&proposal, &forged] {
+        let (status, body) = api.apply(change);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "not_permitted");
+        assert_eq!(
+            body["message"],
+            "Agent trigger changes need a signed-in session Apply."
+        );
+        assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
+    }
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(api.agent_wcl("helper").is_none());
+}
+
+#[test]
+fn changed_note_trigger_filter_and_action_wait_for_session_apply_and_stay_stale_checked() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({"agents":false}));
+    let original = "label = \"Helper\"\n\ntrigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"open\\\"\"\n prompt = \"Read.\"\n}\n";
+    api.put_agent("helper", original);
+    let original = api.agent_wcl("helper").unwrap();
+    for changed in [
+        original.replace("status == \\\"open\\\"", "status == \\\"closed\\\""),
+        original.replace("prompt = \"Read.\"", "prompt = \"Summarise.\""),
+    ] {
+        let events = api.one(
+            &fake,
+            None,
+            "propose_agent_change",
+            json!({"name":"helper", "wcl":changed}),
+        );
+        let proposal = last(&events, "agent_proposal").clone();
+        assert!(find(&events, "applied").is_none(), "{events:?}");
+        let (status, body) = api.apply(&proposal);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "not_permitted");
+        assert_eq!(
+            body["message"],
+            "Agent trigger changes need a signed-in session Apply."
+        );
+        let (status, body) = api.apply_session(&proposal);
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":original.replace("prompt = \"Read.\"", "prompt = \"New action.\"")}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    api.put_agent("helper", &original);
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "stale");
+    assert_eq!(api.agent_wcl("helper").as_deref(), Some(original.as_str()));
 }
 
 #[test]
