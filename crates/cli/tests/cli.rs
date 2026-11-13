@@ -526,7 +526,7 @@ fn backup_keeps_the_schema_version_of_an_older_state_db() {
     );
     let has_table: bool = copy
         .query_row(
-            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'gitsync_notes')",
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'run_provenance_leases')",
             [],
             |r| r.get(0),
         )
