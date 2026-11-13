@@ -10,7 +10,7 @@ export function ScamHistory() {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   function invalidate() { setPreview(undefined); }
-  async function action(fn: () => Promise<void>) {
+  async function action(fn: () => Promise<unknown>) {
     setBusy(true); setError("");
     try { await fn(); } catch (e) { invalidate(); setError(errorText(e)); }
     finally { setBusy(false); }

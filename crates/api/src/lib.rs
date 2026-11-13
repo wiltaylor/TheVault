@@ -254,8 +254,14 @@ fn build() -> Built {
         .get("/api/schema", inspect::schema)
         .get("/api/classifiers", classifier_settings::read)
         .get("/api/classifiers/scam/history", scam_history::progress)
-        .post("/api/classifiers/scam/history/preview", scam_history::preview)
-        .post("/api/classifiers/scam/history/approve", scam_history::approve)
+        .post(
+            "/api/classifiers/scam/history/preview",
+            scam_history::preview,
+        )
+        .post(
+            "/api/classifiers/scam/history/approve",
+            scam_history::approve,
+        )
         .put(
             "/api/classifiers/{name}/account",
             classifier_settings::select,

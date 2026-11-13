@@ -646,8 +646,16 @@ fn safety_rest_mutation_route_inventory() {
     actual.sort_unstable();
     actual.dedup();
     let reviewed = [
-        ("post", "/api/classifiers/scam/history/preview", "owner session only, local count and estimate"),
-        ("post", "/api/classifiers/scam/history/approve", "owner session only, fingerprint-bound scam run"),
+        (
+            "post",
+            "/api/classifiers/scam/history/preview",
+            "owner session only, local count and estimate",
+        ),
+        (
+            "post",
+            "/api/classifiers/scam/history/approve",
+            "owner session only, fingerprint-bound scam run",
+        ),
         (
             "put",
             "/api/classifiers/{name}/account",

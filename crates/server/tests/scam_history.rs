@@ -15,7 +15,11 @@ fn setup(fake: &FakeDecisions) -> (TestServer, Client, String) {
     let server = TestServer::start_with_args(
         |vault| {
             std::fs::create_dir_all(vault.join("types")).unwrap();
-            std::fs::write(vault.join("types/email.wcl"), include_str!("../../writer/defaults/email.wcl")).unwrap();
+            std::fs::write(
+                vault.join("types/email.wcl"),
+                include_str!("../../writer/defaults/email.wcl"),
+            )
+            .unwrap();
             std::fs::create_dir_all(vault.join("notes/email")).unwrap();
             for (i, id) in IDS.iter().enumerate() {
                 std::fs::write(
