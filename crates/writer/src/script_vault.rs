@@ -83,7 +83,30 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
         };
         let mut ctx = query::Context::new(index, schema);
         ctx.excluded_notes = excluded.as_ref();
-        let mut result = query::run(q, &ctx, &page).map_err(err)?;
+        let read_notes = std::cell::RefCell::new(std::collections::HashSet::new());
+        if agent_reading() && script_core::RunContext::current().is_some() {
+            ctx.read_notes = Some(&read_notes);
+        }
+        let result = query::run(q, &ctx, &page);
+        // Use the same locked index snapshot as evaluation, never selected/model
+        // fields. Track even a query error after reference traversal.
+        for id in read_notes.borrow().iter() {
+            let mut stmt = index
+                .connection()
+                .prepare_cached("SELECT type, data FROM notes WHERE id = ?1")
+                .map_err(err)?;
+            let mut rows = stmt.query([id]).map_err(err)?;
+            if let Some(row) = rows.next().map_err(err)? {
+                let kind: String = row.get(0).map_err(err)?;
+                let data: String = row.get(1).map_err(err)?;
+                let fields: Json = serde_json::from_str(&data).map_err(err)?;
+                let doc = Input::Json(json!({"fields": fields}))
+                    .parse("query-provenance.wcl")
+                    .map_err(err)?;
+                w.expose_run_note(&kind, &doc);
+            }
+        }
+        let mut result = result.map_err(err)?;
         if agent_reading() {
             for row in &mut result.rows {
                 let mut fields = Json::Object(std::mem::take(&mut row.fields));

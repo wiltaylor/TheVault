@@ -58,6 +58,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// What a query runs against.
 pub struct Context<'a> {
+    /// Optional read provenance, including reference traversal and aggregate inputs.
+    pub read_notes: Option<&'a RefCell<std::collections::HashSet<String>>>,
     /// Server-side exclusions apply to both roots and reference traversal.
     pub excluded_notes: Option<&'a std::collections::HashSet<String>>,
     pub index: &'a index::Index,
@@ -78,6 +80,7 @@ impl<'a> Context<'a> {
             .map(|d| d.as_secs_f64())
             .unwrap_or_default();
         Context {
+            read_notes: None,
             excluded_notes: None,
             index,
             schema,
@@ -551,6 +554,12 @@ fn name_arg(e: &Expr) -> Result<String> {
 }
 
 impl Runner<'_> {
+    pub(crate) fn observe(&self, id: &str) {
+        if let Some(notes) = self.ctx.read_notes {
+            notes.borrow_mut().insert(id.to_owned());
+        }
+    }
+
     /// A [`plain_search`] page: the page's hits from tantivy, among notes of `only` when given,
     /// by score then id as `run` orders them, and only those notes read from `index.db`. The
     /// cursor is the one `run` writes.
@@ -642,6 +651,7 @@ impl Runner<'_> {
                 continue;
             }
             if hits.is_none_or(|h| h.contains_key(&n.id)) {
+                self.observe(&n.id);
                 out.push(Rc::new(n));
             }
         }
@@ -652,6 +662,7 @@ impl Runner<'_> {
         if self.ctx.excluded_notes.is_some_and(|ids| ids.contains(id)) {
             return Ok(None);
         }
+        self.observe(id);
         if let Some(n) = self.notes.borrow().get(id) {
             return Ok(n.clone());
         }

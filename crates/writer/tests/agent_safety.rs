@@ -116,6 +116,48 @@ fn run_exposure_uses_typed_incoming_metadata_and_preserves_ownership_exclusions(
 }
 
 #[test]
+fn query_exposure_covers_selection_link_traversal_groups_and_empty_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("types")).unwrap();
+    std::fs::write(
+        dir.path().join("types/memo.wcl"),
+        "label = \"Memo\"\nfield link { kind = \"reference\" target = \"email\" }\ntemplate default { tab Main { slot title } }\n",
+    )
+    .unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let mail = create(&w, "Incoming");
+    let hash = w.agent_safety(&mail.id).unwrap().fingerprint;
+    w.release_agent_safety(&mail.id, &hash, &Author::Session("owner".into()))
+        .unwrap();
+    w.create(
+        "memo",
+        &Input::Json(serde_json::json!({"fields":{"title":"Local", "link":mail.id}})),
+        &Author::Session("owner".into()),
+    )
+    .unwrap();
+    for (query, restricted) in [
+        ("from email select title", true),
+        ("from email group by title select title", true),
+        ("from memo select link.title", true),
+        ("from memo where link.title == \"absent\" select title", true),
+        ("from memo select title", false),
+    ] {
+        let context = script_core::RunContext::default();
+        context.scope(|| {
+            let _acting = writer::acting_as(&Author::Agent("reader".into()));
+            w.query_page(query, 1, None).unwrap();
+        });
+        assert_eq!(context.is_restricted(), restricted, "{query}");
+    }
+    let owner = script_core::RunContext::default();
+    owner.scope(|| {
+        w.query_page("from email select title", 1, None).unwrap();
+    });
+    assert!(!owner.is_restricted());
+}
+
+#[test]
 fn backfill_clears_parent_and_member_without_trigger_but_ordinary_clearance_delivers() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();

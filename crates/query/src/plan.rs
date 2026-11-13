@@ -435,6 +435,9 @@ fn cut(
         all.truncate(l);
     }
     let total = all.len();
+    for keys in &all {
+        r.observe(id_of(keys));
+    }
 
     let mut groups = Vec::new();
     if let Some(g) = &q.group_by {
@@ -488,6 +491,11 @@ fn walk(
     main: &Source,
     want: &Want<'_>,
 ) -> Result<Option<Page>> {
+    // Provenance needs the aggregate's inputs, not only the current page.
+    // Keep the SQL plan but use its key-list path rather than count-only walking.
+    if r.ctx.read_notes.is_some() {
+        return Ok(None);
+    }
     let conn = r.conn;
     let counted = if main.distinct {
         format!("count(DISTINCT {})", main.id)
