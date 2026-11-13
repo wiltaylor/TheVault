@@ -954,6 +954,11 @@ fn prepare_for(
         });
     };
     let thread = Thread::read(w, &id)?;
+    if w.state().meta(&format!("outside_text.thread.{id}"))?.is_some()
+        && let Some(context) = RunContext::current()
+    {
+        context.restrict();
+    }
     if thread.agent != agent.name {
         return Err(ApiError::bad_request(format!(
             "thread {id} belongs to agent {:?}, not {:?}",
@@ -5612,6 +5617,43 @@ mod tests {
         assert!(approval_proven_no_write(&Err(ApplyError::Stale(
             "old version".into()
         ))));
+    }
+
+    #[test]
+    fn thread_exposure_survives_owner_reply_transcript_rewrite_and_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let database = vault.server_dir().join("state.db");
+        let state = state::State::open(&database, None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        w.put_agent("reader", "label = \"Reader\"\n", |_| vec![]).unwrap();
+        let thread = agent_threads::create(&w, "reader", None, "dispatch").unwrap();
+        let original = RunContext::default();
+        original.restrict();
+        original.scope(|| {
+            agent_threads::save(&w, &thread.id, "Reader", None, |t| {
+                t.transcript.messages.clear();
+            }).unwrap();
+        });
+        // Owner edits and transcript replacement cannot clear the host-owned marker.
+        agent_threads::save(&w, &thread.id, "Reader", Some(&Author::Session("owner".into())), |_| {}).unwrap();
+        drop(w);
+        let vault = store::Vault::open(root.path()).unwrap();
+        let state = state::State::open(&database, None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        let next = RunContext::default();
+        next.track_agent_reads();
+        next.scope(|| {
+            let _prepared = prepare(&w, &Author::Session("owner".into()), Some("reader".into()),
+                Some(thread.id.clone()), vec![], false, false).unwrap();
+            assert!(next.is_restricted());
+        });
+        let independent = RunContext::default();
+        independent.scope(|| {
+            let _prepared = prepare(&w, &Author::Session("owner".into()), Some("reader".into()),
+                None, vec![], false, false).unwrap();
+            assert!(!independent.is_restricted());
+        });
     }
 
     #[test]
