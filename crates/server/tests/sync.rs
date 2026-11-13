@@ -125,9 +125,14 @@ fn device_calendar_upload_create_and_replace_deny_forged_metadata() {
     let (_, token) = pair(&server, "calendar test");
     let device = bearer(&token);
     for ty in ["event", "event_series"] {
+        let recurrence = if ty == "event_series" {
+            "rule = [\"RRULE:FREQ=DAILY;COUNT=1\"]\nstarts = \"2026-03-10\"\nends = \"2026-03-11\"\n"
+        } else {
+            ""
+        };
         for field in ["google_ref = \"forged\"", "send_updates = true"] {
             let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
-            let body = json!({"wcl": format!("title = \"forged\"\n{field}\n")});
+            let body = json!({"wcl": format!("title = \"forged\"\n{field}\n{recurrence}")});
             let denied = device
                 .put(server.url(&format!("/api/notes/{id}?type={ty}")))
                 .header("If-None-Match", "*")
@@ -146,7 +151,7 @@ fn device_calendar_upload_create_and_replace_deny_forged_metadata() {
             let made = send(
                 owner
                     .post(server.url(&format!("/api/notes?type={ty}")))
-                    .json(&json!({"wcl": "title = \"original\"\n"})),
+                    .json(&json!({"wcl": format!("title = \"original\"\n{recurrence}")})),
                 201,
             );
             let id = made["id"].as_str().unwrap();
@@ -172,7 +177,7 @@ fn device_calendar_upload_create_and_replace_deny_forged_metadata() {
                         "If-Match",
                         format!("\"{}\"", made["version"].as_str().unwrap()),
                     )
-                    .json(&json!({"wcl": "title = \"allowed\"\n"})),
+                    .json(&json!({"wcl": format!("title = \"allowed\"\n{recurrence}")})),
                 200,
             );
         }
