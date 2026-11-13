@@ -1607,7 +1607,10 @@ impl Writer {
             if !submitted.contains(&change.id) {
                 authors
                     .entry(change.id.clone())
-                    .or_insert_with(|| Author::Task(SERVER_AUTHOR.to_owned()));
+                    .or_insert_with(|| match author {
+                        Author::Session(_) => Author::Task(SERVER_AUTHOR.to_owned()),
+                        _ => author.clone(),
+                    });
             }
         }
 
