@@ -68,6 +68,31 @@ fn client_resolving(
 mod tests {
     use super::*;
     #[test]
+    fn http_pairing_ignores_dead_proxy() {
+        const CHILD: &str = "VAULT_PAIR_PROXY_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            checked_dns_is_pinned_and_redirects_are_not_followed();
+            return;
+        }
+        // Isolate environment changes from parallel tests. The synthetic hostname avoids
+        // reqwest's automatic loopback proxy bypass even though its pinned address is local.
+        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy = format!("http://{}", dead.local_addr().unwrap());
+        drop(dead);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["http_pairing_ignores_dead_proxy", "--nocapture"])
+            .env(CHILD, "1")
+            .env("HTTP_PROXY", &proxy)
+            .env("http_proxy", &proxy)
+            .env("ALL_PROXY", &proxy)
+            .env("all_proxy", &proxy)
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    #[test]
     fn checked_dns_is_pinned_and_redirects_are_not_followed() {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

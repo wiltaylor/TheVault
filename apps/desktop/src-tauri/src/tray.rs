@@ -25,6 +25,8 @@ pub const INSTALL_ON_QUIT: &str = "install_on_quit";
 pub const APP_MENU: &str = "app_menu";
 pub const RESTART_TO_UPDATE: &str = "restart_to_update";
 pub const QUIT: &str = "quit";
+pub const UNPAIR: &str = "unpair";
+pub const CONFIRM_UNPAIR: &str = "confirm_unpair";
 
 /// What the tray shows, for `/_desktop/status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -57,6 +59,7 @@ impl Badge {
 }
 
 pub struct Tray {
+    confirm_unpair: Option<MenuItem<Wry>>,
     icon: Option<TrayIcon>,
     autostart: Option<CheckMenuItem<Wry>>,
     update_check: Option<CheckMenuItem<Wry>>,
@@ -77,6 +80,7 @@ impl Tray {
             Err(e) => {
                 eprintln!("thevault: no tray icon: {e}");
                 Tray {
+                    confirm_unpair: None,
                     icon: None,
                     autostart: None,
                     update_check: None,
@@ -139,6 +143,8 @@ impl Tray {
         let separator = PredefinedMenuItem::separator(app)?;
         let separator2 = PredefinedMenuItem::separator(app)?;
         let quit = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
+        let unpair = MenuItem::with_id(app, UNPAIR, "Unpair this device…", true, None::<&str>)?;
+        let confirm_unpair = MenuItem::with_id(app, CONFIRM_UNPAIR, "Confirm unpair and quit (restart to pair again)", false, None::<&str>)?;
         let mut items: Vec<&dyn IsMenuItem<Wry>> = vec![
             &capture,
             &open,
@@ -151,7 +157,7 @@ impl Tray {
         if let Some(item) = &app_menu {
             items.push(item);
         }
-        items.extend([&separator2 as &dyn IsMenuItem<Wry>, &quit]);
+        items.extend([&separator2 as &dyn IsMenuItem<Wry>, &unpair, &confirm_unpair, &quit]);
         let menu = Menu::with_items(app, &items)?;
         let icon = TrayIconBuilder::with_id("main")
             .icon(plain_icon())
@@ -163,6 +169,7 @@ impl Tray {
         let mut badge = Badge::of(0);
         badge.tray = true;
         Ok(Tray {
+            confirm_unpair: Some(confirm_unpair),
             icon: Some(icon),
             autostart: Some(autostart),
             update_check: Some(update_check),
@@ -215,6 +222,12 @@ impl Tray {
 
     pub fn badge(&self) -> Badge {
         self.badge.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    pub fn confirm_unpair(&self, enabled: bool) {
+        if let Some(item) = &self.confirm_unpair {
+            let _ = item.set_enabled(enabled);
+        }
     }
 
     /// Ticks the settings' menu items to match `settings`.

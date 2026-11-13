@@ -98,6 +98,9 @@ pub fn save(dir: &Path, device: &Device) -> Result<(), String> {
 pub trait TokenStore: Send + Sync {
     fn get(&self, device_id: &str) -> Result<String, String>;
     fn set(&self, device_id: &str, token: &str) -> Result<(), String>;
+    fn delete(&self, _: &str) -> Result<(), String> {
+        Err("token deletion is unavailable".into())
+    }
 }
 
 /// The Secret Service keyring of the desktop session (D2). Its calls block: make them from a
@@ -115,6 +118,12 @@ fn keyring_error(e: &keyring::Error) -> String {
 }
 
 impl TokenStore for Keyring {
+    fn delete(&self, device_id: &str) -> Result<(), String> {
+        match Keyring::entry(device_id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(keyring_error(&e)),
+        }
+    }
     fn get(&self, device_id: &str) -> Result<String, String> {
         Keyring::entry(device_id)?
             .get_password()
@@ -166,7 +175,23 @@ pub fn default_name() -> String {
 
 /// Pairs with the server in `req`, stores the token in `tokens` and records the device in `dir`.
 /// It blocks while it waits for the server.
+static PAIRING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Native owner action only. Leave the link intact on credential deletion failure.
+pub fn unpair(dir: &Path, tokens: &dyn TokenStore) -> Result<(), String> {
+    let _guard = PAIRING.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(device) = load(dir)? {
+        tokens.delete(&device.device_id)?;
+        std::fs::remove_file(device_file(dir)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 pub fn pair(dir: &Path, tokens: &dyn TokenStore, req: &PairRequest) -> Result<Device, String> {
+    let _guard = PAIRING.lock().unwrap_or_else(|p| p.into_inner());
+    if load(dir)?.is_some() {
+        return Err("already paired; use Unpair this device in the native tray menu first".into());
+    }
     let server_url = normalise_url(&req.server_url)?;
     let name = req
         .name
@@ -252,6 +277,10 @@ mod tests {
         use std::io::{Read, Write};
         struct Tokens(std::sync::Mutex<String>);
         impl TokenStore for Tokens {
+            fn delete(&self, _: &str) -> Result<(), String> {
+                self.0.lock().unwrap().clear();
+                Ok(())
+            }
             fn get(&self, _: &str) -> Result<String, String> {
                 Ok(self.0.lock().unwrap().clone())
             }
@@ -306,6 +335,20 @@ mod tests {
                 code: code.then(|| "fake".into()),
                 name: Some("test".into()),
             };
+            let old = Device {
+                server_url: "https://old.invalid".into(),
+                device_id: "old".into(),
+                device_name: "old".into(),
+                vault_id: None,
+            };
+            save(dir.path(), &old).unwrap();
+            tokens.set("old", "old-token").unwrap();
+            assert!(pair(dir.path(), &NoTokens, &req).unwrap_err().contains("already paired"));
+            assert_eq!(load(dir.path()).unwrap(), Some(old));
+            assert_eq!(tokens.get("old").unwrap(), "old-token");
+            unpair(dir.path(), &tokens).unwrap();
+            assert!(load(dir.path()).unwrap().is_none());
+            assert_eq!(tokens.get("old").unwrap(), "");
             let d = pair(dir.path(), &tokens, &req).unwrap();
             assert_eq!(load(dir.path()).unwrap(), Some(d));
             assert_eq!(tokens.get("d").unwrap(), "t");
