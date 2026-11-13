@@ -31,6 +31,69 @@ template default {
 const MODEL: &str = "claude-opus-5";
 
 #[test]
+fn outside_text_thread_answer_and_recovered_job_keep_action_guards() {
+    for recovered in [false, true] {
+        let fake = FakeAnthropic::start();
+        let mut api = Api::start(&fake);
+        let web = testkit::StandIn::start();
+        web.route("/outside", testkit::Reply::text(200, "unexpected"));
+        let cookie = mail_triage_login(&api);
+        let mail = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"INCOMING_RESTART_FIXTURE", "sent":"2000-01-01T00:00:00Z"}}}));
+        let preview: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"ids":[mail["id"]]})).error_for_status().unwrap().json().unwrap();
+        safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":preview["preview"],"approve":true})).error_for_status().unwrap();
+        let trigger = if recovered { "trigger audit { on = [\"update\"] type = \"email\" prompt = \"Audit\" }" } else { "" };
+        api.agent("keeper", &format!("label = \"Keeper\"\npermissions {{\n scripts {{ run_code = true }}\n confirm {{ delete = false }}\n outbox {{ send_without_review = true }}\n}}\n{trigger}\n"));
+        let (victim, version) = api.memo("Do not delete", "open");
+        if recovered {
+            // Persist a debounced incoming-source job, then kill and start the actual server.
+            api.send("PUT", &format!("/api/notes/{}", mail["id"].as_str().unwrap()), json!({"base_version":mail["version"],"note":{"fields":{"title":"INCOMING_RESTART_FIXTURE", "sent":"2000-01-01T00:00:00Z"}}}));
+            api.server.restart();
+        } else {
+            fake.push(AnthropicMessage::new().tool_use("read", "get_note", json!({"id":mail["id"]})).tool_use("ask", "ask_user", json!({"question":"Continue?"})));
+            let dispatch = api.send("POST", "/api/agents/keeper/dispatch", json!({"notes":[mail["id"]],"request":"Read this mail."}));
+            let thread = dispatch["thread"]["id"].as_str().unwrap();
+            let until = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
+                if read["question"] == "Continue?" { break; }
+                assert!(std::time::Instant::now() < until, "{read}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(fake.message_requests().len(), 1);
+        }
+        fake.push(AnthropicMessage::new()
+            .tool_use("draft", "draft_email", json!({"to":["nobody@example.test"],"subject":"Review me","body":"Draft only"}))
+            .tool_use("proposal", "propose_delete", json!({"id":victim}))
+            .tool_use("delete", "run_script", json!({"code":format!("use vault\nfn main() -> Result[Value, string] {{ vault::delete(\"{victim}\", \"{version}\") }}\n")}))
+            .tool_use("http", "run_script", json!({"code":format!("use http\nfn main() -> Result[int, string] {{ Ok(http::get(\"{}\", #{{}})?.status) }}\n", web.url("/outside"))}))
+            .tool_use("task", "run_task", json!({"name":"google_gmail"})));
+        fake.push(AnthropicMessage::text("Review required."));
+        if recovered {
+            api.advance("PT35S");
+        } else {
+            let threads = api.get("/api/agents/keeper/threads");
+            let response = api.request("POST", "/api/ai/chat", Some(json!({"agent":"keeper", "thread":threads["threads"][0]["id"],"messages":[{"role":"user","content":[{"type":"text","text":"go on"}]}]})));
+            assert!(response.status().is_success());
+            let events = response.text().unwrap();
+            assert!(events.contains("event: done"), "{events}");
+        }
+        let requests = fake.message_requests();
+        assert_eq!(requests.len(), if recovered { 2 } else { 3 });
+        let results = requests.last().unwrap().json()["messages"].as_array().unwrap().last().unwrap()["content"].to_string();
+        assert!(results.contains("draft"), "{results}");
+        assert!(results.matches(script::OUTSIDE_TEXT_REFUSAL).count() >= 3, "{results}");
+        assert_eq!(api.get(&format!("/api/notes/{victim}"))["version"], version);
+        assert!(web.requests().is_empty());
+        let threads = api.get("/api/agents/keeper/threads");
+        let thread = threads["threads"][0]["id"].as_str().unwrap();
+        assert_eq!(api.get(&format!("/api/agents/keeper/threads/{thread}"))["pending"], 1);
+        let audit = api.get("/api/activity?kind=run.outside_text_refused").to_string();
+        assert!(audit.contains("script_http"), "{audit}");
+        assert!(audit.contains("task_start"), "{audit}");
+    }
+}
+
+#[test]
 fn outside_text_read_by_subagent_blocks_parent_script_http_and_task_admission() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
