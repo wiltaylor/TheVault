@@ -1310,7 +1310,18 @@ impl Round<'_> {
             let entries = self.git.read_tree(&remote_ref)?;
             let entry = entries.iter().find(|e| e.path == layout.manifest() && e.kind == "blob")
                 .ok_or_else(|| fail("own remote branch has no manifest"))?;
-            let remote = Manifest::open(self.key, &layout, &self.git.cat_blob(&entry.oid)?)?;
+            // Read only the authenticated identity and counter, so an upgrade can
+            // republish its own older manifest without definition hashes.
+            #[derive(serde::Deserialize)]
+            struct RemoteCounter {
+                instance: Instance,
+                #[serde(default)]
+                sequence: u64,
+            }
+            let blob = self.git.cat_blob(&entry.oid)?;
+            let json = self.key.open(&layout.manifest(), &blob)?;
+            let remote: RemoteCounter = serde_json::from_slice(&json)
+                .map_err(|e| fail(format!("own remote manifest: {e}")))?;
             if remote.instance.vault_id != self.me {
                 return Err(fail("own remote manifest names a different instance"));
             }

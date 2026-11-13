@@ -2,18 +2,40 @@
 
 Each publisher stores a monotonic sequence in its authenticated manifest. Receivers keep
 an encrypted, durable per-peer high-water checkpoint in state.db, separate from merge bases.
-Lower sequences and equal sequences with different tree content are refused with a round
+Lower sequences and equal sequences with different referenced publication content are refused with a round
 warning before import or archive. Identical retries remain allowed. Rounds hold a vault-local
 file lock through publication, and reserve a sequence durably before pushing. Failed pushes
 can leave harmless gaps. Unchanged publication keeps its sequence and avoids another push.
 
-Upgrade every syncing vault together. Format-2 manifests without a positive sequence are
+Checkpoints fingerprint the manifest blob and only the blobs it references, not unrelated
+files in the git tree. Each definition includes a plaintext SHA256, verified before import,
+as notes and assembled assets are verified.
+
+Upgrade every syncing vault together. Format-2 manifests without a positive sequence or
+without a plaintext SHA256 on every definition are
 refused with upgrade guidance, never accepted through a legacy fallback. Retained local
 vaults republish with sequences on their next round. No remote history migration or deletion
 is needed. The first sequenced contact is trust on first use, not proof of freshness before
 that contact. A new device without checkpoints or a restored/rolled-back state.db cannot
 detect older snapshots it has never recorded. Checkpoints survive disconnect. Do not delete
 them to silence a warning. Corrupt checkpoints fail closed and require owner investigation.
+
+After restoring state.db, the publisher reserves above the larger of its local counter and
+the authenticated sequence in its own fetched remote manifest. If the remote was also
+rolled back, it cannot recover the lost high-water mark. Do not run two copies of the same
+vault identity concurrently: their local locks do not coordinate across machines. Give an
+independent copy a fresh vault identity before syncing, or keep the original stopped while
+restoring its replacement.
+
+The shared symmetric key authenticates the group, not individual publishers. Anyone with
+that key can publish for another instance and raise its sequence, even to the maximum,
+freezing later legitimate publications. After investigating and removing the untrusted
+key holder, an administrator can delete the affected receiver checkpoint via
+`DELETE /api/secrets/gitsync_freshness_receive_<id>` (admin scope), then reconnect to a
+trusted publication. This deliberately resets trust on first use and loses rollback
+protection for that peer until a new checkpoint is recorded. If the forged maximum is on
+the publisher's remote branch too, restore a trusted publication there before resuming.
+These recovery steps are not automatic and are not needed for a normal upgrade.
 
 Agent thread transcripts stay on their home server. Git sync neither exports them nor imports
 them from peer branches, including older branches that already contain transcripts. Removing
