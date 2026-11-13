@@ -627,6 +627,24 @@ fn window_label(minutes: i64) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn recovery_only_replaces_unreadable_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let s = state::State::open(&path, Some(state::SecretKey::generate())).unwrap();
+        assert!(!Accounts::reset_unreadable(&s).unwrap());
+        s.set_secret(ACCOUNTS, "broken JSON").unwrap();
+        assert!(Accounts::load(&s).is_err());
+        assert!(Accounts::reset_unreadable(&s).unwrap());
+        assert!(Accounts::load(&s).unwrap().accounts.is_empty());
+        assert!(!Accounts::reset_unreadable(&s).unwrap());
+        let other = state::State::open(&path, Some(state::SecretKey::generate())).unwrap();
+        other.set_secret(ACCOUNTS, "{}").unwrap();
+        assert!(Accounts::unreadable(&s).unwrap());
+        assert!(Accounts::reset_unreadable(&s).unwrap());
+        assert!(Accounts::load(&s).unwrap().accounts.is_empty());
+    }
+
     fn input(name: &str, kind: Kind) -> AccountInput {
         AccountInput {
             name: Some(name.to_owned()),

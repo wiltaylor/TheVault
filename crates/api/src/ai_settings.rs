@@ -211,20 +211,31 @@ pub async fn reset_accounts(
     Json(b): Json<ResetAccounts>,
 ) -> Result<Json<Value>, ApiError> {
     if !matches!(author, state::Author::Session(_)) {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "human_only", "A signed-in owner session is required"));
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "human_only",
+            "A signed-in owner session is required",
+        ));
     }
     if !b.confirm {
         return Err(ApiError::bad_request("Confirm Reset AI accounts first"));
     }
     blocking_w(&a, move |w| {
         if !Accounts::reset_unreadable(w.state()).map_err(api_error)? {
-            return Err(ApiError::bad_request("Only an unreadable AI accounts record can be reset"));
+            return Err(ApiError::bad_request(
+                "Only an unreadable AI accounts record can be reset",
+            ));
         }
         w.state().record_activity(state::NewActivity::new(
-            "ai.accounts.reset", "settings", &author, "Reset unreadable AI accounts",
+            "ai.accounts.reset",
+            "settings",
+            &author,
+            "Reset unreadable AI accounts",
         ));
         Ok(json!({"ok": true}))
-    }).await.map(Json)
+    })
+    .await
+    .map(Json)
 }
 
 /// The account `r` names, by id or name, or a 404.

@@ -511,7 +511,10 @@ fn build() -> Built {
         .put("/api/integrations/ai/settings", ai_settings::put_settings)
         .put("/api/integrations/ai/default", ai_settings::put_default)
         .post("/api/integrations/ai/accounts", ai_settings::create_account)
-        .post("/api/integrations/ai/accounts/reset", ai_settings::reset_accounts)
+        .post(
+            "/api/integrations/ai/accounts/reset",
+            ai_settings::reset_accounts,
+        )
         .put(
             "/api/integrations/ai/accounts/order",
             ai_settings::put_order,
