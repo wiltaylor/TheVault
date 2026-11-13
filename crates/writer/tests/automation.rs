@@ -248,6 +248,96 @@ fn first_outbox_update_after_restart_publishes_before_post_commit_failure() {
 }
 
 #[test]
+fn failed_owner_file_write_does_not_release_old_outbox_contents() {
+    let (_dir, writer) = setup();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let input = Input::Json(
+        serde_json::json!({"fields": {"title":"Old", "kind":"email", "status":"ready", "to":["old@example.com"]}}),
+    );
+    let item = writer
+        .create("outbox", &input, &Author::Session("owner".into()))
+        .unwrap();
+    writer.state().set_automation_stopped(true).unwrap();
+    writer.state().set_automation_stopped(false).unwrap();
+    writer.set_commit_hook(Some(Box::new(|_| std::ops::ControlFlow::Break(()))));
+    let mut changed = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    changed["fields"]["to"] = serde_json::json!(["new@example.com"]);
+    assert!(
+        writer
+            .update(
+                &item.id,
+                &Input::Json(changed),
+                Some(&item.version),
+                &Author::Session("owner".into())
+            )
+            .is_err()
+    );
+    writer.set_commit_hook(None);
+    assert!(writer.outbox_run_context(&item.id).is_err());
+    assert_eq!(
+        writer::doc_to_json(&writer.read(&item.id).unwrap().doc)["fields"]["to"],
+        serde_json::json!(["old@example.com"])
+    );
+}
+
+#[test]
+fn failed_owner_reference_finalization_keeps_other_committed_hooks() {
+    struct Record(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+    impl writer::Hooks for Record {
+        fn after(&self, saved: &[writer::Saved], _: &Author, _: &schema::Schema) {
+            self.0
+                .lock()
+                .unwrap()
+                .extend(saved.iter().map(|s| s.type_name.clone()));
+        }
+    }
+    let (dir, writer) = setup();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = writer.with_hooks(Box::new(Record(calls.clone())));
+    let input = Input::Json(
+        serde_json::json!({"fields": {"title":"Held", "kind":"email", "status":"draft", "to":["ann@example.com"]}}),
+    );
+    let item = writer
+        .create("outbox", &input, &Author::Session("owner".into()))
+        .unwrap();
+    calls.lock().unwrap().clear();
+    writer.state().set_automation_stopped(true).unwrap();
+    writer.state().set_automation_stopped(false).unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER refuse_owner_replace BEFORE DELETE ON outbox_provenance BEGIN SELECT RAISE(ABORT,'injected finalization failure'); END;").unwrap();
+    let mut changed = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    changed["fields"]["status"] = serde_json::json!("ready");
+    let result = writer
+        .batch(
+            vec![
+                writer::Op::Update {
+                    id: item.id.clone(),
+                    input: Input::Json(changed),
+                    base: Some(item.version),
+                },
+                writer::Op::Create {
+                    type_name: "item".into(),
+                    input: Input::Wcl("title = \"Committed companion\"\n".into()),
+                },
+            ],
+            false,
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
+    assert!(!result.ok);
+    assert!(writer.outbox_run_context(&item.id).is_err());
+    assert_eq!(writer.list(Some("item")).unwrap().len(), 1);
+    let calls = calls.lock().unwrap();
+    assert!(calls.iter().any(|ty| ty == "item"));
+    assert!(calls.iter().any(|ty| ty == "outbox"));
+}
+
+#[test]
 fn outbox_owner_action_replaces_stale_admission_but_automation_cannot() {
     let (_dir, writer) = setup();
     writer

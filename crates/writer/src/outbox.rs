@@ -185,7 +185,7 @@ impl Writer {
         &self,
         saved: &crate::NoteChange,
         author: &Author,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<Option<script_core::RunContext>> {
         if saved.type_name == "outbox" {
             if saved.event == crate::Event::Delete {
                 self.state.remove_outbox_provenance(&saved.id)?;
@@ -195,7 +195,7 @@ impl Writer {
                     .unwrap_or_else(|e| e.into_inner())
                     .remove(&saved.id);
                 drop(removed);
-                return Ok(());
+                return Ok(None);
             }
             let context = script_core::RunContext::current().unwrap_or_default();
             let mut contexts = self
@@ -228,18 +228,37 @@ impl Writer {
                 }
             }
             self.publish_run_context(&context, |state, run_id| {
-                if owner {
-                    state.replace_outbox_provenance(&saved.id, run_id)
-                } else {
-                    state.append_outbox_provenance(
-                        &saved.id,
-                        run_id,
-                        saved.event == crate::Event::Create,
-                    )
-                }
+                state.append_outbox_provenance(
+                    &saved.id,
+                    run_id,
+                    owner || saved.event == crate::Event::Create,
+                )
             })?;
+            if owner {
+                // Keep old durable references until the owner edit has committed.
+                // A failed file write must not authorize the old item contents.
+                // Invalidate any cache that would hide the appended reference.
+                contexts.remove(&saved.id);
+                return Ok(Some(context));
+            }
             contexts.insert(saved.id.clone(), context);
         }
+        Ok(None)
+    }
+
+    pub(crate) fn finish_owner_outbox_context(
+        &self,
+        id: &str,
+        context: &script_core::RunContext,
+    ) -> crate::Result<()> {
+        let mut contexts = self
+            .outbox_contexts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.publish_run_context(context, |state, run_id| {
+            state.replace_outbox_provenance(id, run_id)
+        })?;
+        contexts.insert(id.to_owned(), context.clone());
         Ok(())
     }
 
