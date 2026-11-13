@@ -7,7 +7,7 @@
 // starts or ends, when a note changes elsewhere, every few seconds while a thread is active, and
 // otherwise every half minute, as the apps, which may have no live stream, need.
 
-import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { AGENT_ICON, agentLabel, agents } from "../agents";
 import { type DispatchedThread, api } from "../api";
 import { RunningMark } from "../ai/RunningMark";
@@ -68,6 +68,9 @@ export function Dispatched() {
   onCleanup(onNoteChangedElsewhere(() => void refresh()));
 
   const sections = () => bySection(threads());
+  // Each read gives fresh objects, and For keys by identity: key the rows by thread ID, so a
+  // row and the review it holds (ApplyKind) survive a refresh (TV-274).
+  const byId = createMemo(() => new Map(threads().map((t) => [t.id, t])));
 
   function Row(props: { t: DispatchedThread }) {
     const t = () => props.t;
@@ -128,7 +131,7 @@ export function Dispatched() {
               </h2>
               <Show when={sections()[s.state].length > 0} fallback={<p class="muted">{s.empty}</p>}>
                 <ul class="dispatched-list" aria-label={s.label}>
-                  <For each={sections()[s.state]}>{(t) => <Row t={t} />}</For>
+                  <For each={sections()[s.state].map((t) => t.id)}>{(id) => <Row t={byId().get(id)!} />}</For>
                 </ul>
               </Show>
             </section>

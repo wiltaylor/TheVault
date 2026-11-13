@@ -157,7 +157,9 @@ test("in the Android app offline, About says the home server is unreachable", as
   await expect(about.locator('[data-about="server"]')).toHaveText("unreachable");
 });
 
-test("in an app, an agent's settings are edited and saved on the home server, and offline say they need it", async ({ page, admin }) => {
+// A device token cannot change agents or skills (TV-140), so the apps show them read-only and
+// say where to edit them (TV-159).
+test("in an app, an agent's settings are shown read-only and point to the web app", async ({ page, admin }) => {
   const stamp = unique();
   const name = `app_agent_${stamp}`;
   expect((await admin.put(`/api/agents/${name}`, { data: { wcl: `label = "App agent ${stamp}"\n` } })).ok()).toBe(true);
@@ -165,32 +167,15 @@ test("in an app, an agent's settings are edited and saved on the home server, an
   await logIn(page, `/agents/${name}/settings/permissions`);
 
   const pane = activePane(page);
-  const perms = pane.getByRole("region", { name: "Permissions" });
-  await expect(perms.getByRole("checkbox", { name: /Search notes/ })).toBeEnabled();
-  await expect(pane.getByText("Edit agents in the web app")).toHaveCount(0);
-  await perms.getByRole("switch", { name: "Run wscript code" }).click();
-  await perms.getByRole("button", { name: "Save" }).click();
-  await expect(perms.getByRole("status")).toHaveText("Saved.");
-  const res = await admin.get(`/api/agents/${name}`);
-  expect(((await res.json()) as { permissions: { scripts: { run_code: boolean } } }).permissions.scripts.run_code).toBe(true);
-
-  // The home server cannot be reached: the save says so and the form stays as it was typed.
-  const message = "Changing an agent needs the home server, which is not reachable.";
-  await page.route(`**/api/agents/${name}`, (route) =>
-    route.request().method() === "PUT" ? route.fulfill({ status: 503, json: { error: "ai_needs_server", message } }) : route.continue(),
-  );
-  await pane.getByRole("tab", { name: "General" }).click();
-  const general = pane.getByRole("region", { name: "General" });
-  await general.getByLabel("Label").fill(`Renamed ${stamp}`);
-  await general.getByRole("button", { name: "Save" }).click();
-  await expect(general.getByRole("alert")).toHaveText(message);
-  await expect(general.getByLabel("Label")).toBeEnabled();
-  await expect(general.getByLabel("Label")).toHaveValue(`Renamed ${stamp}`);
+  await expect(pane.getByText("Edit agents and skills in the web app")).toBeVisible();
+  await expect(pane.getByLabel("Agent file")).toContainText(`App agent ${stamp}`);
+  await expect(pane.getByRole("button", { name: "Save" })).toHaveCount(0);
+  await expect(pane.getByRole("switch", { name: "Run wscript code" })).toHaveCount(0);
 
   expect((await admin.delete(`/api/agents/${name}`)).ok()).toBe(true);
 });
 
-test("in an app, a skill's SKILL.md is edited and saved on the home server, and offline says it needs it", async ({ page, admin }) => {
+test("in an app, a skill's files are shown read-only and point to the web app", async ({ page, admin }) => {
   const stamp = unique();
   const name = `app-skill-${stamp}`;
   const md = `---\nname: ${name}\ndescription: Fills in forms. Use when a form arrives.\n---\n\n# Forms\n`;
@@ -199,30 +184,12 @@ test("in an app, a skill's SKILL.md is edited and saved on the home server, and 
   await logIn(page, `/skills/${name}/files`);
 
   const pane = activePane(page);
-  await expect(pane.getByText("Edit skills in the web app")).toHaveCount(0);
-  const files = pane.getByRole("region", { name: "Files" });
-  await expect(files.getByRole("button", { name: /Upload files/ })).toBeVisible();
-  await files.getByRole("button", { name: "SKILL.md", exact: true }).click();
-  const editor = files.getByLabel("Contents of SKILL.md");
-  await expect(editor).toHaveValue(md);
-  await editor.fill(`${md}\nFill every field.\n`);
-  await files.getByRole("region", { name: "SKILL.md" }).getByRole("button", { name: "Save" }).click();
-  // The save reads the skill again, which opens the file afresh with what was saved.
-  await expect.poll(async () => (await admin.get(`/api/skills/${name}/files/SKILL.md`)).text()).toContain("Fill every field.");
-  await expect(editor).toHaveValue(`${md}\nFill every field.\n`);
-
-  // The home server cannot be reached: the save says so and the form stays as it was typed.
-  const message = "Changing a skill needs the home server, which is not reachable.";
-  await page.route(`**/api/skills/${name}`, (route) =>
-    route.request().method() === "PUT" ? route.fulfill({ status: 503, json: { error: "ai_needs_server", message } }) : route.continue(),
-  );
+  await expect(pane.getByText("Edit agents and skills in the web app")).toBeVisible();
+  await expect(pane.getByRole("button", { name: /Upload files/ })).toHaveCount(0);
+  await expect(pane.getByRole("button", { name: "Save" })).toHaveCount(0);
   await pane.getByRole("tab", { name: "Instructions" }).click();
-  const instructions = pane.getByRole("region", { name: "Instructions" });
-  await instructions.getByLabel("Description").fill(`Fills in PDF forms ${stamp}. Use when one arrives.`);
-  await instructions.getByRole("button", { name: "Save" }).click();
-  await expect(instructions.getByRole("alert")).toHaveText(message);
-  await expect(instructions.getByLabel("Description")).toBeEnabled();
-  await expect(instructions.getByLabel("Description")).toHaveValue(`Fills in PDF forms ${stamp}. Use when one arrives.`);
+  await expect(pane.getByLabel("Skill instructions")).toContainText("# Forms");
+  await expect(pane.getByRole("button", { name: "Save" })).toHaveCount(0);
 
   expect((await admin.delete(`/api/skills/${name}`)).ok()).toBe(true);
 });

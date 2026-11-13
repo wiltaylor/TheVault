@@ -43,4 +43,6 @@ test("a delayed ready item shows minutes and Cancel send returns it to Draft", a
   const stored = await (await admin.get(`/api/notes/${saved.id}`)).json();
   expect(stored.note.fields.status).toBe("draft");
   expect(stored.note.fields.sent_at).toBeUndefined();
+  // A read still in flight when the page closes must not fail the finished test (TV-274).
+  await page.unrouteAll({ behavior: "ignoreErrors" });
 });
