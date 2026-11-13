@@ -108,6 +108,14 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
         .find(|c| c["name"] == "broken")
         .unwrap();
     assert_eq!(invalid["reason"], "invalid_definition");
+    for name in ["agent_safety", "scam"] {
+        std::fs::write(server.vault_path().join(format!("classifiers/{name}.wcl")), CONFIG).unwrap();
+        let result = client.put(server.url(&format!("/api/classifiers/{name}/account")))
+            .header("cookie", &cookie).json(&json!({"account": selected})).send().unwrap();
+        assert!(result.status().is_success(), "{}", result.text().unwrap());
+        assert_eq!(std::fs::read_to_string(server.vault_path().join(format!("classifiers/{name}.wcl"))).unwrap(),
+            CONFIG.replace("account = \"router\"", "account = \"OpenRouter\""));
+    }
     let result = client
         .put(server.url("/api/classifiers/incoming/account"))
         .header("cookie", &cookie)
