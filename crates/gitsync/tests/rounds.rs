@@ -403,9 +403,18 @@ fn peer_type_admission_refuses_capabilities_and_mismatched_names() {
     for (declaration, refused) in [
         ("handler before_create { script = \"fake\" }", true),
         ("handler after_update { script = \"fake\" }", true),
-        ("handler after_create { script = \"fake\"\nfunction = run }", true),
-        ("handler after_create { script = \"fake\"\nallow_domains = [\"example.invalid\"] }", true),
-        ("handler after_create { script = \"fake\"\nsecrets = [\"fake_secret\"] }", true),
+        (
+            "handler after_create { script = \"fake\"\nfunction = run }",
+            true,
+        ),
+        (
+            "handler after_create { script = \"fake\"\nallow_domains = [\"example.invalid\"] }",
+            true,
+        ),
+        (
+            "handler after_create { script = \"fake\"\nsecrets = [\"fake_secret\"] }",
+            true,
+        ),
         ("script = \"fake\"", true),
         ("function = run", true),
         ("allow_domains = [\"example.invalid\"]", true),
@@ -438,28 +447,48 @@ fn peer_type_admission_refuses_capabilities_and_mismatched_names() {
             assets: vec![],
         });
         let files = BTreeMap::from([
-            (layout.type_def("plain"), key.seal(&layout.type_def("plain"), source.as_bytes())),
-            (layout.note(id), gitsync::pack::seal_note(&key, &layout.note(id), "plain", text.as_bytes())),
+            (
+                layout.type_def("plain"),
+                key.seal(&layout.type_def("plain"), source.as_bytes()),
+            ),
+            (
+                layout.note(id),
+                gitsync::pack::seal_note(&key, &layout.note(id), "plain", text.as_bytes()),
+            ),
             (layout.manifest(), manifest.seal(&key)),
         ]);
         let tmp = tempfile::tempdir().unwrap();
         let git = Git::new(tmp.path().join("repo"), Auth::None).unwrap();
         git.ensure_bare_clone(&repo.url()).unwrap();
         let tree = git.write_tree(&files).unwrap();
-        let commit = git.commit_tree(&tree, "synthetic type admission peer").unwrap();
+        let commit = git
+            .commit_tree(&tree, "synthetic type admission peer")
+            .unwrap();
         git.force_push(&commit, &layout.branch()).unwrap();
         let report = b.sync();
         let path = b.server.vault_path().join("types/plain.wcl");
         assert_eq!(path.exists(), !refused, "{declaration}: {report}");
         if refused {
             assert!(ids(&report, "created").is_empty(), "{report}");
-            assert!(!report["warnings"].as_array().unwrap().is_empty(), "{report}");
+            assert!(
+                !report["warnings"].as_array().unwrap().is_empty(),
+                "{report}"
+            );
         } else {
             assert_eq!(ids(&report, "created"), vec![id]);
             // A subsequent owner write succeeds without any script binding installed.
-            assert!(schema::TypeDef::parse("plain", &std::fs::read_to_string(path).unwrap())
-                .unwrap().handlers.is_empty());
-            b.call("POST", "/api/notes?type=plain", Some(json!({"wcl": "title = \"Local\"\n"})), 201);
+            assert!(
+                schema::TypeDef::parse("plain", &std::fs::read_to_string(path).unwrap())
+                    .unwrap()
+                    .handlers
+                    .is_empty()
+            );
+            b.call(
+                "POST",
+                "/api/notes?type=plain",
+                Some(json!({"wcl": "title = \"Local\"\n"})),
+                201,
+            );
         }
     }
 }

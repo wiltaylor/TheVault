@@ -710,12 +710,18 @@ impl Writer {
             .map_err(|e| Error::InvalidType(schema::SchemaError(vec![e])))?;
         if !definition.handlers.is_empty()
             || definition.extra.iter().any(|(key, _)| {
-                matches!(key.as_str(), "script" | "function" | "allow_domains" | "secrets")
+                matches!(
+                    key.as_str(),
+                    "script" | "function" | "allow_domains" | "secrets"
+                )
             })
         {
             return Err(Error::InvalidType(schema::SchemaError(vec![Invalid {
                 file: type_path(name),
-                issues: vec![Issue::new("type", "peer type declares executable capabilities")],
+                issues: vec![Issue::new(
+                    "type",
+                    "peer type declares executable capabilities",
+                )],
             }])));
         }
         self.put_types_locked(inner, &[(name, source)])?;
