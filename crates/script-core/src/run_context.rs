@@ -121,12 +121,20 @@ impl RunContext {
     /// Independent import tasks and direct owner reads do not opt into this policy.
     pub fn track_agent_reads(&self) {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
-        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).agent_reads = true;
+        self.root()
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .agent_reads = true;
     }
 
     pub fn tracks_agent_reads(&self) -> bool {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
-        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).agent_reads
+        self.root()
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .agent_reads
     }
 
     /// Retain the oldest admitted generation, never a later replacement.

@@ -418,7 +418,10 @@ impl Host {
     /// Do not reuse a Job or its clones across runs in different scopes: joins are permanent.
     pub fn run(&self, mut job: Job) -> Outcome {
         job.set_run_context(job.run_context.clone());
-        if matches!(job.author, Some(state::Author::Agent(_) | state::Author::AgentMail(_))) {
+        if matches!(
+            job.author,
+            Some(state::Author::Agent(_) | state::Author::AgentMail(_))
+        ) {
             job.run_context.track_agent_reads();
         }
         let limits = Limits {

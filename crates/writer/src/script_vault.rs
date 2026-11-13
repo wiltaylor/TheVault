@@ -134,10 +134,11 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
 pub(crate) fn agent_reading() -> bool {
     script_core::RunContext::current().is_some_and(|context| context.tracks_agent_reads())
         || matches!(
-        crate::activity::acting(),
-        Some(Author::Agent(_) | Author::AgentMail(_))
-    ) || script_core::run::peek(|r| matches!(r.author, Author::Agent(_) | Author::AgentMail(_)))
-        .unwrap_or(false)
+            crate::activity::acting(),
+            Some(Author::Agent(_) | Author::AgentMail(_))
+        )
+        || script_core::run::peek(|r| matches!(r.author, Author::Agent(_) | Author::AgentMail(_)))
+            .unwrap_or(false)
 }
 
 fn check_agent_write(w: &Writer, id: &str, author: &Author) -> Result<(), String> {

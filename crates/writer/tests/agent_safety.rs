@@ -121,14 +121,17 @@ fn agent_descendant_task_reads_track_exposure_not_independent_imports() {
     let w = open(dir.path());
     w.activate_agent_safety().unwrap();
     let mail = create(&w, "Incoming");
-    let linked = w.create(
-        "email",
-        &Input::Json(serde_json::json!({"fields":{"title":"Link", "link":mail.id}})),
-        &Author::Session("owner".into()),
-    ).unwrap();
+    let linked = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Link", "link":mail.id}})),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
     for id in [&mail.id, &linked.id] {
         let hash = w.agent_safety(id).unwrap().fingerprint;
-        w.release_agent_safety(id, &hash, &Author::Session("owner".into())).unwrap();
+        w.release_agent_safety(id, &hash, &Author::Session("owner".into()))
+            .unwrap();
     }
     for operation in ["get", "query", "links"] {
         for descendant in [true, false] {
@@ -139,9 +142,15 @@ fn agent_descendant_task_reads_track_exposure_not_independent_imports() {
             context.scope(|| {
                 let _acting = writer::acting_as(&Author::Task("google_gmail".into()));
                 match operation {
-                    "get" => { w.get(&mail.id).unwrap(); }
-                    "query" => { w.query_page("from email select title", 1, None).unwrap(); }
-                    _ => { w.backlinks(&mail.id).unwrap(); }
+                    "get" => {
+                        w.get(&mail.id).unwrap();
+                    }
+                    "query" => {
+                        w.query_page("from email select title", 1, None).unwrap();
+                    }
+                    _ => {
+                        w.backlinks(&mail.id).unwrap();
+                    }
                 }
             });
             assert_eq!(context.is_restricted(), descendant, "{operation}");

@@ -839,7 +839,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             )?;
             if !has_agent_reads {
                 // Old sealed contexts cannot prove they were independent imports.
-                tx.execute_batch("ALTER TABLE run_provenance ADD COLUMN agent_reads INTEGER NOT NULL DEFAULT 1;")?;
+                tx.execute_batch(
+                    "ALTER TABLE run_provenance ADD COLUMN agent_reads INTEGER NOT NULL DEFAULT 1;",
+                )?;
             }
             tx.execute_batch(jobs::PROVENANCE_SCHEMA)?;
             let has_expiry: bool = tx.query_row(
