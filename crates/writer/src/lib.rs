@@ -38,6 +38,7 @@ pub mod agent_safety;
 mod agent_threads;
 mod asset_use;
 mod assets;
+mod automation;
 mod batch;
 mod builtin;
 mod contacts;
@@ -1309,7 +1310,7 @@ impl Writer {
         let _w = self.write_lock();
         let changes = check(self)?;
         let mut inner = self.lock();
-        let generation = self.commit(changes)?;
+        let (generation, _automation) = self.commit_scoped(changes)?;
         inner.index.advance(generation).map_err(Error::from)?;
         Ok(())
     }
@@ -1643,11 +1644,11 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
-        let generation = {
+        let (generation, automation) = {
             let _acting = activity::acting_as(author);
             match inner.commit_hook.as_mut() {
                 Some(hook) => self.commit_with_hook(files, &mut **hook)?,
-                None => self.commit(files)?,
+                None => self.commit_scoped(files)?,
             }
         };
 
@@ -1825,6 +1826,7 @@ impl Writer {
             };
             self.record_note(by, *act, id, &s.type_name, title.as_deref(), &s.version);
         }
+        drop(automation);
         self.announce(&saved, &|id| match authors.get(id).unwrap_or(author) {
             Author::Token(name) => Some(name.clone()),
             _ => None,

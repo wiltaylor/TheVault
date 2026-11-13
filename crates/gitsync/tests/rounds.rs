@@ -9,6 +9,122 @@ use testkit::BareRepo;
 
 use crate::instance::{COURSES, Instance, MEMO, MEMO_PLUS, RECIPE, ids, memo, pair, s};
 
+#[test]
+fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() {
+    for ty in ["event", "event_series"] {
+        for initial_type in [None, Some(ty), Some("memo")] {
+            let repo = BareRepo::new();
+            let b = Instance::start_seeded("B", |root| {
+                crate::instance::seed(root);
+                std::fs::write(
+                    root.join("types/person.wcl"),
+                    include_str!("../../writer/defaults/person.wcl"),
+                )
+                .unwrap();
+                std::fs::write(
+                    root.join("types/event.wcl"),
+                    include_str!("../../writer/defaults/event.wcl"),
+                )
+                .unwrap();
+                std::fs::write(
+                    root.join("types/event_series.wcl"),
+                    include_str!("../../writer/defaults/event_series.wcl"),
+                )
+                .unwrap();
+            });
+            let key = SyncKey::parse(&b.generate_key()).unwrap();
+            b.configure(&repo.url(), "", "from *", json!({}));
+            let recurrence = if ty == "event_series" {
+                "rule = [\"RRULE:FREQ=DAILY;COUNT=1\"]\nstarts = { start: \"2026-03-10\", end: \"2026-03-11\" }\n"
+            } else {
+                ""
+            };
+            let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
+            // Seed a local note through the owner API when testing replacement.
+            let id = if let Some(ty) = initial_type {
+                let made = b.call(
+                    "POST",
+                    &format!("/api/notes?type={ty}"),
+                    Some(json!({"wcl": format!("title = \"local\"\n{recurrence}")})),
+                    201,
+                );
+                s(&made["id"]).to_owned()
+            } else {
+                id.to_owned()
+            };
+            let before = b.note(&id);
+            let publish = |text: &str| {
+                let layout = Layout::new(&key, "calendar-peer");
+                let mut manifest = Manifest::new(Named {
+                    vault_id: "calendar-peer".into(),
+                    name: "peer".into(),
+                });
+                manifest.notes.push(gitsync::NoteEntry {
+                    id: id.clone(),
+                    note_type: ty.into(),
+                    origin: "calendar-peer".into(),
+                    hash: gitsync::pack::sha256_hex(text.as_bytes()),
+                    path: layout.note(&id),
+                    assets: vec![],
+                });
+                let mut files = BTreeMap::new();
+                for (name, text) in [
+                    ("person", include_str!("../../writer/defaults/person.wcl")),
+                    ("event", include_str!("../../writer/defaults/event.wcl")),
+                    (
+                        "event_series",
+                        include_str!("../../writer/defaults/event_series.wcl"),
+                    ),
+                ] {
+                    manifest.types.push(gitsync::DefEntry {
+                        name: name.into(),
+                        path: layout.type_def(name),
+                    });
+                    files.insert(
+                        layout.type_def(name),
+                        key.seal(&layout.type_def(name), text.as_bytes()),
+                    );
+                }
+                manifest.types.push(gitsync::DefEntry {
+                    name: "memo".into(),
+                    path: layout.type_def("memo"),
+                });
+                files.insert(
+                    layout.type_def("memo"),
+                    key.seal(&layout.type_def("memo"), MEMO.as_bytes()),
+                );
+                files.insert(
+                    layout.note(&id),
+                    gitsync::pack::seal_note(&key, &layout.note(&id), ty, text.as_bytes()),
+                );
+                files.insert(layout.manifest(), manifest.seal(&key));
+                let tmp = tempfile::tempdir().unwrap();
+                let git = Git::new(tmp.path().join("repo"), Auth::None).unwrap();
+                git.ensure_bare_clone(&repo.url()).unwrap();
+                let tree = git.write_tree(&files).unwrap();
+                let commit = git.commit_tree(&tree, "synthetic calendar peer").unwrap();
+                git.force_push(&commit, &layout.branch()).unwrap();
+            };
+            publish(&format!(
+                "title = \"peer\"\n{recurrence}google_ref = \"forged\"\n"
+            ));
+            let report = b.sync();
+            assert!(
+                !report["warnings"].as_array().unwrap().is_empty(),
+                "{report}"
+            );
+            assert_eq!(b.note(&id), before);
+            publish(&format!("title = \"allowed\"\n{recurrence}"));
+            let report = b.sync();
+            assert!(
+                report["warnings"].as_array().unwrap().is_empty(),
+                "{report}"
+            );
+            assert_eq!(b.field(&id, "title"), "allowed");
+        }
+    }
+}
+
 fn peer_note_over_thread(legacy_row: bool) {
     let repo = BareRepo::new();
     let b = Instance::start("B");
@@ -35,7 +151,10 @@ fn peer_note_over_thread(legacy_row: bool) {
         name: "memo".into(),
         path: layout.type_def("memo"),
     });
-    files.insert(layout.type_def("memo"), key.seal(MEMO.as_bytes()));
+    files.insert(
+        layout.type_def("memo"),
+        key.seal(&layout.type_def("memo"), MEMO.as_bytes()),
+    );
     if legacy_row {
         let state =
             state::State::open(&b.server.vault_path().join(".vault/state.db"), None).unwrap();
@@ -60,7 +179,7 @@ fn peer_note_over_thread(legacy_row: bool) {
         });
         files.insert(
             layout.note(id),
-            gitsync::pack::seal_note(&key, "memo", text.as_bytes()),
+            gitsync::pack::seal_note(&key, &layout.note(id), "memo", text.as_bytes()),
         );
     }
     files.insert(layout.manifest(), manifest.seal(&key));
@@ -146,12 +265,20 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     let mut files = BTreeMap::new();
     files.insert(
         layout.note(incoming),
-        gitsync::pack::seal_note(&key, "agent_thread", text.as_bytes()),
+        gitsync::pack::seal_note(
+            &key,
+            &layout.note(incoming),
+            "agent_thread",
+            text.as_bytes(),
+        ),
     );
     let thread_type = b.get("/api/types/agent_thread");
     files.insert(
         layout.type_def("agent_thread"),
-        key.seal(s(&thread_type["wcl"]).as_bytes()),
+        key.seal(
+            &layout.type_def("agent_thread"),
+            s(&thread_type["wcl"]).as_bytes(),
+        ),
     );
     files.insert(layout.manifest(), manifest.seal(&key));
     let temp = tempfile::tempdir().unwrap();
@@ -190,11 +317,19 @@ fn agent_threads_are_neither_exported_nor_imported_from_peer_branches() {
     let mut old_files = BTreeMap::new();
     old_files.insert(
         own_layout.note(own),
-        gitsync::pack::seal_note(&key, "agent_thread", own_text.as_bytes()),
+        gitsync::pack::seal_note(
+            &key,
+            &own_layout.note(own),
+            "agent_thread",
+            own_text.as_bytes(),
+        ),
     );
     old_files.insert(
         own_layout.type_def("agent_thread"),
-        key.seal(s(&thread_type["wcl"]).as_bytes()),
+        key.seal(
+            &own_layout.type_def("agent_thread"),
+            s(&thread_type["wcl"]).as_bytes(),
+        ),
     );
     old_files.insert(own_layout.manifest(), old_manifest.seal(&key));
     let old_tree = git.write_tree(&old_files).unwrap();
