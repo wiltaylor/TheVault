@@ -606,9 +606,8 @@ mod disconnect_tests {
             script::Limits::default(),
             script::Ai::of(&writer),
         ));
-        let scheduler = Scheduler::new(
-            writer.clone(), host, Arc::new(scheduler::TestClock::new(0)),
-        ).unwrap();
+        let scheduler =
+            Scheduler::new(writer.clone(), host, Arc::new(scheduler::TestClock::new(0))).unwrap();
         let google = Arc::new(Google::new(scheduler));
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let entered = Arc::new(tokio::sync::Notify::new());
