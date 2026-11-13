@@ -142,11 +142,13 @@ impl BrowserBox {
         self
     }
 
-    async fn remove_profile(&self) -> Result<(), String> {
+    async fn remove_profile(&self, context: &script::RunContext) -> Result<(), String> {
         let url = self.url("/profile", &[])?;
-        let response = self
-            .auth(http().delete(url))
-            .timeout(Duration::from_secs(40))
+        let request = context.scope(|| {
+            self.auth(http().delete(url))
+                .timeout(Duration::from_secs(40))
+        });
+        let response = request
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -182,7 +184,13 @@ impl BrowserBox {
 }
 
 /// Ensures normal completion, early return and task cancellation all schedule cleanup.
-pub struct TemporaryProfile(pub BrowserBox, pub Arc<Writer>);
+pub struct TemporaryProfile(pub BrowserBox, Arc<Writer>, script::RunContext);
+
+impl TemporaryProfile {
+    pub(crate) fn new(b: BrowserBox, w: Arc<Writer>, context: script::RunContext) -> Self {
+        Self(b, w, context.inherit_current())
+    }
+}
 
 impl Drop for TemporaryProfile {
     fn drop(&mut self) {
@@ -191,11 +199,19 @@ impl Drop for TemporaryProfile {
         let Some(id) = b.profile.clone() else {
             return;
         };
-        if let Err(e) = w.retire_browser_profile(&id) {
+        if let Err(e) = self.2.scope(|| w.retire_browser_profile(&id)) {
             eprintln!("temporary browser profile retirement failed: {e}");
         }
         cleanup_retired(w);
     }
+}
+
+// Terminal sanitation is independent of the run which wakes the shared queue.
+// Persisted IDs have no live owner, so remain conservatively restricted (TV-301).
+fn cleanup_context() -> script::RunContext {
+    let context = script::RunContext::default();
+    context.restrict();
+    context
 }
 
 pub fn cleanup_retired(w: Arc<Writer>) {
@@ -219,6 +235,7 @@ pub fn cleanup_retired(w: Arc<Writer>) {
         }
     }
     tokio::spawn(async move {
+        let context = cleanup_context();
         let _flight = Flight;
         let mut retries = std::collections::HashMap::<String, (Instant, Duration)>::new();
         let mut active = std::collections::HashSet::<String>::new();
@@ -227,7 +244,7 @@ pub fn cleanup_retired(w: Arc<Writer>) {
         let mut offline_until = Instant::now();
         let mut offline_delay = Duration::from_secs(30);
         loop {
-            let ids = w.retired_browser_profiles().unwrap_or_default();
+            let ids = context.scope(|| w.retired_browser_profiles()).unwrap_or_default();
             retries.retain(|id, _| ids.contains(id));
             let now = Instant::now();
             let due: Vec<_> = ids
@@ -253,8 +270,9 @@ pub fn cleanup_retired(w: Arc<Writer>) {
                         active.insert(id.clone());
                         let profile = b.clone().with_profile(id.clone());
                         let name = id.clone();
+                        let context = context.clone();
                         let task =
-                            deletes.spawn(async move { (id, profile.remove_profile().await) });
+                            deletes.spawn(async move { (id, profile.remove_profile(&context).await) });
                         task_ids.insert(task.id(), name);
                     }
                 } else {
@@ -285,7 +303,7 @@ pub fn cleanup_retired(w: Arc<Writer>) {
                     if let Some((id, result)) = completion {
                         active.remove(&id);
                         match result {
-                            Ok(()) => { let _ = w.browser_profile_removed(&id); retries.remove(&id); }
+                            Ok(()) => { let _ = context.scope(|| w.browser_profile_removed(&id)); retries.remove(&id); }
                             Err(e) => {
                                 eprintln!("retired browser profile cleanup failed: {e}");
                                 let delay = retries.get(&id).map_or(Duration::from_secs(30), |(_, delay)| (*delay * 2).min(Duration::from_secs(900)));
@@ -1246,6 +1264,63 @@ pub fn apply_save(w: &Writer, author: &Author, p: &Value) -> Result<Value, Apply
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn temporary_retirement_keeps_owner_after_fake_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let writer = Arc::new(Writer::open(vault, state).unwrap());
+        let context = script::RunContext::default();
+        let generation = writer.state().admit_automation().unwrap();
+        context.capture_stop_generation(generation);
+        writer.begin_temporary_browser_profile("owned").unwrap();
+        let profile = TemporaryProfile::new(
+            BrowserBox {
+                base: "http://unused.invalid".into(),
+                token: String::new(),
+                profile: Some("owned".into()),
+                secret_browser: false,
+            },
+            writer.clone(),
+            context.clone(),
+        );
+        tokio::task::yield_now().await;
+        context.restrict();
+        assert_eq!(profile.2, context);
+        assert!(profile.2.is_restricted());
+        assert_eq!(profile.2.stop_generation(), Some(generation));
+        drop(profile);
+        assert_eq!(writer.retired_browser_profiles().unwrap(), ["owned"]);
+        assert!(script::RunContext::current().is_none());
+    }
+
+    #[tokio::test]
+    async fn maintenance_is_independent_and_restricted_delete_is_not_refused() {
+        let owner = script::RunContext::default();
+        owner.restrict();
+        let context = owner.scope(cleanup_context);
+        assert_ne!(context, owner);
+        assert!(context.is_restricted());
+        assert!(context.stop_generation().is_none());
+        let app = axum::Router::new().route(
+            "/profile",
+            axum::routing::delete(|| async { axum::http::StatusCode::NO_CONTENT }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let b = BrowserBox {
+            base: format!("http://{}", listener.local_addr().unwrap()),
+            token: String::new(),
+            profile: Some("retired".into()),
+            secret_browser: false,
+        };
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        tokio::task::yield_now().await;
+        assert!(b.remove_profile(&context).await.is_ok());
+        assert_ne!(context, owner);
+        assert!(script::RunContext::current().is_none());
+        server.abort();
+    }
 
     #[tokio::test]
     async fn login_redaction_chunked_output_and_logs() {

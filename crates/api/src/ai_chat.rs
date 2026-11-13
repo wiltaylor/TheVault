@@ -2000,9 +2000,10 @@ impl Turn {
                         .await;
                     return;
                 }
-                Some(crate::ai_browser::TemporaryProfile(
+                Some(crate::ai_browser::TemporaryProfile::new(
                     b.with_profile(id),
                     self.writer.clone(),
+                    self.run_context.clone(),
                 ))
             } else {
                 None
