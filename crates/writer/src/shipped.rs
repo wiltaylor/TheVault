@@ -466,12 +466,20 @@ fn outbox_sent_copy_account(w: &Writer) -> Result<()> {
             })
         })
     };
-    let new = current.items.iter().find(|i| pick(i)).expect("sent-copy handler");
+    let new = current
+        .items
+        .iter()
+        .find(|i| pick(i))
+        .expect("sent-copy handler");
     // Compare the whole handler, including event, domains and secrets. Never widen a
     // user-edited handler's secret access.
     let old_text = crate::builtin::DEFAULT_OUTBOX_TYPE.replace(", \"google_account\"", "");
     let old = store::parse_data_only(&old_text, &path)?;
-    let old = old.items.iter().find(|i| pick(i)).expect("old sent-copy handler");
+    let old = old
+        .items
+        .iter()
+        .find(|i| pick(i))
+        .expect("old sent-copy handler");
     let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
     let mut changed = false;
     for item in &mut ast.items {

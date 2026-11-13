@@ -286,7 +286,10 @@ fn a_sent_copy_keeps_the_connected_account_and_lists_deferred_parts_for_the_owne
     let cookie = login.headers()["set-cookie"].to_str().unwrap();
     let parts = expect(
         owner
-            .get(api.server.url(&format!("/api/integrations/google/attachments/{copy_id}")))
+            .get(
+                api.server
+                    .url(&format!("/api/integrations/google/attachments/{copy_id}")),
+            )
             .header("cookie", cookie.split(';').next().unwrap())
             .send()
             .unwrap(),

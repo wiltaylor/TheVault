@@ -2289,7 +2289,9 @@ fn without_handlers(text: &str) -> String {
 fn sent_copy_account_upgrade_preserves_user_handlers_and_is_idempotent() {
     let path = "types/outbox.wcl";
     let current = store::canonical(writer::DEFAULT_OUTBOX_TYPE, path).unwrap();
-    let (prefix, suffix) = writer::DEFAULT_OUTBOX_TYPE.rsplit_once(", \"google_account\"").unwrap();
+    let (prefix, suffix) = writer::DEFAULT_OUTBOX_TYPE
+        .rsplit_once(", \"google_account\"")
+        .unwrap();
     let old = format!("{prefix}{suffix}");
     for edited in [false, true] {
         let dir = tempfile::tempdir().unwrap();
