@@ -552,13 +552,21 @@ impl Round<'_> {
             ));
         }
 
-        let open_defs = |defs: &[DefEntry],
+        let mut open_defs = |defs: &[DefEntry],
                          taxonomy: bool|
          -> std::result::Result<BTreeMap<String, String>, Skip> {
             let found: Vec<(&DefEntry, &str)> = defs
                 .iter()
-                .filter_map(|d| oids.get(&d.path).map(|o| (d, o.as_str())))
-                .collect();
+                .map(|d| {
+                    oids.get(&d.path)
+                        .map(|o| (d, o.as_str()))
+                        .ok_or_else(|| {
+                            let reason = format!("missing definition blob: {}", d.path);
+                            self.report.warnings.push(reason.clone());
+                            named(reason)
+                        })
+                })
+                .collect::<std::result::Result<_, _>>()?;
             let blobs = self
                 .git
                 .cat_blobs(&found.iter().map(|(_, o)| *o).collect::<Vec<_>>())
@@ -598,8 +606,16 @@ impl Round<'_> {
         let found: Vec<(&NoteEntry, &str)> = manifest
             .notes
             .iter()
-            .filter_map(|n| oids.get(&n.path).map(|o| (n, o.as_str())))
-            .collect();
+            .map(|n| {
+                oids.get(&n.path)
+                    .map(|o| (n, o.as_str()))
+                    .ok_or_else(|| {
+                        let reason = format!("missing note blob: {}", n.path);
+                        self.report.warnings.push(reason.clone());
+                        named(reason)
+                    })
+            })
+            .collect::<std::result::Result<_, _>>()?;
         let blobs = self
             .git
             .cat_blobs(&found.iter().map(|(_, o)| *o).collect::<Vec<_>>())

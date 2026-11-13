@@ -144,6 +144,8 @@ is authenticated and included in deterministic nonce derivation. Notes must
 also match the manifest's type and plaintext hash. Unchanged context and
 content still produce identical blobs.
 
+Before upgrading, run a last sync on the old build so that every instance has imported the others' latest changes.
+
 There is no legacy decryption fallback. Format 1 branches are skipped with an
 upgrade message, not imported or treated as deleted content. Upgrade every
 instance, retaining each local vault and the existing sync key, then run sync
