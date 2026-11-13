@@ -1150,10 +1150,7 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
     );
     let proposal = last(&events, "agent_proposal").clone();
     assert!(find(&events, "applied").is_none(), "{events:?}");
-    assert_eq!(
-        api.agent_wcl("helper").as_deref(),
-        Some(scheduled.as_str())
-    );
+    assert_eq!(api.agent_wcl("helper").as_deref(), Some(scheduled.as_str()));
     let (status, body) = api.apply(&proposal);
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let (status, body) = api.apply_session(&proposal);
