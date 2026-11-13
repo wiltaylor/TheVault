@@ -194,7 +194,10 @@ fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
             .unwrap();
             let before = w.read(ID).unwrap();
             let changed = text
-                .replace("attendees = []", "attendees = [\"01JB8Z4K2MQ7V3X9T5R6W8Y2ZB\"]")
+                .replace(
+                    "attendees = []",
+                    "attendees = [\"01JB8Z4K2MQ7V3X9T5R6W8Y2ZB\"]",
+                )
                 .replace("forged", "changed")
                 .replace("true", "\"none\"")
                 .replace("\"all\"", "\"none\"")
