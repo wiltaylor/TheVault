@@ -1478,7 +1478,10 @@ impl Writer {
             .as_ref()
             .and_then(created_of)
             .unwrap_or_else(|| now.clone());
-        if !matches!(author, Author::Handler(_) | Author::Task(_)) {
+        if !matches!(
+            author,
+            Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_)
+        ) {
             let issues = computed_writes(ty, &doc, computed_from.or(old_doc.as_ref()));
             if !issues.is_empty() {
                 return Err(Error::Invalid(Invalid { file: path, issues }));
@@ -1616,7 +1619,10 @@ impl Writer {
             if !submitted.contains(&change.id) {
                 authors
                     .entry(change.id.clone())
-                    .or_insert_with(|| Author::Task(SERVER_AUTHOR.to_owned()));
+                    .or_insert_with(|| match author {
+                        Author::Session(_) => Author::Task(SERVER_AUTHOR.to_owned()),
+                        _ => author.clone(),
+                    });
             }
         }
         for change in &mut changes {
@@ -1699,9 +1705,11 @@ impl Writer {
         // so it cannot silently skip unrelated committed notes' after-handlers.
         let mut owner_outbox = Vec::new();
         for r in &rendered {
-            if let Some(context) = self
-                .remember_outbox_context(&r.change, authors.get(&r.change.id).unwrap_or(author))?
-            {
+            if let Some(context) = self.remember_outbox_context(
+                &r.change,
+                authors.get(&r.change.id).unwrap_or(author),
+                !submitted.contains(&r.change.id),
+            )? {
                 owner_outbox.push((r.change.id.clone(), context));
             }
         }
@@ -2028,6 +2036,19 @@ impl Writer {
     }
 
     fn check_gmail_metadata_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
+        if let Author::GmailSentCopy(id) = author
+            && change.event == Event::Create
+            && self.state.trash_entry(&change.id)?.is_none()
+            && change.type_name == "email"
+            && change
+                .doc
+                .as_ref()
+                .and_then(|doc| doc.field("gmail_ref"))
+                .and_then(schema::Value::as_str)
+                == Some(id.as_str())
+        {
+            return Ok(());
+        }
         if matches!(author, Author::Session(_))
             || matches!(author, Author::Task(name) if name == "google_gmail")
             || change.doc.is_none()

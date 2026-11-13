@@ -486,7 +486,13 @@ impl Shared {
                                 match writer.outbox_run_context(id) {
                                     Ok(item) => context.merge(&item),
                                     Err(error) => {
-                                        eprintln!("recovering queued Outbox provenance: {error}");
+                                        let held = writer.state().handler_recovery_subject(job.id).and_then(|subject| {
+                                            writer.state().record_unavailable_run_for(id, &subject)?;
+                                            writer.state().finish_job(job.id, Err(format!("held: Outbox {id} provenance unavailable; release by editing the note as owner")), "")
+                                        });
+                                        if let Err(hold_error) = held {
+                                            eprintln!("holding queued Outbox job: {error}; {hold_error}");
+                                        }
                                         return;
                                     }
                                 }
@@ -809,6 +815,22 @@ impl Shared {
                 false
             };
             let mut job = Job::new(Kind::After, &script, &source, &text("function"));
+            // Bind privilege to the executing source, never to a user-claimable name.
+            if type_name == "outbox"
+                && event == "after_update"
+                && script == "google_gmail"
+                && text("function") == "copy_sent"
+                && source == include_str!("../../writer/defaults/google/google_gmail.ws")
+            {
+                let body = doc_to_json(&doc);
+                let fields = &body["fields"];
+                if fields["kind"] == "email"
+                    && fields["status"] == "sending"
+                    && let Some(id) = fields["sent_ref"].as_str().filter(|id| !id.is_empty())
+                {
+                    job.author = Some(Author::GmailSentCopy(id.to_owned()));
+                }
+            }
             job.args = vec![json!({
                 "id": id,
                 "type": type_name,

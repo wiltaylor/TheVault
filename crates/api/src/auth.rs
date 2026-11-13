@@ -699,7 +699,7 @@ pub async fn as_owner(mut req: Request, next: Next) -> Response {
     req.extensions_mut()
         .insert(Caller(Author::Session(OWNER_SESSION.to_owned())));
     req.extensions_mut().insert(GrantedScope(Scope::Admin));
-    next.run(req).await
+    crate::agent_threads::materialize_pending(next.run(req).await)
 }
 
 #[derive(Deserialize)]

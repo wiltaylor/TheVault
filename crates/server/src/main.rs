@@ -285,6 +285,7 @@ async fn serve(
         let root = Arc::new(web);
         app = app.fallback(move |req| api::web::serve(root.clone(), req));
     }
+    app = app.layer(axum::middleware::from_fn(api::web::hsts));
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

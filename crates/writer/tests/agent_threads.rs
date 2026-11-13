@@ -238,8 +238,11 @@ fn gmail_metadata_is_owner_or_import_only() {
             Author::Agent("agent-token".into()),
             Author::AgentMail("assistant".into()),
             Author::Handler("script".into()),
+            Author::Handler("google_gmail".into()),
+            Author::Handler("outbox_send".into()),
             Author::Task("other".into()),
             Author::Token("user".into()),
+            Author::GmailSentCopy("mismatched".into()),
         ] {
             assert!(
                 w.create("email", &input, &author).is_err(),
@@ -265,6 +268,35 @@ fn gmail_metadata_is_owner_or_import_only() {
                 .unwrap();
         }
     }
+}
+
+#[test]
+fn gmail_sent_copy_is_only_a_fresh_matching_email_create() {
+    use state::Author;
+    use writer::Input;
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let author = Author::GmailSentCopy("sent-id".into());
+    let input = Input::Json(json!({"fields":{"title":"Sent","gmail_ref":"sent-id"}}));
+    assert!(w.create("note", &input, &author).is_err());
+    let note = w.create("email", &input, &author).unwrap();
+    let changed = Input::Json(
+        json!({"fields":{"title":"Sent","gmail_ref":"sent-id","gmail_account":"forged"}}),
+    );
+    assert!(
+        w.update(&note.id, &changed, Some(&note.version), &author)
+            .is_err()
+    );
+    w.delete(
+        &note.id,
+        Some(&note.version),
+        &Author::Session("owner".into()),
+    )
+    .unwrap();
+    // Restoring unchanged metadata remains permitted by the ordinary guard.
+    // The capability exception itself must not authorize changed restore data.
+    w.restore_from_trash(&note.id, &author).unwrap();
 }
 
 fn open(root: &Path, key: Option<SecretKey>) -> Writer {

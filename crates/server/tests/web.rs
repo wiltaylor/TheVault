@@ -135,6 +135,36 @@ fn listing_types_needs_credentials() {
     assert_eq!(res.status().as_u16(), 401);
 }
 
+#[test]
+fn hsts_covers_api_success_errors_and_streams_only_with_site_setting() {
+    for setting in ["1", "0"] {
+        let server = TestServer::start_with_env(seed, &[("VAULT_SITE_HTTPS", setting)]);
+        let client = Client::new();
+        for (path, authenticated, status) in [
+            ("/api/health", false, 200),
+            ("/api/types", true, 200),
+            ("/api/nothing-here", true, 404),
+            ("/api/types", false, 401),
+            ("/api/events", true, 200),
+        ] {
+            let mut request = client
+                .get(server.url(path))
+                .header("x-forwarded-proto", "https");
+            if authenticated {
+                request = request.header(AUTHORIZATION, format!("Bearer {}", server.admin_token()));
+            }
+            let response = request.send().unwrap();
+            assert_eq!(response.status().as_u16(), status, "{path}");
+            let value = response.headers().get(STRICT_TRANSPORT_SECURITY);
+            if setting == "1" {
+                assert_eq!(value.unwrap(), "max-age=31536000", "{path}");
+            } else {
+                assert!(value.is_none(), "{path}");
+            }
+        }
+    }
+}
+
 fn web_server() -> (TestServer, tempfile::TempDir) {
     let web = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(web.path().join("assets")).unwrap();

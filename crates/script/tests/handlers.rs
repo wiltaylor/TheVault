@@ -126,6 +126,40 @@ fn json_note(fields: serde_json::Value) -> Input {
     Input::Json(json!({ "fields": fields }))
 }
 
+#[test]
+fn current_handler_for_held_outbox_finishes_without_polling_forever() {
+    let dir = tempfile::tempdir().unwrap();
+    let (writer, handlers) = open(dir.path(), false);
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let email = writer
+        .create("email", &json_note(json!({"title":"Received"})), &user())
+        .unwrap();
+    let item = writer.create("outbox", &json_note(json!({"title":"Reply", "kind":"email", "status":"draft", "to":["ann@example.com"], "in_reply_to":email.id})), &user()).unwrap();
+    for job in writer.state().queued_jobs().unwrap() {
+        writer
+            .state()
+            .finish_job(job.id, Ok(()), "fixture")
+            .unwrap();
+    }
+    writer.state().set_automation_stopped(true).unwrap();
+    writer.state().set_automation_stopped(false).unwrap();
+    writer
+        .delete(&email.id, Some(&email.version), &user())
+        .unwrap();
+    let jobs = writer.state().queued_jobs().unwrap();
+    assert!(!jobs.is_empty());
+    handlers.start(&writer);
+    let until = Instant::now() + Duration::from_secs(30);
+    while !writer.state().queued_jobs().unwrap().is_empty() {
+        assert!(Instant::now() < until, "held Outbox job kept polling");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(writer.outbox_run_context(&item.id).is_err());
+    assert!(writer.state().failed_jobs().unwrap().iter().any(|job| matches!(&job.status, state::JobStatus::Failed(message) if message.contains("held: Outbox"))));
+}
+
 fn interrupted_outbox_restart(kind: &str, action: &str) {
     let dir = tempfile::tempdir().unwrap();
     let (writer, handlers) = open(dir.path(), false);

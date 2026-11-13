@@ -26,25 +26,25 @@ fn budgeted_query(
     ctx: &query::Context<'_>,
     page: &query::PageRequest,
     manager: bool,
-) -> Result<query::Page, ApiError> {
+) -> Result<Value, ApiError> {
     let mut page = query::PageRequest {
         cursor: page.cursor.clone(),
         size: page.size,
     };
     loop {
         let result = query::run(q, ctx, &page)?;
-        if manager || result.rows.len() <= 1 {
+        let rows = result.rows.len();
+        let result = serde_json::to_value(result)
+            .map_err(|_| ApiError::bad_request("query result could not be serialized"))?;
+        if manager || rows <= 1 {
             return Ok(result);
         }
-        let bytes = serde_json::to_vec(&result)
-            .map_err(|_| ApiError::bad_request("query result could not be serialized"))?
-            .len();
+        let bytes = crate::agent_threads::json_bytes(&result);
         if bytes <= PAGE_BYTE_BUDGET {
             return Ok(result);
         }
         // Re-run against the same locked index so the engine returns the correct cursor.
-        page.size = (result.rows.len().saturating_mul(PAGE_BYTE_BUDGET) / bytes)
-            .clamp(1, result.rows.len() - 1);
+        page.size = (rows.saturating_mul(PAGE_BYTE_BUDGET) / bytes).clamp(1, rows - 1);
     }
 }
 
@@ -143,7 +143,7 @@ async fn run_page(
     cursor: Option<String>,
     page_size: Option<usize>,
     exclude_held: bool,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let agent = crate::auth::is_agent_token(&author);
     let page = query::PageRequest {
         cursor,
@@ -172,12 +172,11 @@ async fn run_page(
     })
     .await
     .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))??;
-    let mut result = serde_json::to_value(result)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
+    let mut result = result;
     if agent {
         result["notice"] = json!("some notes may be held");
     }
-    Ok(Json(result))
+    Ok(crate::agent_threads::pending_json(result))
 }
 
 fn parse(text: &str) -> Result<query::Query, ApiError> {
@@ -188,7 +187,7 @@ pub async fn run_post(
     State(w): Shared,
     Caller(author): Caller,
     body: Result<Json<RunBody>, JsonRejection>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let b = json_body(body)?;
     let q = with_archived(parse(&b.query)?, b.archived.as_deref())?;
     run_page(w, author, q, b.this, b.cursor, b.page_size, b.exclude_held).await
@@ -198,7 +197,7 @@ pub async fn run_get(
     State(w): Shared,
     Caller(author): Caller,
     p: Result<Query<RunParams>, QueryRejection>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let p = params(p)?;
     let q = with_archived(parse(&p.q)?, p.archived.as_deref())?;
     run_page(w, author, q, p.this, p.cursor, p.page_size, p.exclude_held).await
@@ -209,7 +208,7 @@ pub async fn search(
     State(w): Shared,
     Caller(author): Caller,
     p: Result<Query<SearchParams>, QueryRejection>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let p = params(p)?;
     if p.q.trim().is_empty() {
         return Err(ApiError::bad_request("`q` is empty"));
