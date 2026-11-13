@@ -703,6 +703,58 @@ fn unavailable_agent_queue_is_visible_pending_and_never_executed() {
 }
 
 #[test]
+fn legacy_trigger_hold_does_not_poison_owner_backfill() {
+    let r = Rig::new();
+    let note = r.create("memo", "Legacy", "open", &user());
+    r.agent("watcher", WATCHER);
+    let payload =
+        json!({"title":"legacy", "prompt":"queued", "type":"memo", "op":"create"}).to_string();
+    r.writer
+        .state()
+        .enqueue_trigger("watcher", "opened", Some(&note), &payload, r.clock.now_ms())
+        .unwrap()
+        .unwrap();
+    r.scheduler.tick();
+    r.scheduler.tick();
+    assert!(r.fake.turns().is_empty());
+    assert_eq!(
+        r.writer
+            .state()
+            .trigger_queue_stats("watcher")
+            .unwrap()
+            .failed,
+        1
+    );
+    let held = r
+        .writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    assert_eq!(
+        held.items
+            .iter()
+            .filter(|a| a.kind == "run.recovery_unavailable" && a.summary.contains(&note))
+            .count(),
+        1
+    );
+    assert_eq!(
+        r.scheduler
+            .trigger_backfill("watcher", "opened", &[(note, "memo".into())])
+            .unwrap(),
+        1
+    );
+    r.scheduler.tick();
+    assert_eq!(r.fake.turns().len(), 1);
+    let contexts = r.fake.contexts.lock().unwrap();
+    assert!(
+        r.writer
+            .state()
+            .automation_commit(contexts[0].stop_generation().unwrap())
+            .is_ok()
+    );
+}
+
+#[test]
 fn agent_recovery_storage_and_audit_failures_keep_work_pending_until_retry() {
     for audit_failure in [false, true] {
         let r = Rig::new();

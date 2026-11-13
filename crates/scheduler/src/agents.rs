@@ -1146,9 +1146,20 @@ impl Scheduler {
     fn trigger_context(&self, job_id: i64) -> state::Result<script::RunContext> {
         let state = self.writer.state();
         let subject = state.trigger_recovery_subject(job_id)?;
-        let mut ids = state.trigger_provenance(job_id)?;
-        if ids.is_empty() {
-            ids.push(String::new());
+        let ids = state.trigger_provenance(job_id)?;
+        if ids.is_empty() || ids.iter().any(String::is_empty) {
+            // A legacy waiting row would absorb a new owner backfill via dedup
+            // and keep its missing-reference marker forever. Retain an explicit
+            // failed hold (and audit) instead, permitting a fresh owner attempt.
+            state.record_unavailable_run_for("", &subject)?;
+            state.finish_trigger_job(
+                job_id,
+                "failed",
+                Some("held: provenance unavailable; release by manual run or backfill"),
+            )?;
+            return Err(state::Error::Corrupt(
+                "legacy trigger held for owner action".into(),
+            ));
         }
         let context = script::RunContext::default();
         for id in ids {
