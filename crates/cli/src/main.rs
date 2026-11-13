@@ -1339,6 +1339,7 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
         | Command::PruneThreadHistory { .. }
         | Command::Backup { .. }
         | Command::RestoreBackup { .. }
+        | Command::StateSize { .. }
         | Command::VersionCompare { .. } => unreachable!("local commands are handled in run"),
     }
 }
