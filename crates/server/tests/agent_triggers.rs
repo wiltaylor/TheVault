@@ -408,11 +408,38 @@ fn scam_history_writes_do_not_trigger_agents_but_owner_edits_do() {
         "name":"router", "kind":"openai_compatible", "base_url":decisions.base_url(), "key":testkit::FakeDecisions::KEY
     }));
     std::fs::remove_file(api.server.vault_path().join("classifiers/agent_safety.wcl")).unwrap();
-    std::fs::write(api.server.vault_path().join("classifiers/scam.wcl"), format!("account = \"router\"\n{}", include_str!("../../writer/defaults/classifiers/scam.wcl"))).unwrap();
-    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"History","sent":"2025-12-25T12:00:00Z"}}}));
+    std::fs::write(
+        api.server.vault_path().join("classifiers/scam.wcl"),
+        format!(
+            "account = \"router\"\n{}",
+            include_str!("../../writer/defaults/classifiers/scam.wcl")
+        ),
+    )
+    .unwrap();
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{"title":"History","sent":"2025-12-25T12:00:00Z"}}}),
+    );
     let cookie = mail_triage_login(&api);
-    let release: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"ids":[note["id"]]})).error_for_status().unwrap().json().unwrap();
-    safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":release["preview"],"approve":true})).error_for_status().unwrap();
+    let release: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/preview",
+        json!({"ids":[note["id"]]}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/approve",
+        json!({"preview":release["preview"],"approve":true}),
+    )
+    .error_for_status()
+    .unwrap();
     api.advance("PT35S");
     api.agent("reader", "label = \"Reader\"\ntrigger changed { on = [\"update\"] type = \"email\" prompt = \"Read mail\" }\n");
     decisions.push(testkit::Reply::json(200, &json!({"id":"history","model":"jev","answers":{
@@ -420,12 +447,29 @@ fn scam_history_writes_do_not_trigger_agents_but_owner_edits_do() {
         "category":{"type":"choice","choice":"other","confidence":1.0,"probabilities":{"scam":0.0,"spam":0.0,"marketing":0.0,"personal":0.0,"transactional":0.0,"other":1.0}}
     }})));
     let root = "/api/classifiers/scam/history";
-    let p: Value = api.client.post(api.server.url(&format!("{root}/preview"))).header("cookie", &cookie).json(&json!({"days":30,"estimated_usd_per_decision":0})).send().unwrap().error_for_status().unwrap().json().unwrap();
+    let p: Value = api
+        .client
+        .post(api.server.url(&format!("{root}/preview")))
+        .header("cookie", &cookie)
+        .json(&json!({"days":30,"estimated_usd_per_decision":0}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
     assert_eq!(p["count"], 1);
     api.client.post(api.server.url(&format!("{root}/approve"))).header("cookie", &cookie).json(&json!({"fingerprint":p["fingerprint"],"days":30,"estimated_usd_per_decision":0,"approve":true})).send().unwrap().error_for_status().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let p: Value = api.client.get(api.server.url(root)).header("cookie", &cookie).send().unwrap().json().unwrap();
+        let p: Value = api
+            .client
+            .get(api.server.url(root))
+            .header("cookie", &cookie)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
         if p["status"] == "complete" {
             assert_eq!(p["attempts"][0]["outcome"], "succeeded", "{p}");
             break;
@@ -441,9 +485,17 @@ fn scam_history_writes_do_not_trigger_agents_but_owner_edits_do() {
     // Keep the released safety envelope unchanged, just as the historical write does.
     doc["fields"]["scam_probability"] = json!(0.2);
     chat.push(AnthropicMessage::text("Owner update received"));
-    api.send("PUT", &format!("/api/notes/{id}"), json!({"note":doc,"base_version":current["version"]}));
+    api.send(
+        "PUT",
+        &format!("/api/notes/{id}"),
+        json!({"note":doc,"base_version":current["version"]}),
+    );
     api.advance("PT35S");
-    assert_eq!(chat.message_requests().len(), 1, "ordinary updates still trigger");
+    assert_eq!(
+        chat.message_requests().len(),
+        1,
+        "ordinary updates still trigger"
+    );
     assert_eq!(decisions.requests().len(), 1);
 }
 

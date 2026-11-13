@@ -38,6 +38,7 @@ it("shows exact estimate and fingerprint, approves only that preview, and shows 
   await screen.findByText("consent-digest");
   expect(preview).toHaveBeenCalledWith(30, 0.25);
   expect(screen.getByText(/Estimated total:/).textContent).toContain("$1.5 USD");
+  expect(screen.getByText(/Excludes the arrival classifier's two-day window/).textContent).toContain("Maximum 5,000 items");
   fireEvent.click(screen.getByText("Approve historical scam run"));
   await waitFor(() => expect(approve).toHaveBeenCalledWith("consent-digest", 30, 0.25));
   await waitFor(() => expect(screen.getByText("Refresh scam run progress")).not.toBeDisabled());
