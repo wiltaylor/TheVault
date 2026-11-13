@@ -42,7 +42,7 @@ object VaultCore {
      * as JSON. It makes a network request: never call it on the main thread.
      */
     @JvmStatic
-    external fun pair(serverUrl: String, password: String?, code: String?, name: String): String
+    external fun pair(serverUrl: String, password: String?, code: String?, name: String, confirmHttp: Boolean): String
 
     /**
      * Hands the core the pairing, `{server_url, token, device_id, device_name, cache_mb,

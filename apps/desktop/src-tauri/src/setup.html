@@ -145,6 +145,8 @@
         <input id="name" name="name" type="text" autocomplete="off" />
 
         <button id="submit" type="submit">Pair</button>
+        <label><input id="confirm-http" type="checkbox" /> I accept an unencrypted home connection on a private LAN or loopback address.</label>
+        <p>The home feed is not authenticated over plain HTTP. Someone on the network can read or change it. Use HTTPS when possible. Public HTTP servers are always refused.</p>
         <div id="error" role="alert"></div>
         <div id="progress" role="status"></div>
       </form>
