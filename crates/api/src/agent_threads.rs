@@ -1205,6 +1205,36 @@ const REDACTION_LIMIT: usize = 32 * 1024 * 1024;
 #[derive(Clone)]
 struct PendingJson(Value);
 
+/// Owner routers have no redaction boundary, but must still emit the owned payload.
+pub(crate) fn materialize_pending(mut response: axum::response::Response) -> axum::response::Response {
+    if let Some(PendingJson(value)) = response.extensions_mut().remove::<PendingJson>() {
+        let (mut parts, _) = response.into_parts();
+        parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+        return axum::response::Response::from_parts(
+            parts,
+            axum::body::Body::from(value.to_string()),
+        );
+    }
+    response
+}
+
+// Match serde_json's default recursion guard before walking untrusted values.
+fn check_json_depth(value: &Value) -> Result<(), ApiError> {
+    let mut pending = vec![(value, 0)];
+    while let Some((value, depth)) = pending.pop() {
+        let children: Box<dyn Iterator<Item = &Value>> = match value {
+            Value::Array(values) => Box::new(values.iter()),
+            Value::Object(values) => Box::new(values.values()),
+            _ => continue,
+        };
+        if depth + 1 >= 128 {
+            return Err(redaction_error());
+        }
+        pending.extend(children.map(|child| (child, depth + 1)));
+    }
+    Ok(())
+}
+
 pub(crate) fn pending_json(value: Value) -> axum::response::Response {
     let mut response = axum::response::Response::new(axum::body::Body::empty());
     response.extensions_mut().insert(PendingJson(value));
@@ -1261,6 +1291,7 @@ pub(crate) async fn redact_response(
 ) -> Result<axum::response::Response, ApiError> {
     if let Some(PendingJson(mut value)) = response.extensions_mut().remove::<PendingJson>() {
         if !crate::tasks::may_manage_login_secrets(w, author)? {
+            check_json_depth(&value)?;
             if json_bytes(&value) > REDACTION_LIMIT {
                 return Err(response_too_large());
             }
@@ -1488,6 +1519,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owner_router_materializes_query_and_search() {
+        use std::sync::Arc;
+        use tower::ServiceExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Arc::new(Writer::open(vault, state).unwrap());
+        let host = Arc::new(script::Host::new(w.clone(), 1, script::Limits::default(), script::Ai::unavailable()));
+        let scheduler = scheduler::Scheduler::new(w.clone(), host, Arc::new(state::SystemClock)).unwrap();
+        let app = crate::owner_router(w, scheduler);
+        for (method, uri, body) in [
+            ("GET", "/api/search?q=quokka", ""),
+            ("GET", "/api/query?query=from%20article", ""),
+            ("POST", "/api/query", r#"{"query":"from article"}"#),
+        ] {
+            let request = axum::http::Request::builder().method(method).uri(uri)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body)).unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+            let bytes = axum::body::to_bytes(response.into_body(), REDACTION_LIMIT).await.unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(value["rows"].is_array(), "{value}");
+            assert_eq!(value["total"], 0);
+        }
+    }
+
+    #[tokio::test]
     async fn pending_query_json_matches_generic_boundary_bytes() {
         use axum::response::IntoResponse;
         let dir = tempfile::TempDir::new().unwrap();
@@ -1533,12 +1592,23 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(fast, generic);
+            if matches!(author, state::Author::Token(_)) {
+                let text = std::str::from_utf8(&fast).unwrap();
+                for secret in ["private-password", "private-user", "nested-user", "group-user", "embedded-user", "https://private.invalid"] {
+                    assert!(!text.contains(secret), "reader retained {secret}");
+                }
+            }
             assert_eq!(
                 json_bytes(&value),
                 serde_json::to_vec(&value).unwrap().len()
             );
         }
-        let oversized = pending_json(json!({"text":"x".repeat(REDACTION_LIMIT)}));
+        let exact = json!("x".repeat(REDACTION_LIMIT - 2));
+        assert_eq!(json_bytes(&exact), REDACTION_LIMIT);
+        assert!(redact_response(&w, &state::Author::Token("reader".into()), "/api/query", pending_json(exact)).await.is_ok());
+        let oversized_value = json!("x".repeat(REDACTION_LIMIT - 1));
+        assert_eq!(json_bytes(&oversized_value), REDACTION_LIMIT + 1);
+        let oversized = pending_json(oversized_value);
         assert_eq!(
             redact_response(
                 &w,
@@ -1551,6 +1621,18 @@ mod tests {
             .status,
             StatusCode::PAYLOAD_TOO_LARGE
         );
+    }
+
+    #[test]
+    fn pending_depth_matches_generic_parser_guard() {
+        for depth in [127, 128, 129] {
+            let mut value = json!("leaf");
+            for _ in 0..depth {
+                value = json!([value]);
+            }
+            let parsed = serde_json::from_str::<Value>(&value.to_string());
+            assert_eq!(check_json_depth(&value).is_ok(), parsed.is_ok(), "depth {depth}");
+        }
     }
 
     #[tokio::test]
