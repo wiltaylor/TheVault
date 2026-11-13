@@ -2299,7 +2299,10 @@ fn sent_copy_account_upgrade_preserves_user_handlers_and_is_idempotent() {
         open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
         assert_eq!(read(root, path).unwrap(), current);
         let source = if edited {
-            old.replace("function      = \"copy_sent\"", "function      = \"custom_copy\"")
+            old.replace(
+                "function      = \"copy_sent\"",
+                "function      = \"custom_copy\"",
+            )
         } else {
             old.clone()
         };
