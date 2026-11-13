@@ -10,6 +10,8 @@ for (const app of ['desktop', 'android']) {
     assert.match(csp, /default-src 'self'/);
     assert.match(csp, /object-src 'none'/);
     assert.match(csp, /base-uri 'none'/);
+    const connect = csp.split(';').find(p => p.trim().startsWith('connect-src '));
+    assert.equal(connect.trim(), "connect-src 'self' https: ipc: http://ipc.localhost");
     const script = csp.split(';').find(p => p.trim().startsWith('script-src '));
     assert.equal(script.trim(), "script-src 'self'");
     const source = readFileSync(`apps/${app}/src-tauri/src/lib.rs`, 'utf8');

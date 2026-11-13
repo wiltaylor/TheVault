@@ -167,10 +167,8 @@ fn serves_the_web_client_without_credentials() {
     assert!(csp.contains("default-src 'self'"), "{csp}");
     assert!(csp.contains("script-src 'self'"), "{csp}");
     assert!(csp.contains("object-src 'none'"), "{csp}");
-    assert_eq!(
-        index.headers()[STRICT_TRANSPORT_SECURITY],
-        "max-age=31536000; includeSubDomains"
-    );
+    assert!(!index.headers().contains_key(STRICT_TRANSPORT_SECURITY));
+    assert!(csp.contains("connect-src 'self' https:;"), "{csp}");
     assert_eq!(index.headers()[X_FRAME_OPTIONS], "DENY");
     assert_eq!(index.headers()[REFERRER_POLICY], "no-referrer");
     assert!(index.text().unwrap().contains("shell"));
