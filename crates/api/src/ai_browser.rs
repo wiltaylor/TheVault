@@ -324,7 +324,7 @@ async fn cleanup_worker(
             }
             _ = wake.notified() => {},
             _ = async {
-                if let Some(next) = next { tokio::time::sleep_until(next.into()).await; }
+                if let Some(next) = next { tokio::time::sleep_until(next).await; }
                 else { std::future::pending::<()>().await; }
             } => {},
         }

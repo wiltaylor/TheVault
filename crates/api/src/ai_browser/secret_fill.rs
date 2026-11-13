@@ -1,6 +1,8 @@
 //! Server-owned confirmation and fill authorization. No model confirmation flag.
 use super::*;
 
+// Keep provenance separate from model input and the existing permission flags.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn call(
     context: &script::RunContext,
     b: &BrowserBox,
