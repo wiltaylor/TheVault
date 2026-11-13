@@ -238,6 +238,8 @@ fn gmail_metadata_is_owner_or_import_only() {
             Author::Agent("agent-token".into()),
             Author::AgentMail("assistant".into()),
             Author::Handler("script".into()),
+            Author::Handler("google_gmail".into()),
+            Author::Handler("outbox_send".into()),
             Author::Task("other".into()),
             Author::Token("user".into()),
         ] {
