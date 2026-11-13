@@ -132,7 +132,8 @@ fn repair_head_opens_trashes_restores_and_audits() {
     assert!(cli(dir.path(), &["history-check"]).0);
     let w = open(dir.path());
     let by = Author::Token("fixture".into());
-    w.delete(&id, None, &by).unwrap();
+    w.delete(&id, body["actions"][0]["replacement"].as_str(), &by)
+        .unwrap();
     let restored = w.restore_from_trash(&id, &by).unwrap();
     assert!(restored.wcl.contains("third"));
 }
