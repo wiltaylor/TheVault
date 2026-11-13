@@ -26,6 +26,20 @@ pub struct AutomationState {
 pub struct Generation(i64);
 
 impl Generation {
+    // Durable provenance is decoded only inside State, never from script JSON.
+    pub(crate) fn stored(self) -> i64 {
+        self.0
+    }
+
+    pub(crate) fn restore_stored(value: i64) -> Option<Self> {
+        (value >= -1).then_some(Self(value))
+    }
+
+    // No valid automation_control row can admit this identity.
+    pub(crate) fn stale() -> Self {
+        Self(-1)
+    }
+
     /// Select an existing admission, never manufacture one from a counter.
     /// Both identities must come from the same writer-owned State authority.
     pub fn oldest(self, other: Self) -> Self {
