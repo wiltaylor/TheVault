@@ -615,7 +615,10 @@ fn disconnect_does_not_hide_a_local_cleanup_failure_after_revocation() {
     api.endpoints();
     let auth = api.connect_start("loopback");
     expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
-    api.put_secret("google_gmail_state", &json!({ "history_id": "42" }).to_string());
+    api.put_secret(
+        "google_gmail_state",
+        &json!({ "history_id": "42" }).to_string(),
+    );
     let db = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
     db.execute(
         "CREATE TRIGGER fail_google_cleanup BEFORE UPDATE ON secrets
