@@ -18,7 +18,7 @@ rust-fmt-check: (require-tool "cargo")
 # Run clippy over every target with warnings denied
 [group('ci')]
 rust-lint: (require-tool "cargo")
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --locked --workspace --all-targets -- -D warnings
 
 # Check the formatting of the crates outside the main workspace: the Android app with tauri-plugin-vault-device, and the desktop app
 [group('ci')]
@@ -36,7 +36,7 @@ app-fmt-check dir: (require-tool "cargo")
 # Each app's Tauri context embeds web/dist, so clippy needs the web client built
 [private]
 app-lint dir: (require-tool "cargo") web-build
-	cd {{dir}} && env -u CARGO_TARGET_DIR cargo clippy --workspace --all-targets -- -D warnings
+	cd {{dir}} && env -u CARGO_TARGET_DIR cargo clippy --locked --workspace --all-targets -- -D warnings
 
 # Fail when a crate's tests/ holds a file its tests/main.rs does not declare: with autotests off, cargo would never build it
 [group('ci')]
