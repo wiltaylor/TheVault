@@ -555,6 +555,8 @@ fn safety_rest_read_route_inventory() {
         "/api/assets/trash",
         "/api/assets/{id}",
         "/api/assets/{id}/usage",
+        // TV-252: owner-session-only local setup metadata, no note content.
+        "/api/classifiers",
         "/api/clients",
         "/api/clients/cli/{target}",
         "/api/clients/latest/{kind}",
@@ -643,6 +645,11 @@ fn safety_rest_mutation_route_inventory() {
     actual.sort_unstable();
     actual.dedup();
     let reviewed = [
+        (
+            "put",
+            "/api/classifiers/{name}/account",
+            "owner session only, local account field edit, no note content",
+        ),
         ("delete", "/api/agents/{name}", "admin scope required"),
         (
             "delete",
@@ -2931,6 +2938,45 @@ fn safety_preview(api: &Api, cookie: &str, price: Value) -> Value {
     .unwrap()
     .json()
     .unwrap()
+}
+
+#[test]
+fn historical_safety_incompatible_account_names_setup_fix_without_provider_calls() {
+    let fake = testkit::FakeDecisions::start();
+    let (api, cookie) = historical_safety_setup(&fake);
+    for kind in ["anthropic", "chatgpt"] {
+        api.send(
+            "POST",
+            "/api/integrations/ai/accounts",
+            json!({"name":kind,"kind":kind}),
+        );
+        std::fs::write(
+            api.server.vault_path().join("classifiers/agent_safety.wcl"),
+            format!(
+                "account = {kind:?}\n{}",
+                include_str!("../../writer/defaults/classifiers/agent_safety.wcl")
+            ),
+        )
+        .unwrap();
+        let response = safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/backfill/preview",
+            json!({"estimated_usd_per_decision":0}),
+        );
+        assert_eq!(response.status(), 400);
+        let error = response.text().unwrap();
+        for expected in [
+            "Settings > AI",
+            "OpenRouter",
+            "/api/v1",
+            "account field in classifiers/agent_safety.wcl",
+            "Incoming notes remain held",
+        ] {
+            assert!(error.contains(expected), "{kind}: {error}");
+        }
+        assert!(fake.requests().is_empty());
+    }
 }
 
 #[test]

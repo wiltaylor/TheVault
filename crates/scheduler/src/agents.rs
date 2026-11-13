@@ -121,6 +121,8 @@ pub trait AgentRunner: Send + Sync {
 /// One run to start: an agent's trigger, the first message and the thread's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentJob {
+    /// Live provenance for dispatch and mention jobs only.
+    run_context: script::RunContext,
     pub source_notes: Vec<String>,
     pub op: Option<String>,
     /// Durable trigger queue identity. Person-requested calls keep their existing lane.
@@ -138,6 +140,18 @@ pub struct AgentJob {
     pub thread: Option<String>,
     /// The origin of the thread opened already: [`MENTION_ORIGIN`] or [`DISPATCH_ORIGIN`].
     pub origin: Option<&'static str>,
+}
+
+impl AgentJob {
+    pub fn run_context(&self) -> &script::RunContext {
+        &self.run_context
+    }
+
+    pub fn set_run_context(&mut self, context: script::RunContext) {
+        self.run_context.clone().scope(|| {
+            self.run_context = context.inherit_current();
+        });
+    }
 }
 
 /// Why notes sent to an agent were not run (TV-77 D1). Nothing was queued and no thread stays.
@@ -246,6 +260,7 @@ mod persistence_retry_tests {
         let mut plan = AgentPlan::default();
         for i in 0..=state::TRIGGER_QUEUE_CAP {
             plan.retry_persistence(AgentJob {
+                run_context: script::RunContext::default(),
                 source_notes: vec![],
                 scope: None,
                 caller: None,
@@ -264,6 +279,22 @@ mod persistence_retry_tests {
         assert_eq!(plan.persist_retry.first().unwrap().prompt, "1");
         assert_eq!(plan.persist_retry.last().unwrap().prompt, "10000");
     }
+
+    #[test]
+    fn unknown_durable_provenance_is_not_unrestricted() {
+        let recovered = recovered_context();
+        assert!(recovered.is_restricted());
+        // Recovery must not forge an admission from a stored integer.
+        assert_eq!(recovered.stop_generation(), None);
+    }
+}
+
+// Schedules, note events and backfill always restart from the durable queue.
+// Their placeholder contexts are not persisted. Durable provenance is TV-301.
+fn recovered_context() -> script::RunContext {
+    let context = script::RunContext::default();
+    context.restrict();
+    context
 }
 
 impl AgentPlan {
@@ -327,6 +358,7 @@ impl AgentPlan {
                 continue;
             };
             jobs.push(AgentJob {
+                run_context: script::RunContext::default(),
                 source_notes: vec![],
                 op: None,
                 durable: None,
@@ -822,6 +854,7 @@ impl Scheduler {
             };
             let Some(title) = title else { continue };
             jobs.push(AgentJob {
+                run_context: script::RunContext::default(),
                 source_notes: if e.op == "delete" {
                     vec![]
                 } else {
@@ -906,6 +939,9 @@ impl Scheduler {
                         continue;
                     };
                     let job = AgentJob {
+                        // Recovery cannot prove that a prior run was unrestricted.
+                        // This is provenance only, not a stop-generation admission.
+                        run_context: recovered_context(),
                         source_notes: if payload["op"] == MAIL_TRIAGE {
                             serde_json::from_value(payload["source_notes"].clone())
                                 .unwrap_or_default()
@@ -1142,6 +1178,7 @@ impl Scheduler {
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             let job = AgentJob {
+                run_context: script::RunContext::default(),
                 source_notes: vec![], // Durable jobs use trigger_note_allowed at start.
                 scope: None,
                 caller: None,
@@ -1277,6 +1314,7 @@ impl Scheduler {
             .collect::<Vec<_>>()
             .join("\n");
             let mut job = AgentJob {
+                run_context: script::RunContext::default(),
                 source_notes: vec![id.to_owned()],
                 op: None,
                 durable: None,
@@ -1414,6 +1452,7 @@ impl Scheduler {
             .open_thread(&a, DISPATCH_ORIGIN, title, notes)
             .map_err(DispatchRefused::Thread)?;
         let job = AgentJob {
+            run_context: script::RunContext::current().unwrap_or_default(),
             source_notes: notes.to_vec(),
             op: None,
             durable: None,
@@ -1488,6 +1527,10 @@ impl Scheduler {
 
     /// Run one job: a new thread and one turn on it, recorded in `agent_runs`.
     fn run_agent_job(&self, job: &AgentJob) {
+        job.run_context.scope(|| self.run_agent_job_scoped(job));
+    }
+
+    fn run_agent_job_scoped(&self, job: &AgentJob) {
         if job
             .source_notes
             .iter()

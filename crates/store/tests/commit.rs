@@ -14,6 +14,44 @@ const C: &str = "notes/specimen/01JB8Z4K2MQ7V3X9T5R6W8Y2ZC.wcl";
 const NEW: &str = "notes/board/01JB8Z4K2MQ7V3X9T5R6W8Y2ZF.wcl";
 const ASSET: &str = "assets/01JB9A0C3D4E5F6G7H8J9K0M1N/sketch.png";
 
+#[test]
+fn classifier_account_edit_preserves_bytes_and_recovers_without_canonicalization() {
+    let dir = TempDir::new().unwrap();
+    let vault = Vault::init(dir.path()).unwrap();
+    let path = "classifiers/scam.wcl";
+    let contents = b"# preserve\r\naccount = \"OpenRouter\" # keep\r\nmodel  = \"jev\"".to_vec();
+    let result = vault.commit_with_hook(
+        vec![Change::ClassifierAccount {
+            path: path.into(),
+            contents: contents.clone(),
+        }],
+        &mut |step| {
+            if step == CommitStep::Committed {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        },
+    );
+    assert!(matches!(result, Err(Error::Interrupted)));
+    drop(vault);
+    let vault = Vault::open(dir.path()).unwrap();
+    assert_eq!(vault.read_text(path).unwrap().as_bytes(), contents);
+    for (path, contents) in [
+        (A, "title = \"no bypass\""),
+        ("classifiers/bad.wcl", "account = env(\"SECRET\")"),
+    ] {
+        assert!(
+            vault
+                .commit(vec![Change::ClassifierAccount {
+                    path: path.into(),
+                    contents: contents.as_bytes().to_vec()
+                }])
+                .is_err()
+        );
+    }
+}
+
 /// Every file the commit touches, mapped to its contents (`None` when absent).
 type Snapshot = BTreeMap<&'static str, Option<Vec<u8>>>;
 
