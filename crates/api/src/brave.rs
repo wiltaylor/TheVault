@@ -32,10 +32,10 @@ use writer::Writer;
 use crate::{ApiError, blocking};
 
 /// The secret holding the Brave Search API key.
-pub const KEY: &str = "brave_api_key";
+pub const KEY: &str = state::BRAVE_API_KEY;
 
 /// The secret holding the Brave settings: `{ endpoint }`, the test seam.
-pub const SETTINGS: &str = "brave_settings";
+pub const SETTINGS: &str = state::BRAVE_SETTINGS;
 
 /// Brave's own API host.
 const BRAVE_URL: &str = "https://api.search.brave.com";

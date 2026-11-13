@@ -60,9 +60,9 @@ use crate::ApiError;
 pub(crate) mod attachments;
 
 /// The secrets the sign-in stores and the sync scripts read (google-sync D19).
-pub const CLIENT_ID: &str = "google_client_id";
-pub const CLIENT_SECRET: &str = "google_client_secret";
-pub const REFRESH_TOKEN: &str = "google_refresh_token";
+pub const CLIENT_ID: &str = state::GOOGLE_CLIENT_ID;
+pub const CLIENT_SECRET: &str = state::GOOGLE_CLIENT_SECRET;
+pub const REFRESH_TOKEN: &str = state::GOOGLE_REFRESH_TOKEN;
 const SECRETS: [&str; 3] = [CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN];
 
 /// The tasks a connection unpauses and a disconnection pauses, with the side of the status each

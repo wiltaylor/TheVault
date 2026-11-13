@@ -596,6 +596,7 @@ fn p18_legacy_admin_agent_cannot_rewrite_integration_secrets() {
     let legacy = install(&server, &admin, "legacy", "admin");
     let mut statuses = Vec::new();
     for name in [
+        "ordinary_user_key",
         "ai_accounts",
         "ai_settings",
         "ai_account_key_probe",

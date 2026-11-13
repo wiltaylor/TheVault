@@ -5,6 +5,36 @@ use std::time::{Duration, Instant};
 use testkit::{PASSWORD, TestServer};
 
 #[test]
+fn test_secret_seams_require_opt_in_and_owner_session() {
+    let server = TestServer::start_with_args(|_| {}, &["--test-secret-seams".as_ref()]);
+    let client = Client::new();
+    let login = client.post(server.url("/api/login"))
+        .json(&json!({"password": PASSWORD})).send().unwrap();
+    let cookie = login.headers()["set-cookie"].to_str().unwrap()
+        .split(';').next().unwrap().to_owned();
+    for name in ["ai_settings", "ai_account_chatgpt_fixture", "google_settings",
+        "google_client_id", "google_client_secret", "google_refresh_token", "google_account"] {
+        let url = server.url(&format!("/api/secrets/{name}"));
+        assert_eq!(client.put(&url).bearer_auth(server.admin_token())
+            .json(&json!({"value":"fixture"})).send().unwrap().status().as_u16(), 403);
+        assert!(client.put(&url).header("cookie", &cookie)
+            .json(&json!({"value":"fixture"})).send().unwrap().status().is_success());
+        assert_eq!(server.secret(name).as_deref(), Some("fixture"));
+        assert_eq!(client.delete(&url).bearer_auth(server.admin_token())
+            .send().unwrap().status().as_u16(), 403);
+        assert!(client.delete(&url).header("cookie", &cookie).send().unwrap().status().is_success());
+        assert!(server.secret(name).is_none());
+    }
+    for name in ["ai_accounts", "ai_account_key_fixture", "google_gmail_trashed", "gitsync_key"] {
+        let url = server.url(&format!("/api/secrets/{name}"));
+        for method in [reqwest::Method::PUT, reqwest::Method::DELETE] {
+            assert_eq!(client.request(method, &url).header("cookie", &cookie)
+                .json(&json!({"value":"fixture"})).send().unwrap().status().as_u16(), 403);
+        }
+    }
+}
+
+#[test]
 fn internal_secrets_refuse_put_and_delete_for_tokens_and_sessions() {
     let server = TestServer::start();
     let client = Client::new();
@@ -33,6 +63,7 @@ fn internal_secrets_refuse_put_and_delete_for_tokens_and_sessions() {
         "google_account",
         "google_gmail_state",
         "google_calendar_state",
+        "google_gmail_trashed",
         "gitsync_settings",
         "gitsync_token",
         "gitsync_ssh_key",
@@ -45,9 +76,17 @@ fn internal_secrets_refuse_put_and_delete_for_tokens_and_sessions() {
     ];
     for session in [false, true] {
         for name in names {
+            server.seed_secret(name, "existing record");
             // Even kind=login cannot shadow an internal string secret.
             let before = server.secret(name);
             for method in [reqwest::Method::PUT, reqwest::Method::DELETE] {
+                if method == reqwest::Method::DELETE && name.starts_with("gitsync_freshness_receive_") {
+                    let req = client.delete(server.url(&format!("/api/secrets/{name}")));
+                    let req = if session { req.header("cookie", &cookie) } else { req.bearer_auth(server.admin_token()) };
+                    assert!(req.send().unwrap().status().is_success());
+                    assert!(server.secret(name).is_none());
+                    continue;
+                }
                 let req =
                     client.request(method.clone(), server.url(&format!("/api/secrets/{name}")));
                 let req = if session {

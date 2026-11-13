@@ -16,12 +16,12 @@ use state::State;
 use crate::round::Report;
 use crate::{Error, Result, SyncKey};
 
-pub const SETTINGS: &str = "gitsync_settings";
-pub const TOKEN: &str = "gitsync_token";
-pub const SSH_KEY: &str = "gitsync_ssh_key";
-pub const KNOWN_HOSTS: &str = "gitsync_known_hosts";
-pub const KEY: &str = "gitsync_key";
-pub const STATE: &str = "gitsync_state";
+pub const SETTINGS: &str = state::GITSYNC_SETTINGS;
+pub const TOKEN: &str = state::GITSYNC_TOKEN;
+pub const SSH_KEY: &str = state::GITSYNC_SSH_KEY;
+pub const KNOWN_HOSTS: &str = state::GITSYNC_KNOWN_HOSTS;
+pub const KEY: &str = state::GITSYNC_KEY;
+pub const STATE: &str = state::GITSYNC_STATE;
 
 /// Every secret the connection keeps, which a disconnect removes.
 pub const SECRETS: [&str; 6] = [SETTINGS, TOKEN, SSH_KEY, KNOWN_HOSTS, KEY, STATE];

@@ -3,16 +3,15 @@
 /// Google credentials are also the declared grants of the shipped sync and outbox scripts.
 /// They remain available to scripts, but may not be granted by an agent proposal.
 pub fn internal_script_secret(name: &str) -> bool {
-    matches!(
-        name,
-        "ai_settings" | "ai_accounts" | "brave_api_key" | "brave_settings"
-    ) || name.starts_with("ai_account_")
+    (crate::reserved_secret(name) && !name.starts_with("google_"))
+        || name == crate::BRAVE_SETTINGS
+        || name.starts_with("ai_account_")
         || name.starts_with("gitsync_")
 }
 
 /// Refuse a server-owned name in a task or tool proposed by an agent.
 pub fn proposed_secrets_refused(names: &[String]) -> Option<String> {
-    names.iter().find(|name| internal_script_secret(name) || name.starts_with("google_")).map(|name| {
+    names.iter().find(|name| crate::reserved_secret(name) || internal_script_secret(name) || name.starts_with("google_")).map(|name| {
         format!("secret {name:?} is reserved for the server and cannot be granted by an agent proposal")
     })
 }

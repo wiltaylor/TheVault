@@ -422,43 +422,23 @@ pub struct SecretBody {
 
 /// Internal state must go through its dedicated API, for every caller and secret kind.
 fn require_user_secret(name: &str) -> Result<(), ApiError> {
-    let destination = match name {
-        "ai_accounts" | "ai_settings" => Some("Settings > AI (the accounts API)"),
-        n if n.starts_with("ai_account_key_")
-            || n.starts_with("ai_account_chatgpt_")
-            || n.starts_with("ai_account_usage_") =>
-        {
-            Some("Settings > AI (the accounts API)")
-        }
-        "google_settings"
-        | "google_client_id"
-        | "google_client_secret"
-        | "google_refresh_token"
-        | "google_account"
-        | "google_gmail_state"
-        | "google_calendar_state" => Some("Settings > Google"),
-        "gitsync_settings"
-        | "gitsync_token"
-        | "gitsync_ssh_key"
-        | "gitsync_known_hosts"
-        | "gitsync_key"
-        | "gitsync_state" => Some("Settings > Git Sync"),
-        n if n.starts_with("gitsync_freshness_publish_")
-            || n.starts_with("gitsync_freshness_receive_") =>
-        {
-            Some("Git Sync's managed replay checkpoints")
-        }
-        "brave_api_key" => Some("Settings > Brave Search"),
-        _ => None,
-    };
-    if let Some(destination) = destination {
-        return Err(ApiError::new(
-            StatusCode::FORBIDDEN,
-            "internal_secret",
-            format!("This secret is managed by the server. Use {destination}, not /api/secrets."),
-        ));
+    if !state::reserved_secret(name) {
+        return Ok(());
     }
-    Ok(())
+    let destination = if name.starts_with("ai_") {
+        "Settings > AI (the accounts API)"
+    } else if name.starts_with("google_") {
+        "Settings > Google"
+    } else if name.starts_with("gitsync_") {
+        "Settings > Git Sync"
+    } else {
+        "Settings > Brave Search"
+    };
+    Err(ApiError::new(
+        StatusCode::FORBIDDEN,
+        "internal_secret",
+        format!("This secret is managed by the server. Use {destination}, not /api/secrets."),
+    ))
 }
 
 /// `PUT /api/secrets/{name}`: store or replace a user secret, encrypted at rest.
@@ -466,11 +446,14 @@ pub async fn put_secret(
     State(w): Shared,
     Path(name): Path<String>,
     Caller(author): Caller,
+    seams: Option<axum::Extension<crate::TestSecretSeams>>,
     headers: HeaderMap,
     raw: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     check_name("secret", &name)?;
-    require_user_secret(&name)?;
+    if !test_seam_allowed(&name, &author, seams.is_some()) {
+        require_user_secret(&name)?;
+    }
     let b: SecretBody = body(&headers, &raw, |value| SecretBody {
         value: Some(value),
         ..SecretBody::default()
@@ -523,8 +506,12 @@ pub async fn delete_secret(
     State(w): Shared,
     Path(name): Path<String>,
     Caller(author): Caller,
+    seams: Option<axum::Extension<crate::TestSecretSeams>>,
 ) -> Result<Json<Value>, ApiError> {
-    require_user_secret(&name)?;
+    if !name.starts_with(state::GITSYNC_FRESHNESS_RECEIVE_PREFIX)
+        && !test_seam_allowed(&name, &author, seams.is_some()) {
+        require_user_secret(&name)?;
+    }
     let n = name.clone();
     blocking(w, move |w| -> Result<(), ApiError> {
         if w.state().is_login_secret(&n)? {
@@ -537,6 +524,11 @@ pub async fn delete_secret(
     })
     .await?;
     Ok(Json(json!({ "name": name, "deleted": true })))
+}
+
+fn test_seam_allowed(name: &str, author: &state::Author, enabled: bool) -> bool {
+    cfg!(debug_assertions) && enabled && matches!(author, state::Author::Session(_))
+        && state::test_seam_secret(name)
 }
 
 // ---- test clock -----------------------------------------------------------------------------

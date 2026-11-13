@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { type APIRequestContext, request } from "@playwright/test";
-import { expect, logIn, test } from "./isolated-fixtures";
+import { expect, logIn, isolatedTest as test } from "./test-seam-fixtures";
 
 // Settings > Integrations > Google (google-sync D1, D18): the loopback paste flow against the fake
 // Google server, which the `google_settings` secret's endpoints point at. The consent page is the fake's too:

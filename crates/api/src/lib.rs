@@ -598,6 +598,10 @@ pub fn recover_browser_profiles(writer: Arc<Writer>) -> Result<(), writer::Error
     Ok(())
 }
 
+/// Explicit test-build-only opt-in for owner-session fixture writes.
+#[derive(Clone, Copy)]
+pub struct TestSecretSeams;
+
 /// Builds the router for every `/api` route. `test_clock` is the clock `scheduler` reads when the
 /// server runs with `--test-clock`; it adds `/api/test/clock`, which [`routes`] does not list (S7).
 /// `clients` is the folder of app builds `/api/clients` hands out, or `None` for none.
