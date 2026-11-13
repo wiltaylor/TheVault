@@ -671,7 +671,7 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
     );
     assert_eq!(api.agent_wcl("helper").unwrap(), saved);
 
-    // Use a legacy admin-scoped agent token to exercise the agent-kind boundary too.
+    // Legacy admin install codes redeem as write-scoped agent tokens.
     let denied = api
         .client
         .put(api.server.url("/api/agents/helper"))
@@ -685,7 +685,7 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
     assert_eq!(body["error"], "forbidden");
     assert_eq!(
         body["message"],
-        "this needs the admin scope; the token has admin"
+        "this needs the admin scope; the token has write"
     );
     assert_eq!(api.agent_wcl("helper").unwrap(), saved);
 
