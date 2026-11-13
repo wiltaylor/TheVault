@@ -50,7 +50,10 @@ impl RunContext {
     }
 
     pub fn stop_generation(&self) -> Option<u64> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).stop_generation
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stop_generation
     }
 
     /// Capture the synchronous caller's context before crossing a worker boundary.
