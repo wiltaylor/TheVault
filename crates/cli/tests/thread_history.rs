@@ -4,6 +4,25 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 #[test]
+fn size_diagnostics_are_local_and_advisory() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join(".vault")).unwrap();
+    let path = dir.path().join(".vault/state.db");
+    let state = state::State::open(&path, None).unwrap();
+    state.record_version("mail", "email", &state::Author::Token("fixture".into()), "é").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_vault"))
+        .arg("--vault").arg(dir.path())
+        .args(["state-size", "--warning-bytes", "1"])
+        .output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["history"][0]["content_bytes"], 2);
+    assert_eq!(report["history"][0]["versions"], 1);
+    assert!(report["warning"].as_str().unwrap().contains("backup"));
+    assert_eq!(state.history("mail").unwrap().len(), 1);
+}
+
+#[test]
 fn prune_is_opt_in_and_reports_content_bytes() {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir(dir.path().join(".vault")).unwrap();

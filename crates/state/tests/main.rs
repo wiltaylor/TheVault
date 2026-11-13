@@ -12,6 +12,7 @@ mod changes;
 mod classifiers;
 mod commands;
 mod devices;
+mod diagnostics;
 mod gitsync;
 mod login_origins;
 mod sessions;

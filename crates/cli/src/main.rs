@@ -155,6 +155,12 @@ enum Command {
     },
     /// Every version of a note.
     History { id: String },
+    /// Read-only local state.db history and file sizes. No server or provider calls.
+    StateSize {
+        /// Warn when database plus WAL file lengths reach this many bytes.
+        #[arg(long, default_value_t = state::diagnostics::DEFAULT_WARNING_BYTES, value_parser = clap::value_parser!(u64).range(1..))]
+        warning_bytes: u64,
+    },
     /// Prune old agent_thread history in a local vault. Dry run unless --apply is given.
     /// Keeps device sync bases in addition to the newest N copies.
     PruneThreadHistory {
@@ -911,6 +917,14 @@ fn run(cli: Cli) -> Result<Value, Fail> {
         } => local::init(&dir, starter, password_stdin),
         Command::Passwd { password_stdin } => local::passwd(vault, password_stdin),
         Command::Reindex => local::reindex(vault),
+        Command::StateSize { warning_bytes } => {
+            let report = state::diagnostics::state_size(
+                &vault.join(".vault/state.db"),
+                warning_bytes,
+            )
+            .map_err(Fail::from_display("state"))?;
+            serde_json::to_value(report).map_err(Fail::from_display("state"))
+        }
         Command::PruneThreadHistory { keep, apply } => {
             let state = local::open_state(vault)?;
             let report = state

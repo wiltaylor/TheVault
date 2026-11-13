@@ -22,6 +22,7 @@ mod devices;
 mod events;
 mod gitsync;
 mod history;
+pub mod diagnostics;
 mod jobs;
 mod notifications;
 mod pins;
