@@ -1,7 +1,9 @@
 //! Adversarial branches exist only in a disposable local bare repository.
 use std::collections::BTreeMap;
 
-use gitsync::{AssetEntry, Auth, DefEntry, Git, Instance as Named, Layout, Manifest, NoteEntry, SyncKey};
+use gitsync::{
+    AssetEntry, Auth, DefEntry, Git, Instance as Named, Layout, Manifest, NoteEntry, SyncKey,
+};
 use serde_json::json;
 use testkit::BareRepo;
 
@@ -81,7 +83,11 @@ fn retry_assets(count: usize, repair: bool) {
     publish(&files);
     let first = receiver.sync();
     assert_eq!(first["created"].as_array().unwrap().len(), count, "{first}");
-    assert_eq!(first["warnings"].as_array().unwrap().len(), count, "{first}");
+    assert_eq!(
+        first["warnings"].as_array().unwrap().len(),
+        count,
+        "{first}"
+    );
     for asset in &manifest.assets {
         assert!(receiver.asset(&asset.id).is_none());
         if repair {
