@@ -934,6 +934,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Add an AI account: {name, kind, base_url?, model?, headers?, context?, key?}; kind anthropic, openai, openai_compatible or chatgpt",
     ),
     (
+        "POST",
+        "/api/integrations/ai/accounts/reset",
+        "Owner session only: reset an unreadable AI accounts record with {confirm: true}",
+    ),
+    (
         "PUT",
         "/api/integrations/ai/accounts/order",
         "Put the AI accounts in a new order: {ids}, every account once",
