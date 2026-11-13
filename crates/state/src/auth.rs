@@ -281,6 +281,7 @@ impl State {
             last_used_ms: None,
             expires_ms: Some(expires_ms),
         };
+        self.credential_changes.send_replace(());
         Ok(Some((info, secret)))
     }
 

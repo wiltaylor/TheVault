@@ -647,8 +647,8 @@ pub async fn authenticate(
     res
 }
 
-/// Maximum cached credential lifetime. Timers are polled before body data, including on busy
-/// streams. While a database check is pending no further data is released. Errors fail closed.
+/// Maximum lifetime of a successful credential check. Check immediately, then once per interval
+/// or invalidation signal, before body data. Pending checks hold data. Errors fail closed.
 pub(crate) const STREAM_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) fn guard_stream<S>(
@@ -660,17 +660,26 @@ where
     S::Item: Send,
 {
     use futures_util::StreamExt;
-    let timer = tokio::time::interval(STREAM_CHECK_INTERVAL);
+    let mut timer = tokio::time::interval(STREAM_CHECK_INTERVAL);
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     futures_util::stream::unfold(
         (Box::pin(stream), credential, timer),
         |(mut stream, mut credential, mut timer)| async move {
             loop {
                 let item = tokio::select! {
                     biased;
-                    _ = credential.changes.changed() => None,
+                    changed = credential.changes.changed() => {
+                        if changed.is_err() {
+                            return None;
+                        }
+                        None
+                    },
                     _ = timer.tick() => None,
                     item = stream.next() => Some(item),
                 };
+                if let Some(item) = item {
+                    return item.map(|item| (item, (stream, credential, timer)));
+                }
                 let check = credential.clone();
                 if !tokio::task::spawn_blocking(move || check.is_valid())
                     .await
@@ -679,9 +688,6 @@ where
                     .unwrap_or(false)
                 {
                     return None;
-                }
-                if let Some(item) = item {
-                    return item.map(|item| (item, (stream, credential, timer)));
                 }
             }
         },
@@ -805,6 +811,49 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn busy_stream_checks_once_per_interval_and_fails_closed_on_db_error() {
+        use futures_util::StreamExt;
+        struct CountClock(std::sync::atomic::AtomicUsize);
+        impl state::Clock for CountClock {
+            fn now_ms(&self) -> i64 {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                1_000
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let clock = Arc::new(CountClock(std::sync::atomic::AtomicUsize::new(0)));
+        let db = state::State::open_with_clock(&path, None, clock.clone()).unwrap();
+        let (_, secret) = db.create_token("busy", Scope::Read).unwrap();
+        let stream = guard_stream(futures_util::stream::repeat(()), db.stream_credential(&secret, true));
+        tokio::pin!(stream);
+        clock.0.store(0, Ordering::SeqCst);
+        for _ in 0..1_000 {
+            assert_eq!(stream.next().await, Some(()));
+        }
+        assert_eq!(clock.0.load(Ordering::SeqCst), 1);
+        tokio::time::advance(STREAM_CHECK_INTERVAL).await;
+        assert_eq!(stream.next().await, Some(()));
+        assert_eq!(clock.0.load(Ordering::SeqCst), 2);
+        rusqlite::Connection::open(path).unwrap().execute("DROP TABLE tokens", []).unwrap();
+        tokio::time::advance(STREAM_CHECK_INTERVAL).await;
+        assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next()).await.unwrap(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn closed_invalidation_channel_ends_stream() {
+        use futures_util::StreamExt;
+        let dir = tempfile::tempdir().unwrap();
+        let db = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let (_, secret) = db.create_token("closed", Scope::Read).unwrap();
+        let stream = guard_stream(futures_util::stream::repeat(()), db.stream_credential(&secret, true));
+        tokio::pin!(stream);
+        assert_eq!(stream.next().await, Some(()));
+        drop(db);
+        assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next()).await.unwrap(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn idle_streams_close_on_signals_and_fallback_without_renewal() {
         use futures_util::StreamExt;
         let dir = tempfile::tempdir().unwrap();
@@ -851,7 +900,7 @@ mod tests {
                 _ => clock.0.store(expiry, Ordering::SeqCst),
             }
             let started = tokio::time::Instant::now();
-            assert_eq!(next.await, None, "{mode}");
+            assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, next).await.unwrap(), None, "{mode}");
             assert!(started.elapsed() <= STREAM_CHECK_INTERVAL, "{mode}");
             if mode != "fallback" && !mode.contains("expiry") {
                 assert_eq!(started.elapsed(), Duration::ZERO, "signal for {mode}");
@@ -892,7 +941,7 @@ mod tests {
         tokio::pin!(stream);
         clock.0.store(2_000, Ordering::SeqCst);
         tokio::time::advance(STREAM_CHECK_INTERVAL).await;
-        assert_eq!(stream.next().await, None);
+        assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next()).await.unwrap(), None);
 
         let (id, expiry) = db.create_session(None).unwrap();
         let stream = guard_stream(
