@@ -9,7 +9,6 @@
 //! local vault is a copy of starts a fresh local vault ([`crate::sync_loop`], ticket 145).
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,8 +16,26 @@ use serde_json::{Value, json};
 /// The keyring service the device token is stored under.
 const KEYRING_SERVICE: &str = "thevault";
 
-/// How long pairing waits for the server.
-const PAIR_TIMEOUT: Duration = Duration::from_secs(30);
+pub const HTTP_WARNING: &str = "The home feed is not authenticated over plain HTTP. Someone on the network can read or change it. Use HTTPS when possible.";
+
+/// A startup notice, not an admission check. Existing public HTTP links still sync.
+pub struct HttpWarning(std::sync::atomic::AtomicBool);
+
+impl HttpWarning {
+    pub fn new(device: Option<&Device>) -> Self {
+        Self(std::sync::atomic::AtomicBool::new(
+            device.is_some_and(|d| d.server_url.trim().to_ascii_lowercase().starts_with("http://")),
+        ))
+    }
+
+    pub fn take(&self) -> Option<&'static str> {
+        self.0.swap(false, std::sync::atomic::Ordering::Relaxed).then_some(HTTP_WARNING)
+    }
+}
+
+// Compile the same transport and its tests for both app workspaces.
+#[path = "../../../../plugins/tauri-plugin-vault-device/src/pair_transport.rs"]
+mod transport;
 
 /// A paired device, as `device.json` records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +124,8 @@ impl TokenStore for Keyring {
 /// What the setup page sends to pair: the server and either the password or a pairing code.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PairRequest {
+    #[serde(default)]
+    pub confirm_http: bool,
     pub server_url: String,
     #[serde(default)]
     pub password: Option<String>,
@@ -157,9 +176,7 @@ pub fn pair(dir: &Path, tokens: &dyn TokenStore, req: &PairRequest) -> Result<De
         (None, Some(code)) => body["code"] = json!(code),
         _ => return Err("enter either the password or a pairing code".to_owned()),
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(PAIR_TIMEOUT)
-        .build()
+    let client = transport::client(&server_url, req.confirm_http)
         .map_err(|e| e.to_string())?;
     let res = client
         .post(format!("{server_url}/api/devices/pair"))
@@ -220,6 +237,49 @@ mod tests {
         );
         assert!(normalise_url("vault.example.net").is_err());
         assert!(normalise_url("https://").is_err());
+    }
+
+    struct NoTokens;
+    impl TokenStore for NoTokens {
+        fn get(&self, _: &str) -> Result<String, String> { panic!("no token access") }
+        fn set(&self, _: &str, _: &str) -> Result<(), String> { panic!("no token storage") }
+    }
+
+    #[test]
+    fn pairing_refuses_public_http_and_unconfirmed_private_http() {
+        let dir = tempfile::tempdir().unwrap();
+        for code in [false, true] {
+            for (url, confirmed, message) in [
+                ("http://8.8.8.8", true, "private LAN"),
+                ("http://8.8.8.8", false, "private LAN"),
+                ("http://127.0.0.1:9", false, "confirm"),
+            ] {
+                let req = PairRequest {
+                    server_url: url.into(), confirm_http: confirmed,
+                    password: (!code).then(|| "fake".into()),
+                    code: code.then(|| "fake".into()), name: Some("test".into()),
+                };
+                assert!(pair(dir.path(), &NoTokens, &req).unwrap_err().contains(message));
+                assert!(load(dir.path()).unwrap().is_none());
+            }
+        }
+        let req: PairRequest = serde_json::from_value(json!({"server_url":"http://127.0.0.1","password":"fake"})).unwrap();
+        assert!(!req.confirm_http);
+    }
+
+    #[test]
+    fn existing_http_warning_once_per_start_without_changing_link() {
+        for url in ["http://8.8.8.8", "http://127.0.0.1"] {
+            let d = Device { server_url: url.into(), device_id: "d".into(), device_name: "test".into(), vault_id: None };
+            let warning = HttpWarning::new(Some(&d));
+            assert_eq!(warning.take(), Some(HTTP_WARNING));
+            assert_eq!(warning.take(), None);
+            assert_eq!(d.remote("token".into()).url, url);
+            assert_eq!(HttpWarning::new(Some(&d)).take(), Some(HTTP_WARNING));
+        }
+        assert_eq!(HttpWarning::new(None).take(), None);
+        let d = Device { server_url: "https://example.com".into(), device_id: "d".into(), device_name: "test".into(), vault_id: None };
+        assert_eq!(HttpWarning::new(Some(&d)).take(), None);
     }
 
     #[test]

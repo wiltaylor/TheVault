@@ -80,6 +80,7 @@ const CAPTURE_FLAG: &str = "--capture";
 
 /// The app's state, managed by Tauri.
 struct App {
+    http_warning: device::HttpWarning,
     app: AppHandle,
     /// The local vault and its embedded server, which a fresh start replaces.
     local: Arc<LocalVault>,
@@ -226,6 +227,7 @@ pub fn run() {
             }
             let local = Arc::new(local);
             let paired = device::load(&dir)?;
+            let http_warning = device::HttpWarning::new(paired.as_ref());
             let start = match (&paired, &link) {
                 (None, _) => SETUP_PATH.to_owned(),
                 (Some(_), Some(link)) => link.path(),
@@ -256,6 +258,7 @@ pub fn run() {
             let live = Live::start(Arc::new(LiveShell(handle.clone())), remote_rx);
             let hotkey = Arc::new(Mutex::new(hotkey::Status::Starting));
             app.manage(App {
+                http_warning,
                 app: handle.clone(),
                 local,
                 sync,
@@ -496,6 +499,9 @@ async fn desktop(state: &App, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
             .body(SETUP_SCRIPT.as_bytes().to_vec())
             .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR)),
         (Method::GET, "/_desktop/status") => json_response(StatusCode::OK, &status_json(state)),
+        (Method::POST, "/_desktop/http-warning") => json_response(
+            StatusCode::OK, &json!({ "message": state.http_warning.take() }),
+        ),
         (Method::POST, "/_desktop/update/skip") => {
             if let Some(release) = state.updates.offered() {
                 state.change_settings(&state.app, |s| s.skipped_update = Some(release.version));

@@ -100,6 +100,7 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   $("error").textContent = "";
   const body = { server_url: $("server").value, name: $("name").value };
+  body.confirm_http = $("confirm-http").checked;
   if (mode() === "password") body.password = $("password").value;
   else body.code = $("code").value;
   $("submit").disabled = true;
