@@ -398,7 +398,9 @@ mod tests {
             .create_run_provenance(false, Some(generation))
             .unwrap();
         assert!(RunContext::recover(&database, "missing").is_err());
-        let activity = database.activity(&state::ActivityFilter::default()).unwrap();
+        let activity = database
+            .activity(&state::ActivityFilter::default())
+            .unwrap();
         assert_eq!(activity.items[0].kind, "run.recovery_unavailable");
         assert_eq!(activity.items[0].subject.as_deref(), Some("missing"));
         for id in [active.id()] {
@@ -433,7 +435,9 @@ mod tests {
         assert!(!a_db.load_run_provenance(&a_id).is_sealed());
         assert!(!b_db.load_run_provenance(&b_id).is_sealed());
         for (database, id) in [(&a_db, &a_id), (&b_db, &b_id)] {
-            let activity = database.activity(&state::ActivityFilter::default()).unwrap();
+            let activity = database
+                .activity(&state::ActivityFilter::default())
+                .unwrap();
             assert_eq!(activity.items.len(), 1);
             assert_eq!(activity.items[0].kind, "run.seal_failed");
             assert_eq!(activity.items[0].subject.as_ref(), Some(id));
