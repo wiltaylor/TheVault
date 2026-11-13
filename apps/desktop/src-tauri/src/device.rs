@@ -240,6 +240,50 @@ mod tests {
     }
 
     struct NoTokens;
+
+    #[test]
+    fn confirmed_private_pairing_stores_the_link_and_token() {
+        use std::io::{Read, Write};
+        struct Tokens(std::sync::Mutex<String>);
+        impl TokenStore for Tokens {
+            fn get(&self, _: &str) -> Result<String, String> { Ok(self.0.lock().unwrap().clone()) }
+            fn set(&self, _: &str, token: &str) -> Result<(), String> { *self.0.lock().unwrap() = token.into(); Ok(()) }
+        }
+        for code in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://localhost:{}", listener.local_addr().unwrap().port());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                let mut bytes = Vec::new();
+                let mut buf = [0; 4096];
+                loop {
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buf[..n]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]);
+                        let len: usize = headers.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length: ").map(str::to_owned)).unwrap().parse().unwrap();
+                        if bytes.len() >= end + 4 + len {
+                            let body: Value = serde_json::from_slice(&bytes[end + 4..]).unwrap();
+                            assert_eq!(body["platform"], "linux");
+                            assert_eq!(body[if code { "code" } else { "password" }], "fake");
+                            break;
+                        }
+                    }
+                }
+                let body = r#"{"device_id":"d","token":"t","vault_id":"v"}"#;
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let tokens = Tokens(std::sync::Mutex::new(String::new()));
+            let req = PairRequest { server_url: url, confirm_http: true, password: (!code).then(|| "fake".into()), code: code.then(|| "fake".into()), name: Some("test".into()) };
+            let d = pair(dir.path(), &tokens, &req).unwrap();
+            assert_eq!(load(dir.path()).unwrap(), Some(d));
+            assert_eq!(tokens.get("d").unwrap(), "t");
+            server.join().unwrap();
+        }
+    }
     impl TokenStore for NoTokens {
         fn get(&self, _: &str) -> Result<String, String> { panic!("no token access") }
         fn set(&self, _: &str, _: &str) -> Result<(), String> { panic!("no token storage") }

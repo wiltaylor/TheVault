@@ -34,6 +34,16 @@ fn http_addresses(
 /// Build the only transport used for new pairings on either platform.
 pub fn client(server_url: &str, confirmed: bool) -> anyhow::Result<reqwest::blocking::Client> {
     let parsed = reqwest::Url::parse(server_url)?;
+    client_resolving(&parsed, confirmed, |host, port| {
+        Ok((host, port).to_socket_addrs()?.collect())
+    })
+}
+
+fn client_resolving(
+    parsed: &reqwest::Url,
+    confirmed: bool,
+    resolve: impl FnOnce(&str, u16) -> anyhow::Result<Vec<SocketAddr>>,
+) -> anyhow::Result<reqwest::blocking::Client> {
     let mut builder = reqwest::blocking::Client::builder().timeout(TIMEOUT);
     if parsed.scheme() == "http" {
         // Resolve once, validate every candidate, and pin these exact addresses. Disable
@@ -42,10 +52,8 @@ pub fn client(server_url: &str, confirmed: bool) -> anyhow::Result<reqwest::bloc
             .host_str()
             .ok_or_else(|| anyhow::anyhow!("missing server host"))?;
         let host = host.trim_start_matches('[').trim_end_matches(']');
-        let addresses = (host, parsed.port_or_known_default().unwrap_or(80))
-            .to_socket_addrs()?
-            .collect();
-        let addresses = http_addresses(&parsed, confirmed, addresses)?;
+        let addresses = resolve(host, parsed.port_or_known_default().unwrap_or(80))?;
+        let addresses = http_addresses(parsed, confirmed, addresses)?;
         builder = builder
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -56,6 +64,27 @@ pub fn client(server_url: &str, confirmed: bool) -> anyhow::Result<reqwest::bloc
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn checked_dns_is_pinned_and_redirects_are_not_followed() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut bytes = [0; 4096];
+            let n = stream.read(&mut bytes).unwrap();
+            assert!(String::from_utf8_lossy(&bytes[..n]).contains("host: not-in-dns.invalid"));
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://8.8.8.8/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let url = reqwest::Url::parse(&format!("http://not-in-dns.invalid:{}", address.port())).unwrap();
+        let client = client_resolving(&url, true, |host, _| {
+            assert_eq!(host, "not-in-dns.invalid");
+            Ok(vec![address])
+        }).unwrap();
+        assert_eq!(client.get(url).send().unwrap().status(), 302);
+        server.join().unwrap();
+    }
     #[test]
     fn http_requires_private_addresses_and_confirmation() {
         let url = reqwest::Url::parse("http://localhost.example.com").unwrap();
