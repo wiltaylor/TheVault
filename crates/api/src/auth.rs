@@ -324,6 +324,8 @@ pub fn is_human_only(method: &Method, path: &str) -> bool {
         || path.starts_with("/api/ai/apply-kind/")
         || path == "/api/inbox/triage"
         || path == "/api/agent-safety/backfill"
+        || path == "/api/classifiers"
+        || path.starts_with("/api/classifiers/")
         || path.starts_with("/api/agent-safety/backfill/")
         || path.starts_with("/api/agent-safety/release/")
         || (*method == Method::GET && path == "/api/ai/usage")
