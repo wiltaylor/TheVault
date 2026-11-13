@@ -1134,7 +1134,11 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
     }
     let (status, body) = api.apply_session(&proposal);
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(api.agent_wcl("helper").as_deref(), Some(scheduled));
+    assert_eq!(
+        api.agent_wcl("helper").as_deref(),
+        proposal["after"].as_str()
+    );
+    let scheduled = api.agent_wcl("helper").unwrap();
 
     // A changed schedule waits again. An unrelated label edit with the same definitions does not.
     let rescheduled = scheduled.replace("0 2 * * *", "0 3 * * *");
@@ -1146,7 +1150,10 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
     );
     let proposal = last(&events, "agent_proposal").clone();
     assert!(find(&events, "applied").is_none(), "{events:?}");
-    assert_eq!(api.agent_wcl("helper").as_deref(), Some(scheduled));
+    assert_eq!(
+        api.agent_wcl("helper").as_deref(),
+        Some(scheduled.as_str())
+    );
     let (status, body) = api.apply(&proposal);
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let (status, body) = api.apply_session(&proposal);
@@ -1168,10 +1175,7 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
         "label = \"Renamed\"\nenabled = false",
     );
     api.put_agent("helper", &disabled);
-    let without = disabled.replace(
-        "\ntrigger nightly {\n schedule = \"0 3 * * *\"\n prompt = \"Summarise.\"\n}\n",
-        "",
-    );
+    let without = "label = \"Renamed\"\nenabled = false\n";
     let events = api.one(
         &fake,
         None,
@@ -1192,6 +1196,7 @@ fn changed_note_trigger_filter_and_action_wait_for_session_apply_and_stay_stale_
     api.anthropic(&fake, json!({"agents":false}));
     let original = "label = \"Helper\"\n\ntrigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"open\\\"\"\n prompt = \"Read.\"\n}\n";
     api.put_agent("helper", original);
+    let original = api.agent_wcl("helper").unwrap();
     for changed in [
         original.replace("status == \\\"open\\\"", "status == \\\"closed\\\""),
         original.replace("prompt = \"Read.\"", "prompt = \"Summarise.\""),
@@ -1217,11 +1222,11 @@ fn changed_note_trigger_filter_and_action_wait_for_session_apply_and_stay_stale_
         json!({"name":"helper", "wcl":original.replace("prompt = \"Read.\"", "prompt = \"New action.\"")}),
     );
     let proposal = last(&events, "agent_proposal").clone();
-    api.put_agent("helper", original);
+    api.put_agent("helper", &original);
     let (status, body) = api.apply_session(&proposal);
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "stale");
-    assert_eq!(api.agent_wcl("helper").as_deref(), Some(original));
+    assert_eq!(api.agent_wcl("helper").as_deref(), Some(original.as_str()));
 }
 
 #[test]
