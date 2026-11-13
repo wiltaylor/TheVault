@@ -448,7 +448,7 @@ pub fn run_round(
         .truncate(false)
         .write(true)
         .open(paths.dir.join("freshness.lock"))?;
-    lock.lock()?;
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
     let key = secrets
         .key
         .as_ref()
