@@ -30,6 +30,13 @@ fn setup(fake: &FakeDecisions) -> (TestServer, Client, String) {
                 )
                 .unwrap();
             }
+            for (suffix, extra) in [
+                ("D", "labels = [\"system/SENT\"]"),
+                ("E", "labels = [\"system/DRAFT\"]"),
+                ("F", "scam_probability = 0.9"),
+            ] {
+                std::fs::write(vault.join(format!("notes/email/01JB8Z4K2MQ7V3X9T5R6W8Y2Z{suffix}.wcl")), format!("title = \"Excluded fixture\"\nsent = \"2026-11-01T12:00:00Z\"\n{extra}\n")).unwrap();
+            }
         },
         &["--test-clock".as_ref(), "2026-11-13T12:00:00Z".as_ref()],
     );
@@ -138,7 +145,7 @@ fn history_session_bounds_price_and_zero_call_preview() {
             400
         );
     }
-    for price in [json!(-1), json!(null)] {
+    for price in [json!(-1), json!(null), json!(1e308)] {
         assert!(
             !post(
                 &s,
