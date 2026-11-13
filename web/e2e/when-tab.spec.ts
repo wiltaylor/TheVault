@@ -87,6 +87,12 @@ test("a conditional tab shows and hides as the field it reads is edited", async 
   // Saved as final, the tab is there when the note is opened again.
   await stage.selectOption("final");
   await expect(tablist.getByRole("tab")).toHaveText(["Main", "Notes", "Review"]);
+  // Wait for the page's own save before asking the server: the 1.5 s autosave pause and its PUT
+  // can be pushed past the poll's window while the suite's other workers keep the writer busy
+  // (the alpha.40 gate first pass saw "draft" on the server for the full 10 s with the tab already
+  // showing). The wider window is the same wait event-series gives its polls, and a failed save
+  // shows here at once instead of as a poll timeout.
+  await expect(page.getByTestId("save-status")).toHaveText("Saved", { timeout: 20_000 });
   await expect
     .poll(async () => ((await (await admin.get(`/api/notes/${id}`)).json()) as { note: { fields: { stage?: string } } }).note.fields.stage)
     .toBe("final");

@@ -167,6 +167,11 @@ test("a text capture is saved to the inbox, counted in the sidebar, and opens fr
   const item = inboxItem(page, title);
   await expect(item).toBeVisible();
   await expect(item.getByText("about the leak under the sink")).toBeVisible();
+  // The inbox page keeps polling the badge counts, and the route above answers them. One
+  // intercepted at teardown fetches against a context already closed, which fails the test
+  // ("Target page, context or browser has been closed": the alpha.39 and alpha.40 gate flakes).
+  // Take the route down and ignore whatever is still in flight, as Playwright's error suggests.
+  await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
 test("a pasted and an attached image are saved with a title from the date", async ({ page, admin }) => {
