@@ -4,8 +4,9 @@
 //! - The address rule: a host is resolved once, by the client's own DNS resolver
 //!   ([`GuardedResolver`]), and refused when any address it resolves to is on the local
 //!   network ([`is_local`]): loopback, private (RFC 1918), link-local, unique-local
-//!   (`fc00::/7`), carrier-grade NAT (`100.64.0.0/10`), multicast, unspecified, broadcast,
-//!   `0.0.0.0/8`, and the IPv4-mapped IPv6 forms of these. The resolver hands the addresses it
+//!   (`fc00::/7`), carrier-grade NAT (`100.64.0.0/10`), NAT64 (`64:ff9b::/96`), 6to4
+//!   (`2002::/16`), multicast, unspecified, broadcast, `0.0.0.0/8`, and the IPv4-mapped IPv6
+//!   forms of these. The resolver hands the addresses it
 //!   checked to the connector, which connects to them: there is no second lookup between the
 //!   check and the connection. A URL naming an IP address is never resolved, so it is checked
 //!   before the request is sent. The client uses no proxy, which would connect on its behalf.
@@ -64,6 +65,9 @@ pub fn is_local(ip: IpAddr) -> bool {
                 || (first & 0xfe00) == 0xfc00
                 || (first & 0xffc0) == 0xfe80
                 || (first & 0xffc0) == 0xfec0
+                // NAT64 64:ff9b::/96 and 6to4 2002::/16 can relay to an IPv4 local network.
+                || v6.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0]
+                || first == 0x2002
                 // The old IPv4-compatible form ::a.b.c.d.
                 || (v6.segments()[..6].iter().all(|s| *s == 0) && is_local_v4(v6_tail(v6)))
         }
@@ -611,6 +615,8 @@ mod tests {
             "64:ff9b::a00:1",
             "2002:7f00:1::",
             "2002:c0a8:101::",
+            "64:ff9b::101:101",
+            "2002:101:101::",
         ] {
             assert!(is_local(ip(local)), "{local}");
         }
