@@ -16,6 +16,7 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
             let repo = BareRepo::new();
             let b = Instance::start_seeded("B", |root| {
                 crate::instance::seed(root);
+                std::fs::write(root.join("types/person.wcl"), include_str!("../../writer/defaults/person.wcl")).unwrap();
                 std::fs::write(
                     root.join("types/event.wcl"),
                     include_str!("../../writer/defaults/event.wcl"),

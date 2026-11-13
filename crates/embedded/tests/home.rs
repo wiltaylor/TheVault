@@ -25,6 +25,39 @@ template default {
 }
 "#;
 
+#[test]
+fn calendar_device_owner_edits_reach_home() {
+    let server = TestServer::start_seeded(|root| {
+        seed(root);
+        for (name, text) in [
+            ("person", include_str!("../../writer/defaults/person.wcl")),
+            ("event", include_str!("../../writer/defaults/event.wcl")),
+            ("event_series", include_str!("../../writer/defaults/event_series.wcl")),
+        ] {
+            std::fs::write(root.join(format!("types/{name}.wcl")), text).unwrap();
+        }
+    });
+    let admin = Admin::of(&server);
+    let person = admin.call("POST", "/api/notes?type=person", Some(json!({"wcl": "title = \"Guest\"\n"})), 201);
+    let made = admin.call("POST", "/api/notes?type=event", Some(json!({"wcl": "title = \"Invitation\"\ngoogle_ref = \"synthetic\"\n"})), 201);
+    let id = made["id"].as_str().unwrap();
+    let device = Device::pair(&server, "calendar");
+    device.sync();
+    let mut text = made["wcl"].as_str().unwrap().to_owned();
+    for edit in [
+        "my_response = \"accepted\"\n".to_owned(),
+        format!("attendees = [\"{}\"]\n", person["id"].as_str().unwrap()),
+        "status = \"tentative\"\n".to_owned(),
+    ] {
+        text.push_str(&edit);
+        let local = device.embedded.writer().read(id).unwrap();
+        device.embedded.writer().update(id, &writer::Input::Wcl(text.clone()), Some(&local.version), &state::Author::Session("owner".into())).unwrap();
+        assert!(device.sync().pushed.iter().any(|pushed| pushed == id));
+        let home = admin.call("GET", &format!("/api/notes/{id}"), None, 200);
+        assert_eq!(home["wcl"], device.embedded.writer().read(id).unwrap().wcl);
+    }
+}
+
 fn seed(vault: &std::path::Path) {
     std::fs::create_dir_all(vault.join("types")).unwrap();
     std::fs::write(vault.join("types/memo.wcl"), MEMO).unwrap();
