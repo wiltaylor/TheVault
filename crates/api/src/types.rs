@@ -55,10 +55,12 @@ pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
         let schema = w.schema();
         let mut types: Vec<&TypeDef> = schema.types().collect();
         types.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok::<_, writer::Error>(types
-            .into_iter()
-            .map(|t| type_json(t, w.is_built_in(&t.name)))
-            .collect::<Vec<Value>>())
+        Ok::<_, writer::Error>(
+            types
+                .into_iter()
+                .map(|t| type_json(t, w.is_built_in(&t.name)))
+                .collect::<Vec<Value>>(),
+        )
     })
     .await?;
     Ok(Json(json!({ "types": types })))
