@@ -601,7 +601,8 @@ fn memories_are_left_out_of_the_note_tools_unless_the_agent_names_the_type() {
 fn an_unattended_run_is_offered_the_memory_tools_and_remembers_as_the_agent() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    // Every confirmation switch on: no change tool is offered, the memory tools are.
+    // Every confirmation switch on: the memory tools are offered, and of the change tools only
+    // the note proposals a trigger's thread keeps (TV-146 A1, TV-240, TV-271).
     api.agent(
         "clerk",
         "label = \"Clerk\"\n\ntrigger any {\n  on     = [\"create\"]\n  type   = \"memo\"\n  prompt = \"Note what came in.\"\n}\n",
@@ -616,7 +617,8 @@ fn an_unattended_run_is_offered_the_memory_tools_and_remembers_as_the_agent() {
     for t in ["remember", "recall", "update_memory", "forget"] {
         assert!(tools.contains(&t), "{t}: {tools:?}");
     }
-    assert!(!tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(!tools.contains(&"propose_type_change"), "{tools:?}");
 
     fake.push(AnthropicMessage::new().tool_use(
         "toolu_r",

@@ -4029,7 +4029,8 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
         format!("Tidy this memo.\nEvent: create of note {id} (type memo, title \"Roof\")")
     );
 
-    // Offered both direct changes and changes that wait for Apply.
+    // Offered the direct changes and the note changes that wait for Apply in the trigger's
+    // thread (TV-146 A1, TV-240), not the families left undecided for triggers (TV-271).
     let tools = tool_names(&fake, 0);
     for t in [
         "search_notes",
@@ -4040,9 +4041,10 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
     ] {
         assert!(tools.contains(&t.to_owned()), "{t} in {tools:?}");
     }
+    for t in ["propose_archive", "propose_delete"] {
+        assert!(tools.contains(&t.to_owned()), "{t} in {tools:?}");
+    }
     for t in [
-        "propose_archive",
-        "propose_delete",
         "propose_type_change",
         "propose_taxonomy_change",
         "propose_taxonomy_delete",
@@ -4050,7 +4052,7 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
         "propose_agent_delete",
         "download_asset",
     ] {
-        assert!(tools.contains(&t.to_owned()), "{t} in {tools:?}");
+        assert!(!tools.contains(&t.to_owned()), "{t} not in {tools:?}");
     }
 
     // The edit was made at once, by the agent, and fired nothing more.
@@ -4115,9 +4117,11 @@ fn a_change_tool_whose_switch_is_on_is_offered_as_a_trigger_proposal() {
     api.advance("PT31S");
     let offered = tool_names(&fake, 0);
     assert_eq!(offered, tools, "the run is offered what the route says");
-    // Like mention and dispatch, the trigger retains proposals rather than withholding tools.
+    // The trigger keeps note proposals, and says which other changes it holds back (TV-271).
     let system = fake.message_requests()[0].json()["system"].to_string();
-    assert!(!system.contains("This run is unattended"), "{system}");
+    assert!(system.contains("This run is unattended"), "{system}");
+    assert!(!system.contains("create or edit notes"), "{system}");
+    assert!(system.contains("change or delete types"), "{system}");
 }
 
 #[test]
@@ -4138,7 +4142,7 @@ fn a_trigger_run_is_sent_no_ask_user_and_no_section_about_it() {
     assert!(tools.contains(&"get_note".to_owned()), "{tools:?}");
     assert!(!tools.contains(&"ask_user".to_owned()), "{tools:?}");
     let system = fake.message_requests()[0].json()["system"].to_string();
-    assert!(!system.contains("This run is unattended"), "{system}");
+    assert!(system.contains("This run is unattended"), "{system}");
     assert!(!system.contains("Asking the user"), "{system}");
 }
 
@@ -4221,7 +4225,7 @@ const HELPER_GRANT: &str =
 const BOSS: &str = "label = \"Boss\"\n\npermissions {\n  confirm {\n    agents = false\n  }\n\n  scripts {\n    run_saved = true\n  }\n}\n\ntrigger opened {\n  on     = [\"create\"]\n  type   = \"memo\"\n  prompt = \"Look after the memo.\"\n}\n";
 
 #[test]
-fn a_trigger_run_and_a_chat_propose_a_grant_that_requires_apply() {
+fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent("helper", HELPER);
@@ -4241,15 +4245,23 @@ fn a_trigger_run_and_a_chat_propose_a_grant_that_requires_apply() {
         "{:?}",
         tool_names(&fake, 0)
     );
-    // The grant waits for session Apply, never becoming a direct mutation.
+    // The model is told the change was refused, not that it waits (TV-84): agent changes are
+    // not among the proposals a trigger's thread keeps (TV-271).
     let r = fake.message_requests()[1].json();
     let result = r["messages"].as_array().unwrap().last().unwrap()["content"][0].clone();
-    assert_ne!(result["is_error"], true, "{result}");
-    // The proposal waits in the thread, and the helper is unchanged.
+    assert_eq!(result["is_error"], true, "{result}");
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("the change was not proposed"),
+        "{result}"
+    );
+    // Nothing waits in the thread, and the helper is unchanged.
     let threads = api.get("/api/agents/boss/threads");
     let threads = threads["threads"].as_array().unwrap();
     assert_eq!(threads.len(), 1, "{threads:?}");
-    assert_eq!(threads[0]["pending"], 1, "{threads:?}");
+    assert_eq!(threads[0]["pending"], 0, "{threads:?}");
     let runs = api.runs("boss");
     assert_eq!(
         runs["triggers"][0]["runs"][0]["outcome"], "succeeded",
