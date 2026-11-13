@@ -1207,7 +1207,7 @@ fn reconcile_delete(note: Value) -> Result[(), string] { Err("injected delete fa
         let send = RunContext::default();
         send.restrict();
         let delete = RunContext::default();
-        for (context, kind, action) in [(&send, "email", "create"), (&delete, "event", "delete")] {
+        for (context, kind, action) in [(&send, "email", "update"), (&delete, "event", "delete")] {
             context.scope(|| {
                 writer.create("outbox", &Input::Json(json!({"fields": {
                 "title":"Recover", "kind":kind, "status":"sending", "event_action":action,
