@@ -2,6 +2,7 @@
 //! `cargo test -p gitsync --test main <module>::`.
 
 mod context;
+mod freshness;
 mod crypto;
 mod git_env;
 mod git_file;

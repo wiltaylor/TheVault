@@ -561,15 +561,6 @@ impl Round<'_> {
             ));
         }
 
-        let tree_hash = self.git.tree_of(&format!("refs/remotes/origin/{name}"))
-            .map_err(Skip::new)?.ok_or_else(|| Skip::new("missing peer tree"))?;
-        // Hash the full tree identity, including definitions and asset ciphertexts.
-        let fingerprint = pack::sha256_hex(tree_hash.as_bytes());
-        if let Err(e) = crate::freshness::receive(self.w.state(), &peer, manifest.sequence, &fingerprint) {
-            self.report.warnings.push(format!("peer freshness check failed: {e}"));
-            return Err(named(e.to_string()));
-        }
-
         let mut open_defs = |defs: &[DefEntry],
                              taxonomy: bool|
          -> std::result::Result<BTreeMap<String, String>, Skip> {
@@ -714,6 +705,13 @@ impl Round<'_> {
                     ));
                 }
             }
+        }
+        let tree_hash = self.git.tree_of(&format!("refs/remotes/origin/{name}"))
+            .map_err(Skip::new)?.ok_or_else(|| Skip::new("missing peer tree"))?;
+        let fingerprint = pack::sha256_hex(tree_hash.as_bytes());
+        if let Err(e) = crate::freshness::receive(self.w.state(), &peer, manifest.sequence, &fingerprint) {
+            self.report.warnings.push(format!("peer freshness check failed: {e}"));
+            return Err(named(e.to_string()));
         }
         Ok(Branch {
             peer,

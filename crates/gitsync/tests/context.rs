@@ -96,6 +96,8 @@ fn retry_assets(count: usize, repair: bool) {
         }
     }
     if repair {
+        manifest.sequence += 1;
+        files.insert(layout.manifest(), manifest.seal(&key));
         publish(&files);
     }
     for _ in 0..2 {
@@ -121,6 +123,8 @@ fn retry_assets(count: usize, repair: bool) {
         // Corrupt the remote part again. A locally present asset must not be fetched/opened.
         let path = &manifest.assets[0].parts[0];
         files.insert(path.clone(), key.seal("wrong context", bytes));
+        manifest.sequence += 1;
+        files.insert(layout.manifest(), manifest.seal(&key));
         publish(&files);
         let present = receiver.sync();
         assert!(

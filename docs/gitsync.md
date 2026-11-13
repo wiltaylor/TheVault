@@ -1,5 +1,20 @@
 # Git sync between instances
 
+Each publisher stores a monotonic sequence in its authenticated manifest. Receivers keep
+an encrypted, durable per-peer high-water checkpoint in state.db, separate from merge bases.
+Lower sequences and equal sequences with different tree content are refused with a round
+warning before import or archive. Identical retries remain allowed. Rounds hold a vault-local
+file lock through publication, and reserve a sequence durably before pushing. Failed pushes
+can leave harmless gaps. Unchanged publication keeps its sequence and avoids another push.
+
+Upgrade every syncing vault together. Format-2 manifests without a positive sequence are
+refused with upgrade guidance, never accepted through a legacy fallback. Retained local
+vaults republish with sequences on their next round. No remote history migration or deletion
+is needed. The first sequenced contact is trust on first use, not proof of freshness before
+that contact. A new device without checkpoints or a restored/rolled-back state.db cannot
+detect older snapshots it has never recorded. Checkpoints survive disconnect. Do not delete
+them to silence a warning. Corrupt checkpoints fail closed and require owner investigation.
+
 Agent thread transcripts stay on their home server. Git sync neither exports them nor imports
 them from peer branches, including older branches that already contain transcripts. Removing
 an old exported copy leaves the local thread intact. Device sync still mirrors server threads.
