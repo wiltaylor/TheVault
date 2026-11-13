@@ -13,26 +13,51 @@ fn compression_gain_on_synthetic_vaults() {
         let path = dir.path().join(".vault/state.db");
         let state = state::State::open(&path, None).unwrap();
         for _ in 0..32 {
-            state.record_distinct_version("mail", "email", &state::Author::Token("fixture".into()), &text).unwrap();
+            state
+                .record_distinct_version(
+                    "mail",
+                    "email",
+                    &state::Author::Token("fixture".into()),
+                    &text,
+                )
+                .unwrap();
         }
         if legacy {
             // Seed a separate synthetic old-format fixture. Never rewrite user history.
             let conn = rusqlite::Connection::open(&path).unwrap();
-            conn.execute("UPDATE versions SET content=?1, content_bytes=NULL", [&text]).unwrap();
+            conn.execute(
+                "UPDATE versions SET content=?1, content_bytes=NULL",
+                [&text],
+            )
+            .unwrap();
         }
         drop(state);
         let out = Command::new(env!("CARGO_BIN_EXE_vault"))
-            .arg("--vault").arg(dir.path()).arg("state-size").output().unwrap();
+            .arg("--vault")
+            .arg(dir.path())
+            .arg("state-size")
+            .output()
+            .unwrap();
         assert!(out.status.success());
         let report: Value = serde_json::from_slice(&out.stdout).unwrap();
         println!("{}: {}", if legacy { "before" } else { "after" }, report);
         reports.push(report);
     }
-    assert_eq!(reports[0]["history"][0]["content_bytes"], reports[1]["history"][0]["content_bytes"]);
-    let before = reports[0]["history"][0]["stored_content_bytes"].as_u64().unwrap();
-    let after = reports[1]["history"][0]["stored_content_bytes"].as_u64().unwrap();
+    assert_eq!(
+        reports[0]["history"][0]["content_bytes"],
+        reports[1]["history"][0]["content_bytes"]
+    );
+    let before = reports[0]["history"][0]["stored_content_bytes"]
+        .as_u64()
+        .unwrap();
+    let after = reports[1]["history"][0]["stored_content_bytes"]
+        .as_u64()
+        .unwrap();
     assert!(after < before / 10);
-    assert!(reports[1]["database_file_bytes"].as_u64().unwrap() < reports[0]["database_file_bytes"].as_u64().unwrap());
+    assert!(
+        reports[1]["database_file_bytes"].as_u64().unwrap()
+            < reports[0]["database_file_bytes"].as_u64().unwrap()
+    );
 }
 
 #[test]

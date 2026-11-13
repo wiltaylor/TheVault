@@ -319,8 +319,10 @@ impl State {
             [note_id],
             |r| r.get(0),
         )?;
-        let mut calls_stmt = conn.prepare("SELECT call FROM agent_call_ids WHERE note=?1 AND used=0")?;
-        let calls = calls_stmt.query_map([note_id], |r| r.get::<_, String>(0))?
+        let mut calls_stmt =
+            conn.prepare("SELECT call FROM agent_call_ids WHERE note=?1 AND used=0")?;
+        let calls = calls_stmt
+            .query_map([note_id], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {VERSION_COLUMNS} FROM versions WHERE note_id = ?1 AND (
