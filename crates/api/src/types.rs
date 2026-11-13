@@ -48,15 +48,20 @@ fn type_response(headers: &HeaderMap, name: &str, wcl: String) -> Response {
 }
 
 /// `GET /api/types`: every type, by name, with its fields and templates.
-pub async fn list(State(w): Shared) -> Json<Value> {
-    let schema = w.schema();
-    let mut types: Vec<&TypeDef> = schema.types().collect();
-    types.sort_by(|a, b| a.name.cmp(&b.name));
-    let types: Vec<Value> = types
-        .into_iter()
-        .map(|t| type_json(t, w.is_built_in(&t.name)))
-        .collect();
-    Json(json!({ "types": types }))
+pub async fn list(State(w): Shared) -> Result<Json<Value>, ApiError> {
+    // Both schema() and is_built_in() take the writer's synchronous mutex. A live definition
+    // refresh must not block a runtime thread behind another client's write or query.
+    let types = blocking(w, |w| {
+        let schema = w.schema();
+        let mut types: Vec<&TypeDef> = schema.types().collect();
+        types.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok::<_, writer::Error>(types
+            .into_iter()
+            .map(|t| type_json(t, w.is_built_in(&t.name)))
+            .collect::<Vec<Value>>())
+    })
+    .await?;
+    Ok(Json(json!({ "types": types })))
 }
 
 pub(crate) fn type_json(t: &TypeDef, builtin: bool) -> Value {
@@ -328,6 +333,42 @@ fn missing_type(mut e: ApiError) -> ApiError {
         e.status = StatusCode::NOT_FOUND;
     }
     e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::{Future, poll_fn};
+    use std::task::Poll;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn listing_types_yields_while_the_writer_is_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Arc::new(Writer::open(vault, state).unwrap());
+        let (locked, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let held = w.clone();
+        let holder = std::thread::spawn(move || {
+            held.read_index(|_, _| {
+                locked.send(()).unwrap();
+                // Failure guard only: no delay on the passing path. A synchronous handler
+                // would hold the only runtime thread here and never reach release.send().
+                wait.recv_timeout(Duration::from_secs(5))
+            })
+        });
+        ready.await.unwrap();
+        let mut response = std::pin::pin!(list(State(w)));
+        let yielded = poll_fn(|cx| Poll::Ready(response.as_mut().poll(cx).is_pending())).await;
+        release.send(()).ok();
+        let released = holder.join().unwrap();
+        assert!(yielded, "GET /api/types blocked the runtime thread");
+        released.unwrap();
+        let Json(body) = response.await.unwrap();
+        assert!(body["types"].is_array());
+    }
 }
 
 /// A plan as JSON. Its `plan` member is the token that applies it.
