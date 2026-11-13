@@ -30,8 +30,7 @@ pub async fn serve(root: Arc<PathBuf>, req: Request) -> Response {
     };
     match tokio::task::spawn_blocking(move || read(&root, &rel)).await {
         Ok(Some((name, bytes))) => {
-            let site_https = crate::auth::site_https();
-            file_response(&name, bytes, method == Method::HEAD, site_https)
+            file_response(&name, bytes, method == Method::HEAD)
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -88,7 +87,20 @@ fn content_type(name: &str) -> &'static str {
 
 const SHELL_CSP: &str = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self' https:; worker-src 'self'; manifest-src 'self'; form-action 'self'";
 
-fn file_response(name: &str, bytes: Vec<u8>, head: bool, site_https: bool) -> Response {
+/// Host-wide HSTS, controlled only by the explicit site setting, never request headers.
+/// Install outside the complete router so errors and streaming responses are covered too.
+pub async fn hsts(req: Request, next: axum::middleware::Next) -> Response {
+    let mut response = next.run(req).await;
+    if crate::auth::site_https() {
+        response.headers_mut().insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        );
+    }
+    response
+}
+
+fn file_response(name: &str, bytes: Vec<u8>, head: bool) -> Response {
     // Vite puts content-hashed files under assets/; everything else may change in place.
     let cache = if name.starts_with("assets/") {
         "public, max-age=31536000, immutable"
@@ -112,12 +124,6 @@ fn file_response(name: &str, bytes: Vec<u8>, head: bool, site_https: bool) -> Re
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(SHELL_CSP),
     );
-    if site_https {
-        h.insert(
-            header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static("max-age=31536000"),
-        );
-    }
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.insert(
         header::REFERRER_POLICY,
@@ -133,18 +139,11 @@ mod tests {
 
     #[test]
     fn shell_has_security_headers() {
-        let res = file_response("index.html", vec![], false, true);
+        let res = file_response("index.html", vec![], false);
         let h = res.headers();
         assert!(h.contains_key(header::CONTENT_SECURITY_POLICY));
-        assert_eq!(h[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
         assert_eq!(h[header::X_FRAME_OPTIONS], "DENY");
         assert_eq!(h[header::REFERRER_POLICY], "no-referrer");
-        let plain = file_response("index.html", vec![], false, false);
-        assert!(
-            !plain
-                .headers()
-                .contains_key(header::STRICT_TRANSPORT_SECURITY)
-        );
     }
 
     #[test]
