@@ -21,6 +21,7 @@ services:
     environment:
       # Only read when /data holds no vault yet: the first start creates one with this password.
       VAULT_PASSWORD: ${VAULT_PASSWORD:-}
+      VAULT_SITE_HTTPS: ${VAULT_SITE_HTTPS:-0}
       TZ: ${TZ:-UTC}
       # The browser box's exec service, set only when .env has BROWSER_TOKEN (browser profile).
       VAULT_BROWSER_URL: ${BROWSER_TOKEN:+http://browser:7700}
