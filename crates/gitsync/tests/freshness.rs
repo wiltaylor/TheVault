@@ -67,6 +67,11 @@ fn refused(report: &serde_json::Value, reason: &str) {
         skipped[0]["reason"].as_str().unwrap().contains(reason),
         "{report}"
     );
+    if reason.contains("sequence") || reason.contains("checkpoint") {
+        assert!(report["warnings"].as_array().unwrap().iter().any(|w| {
+            w.as_str().is_some_and(|w| w.contains(reason))
+        }), "{report}");
+    }
     for field in ["created", "updated", "merged", "archived", "unarchived"] {
         assert!(
             report[field].as_array().unwrap().is_empty(),
@@ -192,4 +197,41 @@ fn older_valid_definition_is_refused_and_unreferenced_junk_does_not_pin_checkpoi
     );
     push(&git, &key, peer, &legacy);
     refused(&receiver.sync(), "upgrade every peer and republish");
+}
+
+#[test]
+fn publisher_seeds_from_authenticated_own_remote_counter_after_local_rollback() {
+    let repo = BareRepo::new();
+    let publisher = Instance::start("publisher");
+    let key = SyncKey::parse(&publisher.generate_key()).unwrap();
+    publisher.configure(&repo.url(), "from *", "", json!({}));
+    publisher.create("title = \"local retained data\"\n");
+    publisher.sync();
+    let info = publisher.get("/api/sync/info");
+    let peer = info["vault_id"].as_str().unwrap();
+    let layout = Layout::new(&key, peer);
+    let temp = tempfile::tempdir().unwrap();
+    let git = Git::new(temp.path().join("repo"), Auth::None).unwrap();
+    git.ensure_bare_clone(&repo.url()).unwrap();
+    // A remote ahead of local state models a restored database or a stopped copy.
+    // Also omit definition hashes to prove the upgrade can republish its own old branch.
+    let mut files = fixture(&key, peer, 50, "old publisher");
+    let mut manifest: serde_json::Value = serde_json::from_slice(
+        &key.open(&layout.manifest(), &files[&layout.manifest()]).unwrap()
+    ).unwrap();
+    manifest["types"][0].as_object_mut().unwrap().remove("sha256");
+    files.insert(layout.manifest(), key.seal(&layout.manifest(), &serde_json::to_vec(&manifest).unwrap()));
+    push(&git, &key, peer, &files);
+    publisher.sync();
+    git.fetch_instance_branches().unwrap();
+    let read = || {
+        let entries = git.read_tree(&format!("refs/remotes/origin/{}", layout.branch())).unwrap();
+        let entry = entries.iter().find(|e| e.path == layout.manifest()).unwrap();
+        Manifest::open(&key, &layout, &git.cat_blob(&entry.oid).unwrap()).unwrap()
+    };
+    assert_eq!(read().sequence, 51);
+    let report = publisher.sync();
+    assert_eq!(report["pushed"], false, "{report}");
+    git.fetch_instance_branches().unwrap();
+    assert_eq!(read().sequence, 51);
 }
