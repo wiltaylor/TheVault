@@ -2,6 +2,7 @@
 use super::*;
 
 pub(crate) async fn call(
+    context: &script::RunContext,
     b: &BrowserBox,
     state: &state::State,
     agent: &schema::Agent,
@@ -11,15 +12,15 @@ pub(crate) async fn call(
     write: bool,
 ) -> BrowserOut {
     if !write {
-        return outcome(state, agent, input, "", "insufficient_scope");
+        return outcome(context, state, agent, input, "", "insufficient_scope");
     }
     if !agent.permissions.confirm.secrets {
-        return authorized(b, state, agent, input).await;
+        return authorized(context, b, state, agent, input).await;
     }
     if unattended {
-        return outcome(state, agent, input, "", "confirmation_required");
+        return outcome(context, state, agent, input, "", "confirmation_required");
     }
-    match proposal(b, state, agent, call_id, input).await {
+    match proposal(context, b, state, agent, call_id, input).await {
         Ok(p) => {
             let mut out = BrowserOut::done(
                 json!({"proposed":true,"status":"confirmation_required"}).to_string(),
@@ -28,11 +29,12 @@ pub(crate) async fn call(
             out.event = Some(("proposal", p));
             out
         }
-        Err(reason) => outcome(state, agent, input, "", reason),
+        Err(reason) => outcome(context, state, agent, input, "", reason),
     }
 }
 
 async fn proposal(
+    context: &script::RunContext,
     b: &BrowserBox,
     state: &state::State,
     agent: &schema::Agent,
@@ -42,8 +44,7 @@ async fn proposal(
     let name = input["secret"].as_str().ok_or("invalid_request")?;
     if !agent.permissions.browser
         || !agent.permissions.browser_secrets.iter().any(|s| s == name)
-        || !state
-            .browser_secret_active(&agent.name, name)
+        || !context.scope(|| state.browser_secret_active(&agent.name, name))
             .map_err(|_| "secret_unavailable")?
     {
         return Err("secret_not_allowed");
@@ -73,8 +74,7 @@ async fn proposal(
     .await?;
     let origin = state::canonical_origin(page["origin"].as_str().ok_or("invalid_origin")?)
         .ok_or("invalid_origin")?;
-    let login = state
-        .get_login_secret(name)
+    let login = context.scope(|| state.get_login_secret(name))
         .map_err(|_| "secret_unavailable")?
         .ok_or("unknown_secret")?;
     if !login.origins.is_empty() && !login.origins.contains(&origin) {
@@ -82,7 +82,7 @@ async fn proposal(
     }
     let p = json!({"id":call_id,"agent":agent.name,"op":"browser_secret","secret":name,"field":field,"target":target,"session":session,"origin":origin,"browser_profile":b.profile,"unrestricted_origin":login.origins.is_empty()});
     let redactor =
-        crate::browser_redaction::Redactor::load(state).map_err(|_| "secret_unavailable")?;
+        context.scope(|| crate::browser_redaction::Redactor::load(state)).map_err(|_| "secret_unavailable")?;
     // Do not publish a credential even when it coincides with request metadata. Do not
     // silently change the selector/origin the owner is being asked to authorize either.
     if p.as_object()
@@ -111,7 +111,10 @@ pub(crate) fn apply(w: &Writer, author: &Author, p: &Value) -> Result<Value, App
     }
     let handle = tokio::runtime::Handle::try_current()
         .map_err(|_| ApplyError::Refused("browser_unavailable".into()))?;
-    let out = handle.block_on(authorized(&b, w.state(), &agent, p));
+    // Preserve the synchronous Apply caller. Absence is today's HTTP behavior,
+    // not reconstructed proposing-run provenance (TV-245).
+    let context = script::RunContext::current().unwrap_or_default();
+    let out = handle.block_on(authorized(&context, &b, w.state(), &agent, p));
     if let Some(trail) = out.trail {
         eprintln!("{trail}");
     }
@@ -127,6 +130,7 @@ pub(crate) fn apply(w: &Writer, author: &Author, p: &Value) -> Result<Value, App
 }
 
 fn outcome(
+    context: &script::RunContext,
     state: &state::State,
     agent: &schema::Agent,
     input: &Value,
@@ -142,7 +146,7 @@ fn outcome(
         "field": input["field"].as_str().unwrap_or(""), "origin":origin,
         "result": if status == "filled" { "allowed" } else { "refused" }});
     // Redact decoded strings before JSON escaping. Even metadata can equal a credential.
-    let safe = match crate::browser_redaction::Redactor::load(state) {
+    let safe = match context.scope(|| crate::browser_redaction::Redactor::load(state)) {
         Ok(r) => {
             let mut audit = audit;
             for value in audit.as_object_mut().expect("object").values_mut() {
@@ -157,16 +161,17 @@ fn outcome(
 }
 
 pub(crate) async fn authorized(
+    context: &script::RunContext,
     b: &BrowserBox,
     state: &state::State,
     agent: &schema::Agent,
     input: &Value,
 ) -> BrowserOut {
     let mut origin = String::new();
-    let status = fill(b, state, agent, input, &mut origin)
+    let status = fill(context, b, state, agent, input, &mut origin)
         .await
         .unwrap_or_else(|reason| reason);
-    outcome(state, agent, input, &origin, status)
+    outcome(context, state, agent, input, &origin, status)
 }
 
 async fn request(b: &BrowserBox, path: &str, body: Value) -> Result<Value, &'static str> {
@@ -192,6 +197,7 @@ async fn request(b: &BrowserBox, path: &str, body: Value) -> Result<Value, &'sta
 }
 
 async fn fill(
+    context: &script::RunContext,
     b: &BrowserBox,
     state: &state::State,
     agent: &schema::Agent,
@@ -219,14 +225,12 @@ async fn fill(
     if !agent.permissions.browser || !agent.permissions.browser_secrets.iter().any(|s| s == name) {
         return Err("secret_not_allowed");
     }
-    if !state
-        .is_login_secret(name)
+    if !context.scope(|| state.is_login_secret(name))
         .map_err(|_| "secret_unavailable")?
     {
         return Err("unknown_secret");
     }
-    if !state
-        .browser_secret_active(&agent.name, name)
+    if !context.scope(|| state.browser_secret_active(&agent.name, name))
         .map_err(|_| "secret_unavailable")?
     {
         return Err("secret_not_allowed");
@@ -242,16 +246,14 @@ async fn fill(
     if input.get("origin").is_some() && input["origin"].as_str() != Some(origin.as_str()) {
         return Err("origin_changed");
     }
-    let login = state
-        .get_login_secret(name)
+    let login = context.scope(|| state.get_login_secret(name))
         .map_err(|_| "secret_unavailable")?
         .ok_or("unknown_secret")?;
     if !login.origins.is_empty() && !login.origins.iter().any(|allowed| allowed == origin) {
         return Err("origin_mismatch");
     }
     // Recheck after the network await: deletion/recreation or revocation invalidates the grant.
-    if !state
-        .browser_secret_active(&agent.name, name)
+    if !context.scope(|| state.browser_secret_active(&agent.name, name))
         .map_err(|_| "secret_unavailable")?
     {
         return Err("secret_not_allowed");
@@ -299,6 +301,8 @@ mod tests {
             Some(state::SecretKey::generate()),
         )
         .unwrap();
+        let context = script::RunContext::default();
+        context.restrict();
         let password = "fabricated-TV162-password-only";
         state
             .set_login_secret(
@@ -350,7 +354,7 @@ mod tests {
         });
         let input =
             json!({"secret":"login","field":"password","target":"#password","session":"default"});
-        let out = authorized(&b, &state, &agent, &input).await;
+        let out = authorized(&context, &b, &state, &agent, &input).await;
         assert_eq!(out.content, "filled");
         assert!(!out.is_error);
         assert_eq!(bodies.lock().unwrap().len(), 1);
@@ -365,35 +369,35 @@ mod tests {
         }
         assert_eq!(out.trail.as_ref().unwrap().lines().count(), 1);
 
-        let held = call(&b, &state, &agent, "held", &input, false, true).await;
+        let held = call(&context, &b, &state, &agent, "held", &input, false, true).await;
         assert!(!held.is_error);
         let proposal = held.event.unwrap().1;
         assert!(!proposal.to_string().contains(password));
-        let refused = call(&b, &state, &agent, "mention", &input, true, true).await;
+        let refused = call(&context, &b, &state, &agent, "mention", &input, true, true).await;
         assert!(refused.content.contains("confirmation_required"));
         let mut off = agent.clone();
         off.permissions.confirm.secrets = false;
-        let capped = call(&b, &state, &off, "mention", &input, true, false).await;
+        let capped = call(&context, &b, &state, &off, "mention", &input, true, false).await;
         assert!(capped.content.contains("insufficient_scope"));
         assert_eq!(bodies.lock().unwrap().len(), 1);
         let mut moved = proposal;
         moved["origin"] = json!("https://old.example");
         assert!(
-            authorized(&b, &state, &agent, &moved)
+            authorized(&context, &b, &state, &agent, &moved)
                 .await
                 .content
                 .contains("origin_changed")
         );
         let mut unsafe_input = input.clone();
         unsafe_input["target"] = json!(format!("#{password}"));
-        let unsafe_out = call(&b, &state, &agent, "unsafe", &unsafe_input, false, true).await;
+        let unsafe_out = call(&context, &b, &state, &agent, "unsafe", &unsafe_input, false, true).await;
         assert!(unsafe_out.event.is_none());
         assert!(unsafe_out.content.contains("unsafe_metadata"));
         assert!(!unsafe_out.trail.unwrap().contains(password));
 
         let mut denied = agent.clone();
         denied.permissions.browser_secrets.clear();
-        assert!(authorized(&b, &state, &denied, &input).await.is_error);
+        assert!(authorized(&context, &b, &state, &denied, &input).await.is_error);
         let missing = json!({"secret":"missing", "field":"password", "target":"#password", "session":"default"});
         let mut named_missing = agent.clone();
         named_missing
@@ -401,7 +405,7 @@ mod tests {
             .browser_secrets
             .push("missing".into());
         assert!(
-            authorized(&b, &state, &named_missing, &missing)
+            authorized(&context, &b, &state, &named_missing, &missing)
                 .await
                 .content
                 .contains("unknown_secret")
@@ -418,7 +422,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            authorized(&b, &state, &agent, &input)
+            authorized(&context, &b, &state, &agent, &input)
                 .await
                 .content
                 .contains("origin_mismatch")
@@ -440,7 +444,7 @@ mod tests {
         let mut username = input.clone();
         username["field"] = json!("username");
         assert_eq!(
-            authorized(&b, &state, &agent, &username).await.content,
+            authorized(&context, &b, &state, &agent, &username).await.content,
             "filled"
         );
         assert_eq!(bodies.lock().unwrap()[1]["value"], "fabricated-user");
@@ -450,7 +454,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let answer = authorized(&b, &state, &agent, &otp).await;
+        let answer = authorized(&context, &b, &state, &agent, &otp).await;
         assert_eq!(answer.content, "filled");
         let code = bodies.lock().unwrap()[2]["value"]
             .as_str()
@@ -464,10 +468,10 @@ mod tests {
         assert!(!answer.summary.to_string().contains(&code));
         assert!(!answer.trail.unwrap().contains(&code));
         let locked = state::State::open(&dir.path().join("state.db"), None).unwrap();
-        assert!(authorized(&b, &locked, &agent, &input).await.is_error);
+        assert!(authorized(&context, &b, &locked, &agent, &input).await.is_error);
         state.revoke_browser_secrets("tester").unwrap();
         assert!(
-            authorized(&b, &state, &agent, &input)
+            authorized(&context, &b, &state, &agent, &input)
                 .await
                 .content
                 .contains("secret_not_allowed")
