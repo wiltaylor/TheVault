@@ -715,6 +715,7 @@ fn the_status_reports_the_account_settings_and_each_sides_last_run_error_and_pau
         status["settings"],
         json!({
             "gmail_mode": "all",
+            "gmail_remote_images": false,
             "gmail_labels": [],
             "gmail_window_days": 90,
             "gmail_backfill_to": null,
@@ -772,6 +773,7 @@ fn put_settings_validates_and_saves_keeping_the_endpoints() {
     let out = expect(api.put_settings(good.clone()), StatusCode::OK);
     let saved = json!({
         "gmail_mode": "labels",
+        "gmail_remote_images": false,
         "gmail_labels": ["Work", "INBOX"],
         "gmail_window_days": 30,
         "gmail_backfill_to": "2025-01-31",
@@ -782,6 +784,24 @@ fn put_settings_validates_and_saves_keeping_the_endpoints() {
     let mut stored = saved.clone();
     stored["endpoints"] = api.google.endpoints();
     assert_eq!(api.server.secret_json("google_settings"), stored);
+    let mut consent = good.clone();
+    consent["gmail_remote_images"] = json!(true);
+    expect(api.put_settings(consent.clone()), StatusCode::FORBIDDEN);
+    let login = Client::new()
+        .post(api.server.url("/api/login"))
+        .json(&json!({ "password": testkit::PASSWORD }))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+    let out = expect(Client::new()
+        .put(api.server.url("/api/integrations/google/settings"))
+        .header("cookie", cookie)
+        .json(&consent)
+        .send().unwrap(), StatusCode::OK);
+    assert_eq!(out["settings"]["gmail_remote_images"], true);
+    // Old clients cannot silently clear an owner's consent.
+    expect(api.put_settings(good.clone()), StatusCode::OK);
+    assert_eq!(api.status()["settings"]["gmail_remote_images"], true);
 
     // An empty back-fill date is none, and an empty default calendar is the first listed.
     let mut cleared = good.clone();

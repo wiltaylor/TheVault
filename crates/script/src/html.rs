@@ -178,7 +178,7 @@ impl HostOptions {
             Some("download" | "inline") => true,
             Some(other) => {
                 return Err(format!(
-                    "images is {other:?}: it must be \"download\" or \"link\""
+                    "images is {other:?}: it must be \"download\", \"inline\" or \"link\""
                 ));
             }
         };

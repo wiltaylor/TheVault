@@ -574,7 +574,11 @@ pub async fn put_settings(
     Json(b): Json<SettingsBody>,
 ) -> Result<Json<Value>, ApiError> {
     if b.gmail_remote_images.is_some() && !matches!(author, state::Author::Session(_)) {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "session_required", "Mail image consent requires an owner session"));
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "session_required",
+            "Mail image consent requires an owner session",
+        ));
     }
     if !matches!(b.gmail_mode.as_str(), "labels" | "all") {
         return Err(ApiError::bad_request(format!(
