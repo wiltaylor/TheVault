@@ -27,8 +27,8 @@ mod history;
 mod jobs;
 mod notifications;
 mod pins;
-mod runs;
 mod run_provenance;
+mod runs;
 mod script_secrets;
 mod secrets;
 pub use script_secrets::{internal_script_secret, proposed_secrets_refused};
@@ -71,8 +71,8 @@ pub use notifications::{
     READ_RETENTION_MS, SourceLimit, SourceMatch, is_app_path,
 };
 pub use pins::{PinEntry, PinKind, PinNode};
-pub use runs::{RunId, RunOutcome, TaskRun};
 pub use run_provenance::RunProvenance;
+pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{LoginInfo, LoginSecret, SecretInfo, SecretKey, canonical_origin, key_file_path};
 pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck};
 pub use shipped::ShippedRecord;

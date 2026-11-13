@@ -26,7 +26,10 @@ fn restart_preserves_restriction_and_original_admission() {
     let restored = s.load_run_provenance(restricted.id());
     assert!(restored.is_restricted());
     assert_eq!(restored.stop_generation(), Some(old));
-    drop(s.automation_commit(restored.stop_generation().unwrap()).unwrap());
+    drop(
+        s.automation_commit(restored.stop_generation().unwrap())
+            .unwrap(),
+    );
     let clean = s.load_run_provenance(clean.id());
     assert!(!clean.is_restricted());
     assert_eq!(clean.stop_generation(), None);
@@ -36,7 +39,10 @@ fn restart_preserves_restriction_and_original_admission() {
     let s = open(&path);
     let restored = s.load_run_provenance(restricted.id());
     assert_eq!(restored.stop_generation(), Some(old));
-    assert!(s.automation_commit(restored.stop_generation().unwrap()).is_err());
+    assert!(
+        s.automation_commit(restored.stop_generation().unwrap())
+            .is_err()
+    );
     drop(s.automation_commit(s.admit_automation().unwrap()).unwrap());
 }
 
@@ -158,7 +164,8 @@ fn migration_from_30_preserves_existing_data_and_does_not_invent_provenance() {
     let job = s.enqueue_trigger("agent", "event", None, "{}", 0).unwrap();
     drop(s);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE run_provenance; PRAGMA user_version=30;").unwrap();
+    conn.execute_batch("DROP TABLE run_provenance; PRAGMA user_version=30;")
+        .unwrap();
     drop(conn);
     let s = open(&path);
     assert_eq!(s.meta("existing").unwrap().as_deref(), Some("preserved"));
@@ -167,8 +174,12 @@ fn migration_from_30_preserves_existing_data_and_does_not_invent_provenance() {
     assert_eq!(s.due_trigger_jobs(1234).unwrap()[0].id, job.unwrap());
     assert!(s.load_run_provenance("legacy").is_restricted());
     let conn = rusqlite::Connection::open(&path).unwrap();
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
     assert_eq!(version, crate::EXPECTED_SCHEMA_VERSION);
-    let count: i64 = conn.query_row("SELECT count(*) FROM run_provenance", [], |r| r.get(0)).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM run_provenance", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(count, 0);
 }

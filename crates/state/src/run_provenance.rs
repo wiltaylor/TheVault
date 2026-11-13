@@ -156,7 +156,11 @@ impl State {
         snapshot.generation = oldest(snapshot.generation, generation);
         tx.execute(
             "UPDATE run_provenance SET restricted=?2, stop_generation=?3 WHERE id=?1",
-            params![root, snapshot.restricted, snapshot.generation.map(Generation::stored)],
+            params![
+                root,
+                snapshot.restricted,
+                snapshot.generation.map(Generation::stored)
+            ],
         )?;
         tx.commit()?;
         Ok(snapshot)
