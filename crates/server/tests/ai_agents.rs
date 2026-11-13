@@ -1260,7 +1260,8 @@ fn semantic_edits_of_disabled_triggered_agents_wait_and_session_apply_is_thread_
         assert_eq!(response.status(), StatusCode::OK);
         let events = read_events(response);
         let p = last(&events, "agent_proposal");
-        let bound = json!({"thread":thread, "id":p["id"]});
+        let mut bound = p.clone();
+        bound["thread"] = thread;
         let (status, body) = api.apply_session(&bound);
         assert_eq!(status, StatusCode::OK, "{body}");
         let committed = api.agent_wcl("helper").unwrap();

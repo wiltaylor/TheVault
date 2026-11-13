@@ -786,6 +786,9 @@ mod tests {
             "permissions { tools = []\n}\n",
             "permissions { types = []\n}\n",
             "permissions { change_types = []\n}\n",
+            "permissions { change_fields = { memo: [\"title\"] }\n}\n",
+            "permissions { approval_rule { operation = \"update\"\n type = \"memo\"\n fields = [\"title\"]\n daily_cap = 1\n}\n}\n",
+            "permissions { outbox { send_without_review = true\n}\n}\n",
             "permissions { skills = []\n}\n",
             "permissions { browser = true\n}\n",
             "permissions { browser = true\n browser_secrets = [\"login\"]\n}\n",
@@ -793,6 +796,7 @@ mod tests {
             "permissions { confirm { agents = false\n}\n}\n",
             "permissions { web { search = false\n}\n}\n",
             "permissions { scripts { run_code = true\n}\n}\n",
+            "permissions { scripts { run_saved = true\n}\n}\n",
             "permissions { subagents { allow = true\n}\n}\n",
         ] {
             let after = format!("{field}{trigger}");
