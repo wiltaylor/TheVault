@@ -168,13 +168,7 @@ mod tests {
             }),
         };
         let report = Arc::default();
-        let retry = CapacityRetry::new(
-            waits,
-            writer.clone(),
-            "thread",
-            report,
-            context.clone(),
-        );
+        let retry = CapacityRetry::new(waits, writer.clone(), "thread", report, context.clone());
         let sub = retry.for_sub(1);
         retry.sleep(retry.wait(0).unwrap()).await;
         for item in [&retry, &sub] {

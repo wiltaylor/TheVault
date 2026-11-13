@@ -98,8 +98,7 @@ permissions {
         )
     };
     let overloaded = || {
-        AnthropicReply::error(529, "overloaded_error", "Overloaded")
-            .header("retry-after", "3600")
+        AnthropicReply::error(529, "overloaded_error", "Overloaded").header("retry-after", "3600")
     };
     fake.push(overloaded());
     fake.push(create("parent", "Parent note"));
