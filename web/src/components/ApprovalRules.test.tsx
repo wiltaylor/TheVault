@@ -59,7 +59,7 @@ it("shows the applicable fields for a partially overlapping rule", () => {
 });
 
 it.each(["event", "event_series", "outbox", "agent_thread", "agent_memory"])("shows excluded type %s as never applicable", (note_type) => {
-  render(() => <ApprovalRules permissions={{ types: [note_type], change_types: [note_type], approval_rules: [
+  render(() => <ApprovalRules permissions={{ ...permissions, types: [note_type], change_types: [note_type], approval_rules: [
     { operation: "update", note_type, fields: ["title"], daily_cap: 200 },
   ] }} editable={false} set={vi.fn()} />);
   const row = screen.getByText(/never applies:/).textContent!;
