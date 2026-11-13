@@ -330,7 +330,14 @@ fn owner_delete_keeps_outbox_hold(legacy: bool) {
     assert!(body["fields"]["in_reply_to"].is_null());
     assert!(writer.outbox_run_context(&item.id).is_err());
     if legacy {
-        assert!(writer.state().outbox_provenance(&item.id).unwrap().iter().any(String::is_empty));
+        assert!(
+            writer
+                .state()
+                .outbox_provenance(&item.id)
+                .unwrap()
+                .iter()
+                .any(String::is_empty)
+        );
     }
     assert!(!matches!(
         writer.history(&item.id).unwrap().last().unwrap().author,

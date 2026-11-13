@@ -222,9 +222,11 @@ impl Writer {
                         self.state.append_outbox_provenance(&saved.id, "", false)?;
                         return Ok(None);
                     }
-                    return Err(
-                        state::Error::Corrupt(format!("Outbox provenance unavailable for {}", saved.id)).into(),
-                    );
+                    return Err(state::Error::Corrupt(format!(
+                        "Outbox provenance unavailable for {}",
+                        saved.id
+                    ))
+                    .into());
                 }
                 for id in ids {
                     context.merge(
