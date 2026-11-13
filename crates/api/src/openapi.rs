@@ -15,6 +15,31 @@ use crate::required_scope;
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
+        "/api/agent-safety/backfill",
+        "Session-only one-time backfill progress and summary",
+    ),
+    (
+        "POST",
+        "/api/agent-safety/backfill/preview",
+        "Session-only count and owner-entered estimated cost, no provider calls",
+    ),
+    (
+        "POST",
+        "/api/agent-safety/backfill/approve",
+        "Session-only approval of unchanged backfill preview, no agent triggers",
+    ),
+    (
+        "POST",
+        "/api/agent-safety/release/preview",
+        "Session-only held-note release preview by filter or selection",
+    ),
+    (
+        "POST",
+        "/api/agent-safety/release/approve",
+        "Session-only bulk release of unchanged preview with activity trail",
+    ),
+    (
+        "GET",
         "/api/agent-safety/evidence/{id}",
         "Review current attachment evidence: {envelope, fingerprint, decision_status, decision_current, omissions, bytes, limit, estimated_input_tokens}; owner session or admin user token only",
     ),
@@ -120,6 +145,11 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "Mark every email, message and call sent or made before a date processed, or count them",
     ),
     ("GET", "/api/query", "Run a query, a page at a time"),
+    (
+        "POST",
+        "/api/inbox/triage",
+        "Preview or confirm a read-only mail recommendation batch (session only)",
+    ),
     (
         "POST",
         "/api/query",
@@ -840,8 +870,18 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     ),
     (
         "GET",
+        "/api/integrations/attempt-limits",
+        "Show trusted proxies and the caller's attempt-limit key (owner session or admin token only)",
+    ),
+    (
+        "GET",
         "/api/integrations/ai",
         "Settings > AI: the AI accounts with their kinds, URLs, models, headers, sign-in state and plan usage, the default account and the global AI settings; never a key or token",
+    ),
+    (
+        "GET",
+        "/api/ai/usage",
+        "Owner-only daily UTC token totals by account, model and purpose, retained at least 90 days; no content or prices",
     ),
     (
         "PUT",
@@ -932,6 +972,16 @@ pub const ENDPOINTS: &[(&str, &str, &str)] = &[
         "POST",
         "/api/ai/discard",
         "Record that the user discarded a thread's proposal, from {id, thread}",
+    ),
+    (
+        "POST",
+        "/api/ai/apply-kind/preview",
+        "Session-only current pending proposal snapshot: {thread, proposal}. Expires after ten minutes, grouped by event, operation and note type.",
+    ),
+    (
+        "POST",
+        "/api/ai/apply-kind/confirm",
+        "Session-only confirmation: {preview, confirmed:true}. Applies only snapshotted IDs with individual authorization and freshness checks, returning individual outcomes. No future rule.",
     ),
 ];
 

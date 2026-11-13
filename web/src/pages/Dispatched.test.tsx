@@ -57,6 +57,19 @@ afterEach(() => {
 const section = (name: string) => within(screen.getByRole("list", { name }));
 
 describe("the Dispatched page", () => {
+  it("links a trigger approval once with its origin, then removes it after resolution", async () => {
+    dispatched.mockResolvedValue({ threads: [row({ id: "trigger-thread", origin: "trigger:daily", state: "needs_you", pending: 2, notes: [] })] });
+    render(() => <Dispatched />);
+    const link = await screen.findByRole("link", { name: /Trigger: daily/ });
+    expect(link.getAttribute("href")).toBe("/agents/triage?thread=trigger-thread");
+    expect(section("Needs you").getAllByRole("link")).toHaveLength(1);
+    expect(link).toHaveTextContent("2 proposals wait for you");
+    dispatched.mockResolvedValue({ threads: [] });
+    bumpTurns({ agent: "triage", thread: "trigger-thread", turn: null, running: false });
+    await waitFor(() => expect(screen.queryByRole("link", { name: /Trigger: daily/ })).toBeNull());
+    expect(screen.getByText("Nothing waits for you.")).toBeTruthy();
+  });
+
   it("lists the threads in Active, Needs you and Done, each linking to its thread", async () => {
     dispatched.mockResolvedValue({
       threads: [
@@ -116,6 +129,17 @@ describe("the Dispatched page", () => {
     expect(within(fresh).getByRole("img", { name: "Not opened yet" })).toBeTruthy();
     viewThread("01JNEW")();
     await waitFor(() => expect(within(fresh).queryByRole("img", { name: "Not opened yet" })).toBeNull());
+  });
+
+  it("keeps a row, and the review it holds, across a refresh that returns fresh objects", async () => {
+    const waiting = () => ({ threads: [row({ id: "01JW", state: "needs_you", pending: 2, title: "Batch" })] });
+    dispatched.mockResolvedValueOnce(waiting()).mockResolvedValueOnce(waiting());
+    render(() => <Dispatched />);
+    const before = await screen.findByRole("button", { name: "Review by kind" });
+    bumpTurns();
+    await waitFor(() => expect(dispatched).toHaveBeenCalledTimes(2));
+    // The same element: the row was not built again, so an open preview is not lost.
+    expect(screen.getByRole("button", { name: "Review by kind" })).toBe(before);
   });
 
   it("reads again when a turn starts or ends", async () => {

@@ -25,12 +25,12 @@ services:
       # The browser box's exec service, set only when .env has BROWSER_TOKEN (browser profile).
       VAULT_BROWSER_URL: ${BROWSER_TOKEN:+http://browser:7700}
       VAULT_BROWSER_TOKEN: ${BROWSER_TOKEN:-}
-      VAULT_TRUSTED_PROXIES: ${VAULT_TRUSTED_PROXIES-caddy=172.30.141.2,cloudflare=172.30.141.3}
+      VAULT_TRUSTED_PROXIES: ${VAULT_TRUSTED_PROXIES-caddy=${THEVAULT_PROXY_CADDY_IP:-10.141.0.2},cloudflare=${THEVAULT_PROXY_CLOUDFLARED_IP:-10.141.0.3}}
     networks:
       default:
       browser:
       proxy:
-        ipv4_address: 172.30.141.4
+        ipv4_address: ${THEVAULT_PROXY_SERVER_IP:-10.141.0.4}
     volumes:
       # Named volumes unless .env names host folders.
       - ${THEVAULT_DATA:-data}:/data
@@ -55,7 +55,7 @@ services:
     profiles: [https]
     networks:
       proxy:
-        ipv4_address: 172.30.141.2
+        ipv4_address: ${THEVAULT_PROXY_CADDY_IP:-10.141.0.2}
     restart: unless-stopped
     depends_on:
       thevault:
@@ -76,7 +76,7 @@ services:
     profiles: [cloudflare]
     networks:
       proxy:
-        ipv4_address: 172.30.141.3
+        ipv4_address: ${THEVAULT_PROXY_CLOUDFLARED_IP:-10.141.0.3}
     restart: unless-stopped
     depends_on:
       thevault:
@@ -111,8 +111,8 @@ networks:
   proxy:
     ipam:
       config:
-        - subnet: 172.30.141.0/24
-          ip_range: 172.30.141.128/25
+        - subnet: ${THEVAULT_PROXY_SUBNET:-10.141.0.0/24}
+          ip_range: ${THEVAULT_PROXY_IP_RANGE:-10.141.0.128/25}
   # thevault and the browser box only. Not internal: the box needs the internet.
   browser:
 

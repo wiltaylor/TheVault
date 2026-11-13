@@ -3354,6 +3354,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "scheduler",
+ "schema",
  "script",
  "serde_json",
  "state",

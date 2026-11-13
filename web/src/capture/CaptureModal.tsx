@@ -18,6 +18,7 @@ import { closeCapture, lastSendTo, rememberSendTo, sendToAgents } from "./store"
 
 interface Attachment {
   file: File;
+  manual: boolean;
   url: string;
   /** The asset id, once uploaded, so a retry after an error does not upload it again. */
   asset?: string;
@@ -58,14 +59,14 @@ export function CaptureModal() {
   let fileInput!: HTMLInputElement;
   let cameraInput: HTMLInputElement | undefined;
 
-  function add(files: File[]) {
+  function add(files: File[], manual = false) {
     if (!files.length) return;
     if (!canAttach()) {
       setError("The fleeting note type has no asset field to hold images.");
       return;
     }
     setError(null);
-    setImages((list) => [...list, ...files.map((file) => ({ file, url: URL.createObjectURL(file) }))]);
+    setImages((list) => [...list, ...files.map((file) => ({ file, manual, url: URL.createObjectURL(file) }))]);
   }
 
   function removeImage(a: Attachment) {
@@ -115,7 +116,7 @@ export function CaptureModal() {
     try {
       const ids: string[] = [];
       for (const a of images()) {
-        if (!a.asset) a.asset = (await upload(a.file)).id;
+        if (!a.asset) a.asset = (await upload(a.file, a.manual)).id;
         ids.push(a.asset);
       }
       const agent = hasBody() ? target() : null;
@@ -281,7 +282,7 @@ export function CaptureModal() {
           <CameraPreview
             onClose={closeCamera}
             onUse={(photo) => {
-              add([photo]);
+              add([photo], true);
               closeCamera();
             }}
           />
@@ -350,7 +351,7 @@ export function CaptureModal() {
                   multiple
                   hidden
                   onChange={(e) => {
-                    add(imagesOf(e.currentTarget.files ?? []));
+                    add(imagesOf(e.currentTarget.files ?? []), true);
                     e.currentTarget.value = "";
                     area.focus();
                   }}
@@ -368,7 +369,7 @@ export function CaptureModal() {
                       hidden
                       data-testid="capture-camera-input"
                       onChange={(e) => {
-                        add(imagesOf(e.currentTarget.files ?? []));
+                        add(imagesOf(e.currentTarget.files ?? []), true);
                         e.currentTarget.value = "";
                         area.focus();
                       }}

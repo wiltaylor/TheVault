@@ -7,7 +7,7 @@
 // starts or ends, when a note changes elsewhere, every few seconds while a thread is active, and
 // otherwise every half minute, as the apps, which may have no live stream, need.
 
-import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { AGENT_ICON, agentLabel, agents } from "../agents";
 import { type DispatchedThread, api } from "../api";
 import { RunningMark } from "../ai/RunningMark";
@@ -19,6 +19,7 @@ import { SECTIONS, activityMs, bySection, hasDot, originText, threadLink, waitin
 import { relativeTime } from "../notifications/model";
 import { errorText } from "./TypeEditor";
 import "../dispatched/dispatched.css";
+import { ApplyKind } from "../dispatched/ApplyKind";
 
 /** How often the page reads again while no thread is active. */
 export const IDLE_POLL_MS = 30_000;
@@ -67,6 +68,9 @@ export function Dispatched() {
   onCleanup(onNoteChangedElsewhere(() => void refresh()));
 
   const sections = () => bySection(threads());
+  // Each read gives fresh objects, and For keys by identity: key the rows by thread ID, so a
+  // row and the review it holds (ApplyKind) survive a refresh (TV-274).
+  const byId = createMemo(() => new Map(threads().map((t) => [t.id, t])));
 
   function Row(props: { t: DispatchedThread }) {
     const t = () => props.t;
@@ -97,6 +101,9 @@ export function Dispatched() {
             <span class="ai-new-reply" role="img" aria-label="Not opened yet" title="Not opened yet" />
           </Show>
         </a>
+        <Show when={t().state === "needs_you" && t().pending > 0}>
+          <ApplyKind agent={t().agent} thread={t().id} />
+        </Show>
       </li>
     );
   }
@@ -106,7 +113,7 @@ export function Dispatched() {
       <header class="note-header">
         <h1>Dispatched</h1>
       </header>
-      <p class="muted dispatched-intro">Notes you sent to an agent, and @ calls in notes, with where each stands.</p>
+      <p class="muted dispatched-intro">Sent notes, @ calls and trigger proposals waiting for your review.</p>
       <Show when={error()}>
         {(e) => (
           <p class="error" role="alert">
@@ -124,7 +131,7 @@ export function Dispatched() {
               </h2>
               <Show when={sections()[s.state].length > 0} fallback={<p class="muted">{s.empty}</p>}>
                 <ul class="dispatched-list" aria-label={s.label}>
-                  <For each={sections()[s.state]}>{(t) => <Row t={t} />}</For>
+                  <For each={sections()[s.state].map((t) => t.id)}>{(id) => <Row t={byId().get(id)!} />}</For>
                 </ul>
               </Show>
             </section>

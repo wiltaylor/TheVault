@@ -321,6 +321,12 @@ fn is_definition_write(method: &Method, path: &str) -> bool {
 /// `/browser`, which only the user watches and takes over (browser B4).
 pub fn is_human_only(method: &Method, path: &str) -> bool {
     (*method == Method::POST && path == "/api/trash/empty")
+        || path.starts_with("/api/ai/apply-kind/")
+        || path == "/api/inbox/triage"
+        || path == "/api/agent-safety/backfill"
+        || path.starts_with("/api/agent-safety/backfill/")
+        || path.starts_with("/api/agent-safety/release/")
+        || (*method == Method::GET && path == "/api/ai/usage")
         || (*method == Method::DELETE
             && path
                 .strip_prefix("/api/trash/")
@@ -344,6 +350,20 @@ pub fn human_only() -> ApiError {
 
 /// [`human_only`] for `path`.
 fn human_only_for(path: &str) -> ApiError {
+    if path.starts_with("/api/agent-safety/") {
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "human_only",
+            "Only a signed-in owner may approve safety actions.",
+        );
+    }
+    if path == "/api/ai/usage" {
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "human_only",
+            "Only the signed-in user can read AI token usage.",
+        );
+    }
     if is_desktop(path) {
         ApiError::new(
             StatusCode::FORBIDDEN,
@@ -509,7 +529,7 @@ async fn identify(sessions: &Arc<Sessions>, headers: &HeaderMap) -> Result<Grant
 }
 
 /// The session id in the request's cookies.
-fn session_id(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn session_id(headers: &HeaderMap) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -539,7 +559,8 @@ pub async fn authenticate(
         return human_only_for(req.uri().path()).into_response();
     }
     let path = req.uri().path();
-    let agent_admin_route = is_definition_write(req.method(), path)
+    let agent_admin_route = path == "/api/integrations/attempt-limits"
+        || is_definition_write(req.method(), path)
         || (*req.method() == Method::POST
             && matches!(
                 path,
@@ -625,18 +646,17 @@ pub async fn login(
         let ok = w.state().verify_password(&body.password)?;
         // Never the password itself (activity Y2).
         let detail = json!({ "user_agent": agent.as_deref().map(|a| state::one_line(a, 200)) });
-        w.state().record_activity(if ok {
-            state::NewActivity::new(
-                "auth.login",
-                "auth",
-                &Author::Session(OWNER_SESSION.to_owned()),
-                "Signed in with the password",
-            )
-            .detail(detail)
-        } else {
-            state::NewActivity::server("auth.login_failed", "auth", "A password login failed")
-                .detail(detail)
-        });
+        if ok {
+            w.state().record_activity(
+                state::NewActivity::new(
+                    "auth.login",
+                    "auth",
+                    &Author::Session(OWNER_SESSION.to_owned()),
+                    "Signed in with the password",
+                )
+                .detail(detail),
+            );
+        }
         Ok::<_, state::Error>(ok)
     })
     .await?;

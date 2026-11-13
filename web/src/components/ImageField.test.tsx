@@ -100,7 +100,7 @@ describe("image field", () => {
     Object.defineProperty(input, "files", { value: [png], configurable: true });
     fireEvent.change(input);
     await waitFor(() => expect(m.value()).toBe(NEW));
-    expect(api.uploadAsset).toHaveBeenCalledWith(png);
+    expect(api.uploadAsset).toHaveBeenCalledWith(png, true);
   });
 
   it("uploads an image pasted with Ctrl+V in the dialog, and leaves a text paste to the search box", async () => {
@@ -118,6 +118,7 @@ describe("image field", () => {
     expect(fireEvent.paste(search, { clipboardData: image })).toBe(false);
     await waitFor(() => expect(m.value()).toBe(NEW));
     expect(vi.mocked(api.uploadAsset).mock.calls[0]![0].name).toMatch(/^pasted-[\d-T]+\.png$/);
+    expect(vi.mocked(api.uploadAsset).mock.calls[0]![1]).toBe(false);
     expect(m.queryByRole("dialog")).toBeNull();
   });
 

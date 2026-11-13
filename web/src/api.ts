@@ -21,6 +21,8 @@ export interface NoteDoc {
 }
 
 export interface Note {
+  /** Server-owned Outbox not-before time, in Unix milliseconds. */
+  send_deadline_ms?: number;
   agent_safety?: AgentSafety;
   id: string;
   type: string;
@@ -36,6 +38,7 @@ export interface AgentSafety {
 }
 
 export interface SafetyEvidence {
+  extraction_failures?: Record<string, { reason: string; at_ms: number | null }>;
   envelope: { envelope_version: number; attachments: Array<{ id: string; filename?: string; status: string; text?: string }> };
   fingerprint: string;
   decision_current: boolean;
@@ -44,6 +47,15 @@ export interface SafetyEvidence {
   bytes: number;
   limit: number;
   estimated_input_tokens: number;
+}
+
+export interface SafetyBackfillProgress {
+  status: string;
+  count?: number;
+  attempted?: number;
+  allowed?: number;
+  held?: Record<string, number>;
+  failed?: number;
 }
 
 export interface HeldNote {
@@ -583,6 +595,18 @@ export interface StoredProposal {
   error?: string | null;
 }
 
+export interface ApprovalPreview {
+  preview: string;
+  count: number;
+  kind: [string, string, string];
+  items: { id: string; summary: string; data: Record<string, unknown> }[];
+}
+export interface ApprovalResult {
+  id: string;
+  ok: boolean;
+  error?: { message: string };
+}
+
 /** A thread with its transcript (agents G7, G8). */
 export interface AgentThread extends AgentThreadSummary {
   agent: string;
@@ -642,7 +666,7 @@ export interface DispatchedThread {
   id: string;
   agent: string;
   title: string;
-  origin: "dispatch" | "mention";
+  origin: "dispatch" | "mention" | `trigger:${string}`;
   /** The notes the thread is about: those sent, or the note that called the agent. */
   notes: string[];
   state: DispatchState;
@@ -805,7 +829,7 @@ export interface AgentCallInfo {
 export interface AgentRuns {
   queue?: { waiting: number; failed: number; expired: number; dropped: number };
   tools: string[];
-  triggers: { name: string; kind: AgentTrigger["kind"]; runs: AgentRun[] }[];
+  triggers: { name: string; kind: AgentTrigger["kind"] | "recommendation"; runs: AgentRun[] }[];
 }
 
 /** A cron schedule in words and the next times it fires, as the scheduler reads it. */
@@ -1201,6 +1225,7 @@ export interface AgentCode {
 /** An API token. Only the response that creates it carries `secret` (D11). */
 export interface Token {
   name: string;
+  kind: "user" | "device" | "agent";
   scope: Scope;
   created: number;
   last_used: number | null;
@@ -1841,6 +1866,11 @@ export const api = {
   types: async () => (await request<{ types: TypeDef[] }>("GET", "/api/types")).types,
   note: (id: string) => request<Note>("GET", `/api/notes/${enc(id)}`),
   heldAgentNotes: (offset = 0) => request<{ notes: HeldNote[]; total: number }>("GET", `/api/agent-safety/held?limit=500&offset=${offset}`),
+  safetyBackfillPreview: (estimated_usd_per_decision?: number) => request<{ preview: string; count: number; account: string; model: string; decisions_per_note: number; unit_price: number; estimated_usd: number; disclaimer: string }>("POST", "/api/agent-safety/backfill/preview", { estimated_usd_per_decision }),
+  safetyBackfillApprove: (preview: string) => request<SafetyBackfillProgress>("POST", "/api/agent-safety/backfill/approve", { preview, approve: true }),
+  safetyBackfillProgress: () => request<SafetyBackfillProgress>("GET", "/api/agent-safety/backfill"),
+  safetyReleasePreview: (filter: { type?: string; since?: string; until?: string; reason?: string; ids?: string[] }) => request<{ preview: string; count: number }>("POST", "/api/agent-safety/release/preview", filter),
+  safetyReleaseApprove: (preview: string) => request<{ released: number; failed: number; released_ids: string[] }>("POST", "/api/agent-safety/release/approve", { preview, approve: true }),
   safetyEvidence: (id: string) => request<SafetyEvidence>("GET", `/api/agent-safety/evidence/${enc(id)}`),
   releaseAgentSafety: (id: string, fingerprint: string) => request<{ agent_safety: AgentSafety }>("POST", `/api/notes/${enc(id)}/agent-safety/release`, { fingerprint }),
   /** The daily note for a `YYYY-MM-DD` day; a day with no note is a 404 `ApiError`. */
@@ -1889,7 +1919,7 @@ export const api = {
   /** Delete a taxonomy. One a field uses answers 409 `taxonomy_in_use`, listing the notes. */
   deleteTaxonomy: (name: string) => request<unknown>("DELETE", `/api/taxonomies/${enc(name)}`),
   /** One page of `query`. `thisId` is the note that holds the query, bound to `this`; `signal` cancels it. */
-  query: (query: string, cursor: string | null, pageSize: number, thisId?: string, signal?: AbortSignal) =>
+  query: (query: string, cursor: string | null, pageSize: number, thisId?: string, signal?: AbortSignal, excludeHeld = false) =>
     request<Page>(
       "POST",
       "/api/query",
@@ -1898,6 +1928,7 @@ export const api = {
         ...(thisId ? { this: thisId } : {}),
         ...(cursor ? { cursor } : {}),
         page_size: pageSize,
+        ...(excludeHeld ? { exclude_held: true } : {}),
       },
       signal,
     ),
@@ -2170,6 +2201,10 @@ export const api = {
    * version (ai D23). A stale one is a 409; a type change without admin a 403 `needs_admin`.
    */
   aiApply: (proposal: unknown) => request<AiApplied>("POST", "/api/ai/apply", proposal),
+  aiApplyKindPreview: (thread: string, proposal: string) =>
+    request<ApprovalPreview>("POST", "/api/ai/apply-kind/preview", { thread, proposal }),
+  aiApplyKindConfirm: (preview: string) =>
+    request<{ results: ApprovalResult[] }>("POST", "/api/ai/apply-kind/confirm", { preview, confirmed: true }),
   /** Record that the user discarded a thread's proposal (agents G8). */
   aiDiscard: (id: string, thread: string) => request<{ thread: string; pending: number }>("POST", "/api/ai/discard", { id, thread }),
   /** Start a chat turn in the turns form: its id (ai D23). */
@@ -2200,6 +2235,8 @@ export const api = {
    */
   markProcessedBefore: (before: string, dryRun: boolean) =>
     request<CatchUp>("POST", "/api/inbox/mark-processed", { before, dry_run: dryRun }),
+  mailTriagePreview: (agent: string, limit: number) => request<{ count: number; selected: number; preview: string }>("POST", "/api/inbox/triage", { agent, limit }),
+  mailTriageConfirm: (agent: string, preview: string) => request<{ queued: boolean }>("POST", "/api/inbox/triage", { agent, preview }),
   /** The app this page runs in, or null in a browser: the home server answers 404. */
   app: async (): Promise<AppInfo | null> => {
     try {
@@ -2319,8 +2356,8 @@ export const api = {
     return skillOf(await request<Skill>("POST", `/api/skills/import${replace ? "?replace=true" : ""}`, form));
   },
   /** Upload `file` as a new asset. The body is the file's bytes, unchanged. */
-  uploadAsset: (file: File) =>
-    request<Asset>("POST", `/api/assets?filename=${enc(file.name)}`, file),
+  uploadAsset: (file: File, manual = false) =>
+    request<Asset>("POST", `/api/assets?filename=${enc(file.name)}&provenance=${manual ? "manual" : "incoming"}`, file),
   /**
    * Delete an asset. Notes naming it answer 409 `asset_in_use`, listing them, unless `unlink` is
    * set: then the asset is taken out of those notes in the same commit.

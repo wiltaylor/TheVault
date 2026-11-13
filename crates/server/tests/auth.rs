@@ -119,6 +119,7 @@ fn agent_admin_tokens_cannot_mint_credentials_or_reconfigure_authority() {
     let api = Api::start();
     let token = api.token("agent-restricted", "admin");
     for (method, path) in [
+        ("GET", "/api/integrations/attempt-limits"),
         ("POST", "/api/tokens"),
         ("POST", "/api/agent-codes"),
         ("POST", "/api/devices/pair-codes"),
@@ -137,6 +138,41 @@ fn agent_admin_tokens_cannot_mint_credentials_or_reconfigure_authority() {
             .unwrap();
         assert_eq!(response.status().as_u16(), 403, "{method} {path}");
     }
+}
+
+#[test]
+fn limiter_diagnostic_is_owner_only_and_read_only() {
+    let api = Api::start();
+    let path = "/api/integrations/attempt-limits";
+    let cookie = cookie_pair(&api.login(testkit::PASSWORD));
+    for scope in ["read", "write"] {
+        let token = api.token(&format!("diagnostic-{scope}"), scope);
+        assert_eq!(
+            api.req("GET", path, Auth::Bearer(&token))
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+    }
+    for auth in [api.admin(), Auth::Cookie(&cookie)] {
+        for _ in 0..6 {
+            let response = api
+                .req("GET", path, auth)
+                .header("X-Forwarded-For", "192.0.2.99")
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let body: Value = response.json().unwrap();
+            assert_eq!(body["client_address"], "127.0.0.1");
+            assert_eq!(body["client_address_source"], "peer");
+        }
+    }
+    for _ in 0..5 {
+        assert_eq!(api.login("wrong").status(), 401);
+    }
+    assert_eq!(api.login("wrong").status(), 429);
 }
 
 #[test]

@@ -670,7 +670,10 @@ fn unattended_runs_are_offered_the_read_tools() {
         .collect();
     assert!(tools.contains(&"use_skill"), "{tools:?}");
     assert!(tools.contains(&"read_skill_file"), "{tools:?}");
-    assert!(!tools.contains(&"propose_edit"), "{tools:?}");
+    // Of the change tools only the note proposals a trigger's thread keeps (TV-146 A1, TV-240,
+    // TV-271).
+    assert!(tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(!tools.contains(&"propose_skill_change"), "{tools:?}");
 }
 
 #[test]

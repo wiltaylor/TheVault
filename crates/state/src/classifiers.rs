@@ -74,6 +74,17 @@ impl State {
 
     /// Persist the verdict and its single arrival event together. Subsequent releases do not replay it.
     pub fn set_agent_safety_result(&self, id: &str, value: &str, cleared: bool) -> Result<()> {
+        self.set_agent_safety_result_delivery(id, value, cleared, true)
+    }
+
+    /// Backfill consumes the arrival marker without enqueueing an agent trigger.
+    pub fn set_agent_safety_result_delivery(
+        &self,
+        id: &str,
+        value: &str,
+        cleared: bool,
+        deliver: bool,
+    ) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [format!("agent_safety.note.{id}"), value.to_owned()])?;
@@ -88,7 +99,7 @@ impl State {
                 "INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'1')",
                 [format!("agent_safety.delivered.{id}")],
             )?;
-            if first == 1 {
+            if first == 1 && deliver {
                 tx.execute(
                     "INSERT INTO meta(key,value) VALUES (?1,?2)",
                     [format!("agent_safety.clearance.{id}"), id.to_owned()],

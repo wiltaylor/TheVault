@@ -8,6 +8,7 @@
 
 import { For, type JSX, Show, createSignal, onCleanup, onMount } from "solid-js";
 import type { AgentSummary } from "../api";
+import { appInfo } from "../inApp";
 import {
   AGENT_ICON,
   agentLabel,
@@ -79,6 +80,8 @@ export function MenuBox(props: {
 }
 
 export function AgentsNav(props: { onNavigate: () => void }) {
+  const [editableApp, setEditableApp] = createSignal(false);
+  void appInfo().then((app) => setEditableApp(app === null));
   const [menu, setMenu] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   onMount(() => {
@@ -105,7 +108,7 @@ export function AgentsNav(props: { onNavigate: () => void }) {
 
   function Menu(p: { agent: AgentSummary; anchor: () => HTMLButtonElement | undefined }) {
     const a = () => p.agent;
-    const editable = () => !a().built_in && !a().error;
+    const editable = () => editableApp() && !a().built_in && !a().error;
     return (
       <MenuBox label={`Actions for ${agentLabel(a())}`} anchor={p.anchor} onClose={() => setMenu(null)}>
         <button type="button" role="menuitem" onClick={() => open(a().name)}>
@@ -123,7 +126,7 @@ export function AgentsNav(props: { onNavigate: () => void }) {
             {a().enabled === false ? "Enable" : "Disable"}
           </button>
         </Show>
-        <Show when={!a().built_in}>
+        <Show when={editableApp() && !a().built_in}>
           <button
             type="button"
             role="menuitem"
@@ -210,7 +213,7 @@ export function AgentsNav(props: { onNavigate: () => void }) {
           </span>
           <span>Agents</span>
         </button>
-        <button
+        <Show when={editableApp()}><button
           type="button"
           class="pinned-add"
           aria-label="New agent"
@@ -221,10 +224,10 @@ export function AgentsNav(props: { onNavigate: () => void }) {
           }}
         >
           <TypeIcon name="plus" size={16} />
-        </button>
+        </button></Show>
       </div>
       <Show when={agentsOpen()}>
-        <Show when={creatingAgent()}>
+        <Show when={editableApp() && creatingAgent()}>
           <div class="pin-row pin-row-new">
             <TypeIcon name={AGENT_ICON} size={16} />
             <NameInput label="New agent name" onDone={create} />

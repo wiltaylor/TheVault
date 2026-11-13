@@ -92,6 +92,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mail_triage_batch_membership_survives_restart_and_failed_batches_can_be_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let s = State::open(&path, None).unwrap();
+        let payload = r#"{"op":"mail-triage","source_notes":["a","b"]}"#;
+        let id = s
+            .enqueue_backfill("reader", "mail-triage", Some("batch"), payload, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.mail_triage_notes("reader").unwrap(), vec!["a", "b"]);
+        assert!(s.mail_triage_notes("other").unwrap().is_empty());
+        s.claim_trigger_job(id).unwrap();
+        drop(s);
+        let s = State::open(&path, None).unwrap();
+        s.recover_trigger_jobs().unwrap();
+        assert_eq!(s.due_trigger_jobs(0).unwrap()[0].payload, payload);
+        assert_eq!(s.mail_triage_notes("reader").unwrap(), vec!["a", "b"]);
+        s.finish_trigger_job(id, "succeeded", None).unwrap();
+        assert_eq!(s.mail_triage_notes("reader").unwrap(), vec!["a", "b"]);
+        let id = s
+            .enqueue_backfill(
+                "reader",
+                "mail-triage",
+                Some("failed-batch"),
+                r#"{"source_notes":["c"]}"#,
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        s.finish_trigger_job(id, "failed", None).unwrap();
+        assert_eq!(s.mail_triage_notes("reader").unwrap(), vec!["a", "b"]);
+    }
+
+    #[test]
     fn review_f6_success_survives_later_unsuccessful_jobs_and_retry_exhaustion() {
         let dir = tempfile::tempdir().unwrap();
         let s = State::open(&dir.path().join("state.db"), None).unwrap();
@@ -467,6 +501,15 @@ fn prune_terminal(conn: &rusqlite::Connection) -> Result<()> {
 }
 
 impl State {
+    /// Notes already covered by live or successful recommendation batches for this agent.
+    pub fn mail_triage_notes(&self, agent: &str) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT DISTINCT j.value FROM trigger_jobs t, json_each(t.payload, '$.source_notes') j WHERE t.agent=?1 AND t.trigger='mail-triage' AND t.status IN ('waiting','admitted','running','succeeded')")?;
+        Ok(stmt
+            .query_map([agent], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn unmatched_legacy_trigger_runs(&self, agent: &str, trigger: &str) -> Result<i64> {
         Ok(self.conn().query_row(
             "SELECT count(*) FROM trigger_legacy_runs WHERE agent=?1 AND trigger=?2 AND matched=0",

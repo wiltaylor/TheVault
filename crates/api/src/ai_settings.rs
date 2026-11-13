@@ -78,6 +78,10 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The routes' state: the writer, whose state store holds the secrets, and the sign-ins started.
 pub struct Ai {
+    #[cfg(test)]
+    pub(crate) fail_apply_after_commit: std::sync::atomic::AtomicBool,
+    pub(crate) approval_previews: Mutex<HashMap<String, crate::ai_batch::Preview>>,
+    pub(crate) approval_lock: Mutex<()>,
     pub(crate) writer: Arc<Writer>,
     pending: Mutex<HashMap<String, Pending>>,
     http: reqwest::Client,
@@ -88,6 +92,10 @@ pub struct Ai {
 impl Ai {
     pub fn new(writer: Arc<Writer>) -> Ai {
         Ai {
+            #[cfg(test)]
+            fail_apply_after_commit: std::sync::atomic::AtomicBool::new(false),
+            approval_previews: Mutex::default(),
+            approval_lock: Mutex::new(()),
             writer,
             pending: Mutex::default(),
             http: ai::client(),
@@ -366,6 +374,13 @@ async fn status_answer(a: &Arc<Ai>) -> Result<Json<Value>, ApiError> {
 /// `GET /api/integrations/ai`.
 pub async fn status(State(a): Shared) -> Result<Json<Value>, ApiError> {
     status_answer(&a).await
+}
+
+/// Owner-only UTC daily token totals. Provider content is never stored here.
+pub async fn token_usage(State(a): Shared) -> Result<Json<Value>, ApiError> {
+    blocking_w(&a, |w| Ok(json!({"items": w.state().ai_usage_daily()?})))
+        .await
+        .map(Json)
 }
 
 /// `GET /api/ai/accounts` (read): the accounts set up with their default models, the default

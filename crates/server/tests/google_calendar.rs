@@ -428,6 +428,29 @@ fn the_first_run_imports_single_events_all_day_as_dates_and_timed_with_offsets()
 }
 
 #[test]
+fn adversarial_import_markup_calendar_plain_and_html() {
+    use crate::import_markup::{TEXT, assert_literal};
+    let api = Api::start();
+    for (id, description) in [
+        ("literal", TEXT.to_owned()),
+        ("html", format!("<p>{TEXT}</p>")),
+    ] {
+        api.google.put_event(
+            "primary",
+            json!({ "id": id, "summary": TEXT,
+            "description": description, "start": { "date": "2026-03-10" },
+            "end": { "date": "2026-03-11" } }),
+        );
+    }
+    api.sync();
+    for id in ["literal", "html"] {
+        let note = api.note(&api.event_id(id));
+        assert_eq!(note["note"]["fields"]["title"], TEXT);
+        assert_literal(&note, "description");
+    }
+}
+
+#[test]
 fn a_series_becomes_one_note_per_occurrence_in_the_window_and_follows_changes_and_cancels() {
     let api = Api::start();
     // Weekly on Mondays, all day, from before the window starts and with no end.

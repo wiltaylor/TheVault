@@ -501,8 +501,10 @@ fn an_unattended_run_is_offered_notify_user_and_uses_it() {
         .filter_map(Value::as_str)
         .collect();
     assert!(tools.contains(&"notify_user"), "{tools:?}");
-    // Every confirmation is on, so no change tool is, but notifying is not one.
-    assert!(!tools.contains(&"propose_edit"), "{tools:?}");
+    // Every confirmation is on. Notifying is no change tool; of the change tools only the note
+    // proposals a trigger's thread keeps are offered (TV-146 A1, TV-240, TV-271).
+    assert!(tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(!tools.contains(&"propose_type_change"), "{tools:?}");
 
     let memo = api.note("memo", json!({ "title": "Leak", "status": "open" }));
     fake.push(AnthropicMessage::new().tool_use(

@@ -351,8 +351,7 @@ fn change_switch(name: &str) -> Option<&'static str> {
 }
 
 /// The change tools that always propose, whatever the agent's switches say: their change waits
-/// for the user's Apply in every run. A trigger's run ([`Held::Drop`]) leaves them out, as no one
-/// would see the proposal; a chat, a call from a note and a dispatch offer them (TV-77 F11). A
+/// for the user's Apply in every run, including durable trigger threads (TV-240). A
 /// new tool of that kind is added here, and [`Direct::covers`] never covers its events.
 const ALWAYS_PROPOSE: &[&str] = &[
     "propose_device_file_change",
@@ -366,11 +365,18 @@ const ALWAYS_PROPOSE: &[&str] = &[
 /// confirmation switch is on, or one of [`ALWAYS_PROPOSE`] (agents G12, TV-77 D2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
+    /// Mail backlog recommendations can only read notes, never propose or mutate.
+    Recommend,
     /// Offer it: the change waits in the thread as a proposal for the user's Apply. A chat, and
-    /// an unattended run a person asked for: a call from a note or a dispatch.
+    /// an unattended call from a note or a dispatch.
     Propose,
-    /// Leave it out, and say which changes are held back ([`withheld_note`]): a trigger's run,
-    /// whose thread no one looks at.
+    /// A trigger's run. Its durable thread keeps the proposals that were decided for it: note
+    /// edits, archive and delete, and script changes (TV-146 A1, TV-240). Every other change
+    /// that would only be proposed is left out as in [`Held::Drop`], until its family is decided
+    /// (TV-271).
+    Trigger,
+    /// Leave it out, and say which changes are held back ([`withheld_note`]) for an unknown
+    /// unattended origin without a supported review path.
     Drop,
 }
 
@@ -378,14 +384,37 @@ enum Held {
 const PROPOSING_ORIGINS: [&str; 2] = [scheduler::MENTION_ORIGIN, scheduler::DISPATCH_ORIGIN];
 
 impl Held {
-    /// The mode of a turn, unattended or not, on a thread of origin `origin`. An unattended run
-    /// of any other origin, a trigger's (`trigger:<name>`) or one not known here, drops them.
+    /// Known top-level origins keep proposals in their durable thread. Unknown unattended
+    /// origins retain the conservative drop behavior.
     fn of(unattended: bool, origin: &str) -> Held {
         if !unattended || PROPOSING_ORIGINS.contains(&origin) {
             Held::Propose
+        } else if origin.starts_with("trigger:") {
+            Held::Trigger
         } else {
             Held::Drop
         }
+    }
+}
+
+/// Whether a trigger's run keeps tool `name` although its change would only be proposed
+/// ([`Held::Trigger`]): the note tools and the script proposals, nothing else.
+fn trigger_keeps(name: &str) -> bool {
+    matches!(change_switch(name), Some("notes" | "archive" | "delete"))
+        || crate::ai_script_changes::PROPOSE_TOOLS.contains(&name)
+}
+
+/// Whether a trigger's run keeps the proposal in event `event` with data `p`: a note create,
+/// edit, archive or delete, or a script change. Downloads and browser secrets share the note
+/// event and are not kept.
+fn trigger_keeps_event(event: &str, p: &Value) -> bool {
+    match event {
+        "script_proposal" => true,
+        "proposal" => matches!(
+            p["op"].as_str().unwrap_or("update"),
+            "update" | "create" | "archive" | "unarchive" | "delete"
+        ),
+        _ => false,
     }
 }
 
@@ -395,7 +424,9 @@ impl Held {
 /// (browser B6), the skill tools only when the agent uses skills, with
 /// `install_skill_in_browser` beside the browser tools (skills S6), `ask_user` only when `asks`
 /// (`crate::ai_ask`, TV-77 D3), and, when `drop` gives what the turn makes ([`Held::Drop`]), no
-/// change tool that would only propose (agents G12).
+/// change tool that would only propose (agents G12), except, for a trigger's run (`trigger`),
+/// those of [`trigger_keeps`].
+#[allow(clippy::too_many_arguments)]
 fn turn_tools(
     web: ai::Web,
     brave: bool,
@@ -404,6 +435,7 @@ fn turn_tools(
     browser: bool,
     skills: bool,
     asks: bool,
+    trigger: bool,
 ) -> Vec<ToolSpec> {
     let mut tools = offered_tools(web);
     if !asks {
@@ -426,8 +458,9 @@ fn turn_tools(
     }
     if let Some(direct) = drop {
         tools.retain(|t| {
-            !ALWAYS_PROPOSE.contains(&t.name.as_str())
-                && change_switch(&t.name).is_none_or(|s| direct.makes(s))
+            (trigger && trigger_keeps(&t.name))
+                || (!ALWAYS_PROPOSE.contains(&t.name.as_str())
+                    && change_switch(&t.name).is_none_or(|s| direct.makes(s)))
         });
     }
     tools
@@ -479,7 +512,7 @@ const SWITCHES: [(&str, &str, &str); 9] = [
 /// this run is not offered, because their switch asks first or their tool always proposes, and
 /// no one sees a proposal (agents G12), as a section of the system text. `None` when nothing is
 /// held back.
-fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
+fn withheld_note(agent: &Agent, direct: Direct, trigger: bool) -> Option<String> {
     let names: std::collections::BTreeSet<String> = tool_specs()
         .into_iter()
         .chain(crate::ai_web::tool_specs())
@@ -491,23 +524,32 @@ fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
         .filter(|(key, ..)| {
             !direct.makes(key)
                 && names.iter().any(|n| {
-                    change_switch(n).is_some_and(|s| s == *key) && agent.permissions.allows_tool(n)
+                    change_switch(n).is_some_and(|s| s == *key)
+                        && agent.permissions.allows_tool(n)
+                        && !(trigger && trigger_keeps(n))
                 })
         })
         .map(|(_, label, what)| format!("- {what}: your \"{label}\" switch is on"))
         .chain(
             ALWAYS_PROPOSE
                 .iter()
-                .filter(|n| agent.permissions.allows_tool(n))
+                .filter(|n| agent.permissions.allows_tool(n) && !(trigger && trigger_keeps(n)))
                 .map(|n| format!("- {n}: its change always waits for the user's Apply")),
         )
         .collect();
     if lines.is_empty() {
         return None;
     }
+    // A trigger's thread keeps note and script proposals for a later Apply (TV-240, TV-271).
+    let kept = if trigger {
+        "Note and script changes you propose wait in this run's thread for the user's Apply. \
+         For the other changes that would only be proposed, this run has no tools"
+    } else {
+        "No one is present to apply a proposal, so this run has no tools for the changes that \
+         would only be proposed"
+    };
     Some(format!(
-        "\n## This run is unattended\n\nNo one is present to apply a proposal, so this run has \
-         no tools for the changes that would only be proposed:\n\n{}\n\nWhen the task needs one \
+        "\n## This run is unattended\n\n{kept}:\n\n{}\n\nWhen the task needs one \
          of them, do not say you have no tool for it. Say which change you would make, and that \
          it needs the user: in a chat with you or a call from a note, where it waits for their \
          Apply, or with that switch turned off on your Permissions tab.\n",
@@ -515,8 +557,8 @@ fn withheld_note(agent: &Agent, direct: Direct) -> Option<String> {
     ))
 }
 
-/// The tools a trigger's run of `agent` is offered, by name (agents G12): [`Held::Drop`]. A call
-/// from a note or a dispatch is offered the change tools that would only propose too.
+/// The tools a trigger's run of `agent` is offered ([`Held::Trigger`]): with the note and script
+/// proposals its thread keeps (TV-240), without the other changes that would only propose.
 pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
     let direct = Direct::of(confirm_of(agent), unattended_scope(agent));
     let brave = crate::brave::Search::load(w.state()).is_some();
@@ -528,6 +570,7 @@ pub(crate) fn trigger_tools(w: &Writer, agent: &Agent) -> Vec<String> {
         agent.permissions.browser && crate::ai_browser::BrowserBox::from_env().is_some(),
         crate::ai_skills::uses_skills(agent),
         false,
+        true,
     )
     .into_iter()
     .map(|t| t.name)
@@ -638,13 +681,18 @@ async fn start_with(
         .origin
         .as_deref()
         .is_some_and(crate::ai_ask::asks_on);
+    let recommendation = prepared.origin.as_deref() == Some(scheduler::agents::MAIL_TRIAGE);
     let cfg = TurnCfg {
         owner: author,
         author: actor,
-        scope,
+        scope: if recommendation { Scope::Read } else { scope },
         agent_name: named.then(|| prepared.agent.name.clone()),
         unattended: report.is_some(),
-        held: Held::of(report.is_some(), &origin),
+        held: if recommendation {
+            Held::Recommend
+        } else {
+            Held::of(report.is_some(), &origin)
+        },
         asks,
         retry,
         sub: None,
@@ -1010,7 +1058,7 @@ fn prepare_for(
 }
 
 /// The events of a proposal for the user, or of a change a tool made.
-const PROPOSAL_EVENTS: [&str; 11] = [
+pub(crate) const PROPOSAL_EVENTS: [&str; 11] = [
     "proposal",
     "type_proposal",
     "taxonomy_proposal",
@@ -1556,8 +1604,8 @@ fn setup(
     let direct = Direct::of(confirm_of(agent), change_scope(scope, agent));
     // A trigger's run is offered no change tool that would only propose (agents G12): say
     // which, so the model names the switch rather than saying it has no tool (TV-34).
-    if held == Held::Drop
-        && let Some(note) = withheld_note(agent, direct)
+    if matches!(held, Held::Drop | Held::Trigger)
+        && let Some(note) = withheld_note(agent, direct, held == Held::Trigger)
     {
         system.push_str(&note);
     }
@@ -1932,10 +1980,11 @@ impl Turn {
             setup.web,
             setup.web_search.is_some(),
             setup.tools.as_deref(),
-            (self.held == Held::Drop).then_some(setup.direct),
+            matches!(self.held, Held::Drop | Held::Trigger).then_some(setup.direct),
             setup.browser.is_some(),
             uses_skills,
             self.asks,
+            self.held == Held::Trigger,
         );
         // A throwaway sub agent reads its parent's memories but writes none (subagents U1).
         if self.sub.as_ref().is_some_and(|s| s.throwaway) {
@@ -1945,6 +1994,9 @@ impl Turn {
         // sessions, and never to a sub agent, whatever its file says.
         if self.sub.is_none() && self.log.is_some() && setup.agent.permissions.subagents.allow {
             tools.push(crate::ai_subagents::spec(&setup.agent));
+        }
+        if self.held == Held::Recommend {
+            tools.retain(|t| t.name == "get_note");
         }
         let base_offered: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
         let mut history = history;
@@ -1996,6 +2048,15 @@ impl Turn {
             };
             let mut began = Instant::now();
             let trail = |began: Instant, usage: Usage, outcome: Outcome| {
+                if let Err(e) = self.writer.state().record_ai_usage(
+                    &setup.cred.account,
+                    &setup.model,
+                    "agent",
+                    usage.input,
+                    usage.output,
+                ) {
+                    eprintln!("ai: recording agent usage: {e}");
+                }
                 let line = ai::trail_line(
                     &setup.cred.name,
                     setup.cred.kind,
@@ -2728,12 +2789,25 @@ impl Turn {
             max_tokens: None,
         };
         let began = Instant::now();
-        let mut stream = ai::stream(http(), &setup.cred, &req).await?;
+        let record = |usage: Usage| {
+            if let Err(e) = self.writer.state().record_ai_usage(
+                &setup.cred.account,
+                &setup.model,
+                "agent",
+                usage.input,
+                usage.output,
+            ) {
+                eprintln!("ai: recording compaction usage: {e}");
+            }
+        };
+        let mut stream = ai::stream(http(), &setup.cred, &req)
+            .await
+            .inspect_err(|e| record(e.usage))?;
         let mut summary = String::new();
         let mut usage = Usage::default();
         let mut ended = false;
         while let Some(e) = stream.next().await {
-            match e? {
+            match e.inspect_err(|e| record(e.usage))? {
                 AiEvent::TextDelta(d) => summary.push_str(&d),
                 AiEvent::Usage(u) => usage = u,
                 AiEvent::Done { .. } => {
@@ -2744,6 +2818,15 @@ impl Turn {
             }
         }
         self.keep_usage(&setup.cred, stream.plan_usage()).await;
+        if let Err(e) = self.writer.state().record_ai_usage(
+            &setup.cred.account,
+            &setup.model,
+            "agent",
+            usage.input,
+            usage.output,
+        ) {
+            eprintln!("ai: recording compaction usage: {e}");
+        }
         let line = ai::trail_line(
             &setup.cred.name,
             setup.cred.kind,
@@ -3780,6 +3863,10 @@ fn run_tool(
             made
         }
         Some(_) if held == Held::Drop => ToolOut::error(HELD_REFUSAL),
+        // A trigger's thread keeps only the proposals decided for it (TV-271).
+        Some((event, p)) if held == Held::Trigger && !trigger_keeps_event(event, p) => {
+            ToolOut::error(HELD_REFUSAL)
+        }
         _ => out,
     }
 }
@@ -3902,14 +3989,14 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
     }
 }
 
-/// Why [`apply_change`] wrote nothing.
+/// Why [`apply_change`] did not report success. A storage error can follow a committed write.
 #[derive(Debug)]
 pub enum ApplyError {
     /// The change is not one a chat proposes, or lacks a member it needs.
     Invalid(String),
     /// The type or taxonomy changed since the proposal.
     Stale(String),
-    /// The write refused it: a conflict, a validation failure, a missing note.
+    /// A writer error, including uncertain storage/bookkeeping failure after a commit.
     Write(writer::Error),
     /// A download got nothing (ai D27): the address rule, the size limit, the server.
     Fetch(ai::web::FetchError),
@@ -5194,16 +5281,19 @@ mod tests {
     }
 
     #[test]
-    fn only_a_trigger_run_drops_the_changes_that_would_only_be_proposed() {
+    fn known_top_level_runs_keep_durable_proposals() {
         // A chat keeps them, whatever its thread's origin.
         for origin in ["user", "mention", "trigger:nightly"] {
             assert_eq!(Held::of(false, origin), Held::Propose, "{origin}");
         }
-        // Unattended: a call from a note and a dispatch keep them (TV-77 D2), a trigger's run
-        // and any origin not known here drop them.
+        // Trigger proposals use the same durable transcript as mention and dispatch.
         assert_eq!(Held::of(true, "mention"), Held::Propose);
         assert_eq!(Held::of(true, "dispatch"), Held::Propose);
-        for origin in ["trigger:nightly", "trigger:mention", "subagent:01JB", ""] {
+        // A trigger's thread keeps the decided proposals only (TV-271).
+        for origin in ["trigger:nightly", "trigger:mention"] {
+            assert_eq!(Held::of(true, origin), Held::Trigger, "{origin}");
+        }
+        for origin in ["subagent:01JB", ""] {
             assert_eq!(Held::of(true, origin), Held::Drop, "{origin}");
         }
     }
@@ -5211,7 +5301,8 @@ mod tests {
     #[test]
     fn an_unattended_run_names_the_switches_that_hold_its_changes_back() {
         let agent = |wcl: &str| Agent::parse("a", wcl).unwrap();
-        let note = |a: &Agent| withheld_note(a, Direct::of(confirm_of(a), unattended_scope(a)));
+        let note =
+            |a: &Agent| withheld_note(a, Direct::of(confirm_of(a), unattended_scope(a)), false);
         // Every switch on, every tool: everything is held back, types included.
         let text = note(&agent("label = \"A\"\n")).unwrap();
         assert!(text.contains("## This run is unattended"), "{text}");
@@ -5402,14 +5493,23 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_run_leaves_out_the_task_proposals_and_an_agent_with_them_runs_as_admin() {
+    fn a_dropped_run_leaves_out_task_proposals_and_an_agent_with_them_runs_as_admin() {
         let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
         let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
         let names = |drop: Option<Direct>| -> Vec<String> {
-            turn_tools(ai::Web::default(), false, None, drop, false, false, false)
-                .into_iter()
-                .map(|t| t.name)
-                .collect()
+            turn_tools(
+                ai::Web::default(),
+                false,
+                None,
+                drop,
+                false,
+                false,
+                false,
+                false,
+            )
+            .into_iter()
+            .map(|t| t.name)
+            .collect()
         };
         let chat = names(None);
         let trigger = names(Some(direct));
@@ -5423,7 +5523,7 @@ mod tests {
             );
         }
         assert!(trigger.iter().any(|m| m == "get_task"));
-        let text = withheld_note(&agent, direct).unwrap();
+        let text = withheld_note(&agent, direct, false).unwrap();
         assert!(
             text.contains("- propose_task_change: its change always waits for the user's Apply"),
             "{text}"
@@ -5437,14 +5537,23 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_run_leaves_out_the_script_proposals_and_names_them() {
+    fn a_dropped_run_leaves_out_script_proposals_and_names_them() {
         let agent = Agent::parse("a", "label = \"A\"\n").unwrap();
         let direct = Direct::of(confirm_of(&agent), unattended_scope(&agent));
         let names = |drop: Option<Direct>| -> Vec<String> {
-            turn_tools(ai::Web::default(), false, None, drop, false, false, false)
-                .into_iter()
-                .map(|t| t.name)
-                .collect()
+            turn_tools(
+                ai::Web::default(),
+                false,
+                None,
+                drop,
+                false,
+                false,
+                false,
+                false,
+            )
+            .into_iter()
+            .map(|t| t.name)
+            .collect()
         };
         let chat = names(None);
         let trigger = names(Some(direct));
@@ -5456,7 +5565,7 @@ mod tests {
             );
         }
         assert!(trigger.iter().any(|m| m == "get_script"));
-        let text = withheld_note(&agent, direct).unwrap();
+        let text = withheld_note(&agent, direct, false).unwrap();
         assert!(
             text.contains("- propose_script_change: its change always waits for the user's Apply"),
             "{text}"

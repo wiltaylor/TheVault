@@ -1,6 +1,6 @@
 //! S1 with S7 and the fake Anthropic: agent triggers run on the server (agents G9 to G12). A note
-//! event starts an unattended turn on a new thread with the event line; the turn is offered no
-//! change tool whose confirmation switch is on; a change tool whose switch is off applies at once,
+//! event starts an unattended turn on a new thread with the event line; held changes persist as
+//! proposals; a change tool whose switch is off applies at once,
 //! authored by the agent, and fires no further trigger; runs are recorded and listed; a failed
 //! run leaves one notification linking to its thread.
 
@@ -108,6 +108,240 @@ struct Api {
     client: Client,
 }
 
+fn mail_triage_login(api: &Api) -> String {
+    let res = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    res.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+fn mail_triage_fixture(api: &Api, cookie: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for i in 0..21 {
+        let note = api.send(
+            "POST",
+            "/api/notes?type=email",
+            json!({"note":{"fields":{"title":format!("Mail {i}"),"sent":"2000-01-01T00:00:00Z"}}}),
+        );
+        if i < 20 {
+            ids.push(note["id"].as_str().unwrap().to_owned());
+        }
+    }
+    let p: Value = safety_session(
+        api,
+        cookie,
+        "/api/agent-safety/release/preview",
+        json!({"ids":ids}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    safety_session(
+        api,
+        cookie,
+        "/api/agent-safety/release/approve",
+        json!({"preview":p["preview"],"approve":true}),
+    )
+    .error_for_status()
+    .unwrap();
+    ids
+}
+
+#[test]
+fn mail_triage_preview_auth_bounds_single_summary_and_no_mutation_tools() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent(
+        "reader",
+        r#"label = "Reader"
+permissions {
+ confirm { notes = false archive = false delete = false }
+ scripts { run_code = true }
+ subagents { allow = true }
+}
+"#,
+    );
+    let cookie = mail_triage_login(&api);
+    let ids = mail_triage_fixture(&api, &cookie);
+    let path = "/api/inbox/triage";
+    assert_eq!(
+        api.request("POST", path, Some(json!({"agent":"reader","limit":20})))
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        api.client
+            .post(api.server.url(path))
+            .json(&json!({"agent":"reader","limit":20}))
+            .send()
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    for limit in [0, 19, 51, 1000] {
+        assert_eq!(
+            safety_session(&api, &cookie, path, json!({"agent":"reader","limit":limit})).status(),
+            reqwest::StatusCode::BAD_REQUEST
+        );
+    }
+    let p: Value = safety_session(&api, &cookie, path, json!({"agent":"reader","limit":50}))
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(p["count"], 20, "held note excluded");
+    assert_eq!(p["selected"], 20);
+    assert!(fake.message_requests().is_empty(), "preview is zero-call");
+    fake.push(AnthropicMessage::new().tool_use(
+        "forbidden",
+        "run_script",
+        json!({"code":"use vault"}),
+    ));
+    fake.push(AnthropicMessage::new().tool_use(
+        "forbidden-sub",
+        "start_subagent",
+        json!({"task":"mutate"}),
+    ));
+    fake.push(AnthropicMessage::new().tool_use(
+        "forbidden-write",
+        "propose_fields",
+        json!({"id":ids[0],"fields":{"processed":true}}),
+    ));
+    fake.push(AnthropicMessage::text(
+        "Recommendations only: review these messages. No changes made.",
+    ));
+    let approval = json!({"agent":"reader","preview":p["preview"]});
+    let confirmed: Value = safety_session(&api, &cookie, path, approval.clone())
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(confirmed["queued"], true);
+    api.advance("PT1S");
+    assert_eq!(fake.message_requests().len(), 4);
+    for i in 0..4 {
+        assert_eq!(tool_names(&fake, i), vec!["get_note"]);
+    }
+    let runs = api.runs("reader");
+    let batch = runs["triggers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["kind"] == "recommendation")
+        .unwrap();
+    assert_eq!(batch["runs"].as_array().unwrap().len(), 1);
+    let thread = batch["runs"][0]["thread"].as_str().unwrap();
+    let transcript = api.get(&format!("/api/agents/reader/threads/{thread}"));
+    assert!(
+        !transcript
+            .to_string()
+            .contains("\"event\":\"fields_proposal\"")
+    );
+    for id in ids {
+        assert_ne!(
+            api.get(&format!("/api/notes/{id}"))["note"]["fields"]["processed"],
+            true
+        );
+    }
+    assert_eq!(
+        safety_session(&api, &cookie, path, approval).status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        safety_session(&api, &cookie, path, json!({"agent":"reader","limit":20})).status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "successful batches are not selected again"
+    );
+}
+
+#[test]
+fn mail_triage_confirmation_rechecks_processed_and_permissions() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", "label = \"Reader\"\n");
+    let cookie = mail_triage_login(&api);
+    mail_triage_fixture(&api, &cookie);
+    let p: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/inbox/triage",
+        json!({"agent":"reader","limit":20}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    api.agent(
+        "reader",
+        "label = \"Reader\"\npermissions { types = [\"memo\"] }\n",
+    );
+    assert_eq!(
+        safety_session(
+            &api,
+            &cookie,
+            "/api/inbox/triage",
+            json!({"agent":"reader","preview":p["preview"]})
+        )
+        .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    api.advance("PT35S");
+    assert!(fake.message_requests().is_empty());
+}
+
+#[test]
+fn mail_triage_mark_old_preview_and_commit_start_zero_model_runs() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.agent("reader", "label = \"Reader\"\ntrigger changed { on = [\"update\"] type = \"email\" prompt = \"Read mail\" }\n");
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"Old sent mail","sent":"2000-01-01T00:00:00Z","labels":["system/SENT"]}}}));
+    let dry = api.send(
+        "POST",
+        "/api/inbox/mark-processed",
+        json!({"before":"2001-01-01T00:00:00Z","dry_run":true}),
+    );
+    assert_eq!(dry["total"], 1);
+    assert_eq!(dry["changed"], 0);
+    api.advance("PT35S");
+    assert!(fake.message_requests().is_empty());
+    let done = api.send(
+        "POST",
+        "/api/inbox/mark-processed",
+        json!({"before":"2001-01-01T00:00:00Z"}),
+    );
+    assert_eq!(done["changed"], 1);
+    api.advance("PT35S");
+    assert!(fake.message_requests().is_empty());
+    let id = note["id"].as_str().unwrap();
+    let current = api.get(&format!("/api/notes/{id}"));
+    let mut doc = current["note"].clone();
+    doc["fields"]["title"] = json!("Ordinary edit");
+    fake.push(AnthropicMessage::text("Ordinary update received"));
+    api.send(
+        "PUT",
+        &format!("/api/notes/{id}"),
+        json!({"note":doc,"base_version":current["version"]}),
+    );
+    api.advance("PT35S");
+    assert_eq!(
+        fake.message_requests().len(),
+        1,
+        "ordinary updates still trigger"
+    );
+}
+
 fn safety_setup(chat: &FakeAnthropic, decisions: &testkit::FakeDecisions, account: &str) -> Api {
     let api = Api::start(chat);
     api.send("POST", "/api/integrations/ai/accounts", json!({
@@ -203,6 +437,8 @@ fn safety_rest_read_route_inventory() {
     let expected = [
         "/agent/install.sh",
         "/api/activity",
+        // TV-151: session-only summary, never held content to tokens or agents.
+        "/api/agent-safety/backfill",
         "/api/agent-safety/evidence/{id}",
         "/api/agent-safety/held",
         "/api/agents",
@@ -215,6 +451,8 @@ fn safety_rest_read_route_inventory() {
         "/api/ai/accounts",
         "/api/ai/chat/turns/{turn}/events",
         "/api/ai/models",
+        // TV-217 review: owner-only token counts, no held-note content or identifiers.
+        "/api/ai/usage",
         "/api/assets",
         "/api/assets/trash",
         "/api/assets/{id}",
@@ -235,6 +473,7 @@ fn safety_rest_read_route_inventory() {
         "/api/flagged",
         "/api/health",
         "/api/integrations/ai",
+        "/api/integrations/attempt-limits",
         "/api/integrations/brave",
         "/api/integrations/browser",
         "/api/integrations/gitsync",
@@ -287,24 +526,97 @@ fn safety_rest_read_route_inventory() {
 
 #[test]
 fn safety_rest_mutation_route_inventory() {
-    // Review every new non-GET route, including endpoints that return note text.
-    let source = include_str!("../../api/src/lib.rs");
-    let mut actual = Vec::new();
-    for method in ["post", "post_up_to", "put", "put_up_to", "patch"] {
-        let marker = format!(".{method}(");
-        for part in source.split(&marker).skip(1) {
-            if let Some(path) = part
-                .trim_start()
-                .strip_prefix('"')
-                .and_then(|s| s.split('"').next())
-            {
-                actual.push((method, path));
-            }
-        }
-    }
+    // Registered paths include const paths and size-limited POST/PUT routes.
+    let mut actual: Vec<_> = api::routes()
+        .into_iter()
+        .filter_map(|(method, path)| {
+            let method = match method {
+                reqwest::Method::POST => "post",
+                reqwest::Method::PUT => "put",
+                reqwest::Method::PATCH => "patch",
+                reqwest::Method::DELETE => "delete",
+                _ => return None,
+            };
+            Some((method, path))
+        })
+        .collect();
     actual.sort_unstable();
     actual.dedup();
     let reviewed = [
+        ("delete", "/api/agents/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/agents/{name}/memories/{id}",
+            "caller ownership checked",
+        ),
+        (
+            "delete",
+            "/api/agents/{name}/threads/{id}",
+            "caller ownership checked",
+        ),
+        (
+            "delete",
+            "/api/ai/chat/turns/{turn}",
+            "caller-bound turn ownership checked",
+        ),
+        ("delete", "/api/assets/{id}", "central asset id gate"),
+        (
+            "delete",
+            "/api/device-files/{platform}",
+            "admin scope required",
+        ),
+        ("delete", "/api/devices/{id}", "admin scope required"),
+        (
+            "delete",
+            "/api/integrations/ai/accounts/{id}",
+            "admin scope required",
+        ),
+        (
+            "delete",
+            "/api/integrations/gitsync",
+            "admin scope required",
+        ),
+        (
+            "delete",
+            "/api/integrations/gitsync/token",
+            "admin scope required",
+        ),
+        ("delete", "/api/notes/{id}", "central id gate"),
+        (
+            "delete",
+            "/api/notifications",
+            "caller metadata, no stored note body",
+        ),
+        (
+            "delete",
+            "/api/notifications/{id}",
+            "caller metadata, no stored note body",
+        ),
+        (
+            "delete",
+            "/api/pins/folders/{id}",
+            "caller metadata, no stored note body",
+        ),
+        ("delete", "/api/pins/{id}", "central id gate"),
+        ("delete", "/api/scripts/{name}", "admin scope required"),
+        ("delete", "/api/secrets/{name}", "admin scope required"),
+        ("delete", "/api/skills/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/skills/{name}/files/{*path}",
+            "admin scope required",
+        ),
+        ("delete", "/api/tasks/{name}", "admin scope required"),
+        ("delete", "/api/taxonomies/{name}", "admin scope required"),
+        ("delete", "/api/tokens/{name}", "admin scope required"),
+        ("delete", "/api/tools/{name}", "admin scope required"),
+        ("delete", "/api/trash/{id}", "human-only purge"),
+        ("delete", "/api/types/{name}", "admin scope required"),
+        (
+            "delete",
+            "/api/types/{name}/templates/{template}",
+            "admin scope required",
+        ),
         (
             "patch",
             "/api/agents/{name}/memories/{id}",
@@ -330,6 +642,26 @@ fn safety_rest_mutation_route_inventory() {
             "post",
             "/api/agent-codes/redeem",
             "credentials or configuration or input-only response, scope checked",
+        ),
+        (
+            "post",
+            "/api/agent-safety/backfill/approve",
+            "session-only approval, stale preview rejected, no agent tools",
+        ),
+        (
+            "post",
+            "/api/agent-safety/backfill/preview",
+            "session-only estimated price configuration, no provider call",
+        ),
+        (
+            "post",
+            "/api/agent-safety/release/approve",
+            "session-only reviewed fingerprints, activity trail",
+        ),
+        (
+            "post",
+            "/api/agent-safety/release/preview",
+            "session-only filtered metadata",
         ),
         (
             "post",
@@ -372,6 +704,16 @@ fn safety_rest_mutation_route_inventory() {
             "caller ownership or session-only agent operations",
         ),
         ("post", "/api/ai/apply", "caller-bound proposal approval"),
+        (
+            "post",
+            "/api/ai/apply-kind/preview",
+            "session-only stored proposal preview",
+        ),
+        (
+            "post",
+            "/api/ai/apply-kind/confirm",
+            "session-only current selection approval",
+        ),
         (
             "post",
             "/api/ai/chat",
@@ -437,6 +779,11 @@ fn safety_rest_mutation_route_inventory() {
             "post",
             "/api/inbox/mark-processed",
             "credentials or configuration or input-only response, scope checked",
+        ),
+        (
+            "post",
+            "/api/inbox/triage",
+            "session-only counted read-only recommendation batch; held notes excluded and rechecked",
         ),
         (
             "post",
@@ -748,10 +1095,11 @@ fn safety_rest_mutation_route_inventory() {
         ),
     ];
     assert!(reviewed.iter().all(|(_, _, review)| !review.is_empty()));
-    let expected: Vec<_> = reviewed
+    let mut expected: Vec<_> = reviewed
         .iter()
-        .map(|(method, path, _)| (*method, *path))
+        .map(|(method, path, _)| (method.strip_suffix("_up_to").unwrap_or(method), *path))
         .collect();
+    expected.sort_unstable();
     assert_eq!(
         actual, expected,
         "Review the content returned by every new write route"
@@ -941,6 +1289,39 @@ held_rest_route!(safety_rest_daily, "/api/daily/2026-11-10");
 held_rest_route!(safety_rest_planner, "/api/planner/day/2026-11-10");
 
 #[test]
+fn safety_session_query_count_can_exclude_held_notes() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    decisions.push(safety_reply("scam"));
+    let held = safety_note(&api);
+    assert_eq!(
+        safety_wait(&api, held["id"].as_str().unwrap())["agent_safety"]["status"],
+        "held"
+    );
+    decisions.push(safety_reply("allow"));
+    let allowed = safety_note(&api);
+    assert_eq!(
+        safety_wait(&api, allowed["id"].as_str().unwrap())["agent_safety"]["status"],
+        "allowed"
+    );
+    for exclude in [false, true] {
+        let result = api.send(
+            "POST",
+            "/api/query",
+            json!({
+                "query": "from email", "page_size": 1, "exclude_held": exclude
+            }),
+        );
+        assert_eq!(result["total"], if exclude { 1 } else { 2 });
+        if exclude {
+            assert_eq!(result["rows"][0]["id"], allowed["id"]);
+            assert!(result["next"].is_null());
+        }
+    }
+}
+
+#[test]
 fn safety_rest_list_and_post_query_exclude_held_notes() {
     let chat = FakeAnthropic::start();
     let decisions = testkit::FakeDecisions::start();
@@ -1007,6 +1388,131 @@ fn round4_agent_rest_cleanup_and_restore_are_refused() {
         json!({"ids":[asset["id"]]}),
     );
     assert!(restored.to_string().contains("SECRET_ORPHAN.txt"));
+}
+
+#[test]
+fn device_upload_provenance_matrix_and_sticky_retry() {
+    let chat = FakeAnthropic::start();
+    let api = Api::start(&chat);
+    let paired: Value = api
+        .client
+        .post(api.server.url("/api/devices/pair"))
+        .json(&json!({"password":testkit::PASSWORD, "name":"manual-phone", "platform":"android"}))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let token = paired["token"].as_str().unwrap();
+    let agent = api.external_agent_token();
+    let agent_token = agent["secret"].as_str().unwrap();
+    let read = |id: &str| {
+        api.client
+            .get(api.server.url(&format!("/api/assets/{id}")))
+            .bearer_auth(agent_token)
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    for method in [reqwest::Method::POST, reqwest::Method::PUT] {
+        for (i, source) in [
+            "",
+            "&provenance=",
+            "&provenance=unknown",
+            "&provenance=incoming",
+            "&provenance=manual",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = format!("{i:026}");
+            let path = if method == reqwest::Method::POST {
+                "/api/assets".to_owned()
+            } else {
+                format!("/api/assets/{id}")
+            };
+            let res = api
+                .client
+                .request(
+                    method.clone(),
+                    api.server.url(&format!("{path}?filename=part.bin{source}")),
+                )
+                .bearer_auth(token)
+                .body("bytes")
+                .send()
+                .unwrap();
+            assert_eq!(res.status(), 201);
+            let asset: Value = res.json().unwrap();
+            let id = asset["id"].as_str().unwrap();
+            let manual = source == "&provenance=manual";
+            assert_eq!(
+                read(id),
+                if manual { 200 } else { 403 },
+                "{method} {source}"
+            );
+            let path = api.server.url(&format!(
+                "/api/assets/{id}?filename=part.bin&provenance=manual"
+            ));
+            // Neither repeated manual claims nor another token can clear historical denial.
+            for bearer in [token, agent_token, api.server.admin_token()] {
+                let res = api
+                    .client
+                    .put(&path)
+                    .bearer_auth(bearer)
+                    .body("bytes")
+                    .send()
+                    .unwrap();
+                assert_eq!(
+                    res.status().as_u16(),
+                    if bearer == agent_token && !manual {
+                        403
+                    } else {
+                        200
+                    }
+                );
+                assert_eq!(read(id), if manual { 200 } else { 403 });
+            }
+            // Denial arriving later dominates a previously successful manual upload.
+            let res = api
+                .client
+                .put(
+                    api.server
+                        .url(&format!("/api/assets/{id}?filename=part.bin")),
+                )
+                .bearer_auth(token)
+                .body("bytes")
+                .send()
+                .unwrap();
+            assert_eq!(res.status(), 200);
+            assert_eq!(read(id), 403);
+        }
+    }
+    api.send(
+        "DELETE",
+        &format!("/api/devices/{}", paired["device_id"].as_str().unwrap()),
+        json!(null),
+    );
+    for method in [reqwest::Method::POST, reqwest::Method::PUT] {
+        let path = if method == reqwest::Method::POST {
+            "/api/assets".to_owned()
+        } else {
+            "/api/assets/01J00000000000000000000009".to_owned()
+        };
+        assert_eq!(
+            api.client
+                .request(
+                    method,
+                    api.server
+                        .url(&format!("{path}?filename=revoked.bin&provenance=manual"))
+                )
+                .bearer_auth(token)
+                .body("bytes")
+                .send()
+                .unwrap()
+                .status(),
+            401
+        );
+    }
 }
 
 #[test]
@@ -1442,6 +1948,62 @@ fn attachment_envelope_tool_reads_only_cleared_text_not_html_or_binary() {
     assert!(delivered.contains("CLEARED_INVOICE_17"), "{delivered}");
     assert!(!delivered.contains("WITHHELD_RAW_HTML_17"), "{delivered}");
     assert!(!delivered.contains("image/png"), "{delivered}");
+}
+
+#[test]
+fn attachment_envelope_failed_asset_owner_diagnostic_stays_withheld() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = safety_setup(&chat, &decisions, "router");
+    let asset: Value = api
+        .client
+        .post(api.server.url("/api/assets?filename=broken.docx"))
+        .bearer_auth(api.server.admin_token())
+        .body("broken")
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let id = asset["id"].as_str().unwrap();
+    let note = api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{
+            "title":"Broken attachment", "attachments":[id], "sent":"2000-01-01T00:00:00Z"
+        }}}),
+    );
+    let evidence = api.send(
+        "GET",
+        &format!(
+            "/api/agent-safety/evidence/{}",
+            note["id"].as_str().unwrap()
+        ),
+        json!(null),
+    );
+    assert_eq!(evidence["envelope"]["attachments"][0]["status"], "failed");
+    assert!(evidence["envelope"]["attachments"][0].get("text").is_none());
+    assert!(
+        evidence["extraction_failures"][id]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no zip header")
+    );
+    assert!(
+        evidence["extraction_failures"][id]["at_ms"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let token = api.external_agent_token();
+    assert_eq!(
+        api.client
+            .get(api.server.url(&format!("/api/assets/{id}")))
+            .bearer_auth(token["secret"].as_str().unwrap())
+            .send()
+            .unwrap()
+            .status(),
+        403
+    );
 }
 
 #[test]
@@ -2176,6 +2738,424 @@ fn safety_review_server_holds_preexisting_notes_by_default() {
     assert_eq!(note["agent_safety"]["reason"], "predates_activation");
 }
 
+const BACKFILL_IDS: [&str; 5] = [
+    "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA",
+    "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB",
+    "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC",
+    "01JB8Z4K2MQ7V3X9T5R6W8Y2ZD",
+    "01JB8Z4K2MQ7V3X9T5R6W8Y2ZE",
+];
+
+fn historical_safety_setup(fake: &testkit::FakeDecisions) -> (Api, String) {
+    let server = TestServer::start_with_args(
+        |vault| {
+            for (i, kind) in ["email", "message", "call", "event", "email"]
+                .iter()
+                .enumerate()
+            {
+                std::fs::create_dir_all(vault.join("types")).unwrap();
+                std::fs::write(
+                    vault.join(format!("types/{kind}.wcl")),
+                    format!("label = {kind:?}\ntemplate default {{ tab Main {{ slot title }} }}\n"),
+                )
+                .unwrap();
+                std::fs::create_dir_all(vault.join(format!("notes/{kind}"))).unwrap();
+                let created = if i == 4 {
+                    "2025-01-01T00:00:00Z"
+                } else {
+                    "2026-01-01T00:00:00Z"
+                };
+                let incoming_event = if *kind == "event" {
+                    "organiser = \"external@example.test\"\n"
+                } else {
+                    ""
+                };
+                std::fs::write(vault.join(format!("notes/{kind}/{}.wcl", BACKFILL_IDS[i])), format!("title = \"Historical fixture {i}\"\ncreated = {created:?}\n{incoming_event}")).unwrap();
+            }
+        },
+        &[OsStr::new("--test-clock"), OsStr::new(START)],
+    );
+    let api = Api {
+        server,
+        client: Client::new(),
+    };
+    api.send("POST", "/api/integrations/ai/accounts", json!({"name":"router", "kind":"openai_compatible", "base_url":fake.base_url(), "key":testkit::FakeDecisions::KEY}));
+    std::fs::write(
+        api.server.vault_path().join("classifiers/agent_safety.wcl"),
+        format!(
+            "account = \"router\"\n{}",
+            include_str!("../../writer/defaults/classifiers/agent_safety.wcl")
+        ),
+    )
+    .unwrap();
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    (api, cookie)
+}
+
+fn safety_session(api: &Api, cookie: &str, path: &str, body: Value) -> Response {
+    api.client
+        .post(api.server.url(path))
+        .header("cookie", cookie)
+        .json(&body)
+        .send()
+        .unwrap()
+}
+
+fn safety_preview(api: &Api, cookie: &str, price: Value) -> Value {
+    safety_session(
+        api,
+        cookie,
+        "/api/agent-safety/backfill/preview",
+        json!({"estimated_usd_per_decision":price}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap()
+}
+
+#[test]
+fn historical_safety_estimate_zero_calls_prices_and_stale_configuration() {
+    let fake = testkit::FakeDecisions::start();
+    let (api, cookie) = historical_safety_setup(&fake);
+    assert_eq!(
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/backfill/preview",
+            json!({})
+        )
+        .status(),
+        400
+    );
+    for price in [json!(-1), json!("NaN"), json!("Infinity")] {
+        assert!(
+            safety_session(
+                &api,
+                &cookie,
+                "/api/agent-safety/backfill/preview",
+                json!({"estimated_usd_per_decision":price})
+            )
+            .status()
+            .is_client_error()
+        );
+    }
+    let zero = safety_preview(&api, &cookie, json!(0));
+    assert_eq!(zero["count"], 4);
+    assert_eq!(zero["estimated_usd"], 0.0);
+    let p = safety_preview(&api, &cookie, json!(0.25));
+    assert_eq!(p["count"], 4);
+    assert_eq!(p["decisions_per_note"], 1);
+    assert_eq!(p["estimated_usd"], 1.0);
+    assert!(fake.requests().is_empty());
+    let approve = |id: &Value| {
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/backfill/approve",
+            json!({"preview":id,"approve":true}),
+        )
+    };
+    assert_eq!(approve(&zero["preview"]).status(), 409);
+    assert_eq!(
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/backfill/approve",
+            json!({"preview":p["preview"],"approve":false})
+        )
+        .status(),
+        409
+    );
+    let path = api.server.vault_path().join("classifiers/agent_safety.wcl");
+    let source = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{source}\n# changed classifier\n")).unwrap();
+    assert_eq!(approve(&p["preview"]).status(), 409);
+    assert!(fake.requests().is_empty());
+    let p = safety_preview(&api, &cookie, json!(0.25));
+    let accounts = api.get("/api/ai/accounts");
+    let id = accounts["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "router")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    api.send(
+        "PUT",
+        &format!("/api/integrations/ai/accounts/{id}"),
+        json!({"model":"changed-model"}),
+    );
+    assert_eq!(approve(&p["preview"]).status(), 409);
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn historical_safety_bounded_one_attempt_summary_no_triggers_or_restart_retry() {
+    let fake = testkit::FakeDecisions::start();
+    let (mut api, cookie) = historical_safety_setup(&fake);
+    let chat = FakeAnthropic::start();
+    api.agent("reader", "label = \"Reader\"\ntrigger arrived { on = [\"create\"] type = \"email\" prompt = \"Read\" }\n");
+    fake.push(safety_reply("allow"));
+    fake.push(safety_reply("scam"));
+    fake.push(testkit::Reply::json(
+        500,
+        &json!({"error":{"message":"fixture"}}),
+    ));
+    fake.push(safety_reply("allow"));
+    let p = safety_preview(&api, &cookie, json!(0.1));
+    let began = std::time::Instant::now();
+    let input = json!({"preview":p["preview"],"approve":true});
+    assert_eq!(
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/backfill/approve",
+            input.clone()
+        )
+        .status(),
+        200
+    );
+    assert_eq!(
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/backfill/approve",
+            input.clone()
+        )
+        .status(),
+        409
+    );
+    let summary = loop {
+        let p: Value = api
+            .client
+            .get(api.server.url("/api/agent-safety/backfill"))
+            .header("cookie", &cookie)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        if p["status"] == "complete" {
+            break p;
+        }
+        assert!(began.elapsed() < Duration::from_secs(20), "{p}");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(began.elapsed() >= Duration::from_secs(3));
+    assert_eq!(summary["attempted"], 4);
+    assert_eq!(summary["allowed"], 2);
+    assert_eq!(summary["held"]["scam"], 1);
+    assert_eq!(summary["failed"], 1);
+    assert_eq!(fake.requests().len(), 4);
+    assert_eq!(
+        api.get(&format!("/api/notes/{}", BACKFILL_IDS[4]))["agent_safety"]["status"],
+        "held"
+    );
+    assert_eq!(
+        api.get(&format!("/api/notes/{}", BACKFILL_IDS[0]))["agent_safety"]["status"],
+        "allowed"
+    );
+    let state = state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+    assert!(state.agent_safety_clearances().unwrap().is_empty());
+    api.advance("PT35S");
+    assert!(
+        api.get("/api/agents/reader/runs")["triggers"][0]["runs"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(chat.message_requests().is_empty());
+    api.server.restart();
+    assert_eq!(fake.requests().len(), 4);
+    assert_eq!(
+        safety_session(&api, &cookie, "/api/agent-safety/backfill/approve", input).status(),
+        409
+    );
+}
+
+#[test]
+fn historical_safety_all_actions_refuse_tokens_agent_and_missing_approval() {
+    let fake = testkit::FakeDecisions::start();
+    let (api, cookie) = historical_safety_setup(&fake);
+    let agent = api.external_agent_token();
+    let read = api.send(
+        "POST",
+        "/api/tokens",
+        json!({"name":"safety-read","scope":"read"}),
+    );
+    let write = api.send(
+        "POST",
+        "/api/tokens",
+        json!({"name":"safety-write","scope":"write"}),
+    );
+    for token in [
+        api.server.admin_token(),
+        agent["secret"].as_str().unwrap(),
+        read["secret"].as_str().unwrap(),
+        write["secret"].as_str().unwrap(),
+    ] {
+        for path in [
+            "/api/agent-safety/backfill/preview",
+            "/api/agent-safety/backfill/approve",
+            "/api/agent-safety/release/preview",
+            "/api/agent-safety/release/approve",
+        ] {
+            let response = api
+                .client
+                .post(api.server.url(path))
+                .bearer_auth(token)
+                .json(&json!({"estimated_usd_per_decision":0,"approve":true,"preview":"forged"}))
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), 403, "{path}");
+        }
+        assert_eq!(
+            api.client
+                .get(api.server.url("/api/agent-safety/backfill"))
+                .bearer_auth(token)
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+    }
+    for path in [
+        "/api/agent-safety/backfill/approve",
+        "/api/agent-safety/release/approve",
+    ] {
+        assert_eq!(
+            safety_session(
+                &api,
+                &cookie,
+                path,
+                json!({"preview":"forged","approve":true})
+            )
+            .status(),
+            409
+        );
+        assert_eq!(
+            api.client
+                .post(api.server.url(path))
+                .json(&json!({"preview":"forged","approve":true}))
+                .send()
+                .unwrap()
+                .status(),
+            401
+        );
+    }
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn historical_safety_bulk_filter_selection_trail_and_stale_note() {
+    let fake = testkit::FakeDecisions::start();
+    let (api, cookie) = historical_safety_setup(&fake);
+    let p: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"type":"email","since":"2024-01-01T00:00:00Z","until":"2025-01-02T00:00:00Z","reason":"predates_activation"})).error_for_status().unwrap().json().unwrap();
+    assert_eq!(p["count"], 1);
+    let summary: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/approve",
+        json!({"preview":p["preview"],"approve":true}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(summary["released"], 1);
+    assert_eq!(summary["released_ids"], json!([BACKFILL_IDS[4]]));
+    let p: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/preview",
+        json!({"ids":[BACKFILL_IDS[0],BACKFILL_IDS[1]]}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(p["count"], 2);
+    let summary: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/approve",
+        json!({"preview":p["preview"],"approve":true}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(summary["released"], 2);
+    assert_eq!(
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/release/approve",
+            json!({"preview":p["preview"],"approve":true})
+        )
+        .status(),
+        409
+    );
+    let estimate = safety_preview(&api, &cookie, json!(0));
+    let p: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/agent-safety/release/preview",
+        json!({"ids":[BACKFILL_IDS[2]]}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    let note = api.get(&format!("/api/notes/{}", BACKFILL_IDS[2]));
+    api.send(
+        "PUT",
+        &format!("/api/notes/{}", BACKFILL_IDS[2]),
+        json!({"base_version":note["version"],"note":{"fields":{"title":"changed"}}}),
+    );
+    assert_eq!(
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/release/approve",
+            json!({"preview":p["preview"],"approve":true})
+        )
+        .status(),
+        409
+    );
+    assert_eq!(
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/backfill/approve",
+            json!({"preview":estimate["preview"],"approve":true})
+        )
+        .status(),
+        409
+    );
+    assert!(
+        api.get("/api/activity")
+            .to_string()
+            .contains("agent_safety.bulk_release")
+    );
+    assert!(fake.requests().is_empty());
+}
+
 impl Api {
     fn external_agent_token(&self) -> Value {
         let issued = self.send(
@@ -2569,6 +3549,363 @@ fn review_f6_backfill_preview_keeps_success_after_a_failing_edit_run() {
 }
 
 #[test]
+fn trigger_edit_delete_and_script_proposals_survive_restart_and_resolution() {
+    let fake = FakeAnthropic::start();
+    let mut api = Api::start(&fake);
+    api.agent("reader", "label = \"Reader\"\ntrigger any {\n on = [\"create\"]\n type = \"memo\"\n prompt = \"Review it.\"\n}\n");
+    let (id, version) = api.memo("Unchanged", "open");
+    fake.push(
+        AnthropicMessage::new()
+            .tool_use(
+                "toolu_edit",
+                "propose_edit",
+                json!({
+                    "id": id, "base_version": version,
+                    "note": json!({"fields":{"title":"Proposed", "status":"open"}}).to_string()
+                }),
+            )
+            .tool_use("toolu_delete", "propose_delete", json!({"id":id}))
+            .tool_use(
+                "toolu_script",
+                "propose_script_change",
+                json!({
+                    "name":"pending_trigger_script", "source":"fn run() { }\n"
+                }),
+            ),
+    );
+    fake.push(AnthropicMessage::text("Waiting for review."));
+    api.advance("PT31S");
+    assert_eq!(fake.message_requests().len(), 2);
+    let threads = api.get("/api/agents/reader/threads");
+    let thread = threads["threads"][0]["id"].as_str().unwrap().to_owned();
+    let path = format!("/api/agents/reader/threads/{thread}");
+    let before = api.get(&path);
+    assert_eq!(before["pending"], 3, "{before}");
+    let waiting = api.get("/api/dispatched?state=needs_you");
+    assert_eq!(waiting["threads"].as_array().unwrap().len(), 1, "{waiting}");
+    assert_eq!(waiting["threads"][0]["id"], thread);
+    assert_eq!(waiting["threads"][0]["origin"], "trigger:any");
+    assert_eq!(waiting["threads"][0]["pending"], 3);
+    let agent_token = api.external_agent_token();
+    let denied = api
+        .client
+        .get(api.server.url("/api/dispatched"))
+        .bearer_auth(agent_token["secret"].as_str().unwrap())
+        .send()
+        .unwrap();
+    assert_eq!(
+        denied.status(),
+        403,
+        "agent tokens cannot list approval threads"
+    );
+    let read_token = api.send(
+        "POST",
+        "/api/tokens",
+        json!({"name":"approval-reader", "scope":"read"}),
+    );
+    let listed: Value = api
+        .client
+        .get(api.server.url("/api/dispatched?state=needs_you"))
+        .bearer_auth(read_token["secret"].as_str().unwrap())
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(listed["threads"], waiting["threads"]);
+    for route in ["/api/ai/apply", "/api/ai/discard"] {
+        let denied = api
+            .client
+            .post(api.server.url(route))
+            .bearer_auth(read_token["secret"].as_str().unwrap())
+            .json(&before["proposals"][0]["data"])
+            .send()
+            .unwrap();
+        assert_eq!(denied.status(), 403, "read tokens cannot resolve proposals");
+    }
+    for event in ["proposal", "script_proposal"] {
+        assert!(
+            before["proposals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["event"] == event && p["status"] == "pending"),
+            "{before}"
+        );
+    }
+    assert_eq!(api.get(&format!("/api/notes/{id}"))["version"], version);
+    assert!(
+        !api.server
+            .vault_path()
+            .join("scripts/pending_trigger_script.ws")
+            .exists()
+    );
+    api.server.restart();
+    let reopened = api.get(&path);
+    assert_eq!(reopened["proposals"], before["proposals"]);
+    assert_eq!(reopened["pending"], 3);
+    assert_eq!(api.get(&format!("/api/notes/{id}"))["version"], version);
+    let edit = reopened["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["event"] == "proposal" && p["data"]["op"] != "delete");
+    // Resolve one proposal through the existing Apply endpoint, the rest through Discard.
+    let edit = edit.expect("the trigger retained its edit proposal");
+    api.send("POST", "/api/ai/apply", edit["data"].clone());
+    assert_eq!(api.get(&path)["pending"], 2);
+    assert_eq!(
+        api.get("/api/dispatched?state=needs_you")["threads"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    for p in reopened["proposals"].as_array().unwrap() {
+        if p == edit {
+            continue;
+        }
+        api.send("POST", "/api/ai/discard", p["data"].clone());
+    }
+    assert_eq!(api.get(&path)["pending"], 0);
+    assert!(
+        api.get("/api/dispatched?state=needs_you")["threads"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        api.get("/api/dispatched")["threads"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let resolved = api.get(&path)["proposals"].clone();
+    api.server.restart();
+    assert_eq!(api.get(&path)["proposals"], resolved);
+    assert_eq!(api.get(&path)["pending"], 0);
+}
+
+fn approval_cookie(api: &Api) -> String {
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+fn approval_batch_fixture(fake: &FakeAnthropic) -> (Api, String, String, String) {
+    let api = Api::start(fake);
+    api.agent("reader", "label = \"Reader\"\ntrigger any {\n on = [\"create\"]\n type = \"memo\"\n prompt = \"Review it.\"\n}\n");
+    let (id, version) = api.memo("Original", "open");
+    let (other, other_version) = api.memo("Second", "open");
+    fake.push(AnthropicMessage::new()
+        .tool_use("batch_create1", "propose_create", json!({"type":"memo", "note":json!({"fields":{"title":"First new"}}).to_string()}))
+        .tool_use("batch_create2", "propose_create", json!({"type":"memo", "note":json!({"fields":{"title":"Second new"}}).to_string()}))
+        .tool_use("batch_email", "propose_create", json!({"type":"email", "note":json!({"fields":{"title":"Different kind"}}).to_string()}))
+        .tool_use("batch_edit1", "propose_edit", json!({"id":id, "base_version":version, "note":json!({"fields":{"title":"Edited"}}).to_string()}))
+        .tool_use("batch_edit2", "propose_edit", json!({"id":other, "base_version":other_version, "note":json!({"fields":{"title":"Edited second"}}).to_string()}))
+        .tool_use("batch_delete", "propose_delete", json!({"id":id})));
+    fake.push(AnthropicMessage::text("Review these changes."));
+    api.advance("PT31S");
+    let list = api.get("/api/agents/reader/threads");
+    let thread = list["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["pending"].as_u64().unwrap_or(0) > 0)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    (api, thread, id, other)
+}
+
+#[test]
+fn apply_kind_snapshot_session_confirmation_and_retry_never_repeat_creates() {
+    let fake = FakeAnthropic::start();
+    let (mut api, thread, _, _) = approval_batch_fixture(&fake);
+    let initial = api.get(&format!("/api/agents/reader/threads/{thread}"));
+    assert_eq!(
+        initial["pending"], 6,
+        "all mixed-kind fixtures must actually propose: {initial}"
+    );
+    let cookie = approval_cookie(&api);
+    let selection = json!({"thread":thread,"proposal":"batch_create1"});
+    for token in [
+        api.server.admin_token().to_owned(),
+        api.external_agent_token()["secret"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    ] {
+        for route in ["preview", "confirm"] {
+            let res = api
+                .client
+                .post(api.server.url(&format!("/api/ai/apply-kind/{route}")))
+                .bearer_auth(&token)
+                .json(&selection)
+                .send()
+                .unwrap();
+            assert_eq!(res.status(), 403);
+        }
+    }
+    let p: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/preview", selection)
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(p["count"], 2, "{p}");
+    assert_eq!(p["kind"], json!(["proposal", "create", "memo"]));
+    let body = json!({"preview":p["preview"],"confirmed":true});
+    let rejected = safety_session(
+        &api,
+        &cookie,
+        "/api/ai/apply-kind/confirm",
+        json!({"preview":p["preview"],"confirmed":false}),
+    );
+    assert_eq!(rejected.status(), 400);
+    let other_session = approval_cookie(&api);
+    assert_eq!(
+        safety_session(
+            &api,
+            &other_session,
+            "/api/ai/apply-kind/confirm",
+            body.clone()
+        )
+        .status(),
+        400
+    );
+    let apply = || -> Value {
+        safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body.clone())
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    let (first, concurrent) = std::thread::scope(|s| {
+        let retry = s.spawn(apply);
+        (apply(), retry.join().unwrap())
+    });
+    assert_eq!(
+        concurrent, first,
+        "concurrent retry returns the same created IDs"
+    );
+    assert!(
+        first["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["ok"] == true),
+        "{first}"
+    );
+    assert_eq!(apply(), first, "same stable result IDs, no second create");
+    let path = format!("/api/agents/reader/threads/{thread}");
+    let after = api.get(&path);
+    for proposal in after["proposals"].as_array().unwrap() {
+        let id = proposal["data"]["id"].as_str().unwrap();
+        assert_eq!(
+            proposal["status"],
+            if id == "batch_create1" || id == "batch_create2" {
+                "applied"
+            } else {
+                "pending"
+            }
+        );
+    }
+    // A normal Apply of an already successful batch proposal also returns the original result.
+    let result = api.send("POST", "/api/ai/apply", p["items"][0]["data"].clone());
+    assert_eq!(result, first["results"][0]["result"]);
+    api.server.restart();
+    let result = api.send("POST", "/api/ai/apply", p["items"][0]["data"].clone());
+    assert_eq!(
+        result, first["results"][0]["result"],
+        "success survives restart"
+    );
+    assert_eq!(
+        safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body).status(),
+        400,
+        "in-memory previews do not survive restart"
+    );
+}
+
+#[test]
+fn apply_kind_partial_stale_and_revoked_permissions_are_rechecked() {
+    let fake = FakeAnthropic::start();
+    let (api, thread, id, other) = approval_batch_fixture(&fake);
+    let cookie = approval_cookie(&api);
+    let p: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/ai/apply-kind/preview",
+        json!({"thread":thread,"proposal":"batch_edit1"}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(p["count"], 2);
+    let note = api.get(&format!("/api/notes/{id}"));
+    api.send("PUT", &format!("/api/notes/{id}"), json!({"base_version":note["version"], "note":{"fields":{"title":"Changed after preview"}}}));
+    let body = json!({"preview":p["preview"],"confirmed":true});
+    let first: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body.clone())
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(first["results"][0]["ok"], false, "{first}");
+    assert_eq!(first["results"][1]["ok"], true, "{first}");
+    let version = api.get(&format!("/api/notes/{other}"))["version"].clone();
+    let retry: Value = safety_session(&api, &cookie, "/api/ai/apply-kind/confirm", body)
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(retry["results"][1], first["results"][1]);
+    assert_eq!(api.get(&format!("/api/notes/{other}"))["version"], version);
+    let p: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/ai/apply-kind/preview",
+        json!({"thread":thread,"proposal":"batch_create1"}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    api.agent("reader", "label = \"Reader\"\nenabled = false\n");
+    let result: Value = safety_session(
+        &api,
+        &cookie,
+        "/api/ai/apply-kind/confirm",
+        json!({"preview":p["preview"],"confirmed":true}),
+    )
+    .error_for_status()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert!(
+        result["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["ok"] == false),
+        "{result}"
+    );
+}
+
+#[test]
 fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
@@ -2594,8 +3931,8 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
         format!("Tidy this memo.\nEvent: create of note {id} (type memo, title \"Roof\")")
     );
 
-    // Offered the read tools and the note changes its switch lets through, nothing that would
-    // wait for a user.
+    // Offered the direct changes and the note changes that wait for Apply in the trigger's
+    // thread (TV-146 A1, TV-240), not the families left undecided for triggers (TV-271).
     let tools = tool_names(&fake, 0);
     for t in [
         "search_notes",
@@ -2606,9 +3943,10 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
     ] {
         assert!(tools.contains(&t.to_owned()), "{t} in {tools:?}");
     }
+    for t in ["propose_archive", "propose_delete"] {
+        assert!(tools.contains(&t.to_owned()), "{t} in {tools:?}");
+    }
     for t in [
-        "propose_archive",
-        "propose_delete",
         "propose_type_change",
         "propose_taxonomy_change",
         "propose_taxonomy_delete",
@@ -2658,7 +3996,7 @@ fn a_note_event_runs_the_agent_unattended_on_a_new_thread() {
 }
 
 #[test]
-fn a_change_tool_whose_switch_is_on_is_left_out_of_a_trigger_run() {
+fn a_change_tool_whose_switch_is_on_is_offered_as_a_trigger_proposal() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent(
@@ -2674,17 +4012,18 @@ fn a_change_tool_whose_switch_is_on_is_left_out_of_a_trigger_run() {
         .collect();
     assert!(tools.contains(&"propose_delete"), "{tools:?}");
     assert!(tools.contains(&"get_note"), "{tools:?}");
-    assert!(!tools.contains(&"propose_edit"), "{tools:?}");
-    assert!(!tools.contains(&"propose_create"), "{tools:?}");
+    assert!(tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(tools.contains(&"propose_create"), "{tools:?}");
     fake.push(AnthropicMessage::text("Read."));
     api.memo("Roof", "open");
     api.advance("PT31S");
     let offered = tool_names(&fake, 0);
     assert_eq!(offered, tools, "the run is offered what the route says");
-    // Unlike a call from a note (TV-77 D2), the trigger's run says what it holds back.
+    // The trigger keeps note proposals, and says which other changes it holds back (TV-271).
     let system = fake.message_requests()[0].json()["system"].to_string();
     assert!(system.contains("This run is unattended"), "{system}");
-    assert!(system.contains("create or edit notes"), "{system}");
+    assert!(!system.contains("create or edit notes"), "{system}");
+    assert!(system.contains("change or delete types"), "{system}");
 }
 
 #[test]
@@ -2741,7 +4080,7 @@ fn a_failed_run_is_recorded_and_notified_once() {
 }
 
 #[test]
-fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
+fn an_unattended_run_starts_sub_agents_that_keep_held_proposals() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
     api.agent(
@@ -2767,12 +4106,11 @@ fn an_unattended_run_starts_sub_agents_offered_only_what_it_may_make() {
     api.memo("Roof", "open");
     api.advance("PT31S");
     assert_eq!(fake.message_requests().len(), 3);
-    // The sub agent, like its run, has nobody to ask (subagents U8): it is offered the change
-    // tools it makes itself, not those that would only propose, and never start_subagent.
+    // The sub agent inherits the parent's proposal mode, but cannot start another subagent.
     let sub = tool_names(&fake, 1);
     assert!(sub.contains(&"propose_delete".to_owned()), "{sub:?}");
     assert!(sub.contains(&"get_note".to_owned()), "{sub:?}");
-    assert!(!sub.contains(&"propose_create".to_owned()), "{sub:?}");
+    assert!(sub.contains(&"propose_create".to_owned()), "{sub:?}");
     assert!(!sub.contains(&"start_subagent".to_owned()), "{sub:?}");
     let runs = api.runs("chief");
     assert_eq!(
@@ -2809,7 +4147,8 @@ fn a_trigger_run_refuses_a_grant_it_cannot_have_applied_and_a_chat_proposes_it()
         "{:?}",
         tool_names(&fake, 0)
     );
-    // The model is told the change was refused, not that it waits.
+    // The model is told the change was refused, not that it waits (TV-84): agent changes are
+    // not among the proposals a trigger's thread keeps (TV-271).
     let r = fake.message_requests()[1].json();
     let result = r["messages"].as_array().unwrap().last().unwrap()["content"][0].clone();
     assert_eq!(result["is_error"], true, "{result}");

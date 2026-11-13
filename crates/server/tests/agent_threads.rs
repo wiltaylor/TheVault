@@ -1146,16 +1146,18 @@ fn proposals_and_their_outcomes_are_kept_in_the_thread_and_told_to_the_model_onc
     let last = req["messages"].as_array().unwrap().last().unwrap().clone();
     assert_eq!(last["content"].as_array().unwrap().len(), 1, "{last}");
 
-    // A failed apply is kept as stale: the note moved on.
+    // Retrying a successful stable proposal returns its original result without a second
+    // write or replacing its recorded success with a stale failure (TV-242).
     let stale = api.request_as(
         &api.token(),
         "POST",
         "/api/ai/apply",
         Some(proposals[0].clone()),
     );
-    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(stale.status(), StatusCode::OK);
+    assert_eq!(stale.json::<Value>().unwrap(), done);
     let t = api.read_thread("assistant", &thread);
-    assert_eq!(t["proposals"][0]["status"], "stale");
+    assert_eq!(t["proposals"][0]["status"], "applied");
 }
 
 #[test]

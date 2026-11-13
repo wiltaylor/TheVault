@@ -308,11 +308,18 @@ pub async fn read(
     }
     let (note, safety) = blocking(w, move |w| {
         let note = w.read(&id)?;
-        let safety = if w.state().meta("agent_safety.activation_ms")?.is_some() {
+        let mut safety = if w.state().meta("agent_safety.activation_ms")?.is_some() {
             json!({"agent_safety": w.agent_safety_doc(&id, &note.type_name, &note.doc)?})
         } else {
             json!({})
         };
+        // Read the durable admission deadline, never a caller-editable note field.
+        if note.type_name == "outbox"
+            && doc_to_json(&note.doc)["fields"]["status"] == "ready"
+            && let Some(deadline) = w.state().outbox_deadline(&id)?
+        {
+            safety["send_deadline_ms"] = json!(deadline);
+        }
         Ok::<_, writer::Error>((note, safety))
     })
     .await?;
@@ -364,11 +371,15 @@ pub async fn safety_evidence(
         let current = stored.as_ref().is_some_and(|s| s["fingerprint"] == fingerprint);
         let bytes = envelope.to_string().len();
         let mut omissions = Vec::new();
+        let mut extraction_failures = serde_json::Map::new();
         if let Some(html) = note.doc.field("html").and_then(schema::Value::as_str) {
             omissions.push(json!({"id":html,"reason":"HTML stays withheld"}));
         }
         for entry in envelope["attachments"].as_array().into_iter().flatten() {
             let asset_id = entry["id"].as_str().unwrap_or_default();
+            if let Some(failure) = w.asset_extraction_failure(asset_id) {
+                extraction_failures.insert(asset_id.to_owned(), failure);
+            }
             let html = w.state().meta(&format!("agent_safety.asset_html.{asset_id}"))?.is_some();
             if html || entry["status"] != "ready" || bytes > writer::agent_safety::ENVELOPE_LIMIT {
                 omissions.push(json!({"id":asset_id,"reason":if html {"HTML stays withheld"} else if bytes > writer::agent_safety::ENVELOPE_LIMIT {"over cap"} else {entry["status"].as_str().unwrap_or("unsupported")}}));
@@ -378,6 +389,7 @@ pub async fn safety_evidence(
             "envelope": envelope, "fingerprint": fingerprint,
             "decision_status": stored.as_ref().map(|s| &s["status"]),
             "omissions": omissions,
+            "extraction_failures": extraction_failures,
             "decision_current": current, "bytes": bytes,
             "limit": writer::agent_safety::ENVELOPE_LIMIT,
             "estimated_input_tokens": bytes.div_ceil(4)

@@ -354,35 +354,13 @@ fn validate_login(b: SecretBody) -> Result<state::LoginSecret, ApiError> {
     let seed = b
         .totp_seed
         .filter(|s| !s.is_empty())
-        .map(|s| s.replace(' ', "").to_ascii_uppercase());
-    if let Some(seed) = &seed {
-        let unpadded = seed.trim_end_matches('=');
-        let remainder = unpadded.len() % 8;
-        let valid_length = matches!(remainder, 0 | 2 | 4 | 5 | 7);
-        let expected_padding = (8 - remainder) % 8;
-        let padding = seed.len() - unpadded.len();
-        let trailing_bits = match remainder {
-            2 => 2,
-            4 => 4,
-            5 => 1,
-            7 => 3,
-            _ => 0,
-        };
-        let last = unpadded.bytes().last().and_then(|c| {
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-                .iter()
-                .position(|&v| v == c)
-        });
-        if unpadded.is_empty()
-            || !valid_length
-            || (padding != 0 && padding != expected_padding)
-            || !unpadded
-                .bytes()
-                .all(|c| c.is_ascii_uppercase() || (b'2'..=b'7').contains(&c))
-            || last.is_none_or(|v| v & ((1 << trailing_bits) - 1) != 0)
-        {
-            return Err(invalid());
-        }
+        .map(|s| s.trim().to_owned());
+    if let Some(seed) = &seed
+        && crate::browser_redaction::totp(seed, 0, 6, 30).is_none()
+    {
+        return Err(ApiError::bad_request(
+            "Invalid one-time-code seed: use a base32 key or otpauth://totp URI with SHA1, SHA256 or SHA512, digits 6-8 and a positive period.",
+        ));
     }
     let mut origins = Vec::new();
     for origin in b.origins.unwrap_or_default() {

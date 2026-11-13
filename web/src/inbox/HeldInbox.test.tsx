@@ -24,8 +24,9 @@ it("renders held metadata as text without agent controls and releases reviewed f
   expect(done).toHaveBeenCalledWith("a");
 });
 
-it("confirms bulk count and keeps failures after partial success", async () => {
-  const release = vi.spyOn(api, "releaseAgentSafety").mockResolvedValueOnce({ agent_safety: held("a").agent_safety }).mockRejectedValueOnce(new Error("Review changed content again"));
+it("confirms server bulk count and keeps failures after partial success", async () => {
+  const preview = vi.spyOn(api, "safetyReleasePreview").mockResolvedValue({ preview: "review", count: 2 });
+  const release = vi.spyOn(api, "safetyReleaseApprove").mockResolvedValue({ released: 1, failed: 1, released_ids: ["a"] });
   render(() => {
     const [notes, setNotes] = createSignal([held("a"), held("b")]);
     return <HeldInbox notes={notes()} onReleased={(id) => setNotes((ns) => ns.filter((n) => n.id !== id))} />;
@@ -34,10 +35,11 @@ it("confirms bulk count and keeps failures after partial success", async () => {
   fireEvent.click(screen.getByLabelText("Select Subject a"));
   fireEvent.click(screen.getByLabelText("Select Subject b"));
   fireEvent.click(screen.getByText("Release selected"));
-  expect(screen.getByText("Release 2 items into the Inbox and run their matching agent triggers?")).toBeTruthy();
+  expect(await screen.findByText("Release 2 held notes? Matching agent triggers may run.")).toBeTruthy();
+  expect(preview).toHaveBeenCalledWith({ ids: ["a", "b"] });
   expect(release).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("Confirm release"));
-  await screen.findByRole("alert");
+  await screen.findByText("Released 1. Failed 1.");
   expect(screen.queryByText("Subject a")).toBeNull();
   expect(screen.getByText("Subject b")).toBeTruthy();
 });

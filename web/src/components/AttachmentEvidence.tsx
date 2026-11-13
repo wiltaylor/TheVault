@@ -39,6 +39,9 @@ export function AttachmentEvidence(props: { id: string; fingerprint?: string }) 
       <For each={data().envelope.attachments}>{(asset) => <article>
         <strong>{asset.filename ?? asset.id}</strong>
         <p>{asset.status === "ready" ? "Extracted text representation in current envelope" : `Text omitted: ${asset.status}`}</p>
+        <Show when={data().extraction_failures?.[asset.id]}>{(failure) =>
+          <p>Extraction failed: {failure().reason}. Failure time: {failure().at_ms == null ? "unknown (legacy record)" : new Date(failure().at_ms!).toISOString()}</p>
+        }</Show>
         <pre>{JSON.stringify({ ...asset, text: undefined }, null, 2)}</pre>
         <Show when={asset.status === "ready"}><pre>{asset.text}</pre></Show>
       </article>}</For>

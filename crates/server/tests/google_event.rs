@@ -19,6 +19,35 @@ use testkit::{FakeGoogle, TestServer};
 
 const START: &str = "2026-03-01T08:00:00Z";
 
+#[test]
+fn adversarial_import_markup_event_write_back_reads_fresh_google_text() {
+    use crate::import_markup::{TEXT, assert_literal};
+    let api = Api::start();
+    for (id, description) in [
+        ("literal", TEXT.to_owned()),
+        ("html", format!("<p>{TEXT}</p>")),
+    ] {
+        let mut event = standup();
+        event["id"] = json!(id);
+        api.google.put_event("primary", event);
+        api.sync();
+        let note_id = api.event_id(id);
+        api.google
+            .change_event("primary", id, json!({ "description": description }));
+        api.google.clear_requests();
+        // No intervening pull. A stale-etag PATCH must fetch and convert the fresh response.
+        api.edit(&note_id, json!({ "title": "Local rename" }));
+        let methods: Vec<_> = api
+            .google
+            .requests_to(CALENDAR_PATH)
+            .into_iter()
+            .map(|r| r.method)
+            .collect();
+        assert_eq!(methods, ["PATCH", "GET", "PATCH"]);
+        assert_literal(&api.note(&note_id), "description");
+    }
+}
+
 fn expect(res: Response, status: u16) -> Value {
     let got = res.status().as_u16();
     let text = res.text().unwrap();

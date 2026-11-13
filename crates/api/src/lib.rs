@@ -76,6 +76,7 @@ mod ai_activity;
 mod ai_agents;
 mod ai_ask;
 mod ai_assets;
+mod ai_batch;
 mod ai_browser;
 mod ai_chat;
 mod ai_decide;
@@ -118,6 +119,7 @@ mod openapi;
 mod original;
 mod pins;
 mod query;
+mod safety_backfill;
 mod script_tools;
 mod skills;
 mod sync;
@@ -250,6 +252,21 @@ fn build() -> Built {
         .get("/api/schema", inspect::schema)
         .get("/api/notes", notes::list)
         .get("/api/agent-safety/held", notes::held_agent_notes)
+        .post("/api/inbox/triage", inbox::triage)
+        .get("/api/agent-safety/backfill", safety_backfill::progress)
+        .post(
+            "/api/agent-safety/backfill/preview",
+            safety_backfill::preview,
+        )
+        .post("/api/agent-safety/backfill/approve", safety_backfill::start)
+        .post(
+            "/api/agent-safety/release/preview",
+            safety_backfill::release_preview,
+        )
+        .post(
+            "/api/agent-safety/release/approve",
+            safety_backfill::release,
+        )
         .get("/api/agent-safety/evidence/{id}", notes::safety_evidence)
         .post("/api/notes", notes::create)
         .get("/api/notes/{id}", notes::read)
@@ -466,6 +483,7 @@ fn build() -> Built {
         .post("/api/integrations/gitsync/run", gitsync::run);
     let ai = Routes::new()
         .get("/api/integrations/ai", ai_settings::status)
+        .get("/api/ai/usage", ai_settings::token_usage)
         .put("/api/integrations/ai/settings", ai_settings::put_settings)
         .put("/api/integrations/ai/default", ai_settings::put_default)
         .post("/api/integrations/ai/accounts", ai_settings::create_account)
@@ -504,8 +522,15 @@ fn build() -> Built {
         .get("/api/ai/chat/turns/{turn}/events", ai_turns::events)
         .delete("/api/ai/chat/turns/{turn}", ai_turns::stop)
         .post("/api/ai/apply", ai_turns::apply)
+        .post("/api/ai/apply-kind/preview", ai_batch::preview)
+        .post("/api/ai/apply-kind/confirm", ai_batch::confirm)
         .post("/api/ai/discard", ai_turns::discard);
-    let browser = Routes::new().get("/api/integrations/browser", browser::status);
+    let browser = Routes::new()
+        .get("/api/integrations/browser", browser::status)
+        .get(
+            "/api/integrations/attempt-limits",
+            attempt_limits::diagnostic,
+        );
     Built {
         api,
         login,

@@ -43,9 +43,10 @@ export function waitingText(t: Pick<DispatchedThread, "question" | "pending">): 
   return "";
 }
 
-/** How the thread started: sent from notes, or called from a note. */
+/** How the thread started, without presenting unattended triggers as sent notes. */
 export function originText(t: Pick<DispatchedThread, "origin" | "notes">): string {
   if (t.origin === "mention") return "Called from a note";
+  if (t.origin.startsWith("trigger:")) return `Trigger: ${t.origin.slice("trigger:".length)}`;
   const n = t.notes.length;
   return n === 1 ? "Sent 1 note" : `Sent ${n} notes`;
 }

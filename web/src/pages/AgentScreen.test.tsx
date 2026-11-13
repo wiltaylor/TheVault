@@ -763,7 +763,7 @@ describe("the Permissions tab", () => {
   it("does not offer profile reset in a device app", async () => {
     appInfo.mockResolvedValue({ platform: "android" });
     await open("/agents/inbox_triage/settings/permissions");
-    expect(await screen.findByRole("switch", { name: "Browser automation" })).toBeTruthy();
+    expect(await screen.findByText("Edit agents and skills in the web app")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reset browser profile" })).toBeNull();
   });
 
@@ -904,6 +904,14 @@ describe("the Permissions tab", () => {
 });
 
 describe("the Triggers tab", () => {
+  it("lists read-only mail recommendations separately from editable triggers", async () => {
+    agentRuns.mockResolvedValue({ tools: [], triggers: [{ name: "mail-triage", kind: "recommendation", runs: [{ id: 99, thread: "recommendation-thread", started: 1000, ended: 2000, outcome: "succeeded", message: null, log: "" }] }] });
+    await open("/agents/inbox_triage/settings/triggers");
+    const section = within(await screen.findByRole("region", { name: "Mail backlog recommendations" }));
+    expect(section.getByText(/Read-only summaries/)).toBeTruthy();
+    expect(section.getByRole("link", { name: "Open thread" })).toHaveAttribute("href", "/agents/inbox_triage?thread=recommendation-thread");
+    expect(section.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
   it("previews a backfill count before confirming the selected newest notes", async () => {
     const a = triage();
     a.triggers = [{ name: "opened", kind: "event", on: ["create"], type: ["email"], where: null, prompt: "File." }];
@@ -1134,46 +1142,16 @@ describe("the Memory tab", () => {
 });
 
 describe("in the apps", () => {
-  const APP = { app: true, paired: true, device_id: "d", device_name: "Phone", server_url: "https://vault" };
-
-  it("edits and saves the agent as the web app does, its permissions too", async () => {
-    appInfo.mockResolvedValue(APP);
-    putAgent.mockImplementation(async (_name: string, body: object) => ({ ...triage(), ...body }));
+  it.each(["desktop", "android"])("keeps %s settings read only", async (platform) => {
+    appInfo.mockResolvedValue({ platform });
     await open();
-    expect(screen.queryByRole("note")).toBeNull();
-    const s = within(screen.getByRole("region", { name: "General" }));
-    expect(s.getByLabelText("Label")).toBeEnabled();
-    expect(s.getByLabelText("System prompt")).toBeEnabled();
-    // The account's models come through the home server; Settings > AI stays the web app's.
-    await waitFor(() => expect(s.getByLabelText("Model").tagName).toBe("SELECT"));
-    expect(aiModels).toHaveBeenCalledWith("a1");
-    expect(aiStatus).not.toHaveBeenCalled();
-    fireEvent.input(s.getByLabelText("Label"), { target: { value: "Triage" } });
-    const p = await tab("Permissions");
-    expect(p.getByRole("checkbox", { name: /Search notes/ })).toBeEnabled();
-    fireEvent.click(p.getByRole("switch", { name: "Run wscript code" }));
-    fireEvent.click(p.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(putAgent).toHaveBeenCalled());
-    expect(sent()).toMatchObject({ label: "Triage", permissions: { scripts: { run_code: true } } });
-    // The server's answer shows at once.
-    expect(await p.findByRole("status")).toHaveTextContent("Saved.");
-    expect(screen.getByRole("heading", { name: /Triage/ })).toBeTruthy();
-    const f = await tab("File");
-    expect(f.getByLabelText("Agent file")).not.toHaveAttribute("readonly");
-    expect(f.getByRole("button", { name: "Save" })).toBeTruthy();
-  });
-
-  it("says a save needs the home server when it cannot be reached, and stays editable", async () => {
-    appInfo.mockResolvedValue(APP);
-    const message = "Changing an agent needs the home server, which is not reachable.";
-    putAgent.mockRejectedValue(new ApiError(503, { error: "ai_needs_server", message }));
-    await open();
-    const s = within(screen.getByRole("region", { name: "General" }));
-    fireEvent.input(s.getByLabelText("Label"), { target: { value: "Triage" } });
-    fireEvent.click(s.getByRole("button", { name: "Save" }));
-    expect(await s.findByRole("alert")).toHaveTextContent(message);
-    expect(s.getByLabelText("Label")).toBeEnabled();
-    expect(s.getByLabelText("Label")).toHaveValue("Triage");
-    expect(s.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(await screen.findByText("Edit agents and skills in the web app")).toBeTruthy();
+    expect(screen.getByLabelText("Agent file").textContent).toBe(triage().wcl);
+    for (const name of ["Permissions", "Triggers", "File"]) {
+      fireEvent.click(screen.getByRole("tab", { name }));
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+      expect(screen.queryByRole("textbox")).toBeNull();
+    }
+    expect(putAgent).not.toHaveBeenCalled();
   });
 });

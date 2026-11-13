@@ -879,8 +879,7 @@ export function AgentScreen() {
   const navigate = useNavigate();
   const pane = usePane();
   const uid = createUniqueId();
-  // Settings > AI, for the shipped prompt, is the web app's; in the apps the agent itself is
-  // read and saved on the home server, as in the web app.
+  // Device tokens can read agents but cannot change their files.
   const [app] = createResource(appInfo);
   const [ai] = createResource(
     () => (app.state === "ready" && app() === null ? true : null),
@@ -1046,7 +1045,8 @@ export function AgentScreen() {
                   <p class="muted">{v().a.description}</p>
                 </Show>
                 <p class="muted">Attachments and original HTML of incoming messages are not available to agents, even after the note is allowed or released. You can still open them yourself.</p>
-                <p class="muted">Files uploaded from the phone or desktop app are also unavailable to agents for now. Agent searches do not match extracted file text.</p>
+                <p class="muted">New in-app picker, camera and drawing attachments can be read by agents after both app and server are updated. Share-to-vault, phone imports, pasted or dropped files and script uploads stay incoming. Existing withheld files are not released by upgrading or uploading them again.</p>
+                <p class="muted">Agent searches do not match extracted file text.</p>
                 <div class="agent-tabs" role="tablist" aria-label="Agent settings" onKeyDown={onTabKey}>
                   <For each={AGENT_TABS}>
                     {(t) => (
@@ -1065,6 +1065,10 @@ export function AgentScreen() {
                   </For>
                 </div>
                 <div id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-tab-${tab().id}`}>
+                  <Show when={settingsTab() === "memory" || (app.state === "ready" && app() === null)} fallback={<>
+                    <p class="muted">Edit agents and skills in the web app</p>
+                    <pre aria-label="Agent file">{v().a.wcl}</pre>
+                  </>}>
                   {tab().render({
                     get agent() {
                       return v().a;
@@ -1087,6 +1091,7 @@ export function AgentScreen() {
                     },
                     id: uid,
                   })}
+                  </Show>
                 </div>
               </div>
             </Show>

@@ -424,6 +424,35 @@ fn newly_enabled_bare_sender_keeps_items_in_review() {
 }
 
 #[test]
+fn ready_deadline_is_server_metadata_and_cancel_removes_it() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    api.one(
+        &fake,
+        Some("sender"),
+        "draft_email",
+        email_input(json!(["ann@example.com"])),
+    );
+    let result = last_result(&fake, false);
+    let id = result["id"].as_str().unwrap();
+    let ready = api.note_json(id);
+    assert_eq!(ready["note"]["fields"]["status"], "ready");
+    assert!(ready["send_deadline_ms"].as_i64().unwrap() > 0);
+    assert!(ready["note"]["fields"].get("send_deadline_ms").is_none());
+    let mut doc = ready["note"].clone();
+    doc["fields"]["status"] = json!("draft");
+    api.send(
+        "PUT",
+        &format!("/api/notes/{id}"),
+        json!({"base_version": ready["version"], "note": doc}),
+    );
+    let cancelled = api.note_json(id);
+    assert_eq!(cancelled["note"]["fields"]["status"], "draft");
+    assert!(cancelled.get("send_deadline_ms").is_none());
+    assert!(cancelled["note"]["fields"].get("sent_at").is_none());
+}
+
+#[test]
 fn kelvin_sign_recipient_does_not_match_ascii_allowlist() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
@@ -768,7 +797,8 @@ fn the_draft_tools_need_write_and_follow_the_tools_list() {
 fn unattended_runs_are_offered_the_draft_tools() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    // Every confirmation on: no change tool is offered, but drafting is not one.
+    // Every confirmation on. Drafting is no change tool; of the change tools only the note
+    // proposals a trigger's thread keeps are offered (TV-146 A1, TV-240, TV-271).
     api.agent(
         "clerk",
         &CLERK
@@ -785,7 +815,8 @@ fn unattended_runs_are_offered_the_draft_tools() {
     for t in ["draft_email", "draft_sms", "draft_event"] {
         assert!(tools.contains(&t), "{t}: {tools:?}");
     }
-    assert!(!tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(!tools.contains(&"propose_agent_change"), "{tools:?}");
 }
 
 #[test]

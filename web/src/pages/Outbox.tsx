@@ -235,6 +235,22 @@ function OutboxItem(props: {
     ({ ref, device, devices }) => waitingForPhone(ref, device, devices),
   );
   const statusText = () => (waiting() ? "Waiting for phone" : undefined);
+  const [now, setNow] = createSignal(Date.now());
+  createEffect(() => {
+    const deadline = note()?.send_deadline_ms;
+    if (status() !== "ready" || typeof deadline !== "number" || !Number.isFinite(deadline) || deadline <= Date.now()) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => {
+      const at = Date.now();
+      setNow(at);
+      if (at >= deadline) window.clearInterval(timer);
+    }, 1000);
+    onCleanup(() => window.clearInterval(timer));
+  });
+  const minutesLeft = () => {
+    const deadline = note()?.send_deadline_ms;
+    return status() === "ready" && typeof deadline === "number" && Number.isFinite(deadline) ? Math.max(0, Math.ceil((deadline - now()) / 60_000)) : 0;
+  };
   return (
     <li
       class="inbox-item outbox-item"
@@ -283,6 +299,9 @@ function OutboxItem(props: {
       </div>
       <div class="inbox-actions">
         <Show when={status() === "ready"}>
+          <Show when={minutesLeft() > 0}>
+            <span class="muted outbox-countdown">Sends in {minutesLeft()} {minutesLeft() === 1 ? "minute" : "minutes"}</span>
+          </Show>
           <button type="button" onClick={props.onCancel}>Cancel send</button>
         </Show>
         <Show when={status() === "draft"}>
