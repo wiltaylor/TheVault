@@ -9,6 +9,25 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  async function httpWarning() {
+    try {
+      const { message } = await (await fetch("/_desktop/http-warning", { method: "POST" })).json();
+      if (!message) return;
+      const box = document.createElement("div");
+      box.setAttribute("role", "alert");
+      box.style.cssText = "position:fixed;top:12px;left:12px;z-index:2147483647;max-width:32rem;padding:16px;background:Canvas;color:CanvasText;border:2px solid #c62828";
+      const text = document.createElement("p");
+      text.textContent = message;
+      const close = document.createElement("button");
+      close.textContent = "OK";
+      close.onclick = () => box.remove();
+      box.append(text, close);
+      document.body.append(box);
+    } catch {}
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", httpWarning);
+  else httpWarning();
+
   // The web client opens its capture dialog on Ctrl+Shift+K once its shell is mounted.
   window.__thevaultCapture = async () => {
     const answer = await (await fetch("/_desktop/capture", { method: "POST" })).json();

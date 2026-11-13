@@ -166,6 +166,49 @@ fn an_unauthenticated_client_gets_401() {
 }
 
 #[test]
+fn revoking_a_token_closes_an_open_event_stream() {
+    let api = Api::start();
+    let secret = api.call(
+        "POST",
+        "/api/tokens",
+        Some(json!({"name": "stream-reader", "scope": "read"})),
+        201,
+    )["secret"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stream = Stream::open(
+        api.client
+            .get(api.server.url("/api/events"))
+            .header(AUTHORIZATION, format!("Bearer {secret}"))
+            .send()
+            .unwrap(),
+    );
+    api.call("DELETE", "/api/tokens/stream-reader", None, 204);
+    let deadline = Instant::now() + Duration::from_secs(6);
+    loop {
+        match stream
+            .frames
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("revoked stream remains open"),
+            Ok(_) => assert!(Instant::now() < deadline),
+        }
+    }
+    assert_eq!(
+        api.client
+            .get(api.server.url("/api/events"))
+            .header(AUTHORIZATION, format!("Bearer {secret}"))
+            .send()
+            .unwrap()
+            .status()
+            .as_u16(),
+        401
+    );
+}
+
+#[test]
 fn a_browser_session_can_subscribe() {
     let api = Api::start();
     let res = api

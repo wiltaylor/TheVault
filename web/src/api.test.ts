@@ -11,6 +11,16 @@ afterEach(() => {
 });
 
 describe("api", () => {
+  it("roundtrips token expiry and sends null for an indefinite token", async () => {
+    const fetch = respond(201, { name: "cli", expires: 4102444800000 });
+    vi.stubGlobal("fetch", fetch);
+    expect((await api.createToken("cli", "read", 4102444800000)).expires).toBe(4102444800000);
+    const init = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init[1].body as string).expires).toBe(4102444800000);
+    await api.createToken("legacy", "read");
+    const second = fetch.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(second[1].body as string).expires).toBeNull();
+  });
   it("sends the base version with a save and reports a 409 as a conflict", async () => {
     const fetch = respond(409, { error: "conflict", current_version: "v2", message: "changed" });
     vi.stubGlobal("fetch", fetch);

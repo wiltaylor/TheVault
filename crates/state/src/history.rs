@@ -1,6 +1,7 @@
 //! Note version history, trash and history pruning (D13, D25).
 
 use rusqlite::{OptionalExtension, params};
+use sha2::{Digest, Sha256};
 
 use crate::changes::{ChangeKey, journal};
 use crate::{Error, Result, State, random_bytes, to_hex};
@@ -25,6 +26,65 @@ pub const MERGE_GAP_MS: i64 = 2 * 60 * 1000;
 /// A run of merged browser saves stops merging once it is this old, so a long session still
 /// leaves a version every so often.
 pub const MERGE_SPAN_MS: i64 = 10 * 60 * 1000;
+
+/// Compressed snapshot input and decoded limit. Larger snapshots use legacy text.
+pub const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+const SNAPSHOT_MAGIC: &[u8; 4] = b"VHS\x01";
+const SNAPSHOT_HEADER: usize = 44;
+
+fn encode_snapshot(content: &[u8]) -> Result<Vec<u8>> {
+    if content.len() > MAX_SNAPSHOT_BYTES {
+        return Err(Error::Corrupt(
+            "history snapshot exceeds 64 MiB limit".into(),
+        ));
+    }
+    let mut blob = Vec::with_capacity(SNAPSHOT_HEADER);
+    blob.extend_from_slice(SNAPSHOT_MAGIC);
+    blob.extend_from_slice(&(content.len() as u64).to_le_bytes());
+    blob.extend_from_slice(&Sha256::digest(content));
+    blob.extend_from_slice(&lz4_flex::block::compress(content));
+    Ok(blob)
+}
+
+fn decode_snapshot(blob: &[u8]) -> Result<Vec<u8>> {
+    let corrupt = || Error::Corrupt("invalid or corrupt history snapshot".into());
+    if blob.len() < SNAPSHOT_HEADER || &blob[..4] != SNAPSHOT_MAGIC {
+        return Err(corrupt());
+    }
+    let size = u64::from_le_bytes(blob[4..12].try_into().map_err(|_| corrupt())?);
+    if size > MAX_SNAPSHOT_BYTES as u64
+        || blob.len()
+            > lz4_flex::block::get_maximum_output_size(MAX_SNAPSHOT_BYTES) + SNAPSHOT_HEADER
+    {
+        return Err(Error::Corrupt(
+            "history snapshot exceeds 64 MiB limit".into(),
+        ));
+    }
+    // Never trust the decoder's size prefix. A fixed output slice bounds allocation and
+    // work is bounded by both the input and output lengths of one LZ4 block.
+    let mut content = vec![0; size as usize];
+    let written = lz4_flex::block::decompress_into(&blob[SNAPSHOT_HEADER..], &mut content)
+        .map_err(|_| corrupt())?;
+    if written != content.len() || Sha256::digest(&content)[..] != blob[12..44] {
+        return Err(corrupt());
+    }
+    Ok(content)
+}
+
+pub(crate) fn snapshot_column(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<String> {
+    use rusqlite::types::{Type, ValueRef};
+    let decode = || -> Result<String> {
+        match row.get_ref(index)? {
+            ValueRef::Text(text) => String::from_utf8(text.to_vec())
+                .map_err(|_| Error::Corrupt("invalid history UTF-8".into())),
+            ValueRef::Blob(blob) => String::from_utf8(decode_snapshot(blob)?)
+                .map_err(|_| Error::Corrupt("invalid history UTF-8".into())),
+            _ => Err(Error::Corrupt("invalid history content type".into())),
+        }
+    };
+    decode()
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(index, Type::Blob, Box::new(err)))
+}
 
 /// A deleted note waiting in the trash.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +136,7 @@ fn version_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VersionRow> {
             token: row.get(2)?,
             author: Author::Session(String::new()),
             at_ms: row.get(5)?,
-            content: row.get(6)?,
+            content: snapshot_column(row, 6)?,
         },
         row.get(3)?,
         row.get(4)?,
@@ -129,6 +189,11 @@ impl State {
         content: &str,
         merge: bool,
     ) -> Result<Version> {
+        let encoded = if content.len() > MAX_SNAPSHOT_BYTES {
+            rusqlite::types::Value::Text(content.to_owned())
+        } else {
+            rusqlite::types::Value::Blob(encode_snapshot(content.as_bytes())?)
+        };
         let mut raw = [0u8; 16];
         random_bytes(&mut raw);
         let token = to_hex(&raw);
@@ -163,18 +228,18 @@ impl State {
             Some(seq) => {
                 tx.execute(
                     "UPDATE versions
-                     SET token = ?1, at_ms = ?2, content = ?3,
+                     SET token = ?1, at_ms = ?2, content = ?3, content_bytes = ?5,
                          started_ms = COALESCE(started_ms, at_ms)
                      WHERE seq = ?4",
-                    params![token, at_ms, content, seq],
+                    params![token, at_ms, encoded, seq, content.len() as i64],
                 )?;
             }
             None => {
                 tx.execute(
                     "INSERT INTO versions
-                       (note_id, note_type, token, author_kind, author_name, at_ms, content, started_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6)",
-                    params![note_id, note_type, token, kind, name, at_ms, content],
+                       (note_id, note_type, token, author_kind, author_name, at_ms, content, started_ms, content_bytes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, ?8)",
+                    params![note_id, note_type, token, kind, name, at_ms, encoded, content.len() as i64],
                 )?;
             }
         }
@@ -253,16 +318,36 @@ impl State {
     /// stepped backwards after issuance. The timestamp bound only saves work.
     pub fn agent_call_history(&self, note_id: &str) -> Result<Vec<Version>> {
         let conn = self.conn();
+        let cutoff: Option<i64> = conn.query_row(
+            "SELECT MIN(expires_ms - 86400000) FROM agent_call_ids WHERE note=?1 AND used=0",
+            [note_id],
+            |r| r.get(0),
+        )?;
+        let mut calls_stmt =
+            conn.prepare("SELECT call FROM agent_call_ids WHERE note=?1 AND used=0")?;
+        let calls = calls_stmt
+            .query_map([note_id], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {VERSION_COLUMNS} FROM versions WHERE note_id = ?1 AND (
                 at_ms >= (SELECT MIN(expires_ms - 86400000) FROM agent_call_ids
                           WHERE note = ?1 AND used = 0)
                 OR EXISTS (SELECT 1 FROM agent_call_ids
-                           WHERE note = ?1 AND used = 0 AND instr(content, call) > 0)
+                           WHERE note = ?1 AND used = 0 AND
+                             (typeof(content) = 'blob' OR instr(content, call) > 0))
              ) ORDER BY seq"
         ))?;
         let rows = stmt.query_map([note_id], version_row)?;
-        rows.map(|r| finish_version(r?)).collect()
+        let mut versions = Vec::new();
+        for row in rows {
+            let version = finish_version(row?)?;
+            if cutoff.is_some_and(|at| version.at_ms >= at)
+                || calls.iter().any(|call| version.content.contains(call))
+            {
+                versions.push(version);
+            }
+        }
+        Ok(versions)
     }
 
     /// One version of the note by its token.
@@ -291,7 +376,7 @@ impl State {
                 "SELECT note_type, token, content FROM versions
                  WHERE note_id = ?1 ORDER BY seq DESC LIMIT 1",
                 [note_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, snapshot_column(r, 2)?)),
             )
             .optional()?;
         let Some((note_type, version, content)) = last else {
@@ -403,7 +488,7 @@ impl State {
         let tx = conn.transaction()?;
         let report = {
             let mut stmt = tx.prepare(&format!(
-                "SELECT note_id, COUNT(*), SUM(length(CAST(content AS BLOB))) FROM versions
+                "SELECT note_id, COUNT(*), SUM(COALESCE(content_bytes, length(CAST(content AS BLOB)))) FROM versions
                  WHERE seq IN ({THREAD_PRUNE_ROWS}) GROUP BY note_id ORDER BY note_id"
             ))?;
             stmt.query_map(params![keep, Option::<String>::None], |r| {
@@ -493,4 +578,49 @@ fn finish_trash((mut entry, kind, name): TrashRow) -> Result<TrashEntry> {
 fn author_from_parts(kind: &str, name: String) -> Result<Author> {
     Author::from_parts(kind, name)
         .ok_or_else(|| Error::Corrupt(format!("unknown author kind {kind:?}")))
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn byte_exact_text_binary_empty_and_large() {
+        for bytes in [
+            Vec::new(),
+            "text\r\n雪\0é".as_bytes().to_vec(),
+            (0..=255).collect(),
+            vec![42; 4 * 1024 * 1024],
+        ] {
+            assert_eq!(
+                decode_snapshot(&encode_snapshot(&bytes).unwrap()).unwrap(),
+                bytes
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_corrupt_unknown_and_bomb() {
+        let blob = encode_snapshot(&vec![0; 1024 * 1024]).unwrap();
+        let mut bomb = blob.clone();
+        bomb[4..12].copy_from_slice(&((MAX_SNAPSHOT_BYTES as u64) + 1).to_le_bytes());
+        assert!(
+            decode_snapshot(&bomb)
+                .unwrap_err()
+                .to_string()
+                .contains("limit")
+        );
+        // A tiny declared output must not let an expanding block allocate more.
+        bomb[4..12].copy_from_slice(&1u64.to_le_bytes());
+        assert!(decode_snapshot(&bomb).is_err());
+        for n in [0, 1, 4, 12, 43, blob.len() - 1] {
+            assert!(decode_snapshot(&blob[..n]).is_err());
+        }
+        let mut corrupt = blob.clone();
+        corrupt[12] ^= 1;
+        assert!(decode_snapshot(&corrupt).is_err());
+        corrupt[3] = 2;
+        assert!(decode_snapshot(&corrupt).is_err());
+        assert!(encode_snapshot(&vec![0; MAX_SNAPSHOT_BYTES + 1]).is_err());
+    }
 }

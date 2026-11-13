@@ -74,7 +74,7 @@ pub use pins::{PinEntry, PinKind, PinNode};
 pub use run_provenance::{RunProvenance, RunProvenanceLease};
 pub use runs::{RunId, RunOutcome, TaskRun};
 pub use secrets::{LoginInfo, LoginSecret, SecretInfo, SecretKey, canonical_origin, key_file_path};
-pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck};
+pub use sessions::{SESSION_RENEW_MS, SESSION_TTL_MS, SessionCheck, StreamCredential};
 pub use shipped::ShippedRecord;
 
 /// Errors from `state.db`.
@@ -170,6 +170,7 @@ impl Clock for SystemClock {
 
 /// An open `state.db`.
 pub struct State {
+    credential_changes: tokio::sync::watch::Sender<()>,
     automation_gate: Mutex<()>,
     conn: Arc<Mutex<Connection>>,
     key: Option<SecretKey>,
@@ -181,7 +182,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 31;
+const SCHEMA_VERSION: i64 = 32;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -530,6 +531,7 @@ impl State {
             key,
             clock,
             events: Events::default(),
+            credential_changes: tokio::sync::watch::channel(()).0,
             activity_pruned: AtomicI64::new(now),
             pin_changes: std::sync::atomic::AtomicU64::new(0),
         })
@@ -701,7 +703,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=30 => {
+        0..=31 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -836,6 +838,14 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             )?;
             if !has_expiry {
                 tx.execute_batch("ALTER TABLE tokens ADD COLUMN expires_ms INTEGER;")?;
+            }
+            let has_content_bytes: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('versions') WHERE name='content_bytes')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_content_bytes {
+                tx.execute_batch("ALTER TABLE versions ADD COLUMN content_bytes INTEGER;")?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;

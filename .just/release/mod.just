@@ -15,6 +15,7 @@ gate-dev:
 # Build fixture bundle on dev. Transfer it and run device.sh on android as
 # documented. A skipped/busy device run does not satisfy this gate.
 gate-android:
+	cargo metadata --locked --format-version 1 --manifest-path apps/android/src-tauri/Cargo.toml > /dev/null
 	just validate-android
 	bash scripts/nightly/build.sh emulator
 

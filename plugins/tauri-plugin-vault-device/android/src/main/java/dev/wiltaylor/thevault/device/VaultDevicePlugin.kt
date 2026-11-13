@@ -33,6 +33,7 @@ import org.json.JSONObject
 class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
     /** Whether this process already showed the capture setup screen. */
     private var setupShown = false
+    private var httpWarningShown = false
     private var webView: WebView? = null
 
     /** Asks the page to open the bell panel after a tap on the notifications' summary. */
@@ -86,6 +87,9 @@ class VaultDevicePlugin(private val activity: Activity) : Plugin(activity) {
             return false
         }
         if (paired) {
+            if (!httpWarningShown) {
+                httpWarningShown = HttpWarning.show(activity, PairingStore(context).serverUrl)
+            }
             // On app start: check capture can work, and say so when it cannot (ticket 91).
             CaptureHealth.refresh(context)
             VaultCore.kick()

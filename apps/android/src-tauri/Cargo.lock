@@ -156,6 +156,7 @@ dependencies = [
  "script-core",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "state",
  "store",
@@ -2432,9 +2433,11 @@ dependencies = [
  "rusqlite",
  "schema",
  "serde_json",
+ "sha2",
  "store",
  "tantivy",
  "thiserror 2.0.21",
+ "ulid",
  "vocab",
  "zip",
 ]
@@ -4633,6 +4636,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "serde_json",
+ "state",
  "thiserror 2.0.21",
  "vocab",
  "wscript",
@@ -4890,6 +4894,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5106,6 +5121,7 @@ version = "0.1.12"
 dependencies = [
  "argon2",
  "chacha20poly1305",
+ "lz4_flex",
  "rusqlite",
  "schema",
  "serde",

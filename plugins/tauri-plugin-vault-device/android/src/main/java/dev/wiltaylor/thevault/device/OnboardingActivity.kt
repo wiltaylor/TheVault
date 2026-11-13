@@ -8,6 +8,7 @@ import android.text.InputType
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -34,6 +35,7 @@ class OnboardingActivity : ComponentActivity() {
     lateinit var pairButton: Button
     lateinit var scanButton: Button
     lateinit var message: TextView
+    lateinit var confirmHttp: CheckBox
 
     private val scan = registerForActivityResult(ScanContract()) { result ->
         val text = result.contents ?: return@registerForActivityResult
@@ -77,6 +79,8 @@ class OnboardingActivity : ComponentActivity() {
         deviceName.setText(Build.MODEL ?: "Android")
         cacheMb = field("Offline file cache, MB", InputType.TYPE_CLASS_NUMBER)
         cacheMb.setText(PairingStore(this).cacheMb.toString())
+        confirmHttp = CheckBox(this).apply { text = "I accept: ${HttpWarning.MESSAGE}" }
+        column.addView(confirmHttp)
         pairButton = Button(this).apply { text = "Pair" }
         column.addView(pairButton)
         message = TextView(this)
@@ -106,11 +110,12 @@ class OnboardingActivity : ComponentActivity() {
     fun pair(url: String, pw: String?, code: String?) {
         val name = deviceName.text.toString()
         val cache = cacheMb.text.toString().toLongOrNull() ?: PairingStore.DEFAULT_CACHE_MB
+        val confirmed = confirmHttp.isChecked
         busy(true)
         message.text = "Pairing…"
         worker.execute {
             val error = try {
-                val paired = JSONObject(VaultCore.pair(url, pw, code, name))
+                val paired = JSONObject(VaultCore.pair(url, pw, code, name, confirmed))
                 PairingStore(applicationContext).save(paired, cache)
                 Vault.open(applicationContext)
                 VaultCore.kick()

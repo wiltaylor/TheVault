@@ -18,6 +18,7 @@ path = "src/main.rs"
 tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
+anyhow = "1"
 ashpd = { version = "0.13", default-features = false, features = ["tokio", "global_shortcuts"] }
 axum = "0.8"
 embedded = { path = "../../../crates/embedded" }

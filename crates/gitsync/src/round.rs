@@ -39,6 +39,9 @@ use crate::{Auth, Error, Git, Layout, Result, SyncKey, clip, pack};
 /// The stamps every save writes, which take no part in telling whether a note changed.
 const STAMPS: [&str; 3] = ["created", "updated", "archived"];
 
+/// Bound additional asset imports for unchanged notes across all peers in a round.
+const ASSET_RETRIES_PER_ROUND: usize = 32;
+
 /// Where a round keeps its clone and which programs it runs.
 #[derive(Debug, Clone)]
 pub struct Paths {
@@ -429,6 +432,7 @@ struct Round<'a> {
     git: Git,
     me: String,
     report: Report,
+    asset_retries_left: usize,
 }
 
 /// Run one round. Only one runs at a time; the caller holds that lock.
@@ -460,6 +464,7 @@ pub fn run_round(
             ..Report::default()
         },
         me,
+        asset_retries_left: ASSET_RETRIES_PER_ROUND,
     };
     let import = parse_query(&settings.import_query, "import")?;
     let mut branches = Vec::new();
@@ -835,7 +840,7 @@ impl Round<'_> {
     }
 
     /// Write the assets `n` names that this vault lacks, under their ids.
-    fn import_assets(&mut self, b: &Branch, n: &Incoming) {
+    fn import_assets(&mut self, b: &Branch, n: &Incoming, retry: bool) {
         for id in &n.entry.assets {
             if self.w.asset_info(id).is_ok() {
                 continue;
@@ -843,6 +848,12 @@ impl Round<'_> {
             let Some(asset) = b.manifest.assets.iter().find(|a| &a.id == id) else {
                 continue;
             };
+            if retry {
+                if self.asset_retries_left == 0 {
+                    break;
+                }
+                self.asset_retries_left -= 1;
+            }
             let written = (|| -> Result<()> {
                 let oids: Vec<&str> = asset
                     .parts
@@ -912,7 +923,7 @@ impl Round<'_> {
                 if local_schema.type_def(&n.type_name).is_none() {
                     return Err(fail(format!("this vault has no type {}", n.type_name)));
                 }
-                self.import_assets(b, n);
+                self.import_assets(b, n, false);
                 let text = print(&n.type_name, id, &strip(&n.doc, &n.type_name))?;
                 w.create_remote(id, &n.type_name, &text, &author)?;
                 store_base(false)?;
@@ -925,6 +936,7 @@ impl Round<'_> {
                 }
                 if row.is_some_and(|r| r.base_hash == n.entry.hash) {
                     // Unchanged there since it was last taken.
+                    self.import_assets(b, n, true);
                     return Ok(());
                 }
                 let base_row = row
@@ -943,7 +955,7 @@ impl Round<'_> {
                 if local_schema.type_def(&n.type_name).is_none() {
                     return Err(fail(format!("this vault has no type {}", n.type_name)));
                 }
-                self.import_assets(b, n);
+                self.import_assets(b, n, false);
                 let unchanged_here = base
                     .as_ref()
                     .is_some_and(|base| content(base) == content(&local.doc));

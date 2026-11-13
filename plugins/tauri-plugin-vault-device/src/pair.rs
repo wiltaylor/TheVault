@@ -4,13 +4,11 @@
 //! starts a fresh local vault (ticket 143). The Kotlin side keeps the token in the Android
 //! Keystore; the Rust core holds it only in memory.
 
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// How long pairing waits for the server.
-const TIMEOUT: Duration = Duration::from_secs(30);
+#[path = "pair_transport.rs"]
+mod transport;
 
 /// The platform the app pairs as.
 pub const PLATFORM: &str = "android";
@@ -51,7 +49,17 @@ pub fn server_url(url: &str) -> anyhow::Result<String> {
 
 /// Pair with the server at `url` as a device called `name`.
 pub fn pair(url: &str, secret: &Secret, name: &str) -> anyhow::Result<Paired> {
+    pair_inner(url, secret, name, false)
+}
+
+/// Pair after the owner explicitly accepts the plain-HTTP warning.
+pub fn pair_confirmed(url: &str, secret: &Secret, name: &str) -> anyhow::Result<Paired> {
+    pair_inner(url, secret, name, true)
+}
+
+fn pair_inner(url: &str, secret: &Secret, name: &str, confirmed: bool) -> anyhow::Result<Paired> {
     let server_url = server_url(url)?;
+    let client = transport::client(&server_url, confirmed)?;
     let name = name.trim();
     if name.is_empty() {
         anyhow::bail!("give this device a name");
@@ -61,9 +69,6 @@ pub fn pair(url: &str, secret: &Secret, name: &str) -> anyhow::Result<Paired> {
         Secret::Password(p) => body["password"] = json!(p),
         Secret::Code(c) => body["code"] = json!(c.trim()),
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(TIMEOUT)
-        .build()?;
     let res = client
         .post(format!("{server_url}/api/devices/pair"))
         .json(&body)
