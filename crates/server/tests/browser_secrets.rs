@@ -257,21 +257,18 @@ fn browser_secrets_five_thousand_row_agent_query_is_within_twice_session_time() 
         };
         pairs.push(pair);
     }
-    // Under shared load a spike can perturb one side of a pair, so per-side
-    // medians of three rounds can flake at the limit. The best (lowest) pair
-    // ratio is the least-perturbed same-window comparison and still proves the
-    // agent query costs at most twice the session query.
-    let best = pairs
-        .iter()
-        .copied()
-        .min_by(|a, b| {
-            (a.1.as_secs_f64() / a.0.as_secs_f64())
-                .total_cmp(&(b.1.as_secs_f64() / b.0.as_secs_f64()))
-        })
-        .unwrap();
+    // Load on the shared target only adds time, never removes it, so the
+    // minimum over the five rounds is the least-perturbed estimate of each
+    // side's own cost. An intrinsic agent regression appears in every agent
+    // round and raises the agent minimum, while a session spike would have to
+    // hit all five interleaved rounds to raise the session minimum. Comparing
+    // the minima keeps the property strict: the agent query costs at most
+    // twice the session query.
+    let agent_min = pairs.iter().map(|&(_, agent)| agent).min().unwrap();
+    let session_min = pairs.iter().map(|&(session, _)| session).min().unwrap();
     eprintln!(
-        "5,000 rows, five 1,000-row pages: best of 5 pairs session {:?}, agent {:?}",
-        best.0, best.1
+        "5,000 rows, five 1,000-row pages: minima over 5 pairs session {:?}, agent {:?}",
+        session_min, agent_min
     );
     let report = pairs
         .iter()
@@ -279,8 +276,10 @@ fn browser_secrets_five_thousand_row_agent_query_is_within_twice_session_time() 
         .collect::<Vec<_>>()
         .join(", ");
     assert!(
-        pairs.iter().any(|&(session, agent)| agent <= session * 2),
-        "agent/session above 2x in every pair (agent/session): {}",
+        agent_min <= session_min * 2,
+        "agent_min {:?} above 2x session_min {:?}; pairs (agent/session): {}",
+        agent_min,
+        session_min,
         report
     );
 }
