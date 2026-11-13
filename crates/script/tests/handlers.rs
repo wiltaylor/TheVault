@@ -409,7 +409,7 @@ fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
 }
 
 #[test]
-fn unreadable_handler_reference_stays_pending_and_visible_without_running_script() {
+fn unreadable_handler_reference_fails_visibly_without_running_script() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());
     let (writer, handlers) = open(dir.path(), false);
@@ -450,7 +450,7 @@ fn unreadable_handler_reference_stays_pending_and_visible_without_running_script
             .state()
             .activity(&state::ActivityFilter::default())
             .unwrap();
-        if entries.items.iter().any(|entry| {
+        if writer.state().failed_jobs().unwrap().iter().any(|job| job.id == id) && entries.items.iter().any(|entry| {
             entry.kind == "run.recovery_unavailable"
                 && entry.subject.as_deref() == Some("unreadable-handler")
         }) {
@@ -468,9 +468,9 @@ fn unreadable_handler_reference_stays_pending_and_visible_without_running_script
             .queued_jobs()
             .unwrap()
             .iter()
-            .any(|job| job.id == id)
+            .all(|job| job.id != id)
     );
-    assert!(writer.state().failed_jobs().unwrap().is_empty());
+    assert_eq!(writer.state().failed_jobs().unwrap().len(), 1);
     assert_eq!(commits.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(writer.history(&created.id).unwrap().len(), 2);
 }

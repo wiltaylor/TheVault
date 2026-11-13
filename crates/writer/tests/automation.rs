@@ -318,7 +318,7 @@ fn owner_deleting_referenced_email_does_not_release_outbox() {
     assert!(body["fields"]["in_reply_to"].is_null());
     assert!(writer.outbox_run_context(&item.id).is_err());
     assert!(!matches!(
-        writer.history(&item.id).unwrap()[0].author,
+        writer.history(&item.id).unwrap().last().unwrap().author,
         Author::Session(_)
     ));
 }
