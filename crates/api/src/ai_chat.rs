@@ -5432,6 +5432,10 @@ pub fn diff(before: &Value, after: &Value) -> Vec<Value> {
     ops
 }
 
+#[cfg(test)]
+#[path = "ai_chat_context_tests.rs"]
+mod context_tests;
+
 /// `GET /api/ai/models` and the proposal diff are tested through the server; the pure helpers
 /// here.
 #[cfg(test)]

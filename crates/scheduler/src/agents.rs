@@ -142,6 +142,18 @@ pub struct AgentJob {
     pub origin: Option<&'static str>,
 }
 
+impl AgentJob {
+    pub fn run_context(&self) -> &script::RunContext {
+        &self.run_context
+    }
+
+    pub fn set_run_context(&mut self, context: script::RunContext) {
+        self.run_context.clone().scope(|| {
+            self.run_context = context.inherit_current();
+        });
+    }
+}
+
 /// Why notes sent to an agent were not run (TV-77 D1). Nothing was queued and no thread stays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchRefused {

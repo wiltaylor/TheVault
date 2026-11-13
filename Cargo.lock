@@ -181,6 +181,7 @@ dependencies = [
  "state",
  "store",
  "tempfile",
+ "testkit",
  "tokio",
  "tracing",
  "ulid",

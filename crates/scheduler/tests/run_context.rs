@@ -168,3 +168,25 @@ fn background_admission_carries_explicit_context_to_writer_callback() {
     assert!(seen.restricted);
     assert_eq!(seen.generation, Some(generation));
 }
+
+#[test]
+fn explicit_default_cannot_escape_restricted_caller_at_admission() {
+    for background in [false, true] {
+        let f = Fixture::new();
+        let parent = RunContext::default();
+        parent.restrict();
+        let generation = f.writer.state().admit_automation().unwrap();
+        parent.capture_stop_generation(generation);
+        parent.scope(|| {
+            if background {
+                f.scheduler.trigger_in_background_with_context("probe", RunContext::default())
+            } else {
+                f.scheduler.trigger_with_context("probe", RunContext::default())
+            }.unwrap();
+        });
+        let seen = f.observe();
+        assert_eq!(seen.context, parent);
+        assert!(seen.restricted);
+        assert_eq!(seen.generation, Some(generation));
+    }
+}

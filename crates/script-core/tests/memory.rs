@@ -84,7 +84,7 @@ fn parallel_workers_carry_live_context_without_enforcement_or_leaks() {
     }
     assert!(script_core::RunContext::current().is_none());
     // Reuse both workers for independent, unrestricted jobs.
-    job.set_run_context(script_core::RunContext::default());
+    let job = Job::new(Kind::Task, "context", &job.source, "run");
     let results = std::thread::scope(|scope| {
         let first = scope.spawn(|| host.run(job.clone()));
         let second = scope.spawn(|| host.run(job.clone()));
@@ -93,6 +93,25 @@ fn parallel_workers_carry_live_context_without_enforcement_or_leaks() {
     for result in results {
         assert_eq!(result.result.unwrap(), json!(false));
     }
+}
+
+#[test]
+fn explicit_default_and_prebuilt_job_cannot_escape_restricted_caller() {
+    let context = script_core::RunContext::default();
+    context.restrict();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host::with_extensions(
+        Arc::new(Memory::default()), 1, limits(),
+        &ContextProbe { barrier: Arc::new(std::sync::Barrier::new(1)), seen: seen.clone() },
+    );
+    let mut job = Job::new(Kind::Task, "probe", "use probe\nfn run() -> Result[bool, string] { probe::context() }\n", "run");
+    context.scope(|| job.set_run_context(script_core::RunContext::default()));
+    assert_eq!(job.run_context(), &context);
+    job.set_run_context(script_core::RunContext::default());
+    assert_eq!(host.run(job.clone()).result.unwrap(), json!(true));
+    let prebuilt = Job::new(Kind::Task, "probe", &job.source, "run");
+    assert_eq!(context.scope(|| host.run(prebuilt)).result.unwrap(), json!(true));
+    assert!(seen.lock().unwrap().iter().all(|c| c == &context));
 }
 
 struct Stored {
