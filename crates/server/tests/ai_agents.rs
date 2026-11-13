@@ -775,7 +775,9 @@ fn assistant_settings_saves_keep_approval_rules() {
         .next()
         .unwrap();
     let original = api.agent_wcl("assistant").unwrap();
-    let rules = format!("{original}\npermissions {{\n  approval_rule {{\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"status\"]\n    daily_cap = 1\n  }}\n}}\n");
+    let rules = format!(
+        "{original}\npermissions {{\n  approval_rule {{\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"status\"]\n    daily_cap = 1\n  }}\n}}\n"
+    );
     let response = api
         .client
         .put(api.server.url("/api/agents/assistant"))
