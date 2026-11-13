@@ -132,7 +132,8 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
 }
 
 pub(crate) fn agent_reading() -> bool {
-    matches!(
+    script_core::RunContext::current().is_some_and(|context| context.tracks_agent_reads())
+        || matches!(
         crate::activity::acting(),
         Some(Author::Agent(_) | Author::AgentMail(_))
     ) || script_core::run::peek(|r| matches!(r.author, Author::Agent(_) | Author::AgentMail(_)))
@@ -155,6 +156,11 @@ fn agent_saved(w: &Writer, s: Saved, author: &Author) -> Json {
         // A create or a content edit may itself enter the gate. Return only the receipt,
         // not generated defaults, handler output or other unreviewed note content.
         return json!({"id":s.id,"type":s.type_name,"version":s.version,"held":true});
+    }
+    if (agent_reading() || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
+        && let Ok(doc) = Input::Wcl(s.wcl.clone()).parse("saved.wcl")
+    {
+        w.expose_run_note(&s.type_name, &doc);
     }
     let mut value = saved(s);
     if (agent_reading() || matches!(author, Author::Agent(_) | Author::AgentMail(_)))

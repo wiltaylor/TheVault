@@ -313,6 +313,7 @@ fn mail_triage_is_one_read_scoped_durable_job_and_success_is_not_selected_again(
         vec![Some(state::Scope::Read)]
     );
     assert_eq!(r.fake.threads.lock().unwrap()[0].1, "mail-triage");
+    assert!(r.fake.contexts.lock().unwrap()[0].is_restricted());
     assert!(
         r.scheduler
             .mail_triage_candidates("reader")
@@ -394,6 +395,7 @@ fn due_agent_jobs_are_independent_of_the_tick_callers_scope() {
     assert_eq!(contexts[0].stop_generation(), Some(generation));
     // A fresh scheduled run captures its own admission, not the caller's context.
     assert!(!contexts[0].is_restricted());
+    assert!(contexts[0].tracks_agent_reads());
     assert_eq!(parent.stop_generation(), Some(generation));
     assert_eq!(r.fake.turns().len(), 1);
 }
@@ -1147,6 +1149,7 @@ fn a_committed_call_is_answered_at_once_and_once_without_touching_the_note() {
     );
     // The note is as the user saved it.
     assert_eq!(r.writer.read(&id).unwrap().version, version);
+    assert!(r.fake.contexts.lock().unwrap()[0].is_restricted());
     let recorded = r.writer.state().agent_call(CALL).unwrap().unwrap();
     assert_eq!(
         (recorded.agent.as_str(), recorded.note.as_str()),

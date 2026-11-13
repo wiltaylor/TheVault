@@ -1665,6 +1665,11 @@ impl Scheduler {
     }
 
     fn run_agent_job_scoped(&self, job: &AgentJob) {
+        job.run_context.track_agent_reads();
+        // Every note call is propose-only, even a call from an owner-authored memo.
+        if job.origin == Some(MENTION_ORIGIN) {
+            job.run_context.restrict();
+        }
         // Clearance permits reading content, not acting on its instructions.
         // Inspect typed source metadata for calls, dispatches and event jobs,
         // including recovered jobs, before opening a thread or invoking a model.

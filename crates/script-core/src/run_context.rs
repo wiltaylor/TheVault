@@ -14,6 +14,7 @@ pub struct RunContext(Arc<Mutex<State>>);
 #[derive(Debug, Default)]
 struct State {
     restricted: bool,
+    agent_reads: bool,
     stop_generation: Option<Generation>,
     parent: Option<RunContext>,
     durable: Vec<state::RunProvenanceLease>,
@@ -25,10 +26,11 @@ impl Drop for State {
         // so no live descendant can gain more provenance. No JOIN/State lock
         // is held during this database transaction. Failure leaves every row
         // unsealed and recovery restricted/stale, never a partial clean seal.
-        if let Err(error) = state::RunProvenanceLease::seal_all(
+        if let Err(error) = state::RunProvenanceLease::seal_all_with_agent_reads(
             &self.durable,
             self.restricted,
             self.stop_generation,
+            self.agent_reads,
         ) {
             eprintln!("sealing run provenance: {error}");
             for lease in &self.durable {
@@ -85,6 +87,7 @@ impl RunContext {
         let mut a = root.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut b = other.0.lock().unwrap_or_else(|e| e.into_inner());
         a.restricted |= b.restricted;
+        a.agent_reads |= b.agent_reads;
         a.stop_generation = oldest(a.stop_generation, b.stop_generation);
         a.durable.append(&mut b.durable);
         b.parent = Some(root.clone());
@@ -112,6 +115,18 @@ impl RunContext {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .restricted
+    }
+
+    /// This run supplies content to an agent, including through task/handler descendants.
+    /// Independent import tasks and direct owner reads do not opt into this policy.
+    pub fn track_agent_reads(&self) {
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).agent_reads = true;
+    }
+
+    pub fn tracks_agent_reads(&self) -> bool {
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).agent_reads
     }
 
     /// Retain the oldest admitted generation, never a later replacement.
@@ -187,6 +202,7 @@ impl RunContext {
         // context and releases its token with the conservative recovered values.
         let context = Self(Arc::new(Mutex::new(State {
             restricted: snapshot.is_restricted(),
+            agent_reads: snapshot.tracks_agent_reads(),
             stop_generation: snapshot.stop_generation(),
             parent: None,
             durable: vec![lease],
@@ -248,6 +264,33 @@ fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
 #[cfg(test)]
 mod tests {
     use super::RunContext;
+
+    #[test]
+    fn agent_read_lineage_joins_late_and_survives_sealed_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let database = state::State::open(&path, None).unwrap();
+        let parent = RunContext::default();
+        let child = RunContext::default();
+        let id = child.persist(&database).unwrap();
+        parent.scope(|| child.scope(|| {}));
+        parent.track_agent_reads();
+        assert!(child.tracks_agent_reads());
+        assert!(!child.is_restricted());
+        drop(parent);
+        drop(child);
+        drop(database);
+        let database = state::State::open(&path, None).unwrap();
+        let recovered = RunContext::recover(&database, &id).unwrap();
+        assert!(recovered.tracks_agent_reads());
+        assert!(!recovered.is_restricted());
+        let independent = RunContext::default();
+        let id = independent.persist(&database).unwrap();
+        drop(independent);
+        let independent = RunContext::recover(&database, &id).unwrap();
+        assert!(!independent.tracks_agent_reads());
+        assert!(!independent.is_restricted());
+    }
 
     #[test]
     fn independent_recovery_scope_restores_caller_without_joining_on_panic() {

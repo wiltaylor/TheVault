@@ -625,6 +625,7 @@ async fn start_with(
     unattended: Option<(Report, CapacityRetry)>,
     run_context: RunContext,
 ) -> Result<(mpsc::Receiver<Sent>, Arc<AtomicBool>), ApiError> {
+    run_context.track_agent_reads();
     let (report, retry) = unattended.unzip();
     let account = match (
         body.account
@@ -4721,6 +4722,7 @@ fn propose(w: &Writer, author: &Author, call_id: &str, input: &Value) -> Result<
     let base = str_arg(input, "base_version")?;
     let note = note_arg(input)?;
     let current = w.read(id).map_err(|e| ToolOut::error(e.to_string()))?;
+    w.expose_run_note(&current.type_name, &current.doc);
     let before = doc_to_json(&current.doc);
     let op = Op::Update {
         id: id.to_owned(),
@@ -4819,6 +4821,7 @@ fn propose_fields(
     let current = w
         .read(id)
         .map_err(|e| ToolOut::error(get_note_error(id, &e.to_string())))?;
+    w.expose_run_note(&current.type_name, &current.doc);
     let mut note = doc_to_json(&current.doc);
     for (name, value) in fields {
         if value.is_null() {
@@ -4946,6 +4949,7 @@ fn propose_archive(w: &Writer, call_id: &str, input: &Value) -> Result<ToolOut, 
         .as_bool()
         .ok_or_else(|| ToolOut::error("archived must be true or false"))?;
     let note = w.read(id).map_err(|e| ToolOut::error(e.to_string()))?;
+    w.expose_run_note(&note.type_name, &note.doc);
     if writer::is_archived(&note.doc) == archived {
         return Err(ToolOut::error(if archived {
             format!("note {id} is already archived: there is nothing to apply")
@@ -4987,6 +4991,7 @@ fn propose_delete(
 ) -> Result<ToolOut, ToolOut> {
     let id = str_arg(input, "id")?;
     let note = w.read(id).map_err(|e| ToolOut::error(e.to_string()))?;
+    w.expose_run_note(&note.type_name, &note.doc);
     let op = Op::Delete {
         id: id.to_owned(),
         base: Some(note.version.clone()),

@@ -183,7 +183,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 35;
+const SCHEMA_VERSION: i64 = 36;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -704,7 +704,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=34 => {
+        0..=35 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -832,6 +832,15 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             tx.execute_batch(approval_quota::SCHEMA)?;
             tx.execute_batch(automation::SCHEMA)?;
             tx.execute_batch(run_provenance::SCHEMA)?;
+            let has_agent_reads: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('run_provenance') WHERE name='agent_reads')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_agent_reads {
+                // Old sealed contexts cannot prove they were independent imports.
+                tx.execute_batch("ALTER TABLE run_provenance ADD COLUMN agent_reads INTEGER NOT NULL DEFAULT 1;")?;
+            }
             tx.execute_batch(jobs::PROVENANCE_SCHEMA)?;
             let has_expiry: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tokens') WHERE name='expires_ms')",

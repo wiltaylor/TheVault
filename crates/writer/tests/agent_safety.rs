@@ -116,6 +116,40 @@ fn run_exposure_uses_typed_incoming_metadata_and_preserves_ownership_exclusions(
 }
 
 #[test]
+fn agent_descendant_task_reads_track_exposure_not_independent_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let mail = create(&w, "Incoming");
+    let linked = w.create(
+        "email",
+        &Input::Json(serde_json::json!({"fields":{"title":"Link", "link":mail.id}})),
+        &Author::Session("owner".into()),
+    ).unwrap();
+    for id in [&mail.id, &linked.id] {
+        let hash = w.agent_safety(id).unwrap().fingerprint;
+        w.release_agent_safety(id, &hash, &Author::Session("owner".into())).unwrap();
+    }
+    for operation in ["get", "query", "links"] {
+        for descendant in [true, false] {
+            let context = script_core::RunContext::default();
+            if descendant {
+                context.track_agent_reads();
+            }
+            context.scope(|| {
+                let _acting = writer::acting_as(&Author::Task("google_gmail".into()));
+                match operation {
+                    "get" => { w.get(&mail.id).unwrap(); }
+                    "query" => { w.query_page("from email select title", 1, None).unwrap(); }
+                    _ => { w.backlinks(&mail.id).unwrap(); }
+                }
+            });
+            assert_eq!(context.is_restricted(), descendant, "{operation}");
+        }
+    }
+}
+
+#[test]
 fn query_exposure_covers_selection_link_traversal_groups_and_empty_pages() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();

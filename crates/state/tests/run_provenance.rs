@@ -14,6 +14,29 @@ fn open(path: &std::path::Path) -> State {
 }
 
 #[test]
+fn schema_35_recovery_tracks_reads_but_new_independent_runs_do_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let s = open(&path);
+    let old = s.create_run_provenance(false, Some(s.admit_automation().unwrap())).unwrap();
+    s.seal_run_provenance(old.id()).unwrap();
+    drop(s);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("ALTER TABLE run_provenance DROP COLUMN agent_reads; PRAGMA user_version=35;").unwrap();
+    drop(conn);
+    let s = open(&path);
+    let restored = s.load_run_provenance(old.id());
+    assert!(restored.tracks_agent_reads());
+    assert!(!restored.is_restricted());
+    let new = s.create_run_provenance(false, Some(s.admit_automation().unwrap())).unwrap();
+    s.seal_run_provenance(new.id()).unwrap();
+    assert!(!s.load_run_provenance(new.id()).tracks_agent_reads());
+    s.join_run_provenance(new.id(), old.id()).unwrap();
+    s.seal_run_provenance(new.id()).unwrap();
+    assert!(s.load_run_provenance(new.id()).tracks_agent_reads());
+}
+
+#[test]
 fn schema_34_handler_upgrade_preserves_payloads_and_atomic_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
