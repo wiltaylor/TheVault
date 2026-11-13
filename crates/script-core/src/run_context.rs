@@ -212,6 +212,74 @@ mod tests {
     use super::RunContext;
 
     #[test]
+    fn recovered_component_is_not_sealed_while_another_owner_is_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let a = RunContext::default();
+        let b = RunContext::default();
+        let a_id = a.persist(&database).unwrap();
+        let b_id = b.persist(&database).unwrap();
+        a.scope(|| b.scope(|| {}));
+        drop(a);
+        drop(b);
+        let a = RunContext::recover(&database, &a_id);
+        let b = RunContext::recover(&database, &b_id);
+        drop(a);
+        b.restrict();
+        for id in [&a_id, &b_id] {
+            let snapshot = database.load_run_provenance(id);
+            assert!(!snapshot.is_sealed());
+            assert!(snapshot.is_restricted());
+            assert!(
+                database
+                    .automation_commit(snapshot.stop_generation().unwrap())
+                    .is_err()
+            );
+        }
+        drop(b);
+        for id in [&a_id, &b_id] {
+            assert!(database.load_run_provenance(id).is_sealed());
+            assert!(database.load_run_provenance(id).is_restricted());
+        }
+    }
+
+    #[test]
+    fn concurrent_persist_and_join_keep_every_reference_restricted() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let parent = RunContext::default();
+        let children: Vec<_> = (0..16).map(|_| RunContext::default()).collect();
+        let barrier = std::sync::Barrier::new(children.len());
+        let ids = std::thread::scope(|scope| {
+            let threads: Vec<_> = children
+                .iter()
+                .map(|child| {
+                    let database = &database;
+                    let parent = &parent;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        let id = child.persist(database).unwrap();
+                        parent.scope(|| child.scope(|| child.restrict()));
+                        id
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        drop(children);
+        drop(parent);
+        for id in ids {
+            let snapshot = database.load_run_provenance(&id);
+            assert!(snapshot.is_sealed());
+            assert!(snapshot.is_restricted());
+        }
+    }
+
+    #[test]
     fn durable_identity_seals_only_after_last_live_descendant() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.db");
