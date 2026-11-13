@@ -45,8 +45,8 @@ fn retry_assets(count: usize, repair: bool) {
     )]);
     let bytes = b"authenticated asset";
     for i in 0..count {
-        let id = format!("01JB8Z4K2MQ7V3X9T5R6W8{:05}", i);
-        let asset = format!("01JB8Z4K2MQ7V3X9T5R6W9{:05}", i);
+        let id = format!("01JB8Z4K2MQ7V3X9T5R6W8{:04}", i);
+        let asset = format!("01JB8Z4K2MQ7V3X9T5R6W9{:04}", i);
         let text = format!("title = \"Asset fixture\"\npic = \"{asset}\"\n");
         manifest.notes.push(NoteEntry {
             id: id.clone(),
