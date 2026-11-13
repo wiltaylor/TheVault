@@ -163,7 +163,10 @@ fn migration_preserves_legacy_rows() {
     drop(conn);
     assert!(
         std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "compressed_history::migration_preserves_legacy_rows"])
+            .args([
+                "--exact",
+                "compressed_history::migration_preserves_legacy_rows"
+            ])
             .env("TV262_MIGRATION_DB", &path)
             .status()
             .unwrap()
