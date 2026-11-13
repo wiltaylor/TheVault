@@ -283,7 +283,10 @@ fn copy_sent(note: Value) -> Result[(), string] {
     assert!(format!("{failed:?}").contains("Gmail attachment metadata"));
     let fields = api.fields(&id);
     assert_eq!(fields["status"], "sending");
-    let sent_ref = fields["sent_ref"].as_str().filter(|s| !s.is_empty()).unwrap();
+    let sent_ref = fields["sent_ref"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap();
     assert!(api.copies(sent_ref).is_empty());
 }
 

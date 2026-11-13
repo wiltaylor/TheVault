@@ -281,9 +281,19 @@ fn gmail_sent_copy_is_only_a_fresh_matching_email_create() {
     let input = Input::Json(json!({"fields":{"title":"Sent","gmail_ref":"sent-id"}}));
     assert!(w.create("note", &input, &author).is_err());
     let note = w.create("email", &input, &author).unwrap();
-    let changed = Input::Json(json!({"fields":{"title":"Sent","gmail_ref":"sent-id","gmail_account":"forged"}}));
-    assert!(w.update(&note.id, &changed, Some(&note.version), &author).is_err());
-    w.delete(&note.id, Some(&note.version), &Author::Session("owner".into())).unwrap();
+    let changed = Input::Json(
+        json!({"fields":{"title":"Sent","gmail_ref":"sent-id","gmail_account":"forged"}}),
+    );
+    assert!(
+        w.update(&note.id, &changed, Some(&note.version), &author)
+            .is_err()
+    );
+    w.delete(
+        &note.id,
+        Some(&note.version),
+        &Author::Session("owner".into()),
+    )
+    .unwrap();
     assert!(w.restore_from_trash(&note.id, &author).is_err());
 }
 
