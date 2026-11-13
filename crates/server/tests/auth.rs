@@ -796,6 +796,33 @@ fn a_revoked_token_gets_401() {
 }
 
 #[test]
+fn optional_token_expiry_roundtrips_and_expired_tokens_get_401() {
+    let api = Api::start();
+    let expiry = 253_402_300_799_999i64;
+    let body = expect(api.req("POST", "/api/tokens", api.admin())
+        .json(&json!({"name": "finite", "scope": "read", "expires": expiry}))
+        .send().unwrap(), 201);
+    assert_eq!(body["expires"], expiry);
+    assert_eq!(body["kind"], "user");
+    expect(api.req("GET", "/api/notes", Auth::Bearer(s(&body["secret"]))).send().unwrap(), 200);
+    let list = expect(api.req("GET", "/api/tokens", api.admin()).send().unwrap(), 200);
+    assert_eq!(list["tokens"].as_array().unwrap().iter().find(|t| t["name"] == "finite").unwrap()["expires"], expiry);
+    for invalid in [json!(-1), json!(i64::MAX), json!("tomorrow"), json!(1.5), json!(18446744073709551615u64)] {
+        let response = api.req("POST", "/api/tokens", api.admin())
+            .json(&json!({"name": "invalid", "scope": "read", "expires": invalid}))
+            .send().unwrap();
+        assert!(response.status().is_client_error());
+    }
+    // Issue against a fake clock in the past. No wait or production credential.
+    struct Past;
+    impl state::Clock for Past { fn now_ms(&self) -> i64 { 0 } }
+    let state = state::State::open_with_clock(&api.server.vault_path().join(".vault/state.db"), None, std::sync::Arc::new(Past)).unwrap();
+    let (_, expired) = state.create_token_with_expiry("expired", state::Scope::Admin, Some(1)).unwrap();
+    expect(api.req("GET", "/api/tokens", Auth::Bearer(&expired)).send().unwrap(), 401);
+    assert_eq!(state.list_tokens().unwrap().iter().find(|t| t.name == "expired").unwrap().last_used_ms, None);
+}
+
+#[test]
 fn token_secrets_are_shown_once_and_listed_without_them() {
     let api = Api::start();
     let secret = api.token("cli", "write");
