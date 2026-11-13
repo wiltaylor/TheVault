@@ -281,12 +281,12 @@ mod tests {
                     .upgrade_shipped_defaults(crate::Upkeep::Home)
                     .unwrap();
                 let item_context = script_core::RunContext::default();
-                if restricted {
-                    item_context.restrict();
-                }
                 let item = item_context.scope(|| writer.create("outbox", &crate::Input::Json(json!({"fields": {
                     "title":"Receipt", "kind":"sms", "status":"sending", "to":["+61400000002"], "sent_ref":"command-1"
                 }})), &Author::Session("owner".into())).unwrap());
+                if restricted {
+                    item_context.restrict();
+                }
                 let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
                 let capture = observed.clone();
                 writer.set_commit_hook(Some(Box::new(move |_| {
@@ -325,17 +325,25 @@ mod tests {
                     updated_ms: Some(1),
                 };
                 ambient.scope(|| {
-                    writer.finish_outbox_sms(&command).unwrap();
+                    let result = writer.finish_outbox_sms(&command);
+                    if restricted {
+                        assert!(result.unwrap_err().contains(script_core::OUTSIDE_TEXT_REFUSAL));
+                    } else {
+                        result.unwrap();
+                    }
                     assert_eq!(script_core::RunContext::current(), Some(ambient.clone()));
                 });
                 let observed = observed.lock().unwrap();
-                assert!(!observed.is_empty());
+                assert_eq!(observed.is_empty(), restricted);
                 assert!(observed.iter().all(|context| context == &item_context));
                 assert_eq!(item_context.is_restricted(), restricted);
                 assert_eq!(ambient.is_restricted(), !restricted);
                 assert_ne!(item_context, ambient);
                 let note = writer.get(&item.id).unwrap();
-                if failed {
+                if restricted {
+                    assert_eq!(note["note"]["fields"]["status"], "sending");
+                    assert_eq!(note["note"]["fields"]["sent_ref"], "command-1");
+                } else if failed {
                     assert_eq!(note["note"]["fields"]["status"], "failed");
                 } else {
                     assert_eq!(note["note"]["fields"]["sent_ref"], "sms:123");
