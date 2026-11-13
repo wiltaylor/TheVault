@@ -769,29 +769,41 @@ mod tests {
 
     #[test]
     fn trigger_sensitivity_compares_parsed_before_and_after_definitions() {
-        let scheduled = "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n";
+        let scheduled =
+            "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n";
         let note = "trigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"open\\\"\"\n prompt = \"Read.\"\n}\n";
-        let change = |before: Option<&str>, after: Option<&str>| {
-            json!({"name":"helper", "before":before, "after":after})
-        };
-        assert!(!triggers_changed(&change(None, Some("label = \"Helper\"\n"))));
+        let change = |before: Option<&str>, after: Option<&str>| json!({"name":"helper", "before":before, "after":after});
+        assert!(!triggers_changed(&change(
+            None,
+            Some("label = \"Helper\"\n")
+        )));
         assert!(triggers_changed(&change(None, Some(scheduled))));
-        assert!(triggers_changed(&change(Some(scheduled), Some("label = \"Helper\"\n"))));
+        assert!(triggers_changed(&change(
+            Some(scheduled),
+            Some("label = \"Helper\"\n")
+        )));
         assert!(triggers_changed(&change(Some(scheduled), None)));
         assert!(!triggers_changed(&change(
             Some(scheduled),
-            Some("label = \"Renamed\"\n\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n")
+            Some(
+                "label = \"Renamed\"\n\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n"
+            )
         )));
         for after in [
             "trigger nightly {\n schedule = \"0 3 * * *\"\n prompt = \"Summarise.\"\n}\n",
             "trigger nightly {\n schedule = \"0 2 * * *\"\n timezone = \"Europe/London\"\n prompt = \"Summarise.\"\n}\n",
             "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise everything.\"\n}\n",
         ] {
-            assert!(triggers_changed(&change(Some(scheduled), Some(after))), "{after}");
+            assert!(
+                triggers_changed(&change(Some(scheduled), Some(after))),
+                "{after}"
+            );
         }
         assert!(triggers_changed(&change(
             Some(note),
-            Some("enabled = false\n\ntrigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"closed\\\"\"\n prompt = \"Read.\"\n}\n")
+            Some(
+                "enabled = false\n\ntrigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"closed\\\"\"\n prompt = \"Read.\"\n}\n"
+            )
         )));
         assert!(triggers_changed(&change(Some(note), Some("not valid WCL"))));
         assert!(triggers_changed(&json!({"name":"helper"})));

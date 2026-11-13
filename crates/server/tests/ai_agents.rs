@@ -1163,7 +1163,10 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
     assert_eq!(last(&events, "applied")["op"], "agent_change");
 
     // Removing a definition is sensitive too, including when the target is disabled.
-    let disabled = renamed.replace("label = \"Renamed\"", "label = \"Renamed\"\nenabled = false");
+    let disabled = renamed.replace(
+        "label = \"Renamed\"",
+        "label = \"Renamed\"\nenabled = false",
+    );
     api.put_agent("helper", &disabled);
     let without = disabled.replace(
         "\ntrigger nightly {\n schedule = \"0 3 * * *\"\n prompt = \"Summarise.\"\n}\n",
