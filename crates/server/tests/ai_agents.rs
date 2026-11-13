@@ -1234,7 +1234,7 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
             assert_eq!(body["error"], "not_permitted");
             assert_eq!(
                 body["message"],
-                "Agent trigger changes need a signed-in session Apply."
+                "Changes to an agent with triggers need a signed-in session Apply."
             );
         } else {
             assert_eq!(body["error"], "forbidden");
@@ -1265,7 +1265,7 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
     assert_eq!(body["error"], "not_permitted");
     assert_eq!(
         body["message"],
-        "Agent trigger changes need a signed-in session Apply."
+        "Changes to an agent with triggers need a signed-in session Apply."
     );
     let (status, body) = api.apply_session(&proposal);
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -1330,7 +1330,7 @@ fn semantic_edits_of_disabled_triggered_agents_wait_and_session_apply_is_thread_
         assert_eq!(body["error"], "not_permitted");
         assert_eq!(
             body["message"],
-            "Agent trigger changes need a signed-in session Apply."
+            "Changes to an agent with triggers need a signed-in session Apply."
         );
         assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
 
@@ -1365,6 +1365,7 @@ fn semantic_edits_of_disabled_triggered_agents_wait_and_session_apply_is_thread_
         let (status, body) = api.apply_session(&bound);
         assert_eq!(status, StatusCode::OK, "{body}");
         let committed = api.agent_wcl("helper").unwrap();
+        assert_eq!(Some(committed.as_str()), p["after"].as_str());
         let (status, body) = api.apply_session(&bound);
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(api.agent_wcl("helper").as_deref(), Some(committed.as_str()));
@@ -1394,7 +1395,7 @@ fn enabling_and_deleting_triggered_agents_need_session_apply() {
     assert_eq!(body["error"], "not_permitted");
     assert_eq!(
         body["message"],
-        "Agent trigger changes need a signed-in session Apply."
+        "Changes to an agent with triggers need a signed-in session Apply."
     );
     let (status, body) = api.apply_session(&proposal);
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -1422,7 +1423,7 @@ fn enabling_and_deleting_triggered_agents_need_session_apply() {
         assert_eq!(body["error"], "not_permitted");
         assert_eq!(
             body["message"],
-            "Agent trigger changes need a signed-in session Apply."
+            "Changes to an agent with triggers need a signed-in session Apply."
         );
         assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
     }
@@ -1456,7 +1457,7 @@ fn changed_note_trigger_filter_and_action_wait_for_session_apply_and_stay_stale_
         assert_eq!(body["error"], "not_permitted");
         assert_eq!(
             body["message"],
-            "Agent trigger changes need a signed-in session Apply."
+            "Changes to an agent with triggers need a signed-in session Apply."
         );
         let (status, body) = api.apply_session(&proposal);
         assert_eq!(status, StatusCode::OK, "{body}");
