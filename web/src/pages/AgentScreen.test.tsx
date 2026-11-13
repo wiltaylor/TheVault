@@ -501,6 +501,43 @@ describe("the General tab", () => {
 });
 
 describe("the Permissions tab", () => {
+  it("shows stored rules in the app's read-only WCL without editing or Save", async () => {
+    appInfo.mockResolvedValue({ platform: "android" });
+    const rules: NonNullable<Agent["permissions"]["approval_rules"]> = [
+      { operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 },
+      { operation: "delete", note_type: "email", fields: [], daily_cap: 5 },
+    ];
+    const wcl = `${triage().wcl}permissions {\n  approval_rule { operation = "update" type = "email" fields = ["processed"] daily_cap = 200 }\n}\n`;
+    agent.mockResolvedValue(triage({ wcl, permissions: { ...triage().permissions, approval_rules: rules } }));
+    await open();
+    expect(await screen.findByText("Edit agents and skills in the web app")).toBeTruthy();
+    for (const name of ["General", "Permissions", "File"]) {
+      fireEvent.click(screen.getByRole("tab", { name }));
+      expect(screen.getByLabelText("Agent file").textContent).toBe(wcl);
+      expect(screen.queryByLabelText("Rule type")).toBeNull();
+      expect(screen.queryByText("Add update rule")).toBeNull();
+      expect(screen.queryByRole("button", { name: /Remove rule/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    }
+    expect(putAgent).not.toHaveBeenCalled();
+  });
+
+  it("round-trips an explicit approval rule through Save and reload", async () => {
+    await open();
+    const p = await tab("Permissions");
+    fireEvent.input(p.getByLabelText("Rule type"), { target: { value: "email" } });
+    fireEvent.input(p.getByLabelText("Rule fields"), { target: { value: "processed" } });
+    fireEvent.input(p.getByLabelText("Rule daily cap"), { target: { value: "200" } });
+    fireEvent.click(p.getByText("Add update rule"));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    const saved = (sent().permissions as Agent["permissions"]).approval_rules;
+    expect(saved).toEqual([{ operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 }]);
+    cleanup();
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, approval_rules: saved } }));
+    await open("/agents/inbox_triage/settings/permissions");
+    expect(await screen.findByText(/update email: processed — 200/)).toBeTruthy();
+  });
   it("asks before entering secrets by default and saves an explicit opt-out", async () => {
     await open();
     const p = await tab("Permissions");

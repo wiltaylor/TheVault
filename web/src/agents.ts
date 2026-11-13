@@ -177,6 +177,7 @@ export function agentForm(a: Agent): AgentForm {
     permissions: {
       tools: a.permissions.tools ?? null,
       types: a.permissions.types ?? null,
+      ...(a.permissions.approval_rules ? { approval_rules: a.permissions.approval_rules.map((r) => ({ ...r, fields: [...r.fields] })) } : {}),
       ...(a.permissions.change_types != null ? { change_types: [...a.permissions.change_types] } : {}),
       ...(a.permissions.change_fields ? { change_fields: Object.fromEntries(Object.entries(a.permissions.change_fields).map(([type, fields]) => [type, [...fields]])) } : {}),
       confirm: { ...a.permissions.confirm },

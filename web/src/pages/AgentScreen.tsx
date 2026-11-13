@@ -60,6 +60,7 @@ import { logHref } from "../activity/model";
 import { IconPicker } from "../components/IconPicker";
 import { TypeIcon } from "../components/Icon";
 import { Spinner } from "../components/SyncStatus";
+import { ApprovalRules } from "../components/ApprovalRules";
 import { appInfo } from "../inApp";
 import { types } from "../session";
 import { refreshSkills, skills } from "../skills";
@@ -565,6 +566,7 @@ function PermissionsTab(p: AgentTabProps) {
   }
   return (
     <section class="agent-tab" aria-label="Permissions">
+      <ApprovalRules permissions={perms()} editable={p.ownerActions === true} set={(approval_rules) => setPerms({ approval_rules })} />
       <p class="agent-perm-note">
         These permissions are {agentLabel(p.agent)}'s own: they replace Settings {">"} AI for this agent, and nothing is
         inherited. The person or token running a chat still limits what it can change.
