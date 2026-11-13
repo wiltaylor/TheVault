@@ -664,7 +664,7 @@ mod disconnect_tests {
             assert!(tokio::time::timeout(Duration::from_millis(100), &mut finish).await.is_err(),
                 "finish escaped serialization while revoke was held");
             release.notify_one();
-            tokio::time::timeout(Duration::from_secs(5), &mut disconnect).await.unwrap().unwrap();
+            let _ = tokio::time::timeout(Duration::from_secs(5), &mut disconnect).await.unwrap().unwrap();
             let error = tokio::time::timeout(Duration::from_secs(5), &mut finish).await.unwrap().unwrap_err();
             assert_eq!(error.status, StatusCode::BAD_REQUEST);
             for name in SECRETS.into_iter().chain([ACCOUNT]) {
