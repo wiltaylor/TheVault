@@ -1,10 +1,10 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { type APIRequestContext, request } from "@playwright/test";
-import { expect, logIn, test } from "./fixtures";
+import { expect, logIn, test } from "./isolated-fixtures";
 
 // Settings > Integrations > Google (google-sync D1, D18): the loopback paste flow against the fake
 // Google server, which the `google_settings` secret's endpoints point at. The consent page is the fake's too:
@@ -63,7 +63,7 @@ test.afterAll(() => {
 test("the Google card connects through a pasted loopback address, shows the account and disconnects", async ({
   page,
   admin,
-}) => {
+}, testInfo) => {
   // The sync's tasks, running the shipped scripts against the fake, paused as shipped.
   for (const [task, state] of [
     ["google_gmail", "google_gmail_state"],
@@ -151,9 +151,7 @@ test("the Google card connects through a pasted loopback address, shows the acco
   const status = (await (await admin.get("/api/integrations/google")).json()) as { settings: { gmail_window_days: number } };
   expect(status.settings.gmail_window_days).toBe(30);
 
-  const shots = join(repo, ".scratch", "shots");
-  mkdirSync(shots, { recursive: true });
-  await card.screenshot({ path: join(shots, "ticket-google-connect.png") });
+  await card.screenshot({ path: testInfo.outputPath("ticket-google-connect.png") });
 
   page.once("dialog", (d) => void d.accept());
   await card.getByRole("button", { name: "Disconnect" }).click();
