@@ -5628,7 +5628,8 @@ mod tests {
         let database = vault.server_dir().join("state.db");
         let state = state::State::open(&database, None).unwrap();
         let w = Writer::open(vault, state).unwrap();
-        w.put_type(writer::AGENT_THREAD_TYPE, writer::DEFAULT_AGENT_THREAD_TYPE).unwrap();
+        w.put_type(writer::AGENT_THREAD_TYPE, writer::DEFAULT_AGENT_THREAD_TYPE)
+            .unwrap();
         w.put_agent("reader", "label = \"Reader\"\n", |_| vec![])
             .unwrap();
         let thread = agent_threads::create(&w, "reader", None, "dispatch").unwrap();
