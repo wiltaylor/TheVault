@@ -9,6 +9,7 @@
 //! `skills/<name>/` is an entry of kind `skill`, binary files too (skills S1).
 
 use std::ops::ControlFlow;
+use std::sync::MutexGuard;
 
 use store::{Change, CommitStep, Vault};
 
@@ -122,13 +123,22 @@ impl Writer {
 
     /// Commit `files` and journal the synced ones in the change feed. Returns the generation.
     pub(crate) fn commit(&self, files: Vec<Change>) -> Result<u64> {
+        self.commit_scoped(files).map(|(generation, _guard)| generation)
+    }
+
+    /// Keep the gate through the caller's local history/index updates.
+    pub(crate) fn commit_scoped(
+        &self,
+        files: Vec<Change>,
+    ) -> Result<(u64, Option<MutexGuard<'_, ()>>)> {
+        let automation = self.automation_commit()?;
         let synced = synced_changes(&files);
         let existed = self.existed(&synced);
         let generation = self.vault.commit(files)?;
         self.state.journal_files(&synced)?;
         self.record_definitions(&existed);
         self.announce_definitions(&synced)?;
-        Ok(generation)
+        Ok((generation, automation))
     }
 
     /// Tell open clients which synced files changed, and count them for
@@ -182,14 +192,15 @@ impl Writer {
         &self,
         files: Vec<Change>,
         hook: &mut dyn FnMut(CommitStep) -> ControlFlow<()>,
-    ) -> Result<u64> {
+    ) -> Result<(u64, Option<MutexGuard<'_, ()>>)> {
+        let automation = self.automation_commit()?;
         let synced = synced_changes(&files);
         let existed = self.existed(&synced);
         let generation = self.vault.commit_with_hook(files, hook)?;
         self.state.journal_files(&synced)?;
         self.record_definitions(&existed);
         self.announce_definitions(&synced)?;
-        Ok(generation)
+        Ok((generation, automation))
     }
 }
 

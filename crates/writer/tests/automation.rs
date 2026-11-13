@@ -144,3 +144,95 @@ fn unused_gate_preserves_existing_behavior_and_new_admissions_work() {
     w.with_automation(generation, || w.create("item", &input, &author))
         .unwrap();
 }
+
+#[test]
+fn stale_asset_type_and_agent_commits_write_nothing() {
+    let (dir, w) = setup();
+    let generation = w.state().admit_automation().unwrap();
+    let index = w.read_index(|i, _| i.generation().unwrap());
+    let definitions = w.definition_changes();
+    let vault_generation = w.vault().generation().unwrap();
+    w.state().set_automation_stopped(true).unwrap();
+    w.state().set_automation_stopped(false).unwrap();
+    w.with_automation(generation, || {
+        assert!(matches!(
+            w.put_asset("stale.txt", b"stale".to_vec()),
+            Err(Error::State(state::Error::AutomationRefused))
+        ));
+        assert!(matches!(
+            w.put_type("stale", "label = \"Stale\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n"),
+            Err(Error::State(state::Error::AutomationRefused))
+        ));
+        assert!(matches!(
+            w.put_agent("stale", "label = \"Stale\"\n", |_| Vec::new()),
+            Err(Error::State(state::Error::AutomationRefused))
+        ));
+    });
+    assert!(w.assets().unwrap().is_empty());
+    assert!(!dir.path().join("types/stale.wcl").exists());
+    assert!(!dir.path().join("agents/stale.wcl").exists());
+    assert_eq!(w.vault().generation().unwrap(), vault_generation);
+    assert_eq!(w.read_index(|i, _| i.generation().unwrap()), index);
+    assert_eq!(w.definition_changes(), definitions);
+}
+
+#[test]
+fn nested_scopes_keep_oldest_generation_and_restore_outer_context() {
+    let (dir, w) = setup();
+    let old = w.state().admit_automation().unwrap();
+    w.state().set_automation_stopped(true).unwrap();
+    w.state().set_automation_stopped(false).unwrap();
+    let new = w.state().admit_automation().unwrap();
+    let write = || w.commit_checked::<Error>(|_| Ok(vec![Change::write("scripts/nested.ws", b"ok")]));
+    w.with_automation(old, || {
+        assert!(matches!(w.with_automation(new, write), Err(Error::State(state::Error::AutomationRefused))));
+        assert!(matches!(write(), Err(Error::State(state::Error::AutomationRefused))));
+    });
+    assert!(!dir.path().join("scripts/nested.ws").exists());
+    w.with_automation(new, write).unwrap();
+}
+
+#[test]
+fn stop_waits_for_scoped_commit_then_refuses_next_commit() {
+    use std::ops::ControlFlow;
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    let (_dir, w) = setup();
+    let w = Arc::new(w);
+    let generation = w.state().admit_automation().unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (proceed_tx, proceed_rx) = mpsc::channel();
+    let mut first = true;
+    w.set_commit_hook(Some(Box::new(move |_| {
+        if first {
+            first = false;
+            entered_tx.send(()).unwrap();
+            proceed_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+        ControlFlow::Continue(())
+    })));
+    let worker = w.clone();
+    let commit = std::thread::spawn(move || {
+        worker.with_automation(generation, || worker.create("item", &Input::Wcl("title = \"First\"\n".into()), &Author::Agent("run".into())))
+    });
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (stopped_tx, stopped_rx) = mpsc::channel();
+    let stopper = w.clone();
+    let stop = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        stopper.state().set_automation_stopped(true).unwrap();
+        stopped_tx.send(()).unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let blocked = stopped_rx.recv_timeout(Duration::from_millis(100));
+    proceed_tx.send(()).unwrap();
+    assert!(matches!(blocked, Err(mpsc::RecvTimeoutError::Timeout)));
+    let saved = commit.join().unwrap().unwrap();
+    stopped_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    stop.join().unwrap();
+    assert_eq!(w.history(&saved.id).unwrap().len(), 1);
+    w.set_commit_hook(None);
+    assert!(matches!(w.with_automation(generation, || w.create("item", &Input::Wcl("title = \"Next\"\n".into()), &Author::Agent("run".into()))), Err(Error::State(state::Error::AutomationRefused))));
+}

@@ -1310,8 +1310,7 @@ impl Writer {
         let _w = self.write_lock();
         let changes = check(self)?;
         let mut inner = self.lock();
-        let _automation = self.automation_commit()?;
-        let generation = self.commit(changes)?;
+        let (generation, _automation) = self.commit_scoped(changes)?;
         inner.index.advance(generation).map_err(Error::from)?;
         Ok(())
     }
@@ -1645,12 +1644,11 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
-        let automation = self.automation_commit()?;
-        let generation = {
+        let (generation, automation) = {
             let _acting = activity::acting_as(author);
             match inner.commit_hook.as_mut() {
                 Some(hook) => self.commit_with_hook(files, &mut **hook)?,
-                None => self.commit(files)?,
+                None => self.commit_scoped(files)?,
             }
         };
 

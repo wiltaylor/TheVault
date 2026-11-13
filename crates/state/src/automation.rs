@@ -40,9 +40,9 @@ impl State {
     }
 
     fn automation_lock(&self) -> Result<MutexGuard<'_, ()>> {
-        self.automation_gate
+        Ok(self.automation_gate
             .lock()
-            .map_err(|_| Error::Corrupt("automation gate poisoned".into()))
+            .unwrap_or_else(|e| e.into_inner()))
     }
 
     pub fn admit_automation(&self) -> Result<Generation> {

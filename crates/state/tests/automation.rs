@@ -71,3 +71,21 @@ fn unreadable_state_refuses_admission_transition_and_commit() {
     assert!(state.set_automation_stopped(false).is_err());
     assert!(state.automation_commit(generation).is_err());
 }
+
+#[test]
+fn poisoned_commit_gate_still_allows_durable_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let state = State::open(&path, None).unwrap();
+    let generation = state.admit_automation().unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = state.automation_commit(generation).unwrap();
+        panic!("injected commit panic");
+    }));
+    assert!(panic.is_err());
+    state.set_automation_stopped(true).unwrap();
+    assert!(state.admit_automation().is_err());
+    assert!(state.automation_commit(generation).is_err());
+    drop(state);
+    assert!(State::open(&path, None).unwrap().automation_state().unwrap().stopped);
+}
