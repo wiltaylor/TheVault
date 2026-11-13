@@ -404,7 +404,7 @@ fn peer_type_admission_refuses_capabilities_and_mismatched_names() {
         ("handler before_create { script = \"fake\" }", true),
         ("handler after_update { script = \"fake\" }", true),
         (
-            "handler after_create { script = \"fake\"\nfunction = run }",
+            "handler after_create { script = \"fake\"\nfunction = \"run\" }",
             true,
         ),
         (
@@ -416,7 +416,7 @@ fn peer_type_admission_refuses_capabilities_and_mismatched_names() {
             true,
         ),
         ("script = \"fake\"", true),
-        ("function = run", true),
+        ("function = \"run\"", true),
         ("allow_domains = [\"example.invalid\"]", true),
         ("secrets = [\"fake_secret\"]", true),
         ("name = \"different\"", true),
