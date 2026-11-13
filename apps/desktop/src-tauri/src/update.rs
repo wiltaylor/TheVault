@@ -483,7 +483,10 @@ mod tests {
     #[test]
     fn plain_http_updates_use_only_the_paired_origin() {
         let url = |u| reqwest::Url::parse(u).unwrap();
-        assert!(transport_allowed(&url("https://updates.example/a"), "http://vault:8080"));
+        assert!(transport_allowed(
+            &url("https://updates.example/a"),
+            "http://vault:8080"
+        ));
         assert!(transport_allowed(
             &url("http://vault:8080/api/clients/update/x"),
             "http://vault:8080"

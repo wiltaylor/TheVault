@@ -360,9 +360,9 @@ impl Updates {
             return Ok(None);
         };
         let current = app.package_info().version.to_string();
-        match tauri::async_runtime::block_on(self.self_update(
-            app, &endpoint, server, appimage, &current,
-        )) {
+        match tauri::async_runtime::block_on(
+            self.self_update(app, &endpoint, server, appimage, &current),
+        ) {
             Ok(true) => Ok(self.ready_version()),
             Ok(false) => Ok(None),
             Err(e) => {

@@ -447,9 +447,8 @@ pub struct Sessions {
 
 impl Sessions {
     pub fn new(writer: Arc<Writer>) -> Sessions {
-        let site_https = std::env::var("VAULT_SITE_HTTPS").is_ok_and(|v| {
-            matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
-        });
+        let site_https = std::env::var("VAULT_SITE_HTTPS")
+            .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
         Sessions { writer, site_https }
     }
 
@@ -703,8 +702,10 @@ pub async fn logout(
     }
     let mut res = StatusCode::NO_CONTENT.into_response();
     let secure = sessions.site_https || request_is_https(&headers, &uri);
-    res.headers_mut()
-        .insert(header::SET_COOKIE, session_cookie("", Duration::ZERO, secure));
+    res.headers_mut().insert(
+        header::SET_COOKIE,
+        session_cookie("", Duration::ZERO, secure),
+    );
     Ok(res)
 }
 

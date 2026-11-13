@@ -47,7 +47,12 @@ fn session_cookies_are_secure_on_https_requests_and_https_sites() {
     let api = Api::start();
     let plain = api.login(testkit::PASSWORD);
     assert_eq!(plain.status(), 200);
-    assert!(!plain.headers()[SET_COOKIE].to_str().unwrap().contains("Secure"));
+    assert!(
+        !plain.headers()[SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Secure")
+    );
 
     let https = api
         .req("POST", "/api/login", Auth::None)
@@ -56,7 +61,12 @@ fn session_cookies_are_secure_on_https_requests_and_https_sites() {
         .send()
         .unwrap();
     assert_eq!(https.status(), 200);
-    assert!(https.headers()[SET_COOKIE].to_str().unwrap().contains("Secure"));
+    assert!(
+        https.headers()[SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Secure")
+    );
 
     let configured = TestServer::start_with_env(seed, &[("VAULT_SITE_HTTPS", "true")]);
     let login = Client::new()
@@ -74,7 +84,12 @@ fn session_cookies_are_secure_on_https_requests_and_https_sites() {
         .send()
         .unwrap();
     assert_eq!(logout.status(), 204);
-    assert!(logout.headers()[SET_COOKIE].to_str().unwrap().contains("Secure"));
+    assert!(
+        logout.headers()[SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Secure")
+    );
 }
 
 #[test]
