@@ -302,7 +302,10 @@ fn device_and_agent_tokens_restore_imported_email_without_changing_metadata() {
         let before = f.note();
         expect(
             f.client
-                .post(f.server.url(&format!("/api/notes/{}/agent-safety/release", f.id)))
+                .post(
+                    f.server
+                        .url(&format!("/api/notes/{}/agent-safety/release", f.id)),
+                )
                 .header("cookie", &f.cookie)
                 .json(&json!({"fingerprint":before["agent_safety"]["fingerprint"]}))
                 .send()
