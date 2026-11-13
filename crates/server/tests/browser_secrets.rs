@@ -5,65 +5,55 @@ use std::time::{Duration, Instant};
 use testkit::{PASSWORD, TestServer};
 
 #[test]
-fn google_image_consent_secret_changes_require_owner_session() {
+fn internal_secrets_refuse_put_and_delete_for_tokens_and_sessions() {
     let server = TestServer::start();
     let client = Client::new();
-    let url = server.url("/api/secrets/google_settings");
-    let initial = json!({"gmail_remote_images": false, "gmail_mode": "all"});
-    let response = client
-        .put(&url)
-        .bearer_auth(server.admin_token())
-        .json(&json!({"value": initial.to_string()}))
-        .send()
-        .unwrap();
-    assert!(response.status().is_success());
-    let enabled = json!({"gmail_remote_images": true, "gmail_mode": "all"});
-    let response = client
-        .put(&url)
-        .bearer_auth(server.admin_token())
-        .json(&json!({"value": enabled.to_string()}))
-        .send()
-        .unwrap();
-    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
-    let error: Value = response.json().unwrap();
-    assert_eq!(error["error"], "session_required");
-    assert_eq!(server.secret_json("google_settings"), initial);
-
-    let login = client
-        .post(server.url("/api/login"))
-        .json(&json!({"password": PASSWORD}))
-        .send()
-        .unwrap();
-    let cookie = login.headers()["set-cookie"]
-        .to_str()
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap();
-    let response = client
-        .put(&url)
-        .header("cookie", cookie)
-        .json(&json!({"value": enabled.to_string()}))
-        .send()
-        .unwrap();
-    assert!(response.status().is_success());
-    assert_eq!(server.secret_json("google_settings"), enabled);
-    // Tokens cannot revoke consent by changing or omitting the field either.
-    for value in [initial, json!({"gmail_mode": "all"})] {
-        let response = client
-            .put(&url)
-            .bearer_auth(server.admin_token())
-            .json(&json!({"value": value.to_string()}))
-            .send()
-            .unwrap();
-        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
-        assert_eq!(server.secret_json("google_settings"), enabled);
+    let login = client.post(server.url("/api/login"))
+        .json(&json!({"password": PASSWORD})).send().unwrap();
+    let cookie = login.headers()["set-cookie"].to_str().unwrap()
+        .split(';').next().unwrap().to_owned();
+    let names = [
+        "ai_accounts", "ai_settings", "ai_account_key_id", "ai_account_chatgpt_id",
+        "ai_account_usage_id", "google_settings", "google_client_id", "google_client_secret",
+        "google_refresh_token", "google_account", "google_gmail_state", "google_calendar_state",
+        "gitsync_settings", "gitsync_token", "gitsync_ssh_key", "gitsync_known_hosts",
+        "gitsync_key", "gitsync_state", "gitsync_freshness_publish_peer",
+        "gitsync_freshness_receive_peer", "brave_api_key",
+    ];
+    for session in [false, true] {
+        for name in names {
+            // Even kind=login cannot shadow an internal string secret.
+            let before = server.secret(name);
+            for method in [reqwest::Method::PUT, reqwest::Method::DELETE] {
+                let req = client.request(method.clone(), server.url(&format!("/api/secrets/{name}")));
+                let req = if session { req.header("cookie", &cookie) }
+                    else { req.bearer_auth(server.admin_token()) };
+                let response = req.json(&json!({"kind":"login","username":"x","password":"x"}))
+                    .send().unwrap();
+                assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN, "{method} {name}");
+                let error: Value = response.json().unwrap();
+                assert_eq!(error["error"], "internal_secret");
+                if name == "ai_accounts" {
+                    assert!(error.to_string().contains("Settings > AI"));
+                }
+                assert_eq!(server.secret(name), before, "{name}");
+            }
+        }
+        for name in ["user_key", "google_user_key", "gitsync_user_key", "brave_settings"] {
+            let url = server.url(&format!("/api/secrets/{name}"));
+            let req = client.put(&url);
+            let req = if session { req.header("cookie", &cookie) }
+                else { req.bearer_auth(server.admin_token()) };
+            assert!(req.json(&json!({"value":"fixture"})).send().unwrap().status().is_success());
+            assert_eq!(server.secret(name).as_deref(), Some("fixture"));
+            let req = client.delete(&url);
+            let req = if session { req.header("cookie", &cookie) }
+                else { req.bearer_auth(server.admin_token()) };
+            assert!(req.send().unwrap().status().is_success());
+            assert!(server.secret(name).is_none());
+        }
     }
 }
-
-fn large_note_server(count: usize, bytes: usize) -> TestServer {
-    TestServer::start_seeded(|vault| {
-        std::fs::create_dir_all(vault.join("types")).unwrap();
         std::fs::create_dir_all(vault.join("notes/memo")).unwrap();
         std::fs::write(vault.join("types/memo.wcl"), "label = \"Memo\"\nfield status { kind = \"string\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
         for i in 0..count {

@@ -421,6 +421,32 @@ pub struct SecretBody {
 }
 
 /// `PUT /api/secrets/{name}`: store or replace a secret, encrypted at rest.
+fn require_user_secret(name: &str) -> Result<(), ApiError> {
+    let destination = match name {
+        "ai_accounts" | "ai_settings" => Some("Settings > AI (the accounts API)"),
+        n if n.starts_with("ai_account_key_")
+            || n.starts_with("ai_account_chatgpt_")
+            || n.starts_with("ai_account_usage_") => Some("Settings > AI (the accounts API)"),
+        "google_settings" | "google_client_id" | "google_client_secret"
+        | "google_refresh_token" | "google_account" | "google_gmail_state"
+        | "google_calendar_state" => Some("Settings > Google"),
+        "gitsync_settings" | "gitsync_token" | "gitsync_ssh_key" | "gitsync_known_hosts"
+        | "gitsync_key" | "gitsync_state" => Some("Settings > Git Sync"),
+        n if n.starts_with("gitsync_freshness_publish_")
+            || n.starts_with("gitsync_freshness_receive_") => Some("Git Sync's managed replay checkpoints"),
+        "brave_api_key" => Some("Settings > Brave Search"),
+        _ => None,
+    };
+    if let Some(destination) = destination {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "internal_secret",
+            format!("This secret is managed by the server. Use {destination}, not /api/secrets."),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn put_secret(
     State(w): Shared,
     Path(name): Path<String>,
@@ -429,31 +455,13 @@ pub async fn put_secret(
     raw: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     check_name("secret", &name)?;
+    require_user_secret(&name)?;
     let b: SecretBody = body(&headers, &raw, |value| SecretBody {
         value: Some(value),
         ..SecretBody::default()
     })
     .map_err(|_| ApiError::bad_request("invalid secret body"))?;
     let info = blocking(w, move |w| {
-        if name == writer::google::SETTINGS && !matches!(author, state::Author::Session(_)) {
-            let old = writer::google::settings(w.state())?;
-            let new: Value = b
-                .value
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or(Value::Null);
-            let consent = new
-                .get("gmail_remote_images")
-                .cloned()
-                .unwrap_or(json!(false));
-            if old.get("gmail_remote_images") != Some(&consent) {
-                return Err(ApiError::new(
-                    StatusCode::FORBIDDEN,
-                    "session_required",
-                    "Mail image consent requires an owner session",
-                ));
-            }
-        }
         let login = b.kind.as_deref() == Some("login");
         if login || w.state().is_login_secret(&name)? {
             require_login_owner(w, &author)?;
@@ -501,6 +509,7 @@ pub async fn delete_secret(
     Path(name): Path<String>,
     Caller(author): Caller,
 ) -> Result<Json<Value>, ApiError> {
+    require_user_secret(&name)?;
     let n = name.clone();
     blocking(w, move |w| -> Result<(), ApiError> {
         if w.state().is_login_secret(&n)? {
