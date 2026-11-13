@@ -460,9 +460,12 @@ mod tests {
 
     #[test]
     fn selection_refuses_unknown_fields() {
-        assert!(serde_json::from_value::<Selection>(json!({
-            "account":"fake", "message":"message", "part":"part", "filename":"forged"
-        })).is_err());
+        assert!(
+            serde_json::from_value::<Selection>(json!({
+                "account":"fake", "message":"message", "part":"part", "filename":"forged"
+            }))
+            .is_err()
+        );
     }
 
     #[test]

@@ -336,7 +336,10 @@ fn metadata_create_and_update_refuse_agent_tokens_and_scripts_but_allow_owner() 
         );
         expect(
             f.client
-                .post(f.server.url(&format!("/api/notes/{id}/agent-safety/release")))
+                .post(
+                    f.server
+                        .url(&format!("/api/notes/{id}/agent-safety/release")),
+                )
                 .header("cookie", &f.cookie)
                 .json(&json!({"fingerprint":current["agent_safety"]["fingerprint"]}))
                 .send()
