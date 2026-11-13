@@ -269,6 +269,9 @@ To delete its saved logins and profiles too, run `docker volume rm thevault_brow
 
 ## Back up
 
+For destination ownership, separate key custody, retention, scheduling and a
+synthetic recovery drill, see the [off-host backup runbook](off-host-backup.md).
+
 Run a backup whenever you want a copy of the vault:
 
 ```sh
