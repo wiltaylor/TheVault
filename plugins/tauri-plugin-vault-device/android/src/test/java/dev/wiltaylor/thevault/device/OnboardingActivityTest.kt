@@ -64,6 +64,7 @@ class OnboardingActivityTest {
     fun pairingByPasswordStoresTheLinkAndCloses() {
         val controller = Robolectric.buildActivity(OnboardingActivity::class.java).setup()
         val activity = controller.get()
+        activity.confirmHttp.isChecked = true
         activity.serverUrl.setText(home.url + "/")
         activity.password.setText(FakeHome.PASSWORD)
         activity.deviceName.setText("Pixel 9")
@@ -84,6 +85,7 @@ class OnboardingActivityTest {
     @Test
     fun aScannedCodePairsWithoutThePassword() {
         val activity = Robolectric.buildActivity(OnboardingActivity::class.java).setup().get()
+        activity.confirmHttp.isChecked = true
         activity.pair(home.url, null, FakeHome.CODE)
         waitFor { activity.isFinishing }
         assertTrue(activity.message.text.toString(), activity.isFinishing)
@@ -93,6 +95,7 @@ class OnboardingActivityTest {
     @Test
     fun aWrongPasswordSaysSoAndStoresNothing() {
         val activity = Robolectric.buildActivity(OnboardingActivity::class.java).setup().get()
+        activity.confirmHttp.isChecked = true
         activity.serverUrl.setText(home.url)
         activity.password.setText("wrong")
         activity.pairButton.performClick()
@@ -106,6 +109,7 @@ class OnboardingActivityTest {
     fun afterPairingItAsksToPostNotificationsAndClosesWhateverTheAnswer() {
         shadowOf(context as Application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val activity = Robolectric.buildActivity(OnboardingActivity::class.java).setup().get()
+        activity.confirmHttp.isChecked = true
         activity.pair(home.url, FakeHome.PASSWORD, null)
         waitFor { shadowOf(activity).lastRequestedPermission != null }
         val asked = shadowOf(activity).lastRequestedPermission!!
