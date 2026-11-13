@@ -54,6 +54,7 @@ template default {
 /// What the stand-in runner was asked to do.
 #[derive(Default)]
 struct Fake {
+    contexts: Mutex<Vec<script::RunContext>>,
     scopes: Mutex<Vec<Option<state::Scope>>>,
     threads: Mutex<Vec<(String, String, String)>>,
     turns: Mutex<Vec<(String, String, String)>>,
@@ -98,6 +99,10 @@ impl AgentRunner for Fake {
         scope: Option<state::Scope>,
         _caller: Option<&state::Author>,
     ) -> TurnReport {
+        self.contexts
+            .lock()
+            .unwrap()
+            .push(script::RunContext::current().expect("agent run context"));
         self.scopes.lock().unwrap().push(scope);
         let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
         self.most.fetch_max(now, Ordering::SeqCst);
@@ -327,6 +332,28 @@ trigger nightly {
   prompt   = "Summarise the day."
 }
 "#;
+
+#[test]
+fn due_agent_jobs_are_independent_of_the_tick_callers_scope() {
+    let r = Rig::new();
+    r.agent("owl", NIGHTLY);
+    let next = r.scheduler.agent_next_run("owl", "nightly").unwrap();
+    r.clock.set(next);
+    let parent = script::RunContext::default();
+    parent.restrict();
+    let generation = r.writer.state().admit_automation().unwrap();
+    parent.capture_stop_generation(generation);
+    parent.scope(|| r.scheduler.tick());
+    assert!(script::RunContext::current().is_none());
+    let contexts = r.fake.contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 1);
+    assert_ne!(contexts[0], parent);
+    assert_ne!(contexts[0].stop_generation(), Some(generation));
+    // Legacy durable recovery is fail-closed, not evidence of caller inheritance.
+    assert!(contexts[0].is_restricted());
+    assert_eq!(parent.stop_generation(), Some(generation));
+    assert_eq!(r.fake.turns().len(), 1);
+}
 
 #[test]
 fn a_schedule_trigger_starts_a_thread_with_its_prompt() {

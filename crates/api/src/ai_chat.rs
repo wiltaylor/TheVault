@@ -5443,6 +5443,30 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn blocking_explicit_default_inherits_restricted_caller() {
+        let parent = RunContext::default();
+        parent.restrict();
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let generation = state.admit_automation().unwrap();
+        parent.capture_stop_generation(generation);
+        let worker = parent.scope(|| {
+            blocking(&RunContext::default(), || {
+                let context = RunContext::current().unwrap();
+                let job = script_core::Job::new(script_core::Kind::Task, "child", "", "run");
+                assert_eq!(job.run_context(), &context);
+                context
+            })
+        });
+        assert!(RunContext::current().is_none());
+        let observed = worker.await.unwrap();
+        assert_eq!(observed, parent);
+        assert!(observed.is_restricted());
+        assert_eq!(observed.stop_generation(), Some(generation));
+        assert!(RunContext::current().is_none());
+    }
+
+    #[tokio::test]
     async fn blocking_turn_workers_share_late_restriction_and_job_provenance() {
         let context = RunContext::default();
         let dir = tempfile::tempdir().unwrap();

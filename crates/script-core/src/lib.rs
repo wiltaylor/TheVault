@@ -213,6 +213,7 @@ impl Job {
     }
 
     /// Explicit provenance cannot discard either prior or caller restrictions.
+    /// Do not reuse a Job or its clones across runs in different scopes: joins are permanent.
     pub fn set_run_context(&mut self, context: RunContext) {
         self.run_context.clone().scope(|| {
             self.run_context = context.inherit_current();
@@ -409,6 +410,7 @@ impl Host {
     }
 
     /// Run `job` on a worker and wait for it to end.
+    /// Do not reuse a Job or its clones across runs in different scopes: joins are permanent.
     pub fn run(&self, mut job: Job) -> Outcome {
         job.set_run_context(job.run_context.clone());
         let limits = Limits {
