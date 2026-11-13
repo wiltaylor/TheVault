@@ -1137,7 +1137,7 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
                 "Agent trigger changes need a signed-in session Apply."
             );
         } else {
-            assert_eq!(body["error"], "needs_admin");
+            assert_eq!(body["error"], "forbidden");
         }
         assert!(api.agent_wcl("helper").is_none());
     }
