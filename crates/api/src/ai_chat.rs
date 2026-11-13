@@ -2444,6 +2444,7 @@ impl Turn {
                 // The capability is scoped to this call, never inherited by a sub agent.
                 let gmail_actions =
                     !self.unattended && self.sub.is_none() && setup.agent.permissions.gmail_actions;
+                let unattended = self.unattended;
                 let call = c.clone();
                 let direct = setup.direct;
                 let held = self.held;
@@ -2461,6 +2462,7 @@ impl Turn {
                         &agent,
                         &call,
                         gmail_actions,
+                        unattended,
                     )
                 })
                 .await
@@ -3755,6 +3757,7 @@ fn run_tool(
     agent: &Agent,
     call: &ToolCall,
     gmail_actions: bool,
+    unattended: bool,
 ) -> ToolOut {
     // The memory tools reach only the agent's own memories, and write as the agent (agents G21).
     if call.error.is_none() && agent_memory::is_memory_tool(&call.name) {
@@ -3777,10 +3780,13 @@ fn run_tool(
         }
     }
     // TV-245/246 own destructive activation and explicit owner caps. Confirmation-off is
-    // not an unattended destructive allowance. Keep the proposal reviewable instead.
+    // not an unattended destructive allowance: an unattended run keeps the proposal
+    // reviewable instead. An attended turn keeps its confirmation switches (ai D22).
     let destructive = out.proposal.as_ref().is_some_and(|(event, p)| {
         *event == "proposal" && matches!(p["op"].as_str(), Some("delete" | "archive"))
     });
+    let held_destructive = destructive && unattended;
+    // A rule never approves a destructive change, attended or not.
     let rule = if scope.allows(Scope::Write)
         && !destructive
         && agent.permissions.allows_tool(&call.name)
@@ -3794,7 +3800,7 @@ fn run_tool(
         None
     };
     match &out.proposal {
-        Some((event, p)) if !destructive && (direct.covers(event, p) || rule.is_some()) => {
+        Some((event, p)) if !held_destructive && (direct.covers(event, p) || rule.is_some()) => {
             let (event, mut p) = (*event, p.clone());
             let reservation = if let Some(rule) = rule {
                 let mut fields = rule.fields.clone();
@@ -3813,7 +3819,15 @@ fn run_tool(
                     .reserve_approval(&id, &agent.name, &bucket, false, budget)
                 {
                     Ok(state::ApprovalReservation::Reserved) => {}
-                    Ok(state::ApprovalReservation::Capped) => return out,
+                    // Over the cap the change is only a proposal, which an unattended run
+                    // with no review path refuses like any other (TV-84).
+                    Ok(state::ApprovalReservation::Capped) => {
+                        return if held == Held::Drop {
+                            ToolOut::error(HELD_REFUSAL)
+                        } else {
+                            out
+                        };
+                    }
                     Ok(state::ApprovalReservation::AlreadyAttempted) => {
                         return ToolOut::error(
                             "This change was already attempted. Its outcome may be uncertain. Check the target; do not retry.",
@@ -3835,15 +3849,17 @@ fn run_tool(
                         .as_str()
                         .and_then(|id| w.read(id).ok())
                         .is_some_and(|n| n.type_name == "email"));
-            let author = if email && gmail_actions {
-                Author::AgentMail(agent.name.clone())
-            } else if reservation.is_some() || email || touches_outbox(w, event, &p) {
-                Author::Agent(agent.name.clone())
-            } else {
-                author.clone()
-            };
+            let author = change_author(
+                author,
+                &agent.name,
+                reservation.is_some(),
+                email,
+                gmail_actions,
+                touches_outbox(w, event, &p),
+            );
             let mut made = make(w, &author, event, &p, out.summary, reservation.as_deref());
-            if email && !gmail_actions && !made.is_error {
+            // A rule-approved write is the agent's own, so it skips Gmail like a trigger's.
+            if email && (!gmail_actions || reservation.is_some()) && !made.is_error {
                 let notice = "Gmail action skipped: the note change was applied only in the vault. Gmail archive/trash needs a user Apply or an opted-in foreground chat, never a trigger or mention run.";
                 made.summary["gmail_skipped"] = json!(notice);
                 let summary_message = made.summary["message"]
@@ -3867,6 +3883,28 @@ fn run_tool(
         }
         Some(_) if held == Held::Drop => ToolOut::error(HELD_REFUSAL),
         _ => out,
+    }
+}
+
+/// Who writes a change made without the user's Apply. A rule-approved write is always the
+/// agent's and never carries the Gmail capability, whatever `gmail_actions` says: the rule
+/// approved a field update, not a Gmail action.
+fn change_author(
+    caller: &Author,
+    agent: &str,
+    rule_approved: bool,
+    email: bool,
+    gmail_actions: bool,
+    touches_outbox: bool,
+) -> Author {
+    if rule_approved {
+        Author::Agent(agent.to_owned())
+    } else if email && gmail_actions {
+        Author::AgentMail(agent.to_owned())
+    } else if email || touches_outbox {
+        Author::Agent(agent.to_owned())
+    } else {
+        caller.clone()
     }
 }
 
@@ -5373,6 +5411,140 @@ mod tests {
                 .unwrap(),
             state::ApprovalReservation::Capped
         );
+    }
+
+    #[test]
+    fn rule_approved_write_is_the_agents_and_never_carries_gmail() {
+        let owner = Author::Session("owner".into());
+        // S1: a rule approves a field update, never a Gmail action.
+        assert!(matches!(
+            change_author(&owner, "reader", true, true, true, false),
+            Author::Agent(name) if name == "reader"
+        ));
+        assert!(matches!(
+            change_author(&owner, "reader", true, false, true, false),
+            Author::Agent(name) if name == "reader"
+        ));
+        // Unchanged without a rule.
+        assert!(matches!(
+            change_author(&owner, "reader", false, true, true, false),
+            Author::AgentMail(name) if name == "reader"
+        ));
+        assert!(matches!(
+            change_author(&owner, "reader", false, true, false, false),
+            Author::Agent(name) if name == "reader"
+        ));
+        assert!(matches!(
+            change_author(&owner, "reader", false, false, true, true),
+            Author::Agent(name) if name == "reader"
+        ));
+        assert!(matches!(
+            change_author(&owner, "reader", false, false, true, false),
+            Author::Session(name) if name == "owner"
+        ));
+    }
+
+    /// A vault with type memo, agent `reader` from `permissions`, and one memo.
+    fn selective_fixture(permissions: &str) -> (tempfile::TempDir, Writer, Agent, String, Value) {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        w.put_type("memo", "label = \"Memo\"\nfield status {\n kind = \"string\"\n}\ntemplate default { tab \"Main\" { slot \"title\" } }\n").unwrap();
+        w.put_agent("reader", permissions, |_| vec![]).unwrap();
+        let n = w
+            .create(
+                "memo",
+                &Input::Json(json!({"fields":{"title":"One","status":"open"}})),
+                &Author::Session("owner".into()),
+            )
+            .unwrap();
+        let agent = w.agent("reader").unwrap();
+        let version = json!(n.version);
+        (root, w, agent, n.id, version)
+    }
+
+    fn tool_call(name: &str, input: Value) -> ToolCall {
+        ToolCall {
+            id: "call".into(),
+            name: name.into(),
+            input,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn capped_rule_is_refused_where_no_one_can_review_the_proposal() {
+        // daily_cap 0 grants no allowance, so the matching rule is capped at once.
+        let (_root, w, agent, id, version) = selective_fixture(
+            "permissions {\n approval_rule {\n operation = \"update\"\n type = \"memo\"\n fields = [\"status\"]\n daily_cap = 0\n }\n}\n",
+        );
+        let owner = Author::Session("owner".into());
+        let limits = Limits::of(&agent);
+        let call = tool_call(
+            "propose_fields",
+            json!({"id":id,"base_version":version,"fields":json!({"status":"closed"}).to_string()}),
+        );
+        let run = |held| {
+            run_tool(
+                &w,
+                &owner,
+                Scope::Write,
+                Direct::default(),
+                held,
+                &limits,
+                &agent,
+                &call,
+                false,
+                true,
+            )
+        };
+        // S2: an unknown unattended origin has no review path, so nothing is proposed.
+        let dropped = run(Held::Drop);
+        assert!(dropped.is_error, "{}", dropped.content);
+        assert!(dropped.proposal.is_none());
+        assert!(dropped.content.contains("unattended"), "{}", dropped.content);
+        // A reviewable origin keeps the capped change as a proposal.
+        let proposed = run(Held::Propose);
+        assert!(!proposed.is_error, "{}", proposed.content);
+        assert!(proposed.proposal.is_some());
+        let before = doc_to_json(&w.read(&id).unwrap().doc);
+        assert_eq!(before["fields"]["status"], json!("open"));
+    }
+
+    #[test]
+    fn confirm_off_delete_is_held_unattended_and_made_attended() {
+        let (_root, w, agent, id, _version) = selective_fixture(
+            "permissions {\n approval_rule {\n operation = \"delete\"\n type = \"memo\"\n daily_cap = 100\n }\n confirm {\n delete = false\n archive = false\n }\n}\n",
+        );
+        let owner = Author::Session("owner".into());
+        let limits = Limits::of(&agent);
+        let direct = Direct::of(confirm_of(&agent), Scope::Write);
+        assert!(direct.delete && direct.archive);
+        let call = tool_call("propose_delete", json!({"id":id}));
+        let run = |unattended| {
+            run_tool(
+                &w,
+                &owner,
+                Scope::Write,
+                direct,
+                Held::Propose,
+                &limits,
+                &agent,
+                &call,
+                false,
+                unattended,
+            )
+        };
+        // Unattended: neither the switch nor a destructive rule makes the change (D2).
+        let held = run(true);
+        assert!(!held.is_error, "{}", held.content);
+        assert!(held.proposal.is_some());
+        assert!(!held.content.contains("moved to the trash"), "{}", held.content);
+        // S4: an attended turn keeps its confirmation switch (ai D22).
+        let made = run(false);
+        assert!(!made.is_error, "{}", made.content);
+        assert!(made.content.contains("moved to the trash"), "{}", made.content);
     }
 
     #[test]
