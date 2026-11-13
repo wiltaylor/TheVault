@@ -437,8 +437,15 @@ pub async fn put_secret(
     let info = blocking(w, move |w| {
         if name == writer::google::SETTINGS && !matches!(author, state::Author::Session(_)) {
             let old = writer::google::settings(w.state())?;
-            let new: Value = b.value.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null);
-            let consent = new.get("gmail_remote_images").cloned().unwrap_or(json!(false));
+            let new: Value = b
+                .value
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(Value::Null);
+            let consent = new
+                .get("gmail_remote_images")
+                .cloned()
+                .unwrap_or(json!(false));
             if old.get("gmail_remote_images") != Some(&consent) {
                 return Err(ApiError::new(
                     StatusCode::FORBIDDEN,
