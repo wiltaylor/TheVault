@@ -14,6 +14,9 @@ pub const FORMAT: u32 = 2;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub format: u32,
+    /// Monotonic publication number. Zero denotes a pre-freshness peer.
+    #[serde(default)]
+    pub sequence: u64,
     pub instance: Instance,
     pub notes: Vec<NoteEntry>,
     pub assets: Vec<AssetEntry>,
@@ -74,6 +77,7 @@ impl Manifest {
     pub fn new(instance: Instance) -> Self {
         Self {
             format: FORMAT,
+            sequence: 1,
             instance,
             notes: Vec::new(),
             assets: Vec::new(),

@@ -442,6 +442,10 @@ pub fn run_round(
     secrets: &Secrets,
     paths: &Paths,
 ) -> Result<Report> {
+    std::fs::create_dir_all(&paths.dir)?;
+    let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true)
+        .open(paths.dir.join("freshness.lock"))?;
+    lock.lock()?;
     let key = secrets
         .key
         .as_ref()
@@ -555,6 +559,15 @@ impl Round<'_> {
             return Err(named(
                 "the branch does not belong to the instance it names".into(),
             ));
+        }
+
+        let tree_hash = self.git.tree_of(&format!("refs/remotes/origin/{name}"))
+            .map_err(Skip::new)?.ok_or_else(|| Skip::new("missing peer tree"))?;
+        // Hash the full tree identity, including definitions and asset ciphertexts.
+        let fingerprint = pack::sha256_hex(tree_hash.as_bytes());
+        if let Err(e) = crate::freshness::receive(self.w.state(), &peer, manifest.sequence, &fingerprint) {
+            self.report.warnings.push(format!("peer freshness check failed: {e}"));
+            return Err(named(e.to_string()));
         }
 
         let mut open_defs = |defs: &[DefEntry],
@@ -1274,6 +1287,10 @@ impl Round<'_> {
                 size(self.settings.warn_bytes)
             ));
         }
+        // The normalized manifest (sequence 1) and every ciphertext determine publication.
+        files.insert(layout.manifest(), manifest.seal(self.key));
+        let fingerprint = pack::sha256_hex(&serde_json::to_vec(&files).expect("files serialize"));
+        manifest.sequence = crate::freshness::publication(state, &self.me, &fingerprint)?;
         files.insert(layout.manifest(), manifest.seal(self.key));
 
         let tree = self.git.write_tree(&files)?;
