@@ -1520,8 +1520,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn owner_router_materializes_query_and_search() {
+    #[test]
+    fn owner_router_materializes_query_and_search() {
         use std::sync::Arc;
         use tower::ServiceExt;
         let dir = tempfile::TempDir::new().unwrap();
@@ -1537,6 +1537,8 @@ mod tests {
         let scheduler =
             scheduler::Scheduler::new(w.clone(), host, Arc::new(state::SystemClock)).unwrap();
         let app = crate::owner_router(w, scheduler);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
         for (method, uri, body) in [
             ("GET", "/api/search?q=quokka", ""),
             ("GET", "/api/query?query=from%20article", ""),
@@ -1557,6 +1559,7 @@ mod tests {
             assert!(value["rows"].is_array(), "{value}");
             assert_eq!(value["total"], 0);
         }
+        });
     }
 
     #[tokio::test]
@@ -1580,6 +1583,13 @@ mod tests {
         };
         let mut value = serde_json::to_value(page).unwrap();
         value["notice"] = json!("some notes may be held");
+        value["browser_secrets"] = json!(["top-secret-login"]);
+        value["rows"][0]["fields"]["browser_secrets"] = json!(["nested-secret-login"]);
+        value["rows"][0]["group"]["browser_secrets"] = json!(["group-secret-login"]);
+        value["agent_definition"] = json!({
+            "agent": {}, "format": "wcl", "name": "example",
+            "wcl": "label = \"Example\"\npermissions { browser_secrets = [\"wcl-secret-login\"] }\n"
+        });
         for author in [
             state::Author::Token("reader".into()),
             state::Author::Session("owner".into()),
@@ -1608,12 +1618,10 @@ mod tests {
             if matches!(author, state::Author::Token(_)) {
                 let text = std::str::from_utf8(&fast).unwrap();
                 for secret in [
-                    "private-password",
-                    "private-user",
-                    "nested-user",
-                    "group-user",
-                    "embedded-user",
-                    "https://private.invalid",
+                    "top-secret-login",
+                    "nested-secret-login",
+                    "group-secret-login",
+                    "wcl-secret-login",
                 ] {
                     assert!(!text.contains(secret), "reader retained {secret}");
                 }
