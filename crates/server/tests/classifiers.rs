@@ -304,8 +304,13 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
     assert_eq!(legacy["reason"], "missing_account");
     assert!(legacy.get("resolved_account_id").is_none());
     // A dangling name must not be adopted by either account creation or rename-to.
-    for (name, rename) in [("dangling create", false), ("dangling rename", true)] {
-        let source = CONFIG.replace("\"router\"", &format!("\"{name}\""));
+    for (reference, name, rename) in [
+        ("dangling create", "dangling create", false),
+        ("dangling rename", "dangling rename", true),
+        ("Équipe", "équipe", false),
+        ("Équipe rename", "équipe rename", true),
+    ] {
+        let source = CONFIG.replace("\"router\"", &format!("\"{reference}\""));
         std::fs::write(server.vault_path().join("classifiers/dangling.wcl"), source).unwrap();
         let request = if rename {
             client.put(server.url(&format!("/api/integrations/ai/accounts/{selected}")))
@@ -330,6 +335,24 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
         assert!(dangling.get("resolved_account_id").is_none());
     }
     assert!(fake.requests().is_empty(), "setup must not call Decisions");
+}
+
+#[test]
+fn unrelated_account_creation_does_not_commit_classifier_files() {
+    let fake = FakeDecisions::start();
+    let (server, client) = setup(&fake, CONFIG);
+    let path = server.vault_path().join(".vault/generation");
+    let before = std::fs::read_to_string(&path).unwrap();
+    client
+        .post(server.url("/api/integrations/ai/accounts"))
+        .bearer_auth(server.admin_token())
+        .json(&json!({"name":"unrelated","kind":"openai_compatible","base_url":fake.base_url()}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), before);
+    assert!(fake.requests().is_empty());
 }
 
 #[test]

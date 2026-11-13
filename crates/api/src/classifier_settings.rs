@@ -168,7 +168,8 @@ pub(crate) fn pin_missing_name(
 ) -> Result<(), ApiError> {
     let missing = ulid::Ulid::new().to_string();
     w.pin_classifier_accounts(|reference| {
-        (reference.trim().eq_ignore_ascii_case(name.trim()) && accounts.find(reference).is_none())
+        (reference.trim().to_lowercase() == name.trim().to_lowercase()
+            && accounts.find(reference).is_none())
             .then(|| missing.clone())
     })?;
     Ok(())

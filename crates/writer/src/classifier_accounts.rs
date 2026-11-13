@@ -20,21 +20,30 @@ impl Writer {
             if !schema::is_name(name) {
                 continue;
             }
-            self.commit_checked(|w| {
+            let _w = self.write_lock();
+            let change = (|| {
                 let path = format!("classifiers/{name}.wcl");
-                let source = w.vault().read_text(&path)?;
+                let source = self.vault().read_text(&path)?;
                 let Ok(config) = Classifier::parse(name, &source) else {
-                    return Ok::<_, Error>(vec![]);
+                    return Ok::<_, Error>(None);
                 };
                 let Some(account) = config.account.as_deref().and_then(&decide) else {
-                    return Ok(vec![]);
+                    return Ok(None);
                 };
                 let text = account_source(name, &source, &account)?;
-                Ok(vec![Change::ClassifierAccount {
+                if text == source {
+                    return Ok(None);
+                }
+                Ok(Some(Change::ClassifierAccount {
                     path,
                     contents: text.into_bytes(),
-                }])
-            })?;
+                }))
+            })()?;
+            if let Some(change) = change {
+                let mut inner = self.lock();
+                let (generation, _automation) = self.commit_scoped(vec![change])?;
+                inner.index.advance(generation)?;
+            }
         }
         Ok(())
     }
