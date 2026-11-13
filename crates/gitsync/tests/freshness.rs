@@ -68,9 +68,14 @@ fn refused(report: &serde_json::Value, reason: &str) {
         "{report}"
     );
     if reason.contains("sequence") || reason.contains("checkpoint") {
-        assert!(report["warnings"].as_array().unwrap().iter().any(|w| {
-            w.as_str().is_some_and(|w| w.contains(reason))
-        }), "{report}");
+        assert!(
+            report["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| { w.as_str().is_some_and(|w| w.contains(reason)) }),
+            "{report}"
+        );
     }
     for field in ["created", "updated", "merged", "archived", "unarchived"] {
         assert!(
@@ -217,16 +222,29 @@ fn publisher_seeds_from_authenticated_own_remote_counter_after_local_rollback() 
     // Also omit definition hashes to prove the upgrade can republish its own old branch.
     let mut files = fixture(&key, peer, 50, "old publisher");
     let mut manifest: serde_json::Value = serde_json::from_slice(
-        &key.open(&layout.manifest(), &files[&layout.manifest()]).unwrap()
-    ).unwrap();
-    manifest["types"][0].as_object_mut().unwrap().remove("sha256");
-    files.insert(layout.manifest(), key.seal(&layout.manifest(), &serde_json::to_vec(&manifest).unwrap()));
+        &key.open(&layout.manifest(), &files[&layout.manifest()])
+            .unwrap(),
+    )
+    .unwrap();
+    manifest["types"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("sha256");
+    files.insert(
+        layout.manifest(),
+        key.seal(&layout.manifest(), &serde_json::to_vec(&manifest).unwrap()),
+    );
     push(&git, &key, peer, &files);
     publisher.sync();
     git.fetch_instance_branches().unwrap();
     let read = || {
-        let entries = git.read_tree(&format!("refs/remotes/origin/{}", layout.branch())).unwrap();
-        let entry = entries.iter().find(|e| e.path == layout.manifest()).unwrap();
+        let entries = git
+            .read_tree(&format!("refs/remotes/origin/{}", layout.branch()))
+            .unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.path == layout.manifest())
+            .unwrap();
         Manifest::open(&key, &layout, &git.cat_blob(&entry.oid).unwrap()).unwrap()
     };
     assert_eq!(read().sequence, 51);
