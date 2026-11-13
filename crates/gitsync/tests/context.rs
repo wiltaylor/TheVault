@@ -97,8 +97,7 @@ fn retry_assets(count: usize, repair: bool) {
         }
     }
     if repair {
-        manifest.sequence += 1;
-        files.insert(layout.manifest(), manifest.seal(&key));
+        // Repair at the same unseen-then-pinned sequence must remain acceptable.
         publish(&files);
     }
     for _ in 0..2 {

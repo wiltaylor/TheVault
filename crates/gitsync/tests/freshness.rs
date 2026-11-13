@@ -252,4 +252,26 @@ fn publisher_seeds_from_authenticated_own_remote_counter_after_local_rollback() 
     assert_eq!(report["pushed"], false, "{report}");
     git.fetch_instance_branches().unwrap();
     assert_eq!(read().sequence, 51);
+    for case in ["version 1", "junk", "invalid json", "missing"] {
+        let mut blob = fixture(&key, peer, 52, "unreadable")[&layout.manifest()].clone();
+        match case {
+            "version 1" => blob[4] = 1,
+            "junk" => blob = b"junk".to_vec(),
+            "invalid json" => blob = key.seal(&layout.manifest(), b"not json"),
+            _ => {}
+        }
+        let files = if case == "missing" {
+            BTreeMap::from([("junk".into(), b"junk".to_vec())])
+        } else {
+            BTreeMap::from([(layout.manifest(), blob)])
+        };
+        push(&git, &key, peer, &files);
+        let report = publisher.sync();
+        assert_eq!(report["pushed"], true, "{case}: {report}");
+        assert!(report["warnings"].as_array().unwrap().iter().any(|w|
+            w.as_str().unwrap().contains("own remote manifest cannot supply a counter")
+        ), "{case}: {report}");
+        git.fetch_instance_branches().unwrap();
+        assert_eq!(read().sequence, 51);
+    }
 }

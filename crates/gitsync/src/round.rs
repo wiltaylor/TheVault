@@ -722,15 +722,27 @@ impl Round<'_> {
                     .map(|d| &d.path),
             )
             .chain(manifest.notes.iter().map(|n| &n.path))
-            .chain(manifest.assets.iter().flat_map(|a| &a.parts))
         {
             let oid = oids
                 .get(path)
                 .ok_or_else(|| named(format!("missing referenced blob: {path}")))?;
             referenced.insert(path, oid);
         }
+        // Asset parts are validated at import. Pin their authenticated assembled
+        // identity, not untrusted part ciphertexts that may be repaired later.
+        let mut assets = BTreeMap::new();
+        for asset in &manifest.assets {
+            for path in &asset.parts {
+                if !oids.contains_key(path) {
+                    let reason = format!("missing referenced blob: {path}");
+                    self.report.warnings.push(reason.clone());
+                    return Err(named(reason));
+                }
+            }
+            assets.insert(&asset.id, &asset.sha256);
+        }
         let fingerprint =
-            pack::sha256_hex(&serde_json::to_vec(&referenced).expect("references serialize"));
+            pack::sha256_hex(&serde_json::to_vec(&(referenced, assets)).expect("references serialize"));
         if let Err(e) =
             crate::freshness::receive(self.w.state(), &peer, manifest.sequence, &fingerprint)
         {
@@ -1320,7 +1332,8 @@ impl Round<'_> {
         let remote_ref = format!("refs/remotes/origin/{branch}");
         let remote_sequence = if self.git.tree_of(&remote_ref)?.is_some() {
             let entries = self.git.read_tree(&remote_ref)?;
-            let entry = entries
+            let counter = (|| -> Result<RemoteCounter> {
+                let entry = entries
                 .iter()
                 .find(|e| e.path == layout.manifest() && e.kind == "blob")
                 .ok_or_else(|| fail("own remote branch has no manifest"))?;
@@ -1334,12 +1347,26 @@ impl Round<'_> {
             }
             let blob = self.git.cat_blob(&entry.oid)?;
             let json = self.key.open(&layout.manifest(), &blob)?;
-            let remote: RemoteCounter = serde_json::from_slice(&json)
-                .map_err(|e| fail(format!("own remote manifest: {e}")))?;
+                serde_json::from_slice(&json)
+                    .map_err(|e| fail(format!("own remote manifest: {e}")))
+            })();
+            let remote = match counter {
+                Ok(remote) => Some(remote),
+                Err(e) => {
+                    self.report.warnings.push(format!(
+                        "own remote manifest cannot supply a counter, republishing: {e}"
+                    ));
+                    None
+                }
+            };
+            if let Some(remote) = remote {
             if remote.instance.vault_id != self.me {
                 return Err(fail("own remote manifest names a different instance"));
             }
             remote.sequence
+            } else {
+                0
+            }
         } else {
             0
         };
