@@ -109,7 +109,8 @@ describe("the Inbox", () => {
     const button = within(rowOf("Roof quote")).getByRole("button", { name: "Send to agent" });
     expect(button.querySelector("svg.robot-glyph")).not.toBeNull();
     fireEvent.click(button);
-    fireEvent.input(screen.getByRole("textbox"), { target: { value: "File it" } });
+    // The page has other text inputs (mail triage), so look inside the dialog (TV-273).
+    fireEvent.input(within(screen.getByRole("dialog")).getByRole("textbox"), { target: { value: "File it" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByRole("status");
     expect(dispatch).toHaveBeenCalledWith("clerk", ["01JN1"], "File it");
@@ -188,7 +189,8 @@ describe("the Inbox", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Gutter invoice" }));
     fireEvent.click(screen.getByRole("button", { name: "Send 2 notes to agent" }));
-    fireEvent.input(screen.getByRole("textbox"), { target: { value: "File the quotes" } });
+    // The page has other text inputs (mail triage), so look inside the dialog (TV-273).
+    fireEvent.input(within(screen.getByRole("dialog")).getByRole("textbox"), { target: { value: "File the quotes" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Sent to Clerk.");
     expect(dispatch).toHaveBeenCalledTimes(1);
