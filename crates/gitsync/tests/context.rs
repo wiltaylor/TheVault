@@ -84,10 +84,20 @@ fn missing_manifest_blob(kind: &str) {
     });
     publish(&files);
     let report = receiver.sync();
-    assert_eq!(report["skipped_branches"].as_array().unwrap().len(), 1, "{report}");
+    assert_eq!(
+        report["skipped_branches"].as_array().unwrap().len(),
+        1,
+        "{report}"
+    );
     assert!(s(&report["skipped_branches"][0]["reason"]).contains(&format!("missing {kind} blob")));
-    assert!(!report["warnings"].as_array().unwrap().is_empty(), "{report}");
-    assert!(report["archived"].as_array().unwrap().is_empty(), "{report}");
+    assert!(
+        !report["warnings"].as_array().unwrap().is_empty(),
+        "{report}"
+    );
+    assert!(
+        report["archived"].as_array().unwrap().is_empty(),
+        "{report}"
+    );
     assert!(receiver.note(new_id).is_none());
     assert_eq!(receiver.field(id, "title"), "Earlier import");
     assert!(!receiver.archived(id));
