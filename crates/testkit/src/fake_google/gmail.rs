@@ -699,6 +699,7 @@ fn get(gmail: &State, id: &str, request: &Request) -> Reply {
     };
     let file = |a: &Attachment| {
         let mut part = json!({
+            "partId": a.id,
             "mimeType": a.mime,
             "filename": a.filename,
             "body": { "attachmentId": a.id, "size": a.data.len() },

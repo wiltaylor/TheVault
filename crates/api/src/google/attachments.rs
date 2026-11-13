@@ -105,7 +105,13 @@ async fn bounded_json(response: reqwest::Response, cap: usize) -> Result<Value, 
 
 // Encode each identifier as one URL segment, including slashes and dot segments.
 fn segment(text: &str) -> String {
-    text.bytes().map(|b| format!("%{b:02X}")).collect()
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
+        char::from(b).to_string()
+    } else { format!("%{b:02X}") }).collect()
+}
+
+async fn within_budget<T>(work: impl std::future::Future<Output = Result<T, ApiError>>) -> Result<T, ApiError> {
+    tokio::time::timeout(FETCH_TIMEOUT, work).await.map_err(|_| provider_error())?
 }
 
 pub(crate) async fn fetch(
@@ -131,7 +137,7 @@ pub(crate) async fn fetch(
     // Disable redirects so neither refresh nor access tokens are forwarded elsewhere.
     let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
         .timeout(FETCH_TIMEOUT).build().map_err(|_| provider_error())?;
-    let bytes = tokio::time::timeout(FETCH_TIMEOUT, async {
+    let bytes = within_budget(async {
         let response = http.post(&endpoints.token).form(&[
             ("grant_type","refresh_token"),("client_id",credentials[0].as_str()),
             ("client_secret",credentials[1].as_str()),("refresh_token",credentials[2].as_str())
@@ -145,7 +151,7 @@ pub(crate) async fn fetch(
             .map_err(|_| provider_error())?;
         if bytes.len() != part.size || bytes.len() > MAX_BYTES { return Err(provider_error()); }
         Ok(bytes)
-    }).await.map_err(|_| provider_error())??;
+    }).await?;
     on_writer(&g, move |w| {
         let (current, _) = select(w, &id, &selected)?;
         if current.version != note.version || settings(w)? != config { return Err(refused()); }
@@ -169,4 +175,34 @@ pub(crate) async fn fetch(
         })?;
         Ok(Json(json!({"asset":asset.id,"agent_safety":w.agent_safety(&id)?})))
     }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_fetch_has_one_total_deadline_with_fake_clock() {
+        let start = tokio::time::Instant::now();
+        let result = within_budget(std::future::pending::<Result<(),ApiError>>()).await;
+        assert!(result.is_err());
+        assert_eq!(start.elapsed(), FETCH_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn response_bytes_and_json_are_bounded() {
+        let response = reqwest::Response::from(axum::http::Response::new("{\"data\":\"AAAA\"}"));
+        assert!(bounded_json(response, 4).await.is_err());
+        let response = reqwest::Response::from(axum::http::Response::new("not JSON: provider secret"));
+        assert!(bounded_json(response, 100).await.is_err());
+        let response = reqwest::Response::from(axum::http::Response::builder().status(500).body("provider secret").unwrap());
+        assert!(bounded_json(response, 100).await.is_err());
+        let response = reqwest::Response::from(axum::http::Response::new("{\"data\":\"AAAA\"}"));
+        assert_eq!(bounded_json(response, 100).await.unwrap()["data"], "AAAA");
+    }
+
+    #[test]
+    fn identifiers_are_single_segments() {
+        assert_eq!(segment("a/b?x#z"),"a%2Fb%3Fx%23z");
+    }
 }

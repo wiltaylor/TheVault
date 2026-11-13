@@ -56,6 +56,7 @@ mod google_calendar;
 mod google_connect;
 mod google_event;
 mod google_gmail;
+mod gmail_attachment_fetch;
 mod google_types;
 mod graph;
 mod handlers;

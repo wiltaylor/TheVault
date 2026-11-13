@@ -55,9 +55,12 @@ struct Gmail {
 impl Gmail {
     /// A server whose `google_gmail` task may reach `google`, with the three secrets set and the
     /// `google_settings` secret holding `settings` and the fake's endpoints.
-    fn start(google: FakeGoogle, mut settings: Value) -> Gmail {
+    fn start(google: FakeGoogle, settings: Value) -> Gmail {
+        Self::start_with_server(google, settings, TestServer::start())
+    }
+
+    fn start_with_server(google: FakeGoogle, mut settings: Value, server: TestServer) -> Gmail {
         settings["endpoints"] = google.endpoints();
-        let server = TestServer::start();
         let gmail = Gmail {
             server,
             client: Client::new(),
@@ -79,7 +82,7 @@ script        = "google_gmail"
 timeout       = "PT5M"
 retries       = 0
 allow_domains = ["oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com", "{host}"]
-secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_state"]
+secrets       = ["google_client_id", "google_client_secret", "google_refresh_token", "google_settings", "google_gmail_state", "google_account"]
 paused        = true
 "#,
             host = gmail.google.host()

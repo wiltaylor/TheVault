@@ -533,8 +533,6 @@ fn safety_rest_read_route_inventory() {
     actual.sort_unstable();
     actual.dedup();
     let expected = [
-        // TV-266: owner session metadata only, no provider calls or asset content.
-        "/api/integrations/google/attachments/{id}",
         "/agent/install.sh",
         "/api/activity",
         // TV-151: session-only summary, never held content to tokens or agents.
@@ -578,6 +576,8 @@ fn safety_rest_read_route_inventory() {
         "/api/integrations/browser",
         "/api/integrations/gitsync",
         "/api/integrations/google",
+        // TV-266: owner session metadata only, no provider calls or asset content.
+        "/api/integrations/google/attachments/{id}",
         "/api/notes",
         "/api/notes/{id}",
         "/api/notes/{id}/canvas/{name}",
@@ -929,6 +929,11 @@ fn safety_rest_mutation_route_inventory() {
             "post",
             "/api/integrations/gitsync/ssh-key/generate",
             "credentials or configuration or input-only response, scope checked",
+        ),
+        (
+            "post",
+            "/api/integrations/google/attachments/{id}",
+            "owner session only; bounded selected-part fetch, incoming provenance and evidence hold",
         ),
         (
             "post",
