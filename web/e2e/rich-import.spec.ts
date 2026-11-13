@@ -61,7 +61,7 @@ async function startServer(): Promise<{ server: Server; stop: () => void }> {
     password: string;
     admin_token: string;
   };
-  const child = spawn(binary("VAULT_SERVER_BIN", "vault-server"), ["--vault", vault, "--listen", "127.0.0.1:0", "--web", join(repo, "web", "dist")], {
+  const child = spawn(binary("VAULT_SERVER_BIN", "vault-server"), ["--test-secret-seams", "--vault", vault, "--listen", "127.0.0.1:0", "--web", join(repo, "web", "dist")], {
     stdio: ["ignore", "pipe", "inherit"],
     env: { ...process.env, VAULT_SECRET_KEY_FILE: key },
   });
@@ -118,7 +118,9 @@ const test = base.extend<{ admin: APIRequestContext }, { server: Server; google:
     await use(context);
   },
   admin: async ({ server }, use) => {
-    const ctx = await request.newContext({ baseURL: server.url, extraHTTPHeaders: { Authorization: `Bearer ${server.token}` } });
+    const ctx = await request.newContext({ baseURL: server.url });
+    const login = await ctx.post("/api/login", { data: { password: server.password } });
+    expect(login.ok()).toBe(true);
     await use(ctx);
     await ctx.dispose();
   },

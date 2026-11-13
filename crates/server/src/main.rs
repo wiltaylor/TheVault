@@ -58,6 +58,9 @@ struct Args {
     /// milliseconds since the epoch. Only test builds accept it (S7).
     #[arg(long, value_name = "TIME")]
     test_clock: Option<String>,
+    /// Allow owner-session fixture writes to the listed test seams. Never accepted in release.
+    #[arg(long)]
+    test_secret_seams: bool,
 }
 
 /// Script worker threads for scheduled tasks.
@@ -98,6 +101,12 @@ fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .try_init();
     let args = Args::parse();
+    check_test_secret_seams(args.test_secret_seams, cfg!(debug_assertions))?;
+    if args.test_secret_seams {
+        eprintln!(
+            "WARNING: --test-secret-seams enabled: owner sessions can write test fixture records"
+        );
+    }
     let test_clock = args.test_clock.as_deref().map(test_clock).transpose()?;
     if !args.vault.is_dir() {
         bail!("vault folder {} does not exist", args.vault.display());
@@ -194,6 +203,11 @@ fn main() -> anyhow::Result<()> {
             Some(clients.clone()),
         )
     };
+    let app = if args.test_secret_seams {
+        app.layer(axum::Extension(api::TestSecretSeams))
+    } else {
+        app
+    };
     if test_clock.is_none() {
         scheduler.start();
     }
@@ -226,6 +240,20 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// The clock `--test-clock` asks for. A release build refuses it.
+fn check_test_secret_seams(enabled: bool, test_build: bool) -> anyhow::Result<()> {
+    if enabled && !test_build {
+        bail!("--test-secret-seams is accepted only by test builds");
+    }
+    Ok(())
+}
+
+#[test]
+fn release_style_start_refuses_test_secret_seams() {
+    assert!(check_test_secret_seams(true, false).is_err());
+    assert!(check_test_secret_seams(false, false).is_ok());
+    assert!(check_test_secret_seams(true, true).is_ok());
+}
+
 fn test_clock(at: &str) -> anyhow::Result<Arc<TestClock>> {
     if !cfg!(debug_assertions) {
         bail!("--test-clock is accepted only by test builds");

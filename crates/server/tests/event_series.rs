@@ -144,13 +144,7 @@ impl Api {
     }
 
     fn put_secret(&self, name: &str, value: &str) {
-        expect(
-            self.req("PUT", &format!("/api/secrets/{name}"))
-                .json(&json!({ "value": value }))
-                .send()
-                .unwrap(),
-            200,
-        );
+        self.server.seed_secret(name, value);
     }
 
     fn file(&self, path: &str) -> String {
@@ -451,12 +445,7 @@ fn run() -> Result[string, string] {
         200,
     );
     // Made while Google is not connected, the notes' handlers send nothing.
-    expect(
-        api.req("DELETE", "/api/secrets/google_refresh_token")
-            .send()
-            .unwrap(),
-        200,
-    );
+    api.server.remove_seed_secret("google_refresh_token");
     let run = expect(
         api.req("POST", "/api/tasks/old_occurrences/run?wait=true")
             .send()

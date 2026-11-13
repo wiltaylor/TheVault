@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 use crate::error::{AiError, ErrorKind};
 
 /// The secret holding [`Settings`].
-pub const SETTINGS: &str = "ai_settings";
+pub const SETTINGS: &str = state::AI_SETTINGS;
 
 /// Anthropic's API, which `/v1/messages` and `/v1/models` hang off.
 pub const ANTHROPIC_BASE: &str = "https://api.anthropic.com";

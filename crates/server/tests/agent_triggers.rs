@@ -3455,11 +3455,7 @@ impl Api {
             .account(TestAccount::anthropic(fake).model(MODEL))
             .secrets()
         {
-            api.send(
-                "PUT",
-                &format!("/api/secrets/{name}"),
-                json!({ "value": value }),
-            );
+            api.server.seed_secret(&name, &value);
         }
         api
     }

@@ -1,5 +1,6 @@
 import { type Fake, type Running, aiAccounts, alone, dropAccount, startFake, useAccount, withDefault } from "./ai";
-import { activePane, expect, logIn, test } from "./fixtures";
+import { activePane } from "./fixtures";
+import { expect, logIn, test } from "./test-seam-fixtures";
 
 // The AI panel (ai D14, D23) against the fake Anthropic API, which an account of the worker's own
 // points at, chosen at the chat's foot (accounts A12): ask beside a note, watch the answer arrive,

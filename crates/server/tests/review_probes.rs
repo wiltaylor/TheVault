@@ -596,6 +596,7 @@ fn p18_legacy_admin_agent_cannot_rewrite_integration_secrets() {
     let legacy = install(&server, &admin, "legacy", "admin");
     let mut statuses = Vec::new();
     for name in [
+        "ordinary_user_key",
         "ai_accounts",
         "ai_settings",
         "ai_account_key_probe",
@@ -604,15 +605,7 @@ fn p18_legacy_admin_agent_cannot_rewrite_integration_secrets() {
         "google_client_id",
     ] {
         let url = server.url(&format!("/api/secrets/{name}"));
-        assert!(
-            admin
-                .put(&url)
-                .json(&json!({ "value": "fixture" }))
-                .send()
-                .unwrap()
-                .status()
-                .is_success()
-        );
+        server.seed_secret(name, "fixture");
         statuses.push(
             legacy
                 .put(&url)
@@ -630,15 +623,7 @@ fn p18_legacy_admin_agent_cannot_rewrite_integration_secrets() {
 fn p19_legacy_admin_agent_cannot_read_google_token_through_a_task() {
     let server = TestServer::start();
     let admin = client(server.admin_token());
-    assert!(
-        admin
-            .put(server.url("/api/secrets/google_refresh_token"))
-            .json(&json!({ "value": "synthetic-test-marker" }))
-            .send()
-            .unwrap()
-            .status()
-            .is_success()
-    );
+    server.seed_secret("google_refresh_token", "synthetic-test-marker");
     let legacy = install(&server, &admin, "legacy", "admin");
     let script = "use vault\nuse secrets\nfn run() -> Result[string, string] {\n    let t = secrets::get(\"google_refresh_token\")?\n    vault::log(t)\n    Ok(\"done\")\n}\n";
     let script_status = legacy

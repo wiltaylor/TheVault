@@ -58,7 +58,7 @@ pub(crate) fn publication(
     hash: &str,
     remote_sequence: u64,
 ) -> Result<u64> {
-    let name = format!("gitsync_freshness_publish_{peer}");
+    let name = format!("{}{peer}", state::GITSYNC_FRESHNESS_PUBLISH_PREFIX);
     let sequence = match load(state, &name)? {
         Some(old) if old.hash == hash && old.sequence >= remote_sequence => return Ok(old.sequence),
         Some(old) => old
@@ -81,7 +81,7 @@ pub(crate) fn receive(state: &State, peer: &str, sequence: u64, hash: &str) -> R
             "peer has no freshness sequence: upgrade every peer and republish".into(),
         ));
     }
-    let name = format!("gitsync_freshness_receive_{peer}");
+    let name = format!("{}{peer}", state::GITSYNC_FRESHNESS_RECEIVE_PREFIX);
     if let Some(old) = load(state, &name)? {
         if sequence < old.sequence || (sequence == old.sequence && hash != old.hash) {
             return Err(Error::Sync(

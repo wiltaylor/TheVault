@@ -59,11 +59,7 @@ impl Api {
             .account(TestAccount::anthropic(fake).model(MODEL))
             .secrets()
         {
-            api.send(
-                "PUT",
-                &format!("/api/secrets/{name}"),
-                json!({ "value": value }),
-            );
+            api.server.seed_secret(&name, &value);
         }
         // These tests count the skills offered: start from the test's own, without the shipped
         // skills `wscript` (script-tools T5), `vault-queries` (TV-29) and `vault-notes` (TV-34).

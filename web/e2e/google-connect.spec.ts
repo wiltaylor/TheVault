@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { type APIRequestContext, request } from "@playwright/test";
-import { expect, logIn, test } from "./isolated-fixtures";
+import { expect, logIn, isolatedTest as test } from "./test-seam-fixtures";
 
 // Settings > Integrations > Google (google-sync D1, D18): the loopback paste flow against the fake
 // Google server, which the `google_settings` secret's endpoints point at. The consent page is the fake's too:
@@ -42,7 +42,8 @@ async function tell(line: string): Promise<void> {
   expect(JSON.parse(await answer)).toEqual({ ok: line });
 }
 
-// Disconnect revokes the fake token, so each test needs its own provider.
+// Disconnect revokes the fake refresh token. Each test needs a fresh provider so a later
+// fixture does not reuse a token revoked by the connection lifecycle test.
 test.beforeEach(async () => {
   google = spawn(binary("TESTKIT_FAKE_GOOGLE_BIN", "testkit-fake-google"), [], { stdio: ["pipe", "pipe", "inherit"] });
   fake = await new Promise<Fake>((resolve, reject) => {

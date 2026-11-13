@@ -82,12 +82,7 @@ impl Api {
             "chatgpt": api.openai.base_url(),
             "chatgpt_auth": auth_base.unwrap_or_else(|| api.siwc.base_url()),
         }});
-        api.send(
-            api.client
-                .put(api.server.url("/api/secrets/ai_settings"))
-                .json(&json!({ "value": settings.to_string() })),
-            StatusCode::OK,
-        );
+        api.server.seed_secret("ai_settings", &settings.to_string());
         api
     }
 
@@ -1149,11 +1144,11 @@ fn accounts_added_and_changed_at_once_are_all_kept() {
 }
 
 #[test]
-fn an_accounts_secrets_take_names_the_secrets_route_accepts() {
+fn account_credentials_seeded_in_state_are_recognized() {
     let api = Api::start();
     let id = api.plan();
     assert!(id.chars().any(|c| c.is_ascii_uppercase()), "a ULID: {id}");
-    // The e2e seam: a signed-in plan stored through the secrets route.
+    // Fixture setup is not an alternate production credentials API.
     let name = ai::chatgpt_secret(&id);
     assert_eq!(
         name,
@@ -1163,19 +1158,13 @@ fn an_accounts_secrets_take_names_the_secrets_route_accepts() {
         "client_id": "oaiapp_test", "access_token": "plan-access", "refresh_token": "plan-refresh",
         "expires_ms": 4_102_444_800_000_i64, "account": "me@example.com",
     });
-    api.put(
-        &format!("/api/secrets/{name}"),
-        json!({ "value": auth.to_string() }),
-    );
+    api.server.seed_secret(&name, &auth.to_string());
     let plan = api.account("ChatGPT");
     assert_eq!(plan["configured"], true, "{plan}");
     assert_eq!(plan["signed_in"]["account"], "me@example.com");
     let key = api.add(json!({ "name": "Claude", "kind": "anthropic" }));
     let kid = key["id"].as_str().unwrap();
-    api.put(
-        &format!("/api/secrets/{}", ai::key_secret(kid)),
-        json!({ "value": "sk-ant-x" }),
-    );
+    api.server.seed_secret(&ai::key_secret(kid), "sk-ant-x");
     assert_eq!(api.account("Claude")["key_set"], true);
 }
 
@@ -1184,9 +1173,12 @@ fn classifier_diagnostics_and_selection_never_refresh_chatgpt() {
     let api = Api::start();
     let client = Client::new();
     let id = api.plan();
-    api.put(&format!("/api/secrets/{}", ai::chatgpt_secret(&id)),
-        json!({"value":json!({"client_id":"oaiapp_test","access_token":"expired",
-            "refresh_token":api.siwc.refresh_token(),"expires_ms":1,"account":"test"}).to_string()}));
+    api.server.seed_secret(
+        &ai::chatgpt_secret(&id),
+        &json!({"client_id":"oaiapp_test","access_token":"expired",
+            "refresh_token":api.siwc.refresh_token(),"expires_ms":1,"account":"test"})
+        .to_string(),
+    );
     let login = client
         .post(api.server.url("/api/login"))
         .json(&json!({"password":testkit::PASSWORD}))

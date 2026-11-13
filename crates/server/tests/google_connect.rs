@@ -130,14 +130,7 @@ impl Api {
     }
 
     fn put_secret(&self, name: &str, value: &str) {
-        expect(
-            self.client
-                .put(self.server.url(&format!("/api/secrets/{name}")))
-                .json(&json!({ "value": value }))
-                .send()
-                .unwrap(),
-            StatusCode::OK,
-        );
+        self.server.seed_secret(name, value);
     }
 
     fn put_settings(&self, settings: Value) -> Response {
@@ -340,13 +333,7 @@ fn finish_writes_the_settings_keeping_the_endpoints_the_start_used() {
     // The flow starts against the fake's endpoints; then the settings go, as if never saved.
     api.endpoints();
     let auth = api.connect_start("loopback");
-    expect(
-        api.client
-            .delete(api.server.url("/api/secrets/google_settings"))
-            .send()
-            .unwrap(),
-        StatusCode::OK,
-    );
+    api.server.remove_seed_secret("google_settings");
 
     expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
 

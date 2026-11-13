@@ -31,6 +31,8 @@ mod pins;
 mod run_provenance;
 mod runs;
 mod script_secrets;
+mod secret_names;
+pub use secret_names::*;
 mod secrets;
 pub use script_secrets::{internal_script_secret, proposed_secrets_refused};
 mod sessions;

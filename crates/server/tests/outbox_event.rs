@@ -54,13 +54,7 @@ impl Api {
             ("google_refresh_token", DEFAULT_REFRESH_TOKEN.to_owned()),
             ("google_settings", settings.to_string()),
         ] {
-            expect(
-                api.req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({ "value": value }))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            api.server.seed_secret(name, &value);
         }
         let allow = format!("allow_domains = [\"{}\", ", api.google.host());
         let event_type = api.file("types/event.wcl");
@@ -116,13 +110,7 @@ impl Api {
             .account(TestAccount::anthropic(fake).model("claude-opus-5"))
             .secrets()
         {
-            expect(
-                self.req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({ "value": value }))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            self.server.seed_secret(&name, &value);
         }
         expect(self.req("PUT", "/api/agents/clerk").header("content-type", "text/plain").body("label = \"Clerk\"\npermissions {\n tools = [\"draft_event\"]\n confirm {\n notes = false\n }\n}\n").send().unwrap(), 200);
         let mut input = json!({ "event": event, "event_action": "", "my_response": "", "title": "", "when": { "start": "", "end": "" }, "location": "", "attendees": [], "description": "", "calendar": "" });
@@ -752,12 +740,7 @@ fn outbox_delete_disconnected_keeps_event_for_retry() {
     api.google.put_event("primary", standup());
     api.sync();
     let id = api.events().keys().next().unwrap().clone();
-    expect(
-        api.req("DELETE", "/api/secrets/google_refresh_token")
-            .send()
-            .unwrap(),
-        200,
-    );
+    api.server.remove_seed_secret("google_refresh_token");
     let item = api.create(
         "outbox",
         invite(
@@ -784,13 +767,8 @@ fn outbox_delete_disconnected_keeps_event_for_retry() {
             .unwrap()
             .contains("not connected")
     );
-    expect(
-        api.req("PUT", "/api/secrets/google_refresh_token")
-            .json(&json!({ "value": DEFAULT_REFRESH_TOKEN }))
-            .send()
-            .unwrap(),
-        200,
-    );
+    api.server
+        .seed_secret("google_refresh_token", DEFAULT_REFRESH_TOKEN);
     api.retry_delete(&item, &id);
 }
 
@@ -843,12 +821,9 @@ fn outbox_delete_no_network_keeps_event_and_manual_retry_succeeds() {
     drop(listener);
     let mut endpoints = api.google.endpoints();
     endpoints["calendar"] = json!(format!("http://{addr}/calendar/v3"));
-    expect(
-        api.req("PUT", "/api/secrets/google_settings")
-            .json(&json!({ "value": json!({ "endpoints": endpoints }).to_string() }))
-            .send()
-            .unwrap(),
-        200,
+    api.server.seed_secret(
+        "google_settings",
+        &json!({ "endpoints": endpoints }).to_string(),
     );
     let item = api.delete_item(&id);
     api.settle();
@@ -859,12 +834,9 @@ fn outbox_delete_no_network_keeps_event_and_manual_retry_succeeds() {
         api.google.event("primary", "standup").unwrap()["status"],
         "cancelled"
     );
-    expect(
-        api.req("PUT", "/api/secrets/google_settings")
-            .json(&json!({ "value": json!({ "endpoints": api.google.endpoints() }).to_string() }))
-            .send()
-            .unwrap(),
-        200,
+    api.server.seed_secret(
+        "google_settings",
+        &json!({ "endpoints": api.google.endpoints() }).to_string(),
     );
     api.retry_delete(&item, &id);
 }

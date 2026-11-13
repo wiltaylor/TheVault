@@ -96,13 +96,7 @@ impl Api {
     }
 
     fn put_secret(&self, name: &str, value: &str) {
-        expect(
-            self.req("PUT", &format!("/api/secrets/{name}"))
-                .json(&json!({ "value": value }))
-                .send()
-                .unwrap(),
-            200,
-        );
+        self.server.seed_secret(name, value);
     }
 
     fn upload(&self, name: &str, bytes: Vec<u8>) -> String {

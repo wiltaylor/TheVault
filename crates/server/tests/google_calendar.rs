@@ -51,13 +51,7 @@ impl Api {
             ("google_client_secret", DEFAULT_CLIENT_SECRET),
             ("google_refresh_token", DEFAULT_REFRESH_TOKEN),
         ] {
-            expect(
-                api.req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({ "value": value }))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            api.server.seed_secret(name, value);
         }
         // The shipped task, with the fake's host allowed as the spec's tests do.
         let task =
@@ -91,13 +85,7 @@ impl Api {
     }
 
     fn put_secret(&self, name: &str, value: &str) {
-        expect(
-            self.req("PUT", &format!("/api/secrets/{name}"))
-                .json(&json!({ "value": value }))
-                .send()
-                .unwrap(),
-            200,
-        );
+        self.server.seed_secret(name, value);
     }
 
     fn req(&self, method: &str, path: &str) -> RequestBuilder {
@@ -280,12 +268,7 @@ fn a_new_vault_ships_the_calendar_task_paused_and_a_run_without_settings_does_no
     );
 
     // Without a refresh token Google is not connected, and the run ends doing nothing.
-    expect(
-        api.req("DELETE", "/api/secrets/google_refresh_token")
-            .send()
-            .unwrap(),
-        200,
-    );
+    api.server.remove_seed_secret("google_refresh_token");
     let run = api.sync();
     assert!(
         run["log"]

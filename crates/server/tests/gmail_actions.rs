@@ -106,13 +106,7 @@ impl Api {
             ("google_refresh_token", DEFAULT_REFRESH_TOKEN.to_owned()),
             ("google_settings", settings.to_string()),
         ] {
-            expect(
-                api.req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({ "value": value }))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            api.server.seed_secret(name, &value);
         }
         // The shipped type and task, with the fake's host allowed as the Google tests do.
         let allow = format!("allow_domains = [\"{}\", ", api.google.host());
@@ -294,13 +288,7 @@ impl Api {
             .account(TestAccount::anthropic(fake).model("claude-opus-5"))
             .secrets()
         {
-            expect(
-                self.req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({"value": value}))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            self.server.seed_secret(&name, &value);
         }
     }
 
@@ -754,13 +742,7 @@ fn interactive_agents_need_the_gmail_switch_for_archive_and_trash() {
             .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
             .secrets()
         {
-            expect(
-                api.req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({"value": value}))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            api.server.seed_secret(&name, &value);
         }
         expect(api.req("PUT", "/api/agents/clerk").body(format!("label = \"Clerk\"\npermissions {{\n gmail_actions = {allowed}\n confirm {{ notes = false\n delete = false\n }}\n}}\n")).send().unwrap(), 200);
         let one = api.email("one");
@@ -858,13 +840,7 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
             .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
             .secrets()
         {
-            expect(
-                api.req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({"value": value}))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            api.server.seed_secret(&name, &value);
         }
         let trigger = if mention {
             "trigger asked { mention = true\n}"
@@ -954,13 +930,8 @@ fn a_missing_message_or_missing_scope_does_not_clear_the_restore_ref() {
             api.google.delete_message("one");
         } else {
             let settings = json!({"gmail_labels": ["INBOX"], "scopes": [READONLY_SCOPE], "endpoints": api.google.endpoints()});
-            expect(
-                api.req("PUT", "/api/secrets/google_settings")
-                    .json(&json!({"value": settings.to_string()}))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            api.server
+                .seed_secret("google_settings", &settings.to_string());
         }
         expect(
             api.req("POST", &format!("/api/trash/{one}/restore"))
@@ -1017,12 +988,7 @@ fn disconnected_restore_keeps_the_ref_without_a_failure_notification() {
     let api = Api::start(&["one"], &[MODIFY_SCOPE]);
     let one = api.email("one");
     api.delete(&one);
-    expect(
-        api.req("DELETE", "/api/secrets/google_refresh_token")
-            .send()
-            .unwrap(),
-        200,
-    );
+    api.server.remove_seed_secret("google_refresh_token");
     expect(
         api.req("POST", &format!("/api/trash/{one}/restore"))
             .send()

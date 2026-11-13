@@ -190,7 +190,7 @@ def serve():
             fake = Fake(name, *(["chat_completions"] if name == "openai" else []))
             fakes[name] = fake
             children.append(fake.proc)
-        server = subprocess.Popen(["vault-server", "--vault", "/data", "--listen", "127.0.0.1:8080"])
+        server = subprocess.Popen(["vault-server", "--test-secret-seams", "--vault", "/data", "--listen", "127.0.0.1:8080"])
         children.append(server)
         until = time.monotonic() + 90
         while True:

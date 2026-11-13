@@ -25,7 +25,7 @@ use crate::settings::{ANTHROPIC_BASE, Context, Endpoints, OPENAI_BASE, check_url
 use crate::types::Kind;
 
 /// The secret holding [`Accounts`].
-pub const ACCOUNTS: &str = "ai_accounts";
+pub const ACCOUNTS: &str = state::AI_ACCOUNTS;
 
 /// The longest account name, in characters.
 pub const NAME_MAX: usize = 60;
@@ -42,17 +42,17 @@ static WRITE: Mutex<()> = Mutex::new(());
 
 /// The secret holding account `id`'s API key. Secret names are lower case, so the ULID is too.
 pub fn key_secret(id: &str) -> String {
-    format!("ai_account_key_{}", id.to_ascii_lowercase())
+    format!("{}{}", state::AI_KEY_PREFIX, id.to_ascii_lowercase())
 }
 
 /// The secret holding account `id`'s ChatGPT sign-in.
 pub fn chatgpt_secret(id: &str) -> String {
-    format!("ai_account_chatgpt_{}", id.to_ascii_lowercase())
+    format!("{}{}", state::AI_CHATGPT_PREFIX, id.to_ascii_lowercase())
 }
 
 /// The secret holding the last usage reading of account `id`'s plan.
 pub fn usage_secret(id: &str) -> String {
-    format!("ai_account_usage_{}", id.to_ascii_lowercase())
+    format!("{}{}", state::AI_USAGE_PREFIX, id.to_ascii_lowercase())
 }
 
 /// An account's own context window, when it sets one.

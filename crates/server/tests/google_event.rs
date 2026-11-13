@@ -84,13 +84,7 @@ impl Api {
             ("google_client_secret", DEFAULT_CLIENT_SECRET),
             ("google_refresh_token", DEFAULT_REFRESH_TOKEN),
         ] {
-            expect(
-                api.req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({ "value": value }))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            api.server.seed_secret(name, value);
         }
         // The shipped task and handlers, with the fake's host allowed as the spec's tests do.
         let allow = format!("allow_domains = [\"{}\", ", api.google.host());
@@ -118,13 +112,8 @@ impl Api {
         );
         let mut settings = settings;
         settings["endpoints"] = api.google.endpoints();
-        expect(
-            api.req("PUT", "/api/secrets/google_settings")
-                .json(&json!({ "value": settings.to_string() }))
-                .send()
-                .unwrap(),
-            200,
-        );
+        api.server
+            .seed_secret("google_settings", &settings.to_string());
         api
     }
 
@@ -353,13 +342,8 @@ fn existing_invitations_are_relisted_once_when_rsvp_support_arrives() {
     put_note(&api, &id, note);
     let mut state = api.server.secret_json("google_calendar_state");
     state.as_object_mut().unwrap().remove("rsvp");
-    expect(
-        api.req("PUT", "/api/secrets/google_calendar_state")
-            .json(&json!({ "value": state.to_string() }))
-            .send()
-            .unwrap(),
-        200,
-    );
+    api.server
+        .seed_secret("google_calendar_state", &state.to_string());
     api.google.clear_requests();
     api.sync();
     assert_eq!(
@@ -1251,13 +1235,8 @@ fn an_older_snapshot_is_converted_on_the_next_sync_without_sending_anything() {
     // A state from before the conversion lists every event again.
     let mut state = api.server.secret_json("google_calendar_state");
     state.as_object_mut().unwrap().remove("converter");
-    expect(
-        api.req("PUT", "/api/secrets/google_calendar_state")
-            .json(&json!({ "value": state.to_string() }))
-            .send()
-            .unwrap(),
-        200,
-    );
+    api.server
+        .seed_secret("google_calendar_state", &state.to_string());
     api.sync();
     let note = api.note(&id);
     assert_eq!(

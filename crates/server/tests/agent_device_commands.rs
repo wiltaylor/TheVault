@@ -149,11 +149,7 @@ impl Api {
     }
 
     fn secret(&self, name: &str, value: &str) {
-        self.ok(
-            reqwest::Method::PUT,
-            &format!("/api/secrets/{name}"),
-            Some(json!({ "value": value })),
-        );
+        self.server.seed_secret(name, value);
     }
 
     fn agent(&self, name: &str, wcl: &str) {

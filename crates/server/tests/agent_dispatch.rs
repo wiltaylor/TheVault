@@ -483,11 +483,7 @@ impl Api {
             .account(TestAccount::anthropic(fake).model("claude-opus-5"))
             .secrets()
         {
-            api.send(
-                "PUT",
-                &format!("/api/secrets/{name}"),
-                json!({ "value": value }),
-            );
+            api.server.seed_secret(&name, &value);
         }
         api
     }

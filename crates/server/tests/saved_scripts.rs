@@ -148,13 +148,7 @@ impl Api {
     }
 
     fn secret(&self, name: &str, value: &str) {
-        let (status, v) = self.send(
-            reqwest::Method::PUT,
-            &format!("/api/secrets/{name}"),
-            &self.token(),
-            Some(json!({ "value": value })),
-        );
-        assert!(status.is_success(), "{v}");
+        self.server.seed_secret(name, value);
     }
 
     fn agent(&self, name: &str, wcl: &str) {

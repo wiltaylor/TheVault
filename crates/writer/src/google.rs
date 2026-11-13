@@ -16,13 +16,13 @@ use serde_json::{Map, Value, json};
 use crate::Result;
 
 /// The sync's settings.
-pub const SETTINGS: &str = "google_settings";
+pub const SETTINGS: &str = state::GOOGLE_SETTINGS;
 /// The Gmail task's cursors and last run.
-pub const GMAIL_STATE: &str = "google_gmail_state";
+pub const GMAIL_STATE: &str = state::GOOGLE_GMAIL_STATE;
 /// The Calendar task's cursors and last run.
-pub const CALENDAR_STATE: &str = "google_calendar_state";
+pub const CALENDAR_STATE: &str = state::GOOGLE_CALENDAR_STATE;
 /// The connected Google address.
-pub const ACCOUNT: &str = "google_account";
+pub const ACCOUNT: &str = state::GOOGLE_ACCOUNT;
 
 /// The settings a vault without [`SETTINGS`] syncs with.
 pub fn default_settings() -> Map<String, Value> {

@@ -29,6 +29,11 @@ Do not run multiple copies of this project on the same guest.
 ## Build and recreate from nothing
 
 Build binaries from the reviewed card commit in the one dev checkout. Run the
+debug/test build below, not release binaries. The supervisor passes
+`--test-secret-seams` for owner-session fake-provider setup. Release builds refuse
+this flag at startup. No production image or production seed path is changed.
+
+Run the
 following build via `terrarium run thevault-dev --name staging-binaries -- sh
 /src/thevault-heavy.sh sh -c '<command>'`:
 
