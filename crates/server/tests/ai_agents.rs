@@ -664,11 +664,50 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
     assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
     let body: Value = denied.json().unwrap();
     assert_eq!(body["error"], "invalid");
+    assert_eq!(body["issues"].as_array().unwrap().len(), 1);
     assert_eq!(body["issues"][0]["at"], "permissions.approval_rules");
     assert_eq!(
         body["issues"][0]["message"],
         "only an owner session may change automatic approval rules"
     );
+    assert_eq!(api.agent_wcl("helper").unwrap(), saved);
+
+    // Each mutation must reach the rule comparison, not just the added-rule case.
+    for (name, after) in [
+        ("helper", rules.replace("daily_cap = 1", "daily_cap = 5")),
+        ("helper", rules.replace("[\"status\"]", "[\"status\", \"title\"]")),
+        ("helper", HELPER.to_owned()),
+        ("new-helper", rules.clone()),
+    ] {
+        let denied = api
+            .client
+            .put(api.server.url(&format!("/api/agents/{name}")))
+            .bearer_auth(api.token())
+            .header("content-type", "text/plain")
+            .body(after)
+            .send()
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+        let body: Value = denied.json().unwrap();
+        assert_eq!(body["error"], "invalid");
+        assert_eq!(body["issues"].as_array().unwrap().len(), 1);
+        assert_eq!(body["issues"][0]["at"], "permissions.approval_rules");
+        assert_eq!(body["issues"][0]["message"], "only an owner session may change automatic approval rules");
+        assert_eq!(api.agent_wcl("helper").unwrap(), saved);
+        assert!(api.agent_wcl("new-helper").is_none());
+    }
+
+    // No proposer, agent, thread or proposal id: only the writer's Token author
+    // guard can refuse this client-built proposal.
+    let (status, body) = api.apply(&json!({
+        "kind": "agent", "op": "change", "name": "helper",
+        "before": saved, "after": expanded,
+    }));
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid");
+    assert_eq!(body["issues"].as_array().unwrap().len(), 1);
+    assert_eq!(body["issues"][0]["at"], "permissions.approval_rules");
+    assert_eq!(body["issues"][0]["message"], "only an owner session may change automatic approval rules");
     assert_eq!(api.agent_wcl("helper").unwrap(), saved);
 
     // Legacy admin install codes redeem as write-scoped agent tokens.
@@ -708,6 +747,55 @@ fn approval_rules_changes_require_owner_session_even_on_proposal_apply() {
         "it would give agent helper more than Clerk has: automatic approval rules require a session owner"
     );
     assert_eq!(api.agent_wcl("helper").unwrap(), saved);
+}
+
+#[test]
+fn assistant_settings_saves_keep_approval_rules() {
+    let api = Api::start();
+    let login = api.client.post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD})).send().unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login.headers()[reqwest::header::SET_COOKIE].to_str().unwrap()
+        .split(';').next().unwrap();
+    let original = api.agent_wcl("assistant").unwrap();
+    let rules = original.replace("permissions {", "permissions {\n  approval_rule {\n    operation = \"update\"\n    type = \"memo\"\n    fields = [\"status\"]\n    daily_cap = 1\n  }");
+    let response = api.client.put(api.server.url("/api/agents/assistant"))
+        .header("cookie", cookie).header("content-type", "text/plain")
+        .body(rules).send().unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "{}", response.text().unwrap());
+    let saved = schema::Agent::parse("assistant", &api.agent_wcl("assistant").unwrap()).unwrap();
+    assert_eq!(saved.permissions.approval_rules.len(), 1);
+    for session in [false, true] {
+        let prompt = if session { "Session prompt" } else { "Token prompt" };
+        let request = api.client.put(api.server.url("/api/integrations/ai/settings"))
+            .json(&json!({"system_prompt": prompt}));
+        let response = if session { request.header("cookie", cookie) }
+            else { request.bearer_auth(api.token()) }.send().unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{}", response.text().unwrap());
+        let after = schema::Agent::parse("assistant", &api.agent_wcl("assistant").unwrap()).unwrap();
+        assert_eq!(after.permissions.approval_rules, saved.permissions.approval_rules);
+        assert_eq!(after.system_prompt, prompt);
+    }
+}
+
+// Pin the author scopes at the three HTTP agent-writing entry points. These
+// source assertions also catch removal of acting_as on the unchanged-rule
+// settings path, where a successful round trip alone cannot prove an author.
+#[test]
+fn http_agent_writers_install_acting_authors() {
+    for (source, marker, author) in [
+        (include_str!("../../api/src/agent_files.rs"), "w.put_agent(", "writer::acting_as(&by)"),
+        (include_str!("../../api/src/ai_settings.rs"), "w.put_agent(schema::ASSISTANT_AGENT", "writer::acting_as(&by)"),
+        (include_str!("../../api/src/ai_chat.rs"), "pub fn apply_change_with_admin(", "writer::acting_as(author)"),
+    ] {
+        let position = source.find(marker).unwrap();
+        let vicinity = if marker.starts_with("pub fn") {
+            &source[position..position + 600]
+        } else {
+            &source[position.saturating_sub(2500)..position]
+        };
+        assert!(vicinity.contains(author), "missing acting author at {marker}");
+    }
 }
 
 #[test]
