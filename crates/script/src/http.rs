@@ -120,6 +120,9 @@ fn call(
     headers: HashMap<String, String>,
     body: String,
 ) -> Result<Result<Response, String>, HostError> {
+    if outside_text_refused(ai)? {
+        return Ok(Err(OUTSIDE_TEXT_REFUSAL.into()));
+    }
     let (remaining, allow, max_bytes, public_only) = run::with(|r| {
         Ok((
             r.remaining()?,
@@ -160,12 +163,7 @@ fn call(
     };
     // Check the live shared context, not a snapshot taken when the job was queued.
     // GET is not an exception: its URL and headers can carry data out too.
-    if script_core::RunContext::current().is_some_and(|c| c.is_restricted()) {
-        run::with(|r| {
-            r.log(OUTSIDE_TEXT_REFUSAL, true);
-            ai.record_http_refusal(&r.author, OUTSIDE_TEXT_REFUSAL);
-            Ok(())
-        })?;
+    if outside_text_refused(ai)? {
         return Ok(Err(OUTSIDE_TEXT_REFUSAL.into()));
     }
     let mut req = client.request(method, url.clone()).timeout(remaining);
@@ -174,6 +172,9 @@ fn call(
     }
     if !body.is_empty() {
         req = req.body(body);
+    }
+    if outside_text_refused(ai)? {
+        return Ok(Err(OUTSIDE_TEXT_REFUSAL.into()));
     }
     let res = match req.send() {
         Ok(r) => r,
@@ -209,6 +210,19 @@ fn call(
         body: String::from_utf8_lossy(&bytes).into_owned(),
         body_base64: BASE64.encode(&bytes),
     }))
+}
+
+/// Shared by explicit HTTP and implicit remote-image downloads. Do not log inputs.
+pub(crate) fn outside_text_refused(ai: &crate::Ai) -> Result<bool, HostError> {
+    if !script_core::RunContext::current().is_some_and(|c| c.is_restricted()) {
+        return Ok(false);
+    }
+    run::with(|r| {
+        r.log(OUTSIDE_TEXT_REFUSAL, true);
+        ai.record_http_refusal(&r.author, OUTSIDE_TEXT_REFUSAL);
+        Ok(())
+    })?;
+    Ok(true)
 }
 
 fn failed(e: reqwest::Error, url: &Url) -> Result<Result<Response, String>, HostError> {

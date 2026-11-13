@@ -413,6 +413,11 @@ impl<'a> HostImages<'a> {
     }
 
     fn remote(&mut self, url: &str) -> Placed {
+        match crate::http::outside_text_refused(self.ai) {
+            Ok(false) => {}
+            Ok(true) => return Placed::Failed(script_core::OUTSIDE_TEXT_REFUSAL.into()),
+            Err(e) => return Placed::Failed(e.to_string()),
+        }
         if let Some(id) = stored(&format!("url:{url}")) {
             return Placed::Asset(id);
         }
@@ -447,6 +452,11 @@ impl<'a> HostImages<'a> {
             return Placed::Failed("no fetcher".into());
         };
         let fetcher = fetcher.clone().limited(timeout, IMAGE_REDIRECTS);
+        match crate::http::outside_text_refused(self.ai) {
+            Ok(false) => {}
+            Ok(true) => return Placed::Failed(script_core::OUTSIDE_TEXT_REFUSAL.into()),
+            Err(e) => return Placed::Failed(e.to_string()),
+        }
         let got = rt.block_on(fetcher.get(url, IMAGE_LIMIT + 1));
         let placed = match got {
             Ok(f) if f.cut => Placed::Failed("it is larger than 5 MB".into()),

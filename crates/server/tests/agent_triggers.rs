@@ -31,6 +31,41 @@ template default {
 const MODEL: &str = "claude-opus-5";
 
 #[test]
+fn outside_text_read_by_subagent_blocks_parent_script_http_and_task_admission() {
+    let fake = FakeAnthropic::start();
+    let api = Api::start(&fake);
+    let web = testkit::StandIn::start();
+    web.route("/outside", testkit::Reply::text(200, "unexpected"));
+    let cookie = mail_triage_login(&api);
+    let mail = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"CLEARED_INCOMING_FIXTURE", "sent":"2000-01-01T00:00:00Z"}}}));
+    let preview: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"ids":[mail["id"]]}))
+        .error_for_status().unwrap().json().unwrap();
+    safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":preview["preview"],"approve":true}))
+        .error_for_status().unwrap();
+    api.agent("chief", "label = \"Chief\"\npermissions {\n scripts { run_code = true\n run_saved = true }\n subagents { allow = true }\n}\ntrigger audit { on = [\"create\"] type = \"memo\" prompt = \"Audit\" }\n");
+    fake.push(AnthropicMessage::new().tool_use("start", "start_subagent", json!({"task":"Read mail", "instructions":null, "agent":null, "permissions":null,"model":null})));
+    fake.push(AnthropicMessage::new().tool_use("read", "get_note", json!({"id":mail["id"]})));
+    fake.push(AnthropicMessage::text("Read the incoming mail."));
+    fake.push(AnthropicMessage::new().tool_use("http", "run_script", json!({"code":format!("use http\nfn main() -> Result[int, string] {{ Ok(http::get(\"{}\", #{{}})?.status) }}\n", web.url("/outside")), "function":null, "args":null})));
+    fake.push(AnthropicMessage::new().tool_use("task", "run_task", json!({"name":"google_gmail"})));
+    fake.push(AnthropicMessage::text("Refused."));
+    api.memo("Audit", "open");
+    api.advance("PT35S");
+    let requests = fake.message_requests();
+    assert_eq!(requests.len(), 6);
+    assert!(requests[2].json().to_string().contains("CLEARED_INCOMING_FIXTURE"));
+    for index in [4, 5] {
+        let request = requests[index].json();
+        let result = request["messages"].as_array().unwrap().last().unwrap()["content"].to_string();
+        assert!(result.contains(script::OUTSIDE_TEXT_REFUSAL), "{result}");
+    }
+    assert!(web.requests().is_empty());
+    let audit = api.get("/api/activity?kind=run.outside_text_refused");
+    assert!(audit.to_string().contains("script_http"));
+    assert!(audit.to_string().contains("task_start"));
+}
+
+#[test]
 fn selective_approval_email_fields_caps_restart_and_destructive_denial() {
     let fake = FakeAnthropic::start();
     let mut api = Api::start(&fake);
