@@ -83,6 +83,8 @@ fn content_type(name: &str) -> &'static str {
     }
 }
 
+const SHELL_CSP: &str = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; form-action 'self'";
+
 fn file_response(name: &str, bytes: Vec<u8>, head: bool) -> Response {
     // Vite puts content-hashed files under assets/; everything else may change in place.
     let cache = if name.starts_with("assets/") {
@@ -103,6 +105,19 @@ fn file_response(name: &str, bytes: Vec<u8>, head: bool) -> Response {
         HeaderValue::from_static(content_type(name)),
     );
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(SHELL_CSP),
+    );
+    h.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+    );
+    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
     h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
     res
 }
