@@ -78,10 +78,17 @@ fn user() -> Author {
 
 struct CalendarClock;
 
+fn calendar_types(w: &Writer) {
+    w.put_type("person", include_str!("../defaults/person.wcl")).unwrap();
+    w.put_type("event", include_str!("../defaults/event.wcl")).unwrap();
+    w.put_type("event_series", include_str!("../defaults/event_series.wcl")).unwrap();
+}
+
 #[test]
 fn device_calendar_owner_edits_keep_existing_send_updates_boundary() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path(), Recorder::default()).with_clock(Arc::new(CalendarClock));
+    calendar_types(&w);
     let (device, _) = w.state().pair_device(&state::NewDevice {
         name: "test", platform: "linux", capabilities: "{}", settings: "{}",
     }).unwrap();
@@ -122,7 +129,7 @@ fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
             let dir = tempfile::tempdir().unwrap();
             let hooks = Recorder::default();
             let w = open(dir.path(), hooks.clone()).with_clock(Arc::new(CalendarClock));
-            // Keep the shipped calendar definitions installed by Writer::open.
+            calendar_types(&w);
             let recurrence = if ty == "event_series" { "rule = [\"RRULE:FREQ=DAILY;COUNT=1\"]\nstarts = { start: \"2026-03-10\", end: \"2026-03-11\" }\n" } else { "" };
             let text = format!("title = \"peer\"\n{recurrence}{forged}");
             assert!(matches!(
