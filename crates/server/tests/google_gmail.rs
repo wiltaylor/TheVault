@@ -192,8 +192,24 @@ paused        = true
     }
 
     fn create(&self, type_name: &str, fields: Value) -> String {
+        // Historical import fixtures carry protected Gmail metadata and need an owner session.
+        let login = self
+            .client
+            .post(self.server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap();
+        assert_eq!(login.status(), 200);
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
         let made = expect(
-            self.req("POST", &format!("/api/notes?type={type_name}"))
+            self.client
+                .post(self.server.url(&format!("/api/notes?type={type_name}")))
+                .header("cookie", cookie)
                 .json(&json!({ "note": { "fields": fields } }))
                 .send()
                 .unwrap(),
