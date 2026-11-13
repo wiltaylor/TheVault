@@ -142,6 +142,8 @@ pub enum Error {
     },
     #[error("state.db is corrupt: {0}")]
     Corrupt(String),
+    #[error("automation stopped or stale generation")]
+    AutomationRefused,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

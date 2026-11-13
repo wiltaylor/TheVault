@@ -49,7 +49,7 @@ impl State {
         let _gate = self.automation_lock()?;
         let state = self.automation_state()?;
         if state.stopped {
-            return Err(Error::Corrupt("automation stopped".into()));
+            return Err(Error::AutomationRefused);
         }
         Ok(Generation(state.generation))
     }
@@ -84,9 +84,7 @@ impl State {
         let gate = self.automation_lock()?;
         let state = self.automation_state()?;
         if state.stopped || state.generation != generation.0 {
-            return Err(Error::Corrupt(
-                "automation stopped or stale generation".into(),
-            ));
+            return Err(Error::AutomationRefused);
         }
         Ok(gate)
     }
