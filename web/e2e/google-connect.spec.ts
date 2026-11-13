@@ -42,7 +42,8 @@ async function tell(line: string): Promise<void> {
   expect(JSON.parse(await answer)).toEqual({ ok: line });
 }
 
-test.beforeAll(async () => {
+// Disconnect revokes the fake token, so each test needs its own provider.
+test.beforeEach(async () => {
   google = spawn(binary("TESTKIT_FAKE_GOOGLE_BIN", "testkit-fake-google"), [], { stdio: ["pipe", "pipe", "inherit"] });
   fake = await new Promise<Fake>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("testkit-fake-google did not report its address")), 30_000);
@@ -56,7 +57,7 @@ test.beforeAll(async () => {
   });
 });
 
-test.afterAll(() => {
+test.afterEach(() => {
   google?.kill();
 });
 
