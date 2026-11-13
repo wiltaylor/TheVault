@@ -1,7 +1,7 @@
 //! Login metadata content-boundary inventory and the 5,000-row performance contract.
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use testkit::{PASSWORD, TestServer};
 
 #[test]
@@ -327,24 +327,18 @@ fn browser_secrets_five_thousand_row_agent_query_is_within_twice_session_time() 
         "5,000 rows, five 1,000-row pages: minima over 5 pairs session {:?}, agent {:?}",
         session_min, agent_min
     );
-    // Load slack: the intrinsic quiet-window ratio on thevault-dev sits on the
-    // 2x line itself (session 177.616ms vs agent 355.337ms, 2.0015x, TV-272),
-    // and the worst overshoot past a bare 2x with these minima was 12.1ms
-    // (3 of 11 runs failed at exactly 2x). 30ms covers that overshoot 2.5x
-    // over, far below any real regression. TV-277 tracks the ~2.0x intrinsic
-    // agent-path cost that would let this slack shrink again.
-    const LOAD_SLACK: Duration = Duration::from_millis(30);
+    // TV-330: the centralized query boundary encodes each page only once.
+    // Require the improvement without a fixed allowance hiding small-page costs.
     let report = pairs
         .iter()
         .map(|&(session, agent)| format!("{:?}/{:?}", agent, session))
         .collect::<Vec<_>>()
         .join(", ");
     assert!(
-        agent_min <= session_min * 2 + LOAD_SLACK,
-        "agent_min {:?} above 2x session_min {:?} + {:?}; pairs (agent/session): {}",
+        agent_min <= session_min.mul_f64(1.6),
+        "agent_min {:?} above 1.6x session_min {:?}; pairs (agent/session): {}",
         agent_min,
         session_min,
-        LOAD_SLACK,
         report
     );
 }
