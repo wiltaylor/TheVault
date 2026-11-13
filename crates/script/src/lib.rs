@@ -91,7 +91,7 @@ struct Server {
 
 impl Extensions for Server {
     fn vault(&self, m: &mut Module, v: &Arc<dyn Vault>) {
-        m.fn_named("gmail_attachment_limit", [], || -> i64 {
+        m.fn_named("gmail_attachment_limit", [] as [&str; 0], || -> i64 {
             vocab::GMAIL_IMPORT_ATTACHMENT_BYTES as i64
         });
         html::register(m, v, &self.ai);

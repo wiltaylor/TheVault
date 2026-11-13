@@ -331,7 +331,9 @@ mod tests {
                     "body" => {
                         let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await;
                         let chunk = vec![b'x'; MAX_RESPONSE + 1];
-                        let _ = conn.write_all(format!("{:x}\r\n", chunk.len()).as_bytes()).await;
+                        let _ = conn
+                            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                            .await;
                         let _ = conn.write_all(&chunk).await;
                         let _ = conn.write_all(b"\r\n0\r\n\r\n").await;
                     }
@@ -362,12 +364,20 @@ mod tests {
             let scheduler = Scheduler::new(w, host, Arc::new(scheduler::TestClock::new(0))).unwrap();
             (Arc::new(Google::new(scheduler)), note.id)
         }).await.unwrap();
-        let app = axum::Router::new().route("/{id}", axum::routing::post(fetch))
-            .layer(axum::Extension(crate::Caller(state::Author::Session("owner".into()))))
+        let app = axum::Router::new()
+            .route("/{id}", axum::routing::post(fetch))
+            .layer(axum::Extension(crate::Caller(state::Author::Session(
+                "owner".into(),
+            ))))
             .with_state(google.clone());
-        let request = axum::http::Request::builder().method("POST").uri(format!("/{id}"))
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/{id}"))
             .header("content-type", "application/json")
-            .body(axum::body::Body::from(json!({"account":"fake","message":"message","part":"part"}).to_string())).unwrap();
+            .body(axum::body::Body::from(
+                json!({"account":"fake","message":"message","part":"part"}).to_string(),
+            ))
+            .unwrap();
         let route = tokio::spawn(app.oneshot(request));
         received.await.unwrap();
         if mode == "stall" {
@@ -378,26 +388,49 @@ mod tests {
         }
         let response = route.await.unwrap().unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("Gmail attachment fetch failed or exceeded its limits"));
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&body)
+                .contains("Gmail attachment fetch failed or exceeded its limits")
+        );
         provider.abort();
-        if mode == "stall" { tokio::time::resume(); }
+        if mode == "stall" {
+            tokio::time::resume();
+        }
         tokio::task::spawn_blocking(move || {
             let note = google.writer().read(&id).unwrap();
             let json = doc_to_json(&note.doc);
             assert!(json["fields"]["attachments"].is_null());
-            assert_eq!(json["fields"]["gmail_deferred_parts"].as_array().unwrap().len(), 1);
-        }).await.unwrap();
+            assert_eq!(
+                json["fields"]["gmail_deferred_parts"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
-    async fn route_refuses_false_content_length() { route_failure("length").await; }
+    async fn route_refuses_false_content_length() {
+        route_failure("length").await;
+    }
     #[tokio::test]
-    async fn route_refuses_oversized_stream() { route_failure("body").await; }
+    async fn route_refuses_oversized_stream() {
+        route_failure("body").await;
+    }
     #[tokio::test]
-    async fn route_refuses_decoded_size_mismatch() { route_failure("size").await; }
+    async fn route_refuses_decoded_size_mismatch() {
+        route_failure("size").await;
+    }
     #[tokio::test]
-    async fn route_stalled_provider_uses_thirty_second_budget() { route_failure("stall").await; }
+    async fn route_stalled_provider_uses_thirty_second_budget() {
+        route_failure("stall").await;
+    }
 
     #[tokio::test(start_paused = true)]
     async fn stalled_fetch_has_one_total_deadline_with_fake_clock() {
