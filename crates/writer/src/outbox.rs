@@ -295,6 +295,10 @@ impl Writer {
         id: &str,
         context: &script_core::RunContext,
     ) -> state::Result<()> {
+        if context.is_restricted() {
+            self.record_outside_text_refusal(&Author::Handler("outbox_send".into()), "outbox_delivery");
+            return Err(state::Error::Corrupt(script_core::OUTSIDE_TEXT_REFUSAL.into()));
+        }
         if context
             .stop_generation()
             .is_none_or(|g| self.state.automation_commit(g).is_err())
@@ -316,6 +320,7 @@ impl Writer {
         old: Option<&Doc>,
         author: &Author,
     ) -> Result<()> {
+        self.hold_outside_text_ready(doc, author);
         if text(doc, "status") == Some("sending")
             && old.is_some_and(|d| text(d, "status") == Some("ready"))
             && self

@@ -53,6 +53,7 @@ mod inbox;
 mod note;
 mod notify;
 pub mod outbox;
+mod outside_text;
 mod outbox_sms;
 mod purge;
 mod queryviews;
@@ -82,6 +83,7 @@ pub use agent_threads::AgentThreadRuntime;
 pub use asset_use::{ASSET_TRASH_DAYS, AssetSummary, AssetUsage, TrashedAsset, TrashedUse};
 pub use assets::{Asset, MAX_FILENAME};
 pub use batch::{Item, Op, Outcome, Report};
+pub use outside_text::outside_text_sensitive;
 pub use schema::{hide_browser_secrets, redact_agent_content, redact_agent_note};
 
 /// A single note write whose authorization must be checked under the write lock.
@@ -521,6 +523,12 @@ fn note_files(vault: &Vault) -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
+#[derive(Default)]
+struct StagedChanges {
+    changes: Vec<(NoteChange, Author)>,
+    dry_run: bool,
+}
+
 /// The write path of one vault.
 pub struct Writer {
     durable_contexts: Mutex<HashMap<String, script_core::RunContext>>,
@@ -533,7 +541,7 @@ pub struct Writer {
     writes: Mutex<()>,
     inner: Mutex<Inner>,
     /// The changes handlers made during step 5 of the write in progress, `None` outside step 5.
-    staging: Mutex<Option<Vec<(NoteChange, Author)>>>,
+    staging: Mutex<Option<StagedChanges>>,
     /// Each agent's open notification of the Outbox items it drafted this turn (outbox X10).
     drafts: Mutex<HashMap<String, outbox::DraftBatch>>,
     /// How many synced files besides notes this writer has changed since it opened, written here
@@ -1163,9 +1171,10 @@ impl Writer {
 
     /// Run a staged change's `before_*` handlers and add it to the write in progress.
     fn stage(&self, mut change: NoteChange, author: &Author) -> Result<NoteChange> {
-        self.before(&mut change, author)?;
+        let dry_run = self.staging_slot().as_ref().is_some_and(|s| s.dry_run);
+        self.before(&mut change, author, dry_run)?;
         match self.staging_slot().as_mut() {
-            Some(staged) => staged.push((change.clone(), author.clone())),
+            Some(staged) => staged.changes.push((change.clone(), author.clone())),
             None => {
                 return Err(Error::Rejected(
                     "the write this change was to join has ended".into(),
@@ -1175,7 +1184,7 @@ impl Writer {
         Ok(change)
     }
 
-    fn staging_slot(&self) -> MutexGuard<'_, Option<Vec<(NoteChange, Author)>>> {
+    fn staging_slot(&self) -> MutexGuard<'_, Option<StagedChanges>> {
         self.staging.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -1568,7 +1577,7 @@ impl Writer {
         let mut handled = HashSet::new();
         let submitted: HashSet<_> = changes.iter().map(|change| change.id.clone()).collect();
         let mut authors = HashMap::new();
-        let mut changes = self.run_before(changes, &mut handled, &mut authors, author)?;
+        let mut changes = self.run_before(changes, &mut handled, &mut authors, author, dry_run)?;
         let mut inner = self.lock();
         let mut rounds = 0;
         let mut series = series::Pass::default();
@@ -1591,7 +1600,7 @@ impl Writer {
                 )));
             }
             drop(inner);
-            changes = self.run_before(expanded, &mut handled, &mut authors, author)?;
+            changes = self.run_before(expanded, &mut handled, &mut authors, author, dry_run)?;
             inner = self.lock();
         };
         for id in series.made {
@@ -1608,6 +1617,13 @@ impl Writer {
                 authors
                     .entry(change.id.clone())
                     .or_insert_with(|| Author::Task(SERVER_AUTHOR.to_owned()));
+            }
+        }
+        for change in &mut changes {
+            let by = authors.get(&change.id).unwrap_or(author);
+            self.hold_outside_text_outbox(change, by);
+            if !dry_run {
+                self.check_outside_text_write(change, by)?;
             }
         }
 
@@ -1690,6 +1706,11 @@ impl Writer {
             }
         }
         let (generation, automation) = {
+            // Side-effect hooks and provenance joins may have exposed outside text.
+            // Recheck the complete rendered write immediately before committing it.
+            for r in &rendered {
+                self.check_outside_text_write(&r.change, authors.get(&r.change.id).unwrap_or(author))?;
+            }
             let _acting = activity::acting_as(author);
             match inner.commit_hook.as_mut() {
                 Some(hook) => self.commit_with_hook(files, &mut **hook)?,
@@ -1925,19 +1946,20 @@ impl Writer {
         handled: &mut HashSet<(String, Event)>,
         authors: &mut HashMap<String, Author>,
         author: &Author,
+        dry_run: bool,
     ) -> Result<Vec<NoteChange>> {
-        *self.staging_slot() = Some(Vec::new());
+        *self.staging_slot() = Some(StagedChanges { changes: Vec::new(), dry_run });
         let ran = (|| -> Result<()> {
             for change in &mut changes {
                 if handled.insert((change.id.clone(), change.event)) {
-                    self.before(change, author)?;
+                    self.before(change, author, dry_run)?;
                 }
             }
             Ok(())
         })();
         let staged = self.staging_slot().take().unwrap_or_default();
         ran?;
-        for (change, by) in staged {
+        for (change, by) in staged.changes {
             handled.insert((change.id.clone(), change.event));
             authors.insert(change.id.clone(), by);
             match changes.iter_mut().find(|c| c.id == change.id) {
@@ -1950,7 +1972,11 @@ impl Writer {
 
     /// Run the `before_*` handlers of one change. A note a handler changed keeps its `created`
     /// and `updated` times and its archived state, and is put back in canonical order.
-    fn before(&self, change: &mut NoteChange, author: &Author) -> Result<()> {
+    fn before(&self, change: &mut NoteChange, author: &Author, dry_run: bool) -> Result<()> {
+        self.hold_outside_text_outbox(change, author);
+        if !dry_run {
+            self.check_outside_text_write(change, author)?;
+        }
         Self::check_memory_author(&change.type_name, author)?;
         if change.type_name == "outbox" && change.event == Event::Delete {
             let (_, old) = self.existing(&change.id)?;
@@ -1970,6 +1996,10 @@ impl Writer {
         });
         let original = change.doc.clone();
         self.hooks.before(change, author).map_err(Error::Rejected)?;
+        self.hold_outside_text_outbox(change, author);
+        if !dry_run {
+            self.check_outside_text_write(change, author)?;
+        }
         self.check_calendar_write(change, author)?;
         self.check_gmail_metadata_write(change, author)?;
         if change.doc == original {

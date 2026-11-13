@@ -3927,7 +3927,7 @@ fn run_tool(
     let destructive = out.proposal.as_ref().is_some_and(|(event, p)| {
         *event == "proposal" && matches!(p["op"].as_str(), Some("delete" | "archive"))
     });
-    let held_destructive = destructive && unattended;
+    let mut held_destructive = destructive && unattended;
     // A rule never approves a destructive change, attended or not.
     let rule = if scope.allows(Scope::Write)
         && !destructive
@@ -3941,6 +3941,30 @@ fn run_tool(
     } else {
         None
     };
+    if RunContext::current().is_some_and(|c| c.is_restricted()) {
+        held_destructive |= out.proposal.as_ref().is_some_and(|(event, p)| {
+            if *event != "proposal" {
+                return false;
+            }
+            let current = p["note_id"].as_str().and_then(|id| w.read(id).ok());
+            let kind = current.as_ref().map(|n| n.type_name.as_str())
+                .unwrap_or_else(|| p["type"].as_str().unwrap_or_default());
+            let by = change_author(author, &agent.name, rule.is_some(), kind == "email", gmail_actions, kind == "outbox");
+            let op = match p["op"].as_str() {
+                Some("delete") => writer::Event::Delete,
+                Some("create") => writer::Event::Create,
+                _ => writer::Event::Update,
+            };
+            let next = p.get("after").and_then(|v| Input::Json(v.clone()).parse("proposal.wcl").ok());
+            writer::outside_text_sensitive(kind, op, current.as_ref().map(|n| &n.doc), next.as_ref(), &by)
+        });
+        if held_destructive {
+            w.state().record_activity(
+                state::NewActivity::new("run.outside_text_refused", "automation", author, script_core::OUTSIDE_TEXT_REFUSAL)
+                    .detail(json!({"action":"proposal_held"})),
+            );
+        }
+    }
     match &out.proposal {
         Some((event, p)) if !held_destructive && (direct.covers(event, p) || rule.is_some()) => {
             let (event, mut p) = (*event, p.clone());
@@ -5786,6 +5810,12 @@ mod tests {
             "{}",
             held.content
         );
+        let restricted = RunContext::default();
+        restricted.restrict();
+        let held = restricted.scope(|| run(false));
+        assert!(!held.is_error, "{}", held.content);
+        assert!(held.proposal.is_some());
+        assert!(w.read(&id).is_ok());
         // S4: an attended turn keeps its confirmation switch (ai D22).
         let made = run(false);
         assert!(!made.is_error, "{}", made.content);

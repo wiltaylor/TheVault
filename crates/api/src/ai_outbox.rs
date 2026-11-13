@@ -192,6 +192,7 @@ fn note_of(w: &Writer, id: &str, type_name: &str, what: &str) -> Result<Option<V
             n.type_name
         )));
     }
+    w.expose_run_note(&n.type_name, &n.doc);
     Ok(Some(doc_to_json(&n.doc)["fields"].clone()))
 }
 

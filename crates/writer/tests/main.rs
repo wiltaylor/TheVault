@@ -26,6 +26,7 @@ mod ink;
 mod office_text;
 mod open_taxonomies;
 mod outbox;
+mod outside_text;
 mod pdf_text;
 mod query_views;
 mod sessions;

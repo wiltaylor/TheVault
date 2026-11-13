@@ -65,6 +65,39 @@ fn only_preupgrade_names_get_legacy_limits_and_saving_conditions_revokes_them() 
 }
 
 #[test]
+fn outside_text_automatic_ready_stays_draft_and_owner_review_gets_fresh_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let context = script_core::RunContext::default();
+    context.restrict();
+    let id = context.scope(|| create(&w, &agent("sender"), email(json!({"status":"ready"})))).unwrap();
+    assert_eq!(status(&w, &id), "draft");
+    assert!(w.outbox_run_context(&id).is_err());
+    edit(&w, &id, &user(), json!({"status":"ready"})).unwrap();
+    assert_eq!(status(&w, &id), "ready");
+    assert!(!w.outbox_run_context(&id).unwrap().is_restricted());
+    assert!(context.is_restricted());
+}
+
+#[test]
+fn late_outbox_restriction_remains_gated_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let context = script_core::RunContext::default();
+    let id = context.scope(|| create(&w, &agent("sender"), email(json!({"status":"ready"})))).unwrap();
+    assert_eq!(status(&w, &id), "ready");
+    context.restrict();
+    assert!(w.outbox_run_context(&id).is_err());
+    drop(context);
+    drop(w);
+    let vault = Vault::open(dir.path()).unwrap();
+    let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
+    let w = Writer::open(vault, state).unwrap();
+    assert!(w.outbox_run_context(&id).is_err());
+    assert_eq!(status(&w, &id), "ready");
+}
+
+#[test]
 fn round3_outside_delete_then_api_recreate_does_not_restore_legacy() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
