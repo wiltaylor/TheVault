@@ -1299,7 +1299,6 @@ fn reconcile_send(note: Value) -> Result[(), string] {
 fn reconcile_delete(note: Value) -> Result[(), string] { Err("injected delete failure") }
 "#).unwrap();
         let send = RunContext::default();
-        send.restrict();
         let delete = RunContext::default();
         for (context, kind, action) in [(&send, "email", "update"), (&delete, "event", "delete")] {
             context.scope(|| {
@@ -1309,6 +1308,7 @@ fn reconcile_delete(note: Value) -> Result[(), string] { Err("injected delete fa
             }})), &Author::Session("test".into())).unwrap()
             });
         }
+        send.restrict();
         let observed = Arc::new(Mutex::new(Vec::new()));
         let capture = observed.clone();
         writer.set_commit_hook(Some(Box::new(move |_| {
@@ -1324,7 +1324,7 @@ fn reconcile_delete(note: Value) -> Result[(), string] { Err("injected delete fa
             assert_eq!(RunContext::current(), Some(ambient.clone()));
         });
         let observed = observed.lock().unwrap();
-        assert!(observed.iter().any(|context| context == &send));
+        assert!(observed.iter().all(|context| context != &send));
         assert!(observed.iter().any(|context| context == &delete));
         assert!(
             observed
