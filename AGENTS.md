@@ -12,6 +12,8 @@ Use one clean checkout per card: `terrarium repo checkout thevault --target thev
 
 Never run a formatter inside the tested checkout. Format a copy, apply the change in the sandbox, then push.
 
+A root crate dependency change must also update both app lockfiles, checked by `just ci::cargo-lock-check` (part of `just check`).
+
 GitHub build/test CI is removed. The nine former workflows are deleted.
 One manual sign-only workflow temporarily uses the existing repository
 keys, as the operator requested. Releases use the local two-phase release job
