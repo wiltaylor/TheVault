@@ -771,6 +771,41 @@ mod tests {
     }
 
     #[test]
+    fn triggered_agent_semantic_fields_and_formatting() {
+        let trigger = "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Read.\"\n}\n";
+        for field in [
+            "label = \"Other\"\n",
+            "description = \"Other\"\n",
+            "icon = \"star\"\n",
+            "enabled = false\n",
+            "system_prompt = \"Other\"\n",
+            "account = \"other\"\n",
+            "provider = \"anthropic\"\n",
+            "model = \"other\"\n",
+            "effort = \"high\"\n",
+            "permissions { tools = []\n}\n",
+            "permissions { types = []\n}\n",
+            "permissions { change_types = []\n}\n",
+            "permissions { skills = []\n}\n",
+            "permissions { browser = true\n}\n",
+            "permissions { browser_secrets = [\"login\"]\n}\n",
+            "permissions { gmail_actions = true\n}\n",
+            "permissions { confirm { agents = false\n}\n}\n",
+            "permissions { web { search = false\n}\n}\n",
+            "permissions { scripts { run_code = true\n}\n}\n",
+            "permissions { subagents { allow = true\n}\n}\n",
+        ] {
+            let after = format!("{field}{trigger}");
+            Agent::parse("helper", &after).unwrap();
+            for (before, after) in [(trigger, after.as_str()), (after.as_str(), trigger)] {
+                assert!(triggered_agent_changed(&json!({"name":"helper", "before":before, "after":after})), "{field}");
+            }
+            assert!(!triggered_agent_changed(&json!({"name":"helper", "before":"", "after":field})), "{field}");
+        }
+        assert!(!triggered_agent_changed(&json!({"name":"helper", "before":trigger, "after":format!("\n{trigger}\n")})));
+    }
+
+    #[test]
     fn trigger_sensitivity_compares_parsed_before_and_after_definitions() {
         let scheduled =
             "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n";
