@@ -3,6 +3,7 @@
 
 mod context;
 mod crypto;
+mod freshness;
 mod git_env;
 mod git_file;
 mod git_http;

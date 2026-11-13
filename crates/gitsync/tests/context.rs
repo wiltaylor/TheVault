@@ -38,6 +38,7 @@ fn retry_assets(count: usize, repair: bool) {
     manifest.types.push(DefEntry {
         name: "memo".into(),
         path: layout.type_def("memo"),
+        sha256: gitsync::pack::sha256_hex(MEMO.as_bytes()),
     });
     let mut files = BTreeMap::from([(
         layout.type_def("memo"),
@@ -96,6 +97,7 @@ fn retry_assets(count: usize, repair: bool) {
         }
     }
     if repair {
+        // Repair at the same unseen-then-pinned sequence must remain acceptable.
         publish(&files);
     }
     for _ in 0..2 {
@@ -121,6 +123,8 @@ fn retry_assets(count: usize, repair: bool) {
         // Corrupt the remote part again. A locally present asset must not be fetched/opened.
         let path = &manifest.assets[0].parts[0];
         files.insert(path.clone(), key.seal("wrong context", bytes));
+        manifest.sequence += 1;
+        files.insert(layout.manifest(), manifest.seal(&key));
         publish(&files);
         let present = receiver.sync();
         assert!(
@@ -161,6 +165,7 @@ fn missing_manifest_blob(kind: &str) {
     manifest.types.push(DefEntry {
         name: "memo".into(),
         path: layout.type_def("memo"),
+        sha256: gitsync::pack::sha256_hex(MEMO.as_bytes()),
     });
     manifest.notes.push(NoteEntry {
         id: id.into(),
@@ -247,6 +252,7 @@ fn altered_context_and_manifest_are_refused_then_upgraded_peer_imports() {
     manifest.types.push(DefEntry {
         name: "memo".into(),
         path: layout.type_def("memo"),
+        sha256: gitsync::pack::sha256_hex(MEMO.as_bytes()),
     });
     manifest.notes.push(NoteEntry {
         id: id.into(),
