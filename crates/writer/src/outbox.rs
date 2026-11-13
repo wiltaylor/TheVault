@@ -185,6 +185,7 @@ impl Writer {
         &self,
         saved: &crate::NoteChange,
         author: &Author,
+        implied: bool,
     ) -> crate::Result<Option<script_core::RunContext>> {
         if saved.type_name == "outbox" {
             if saved.event == crate::Event::Delete {
@@ -217,8 +218,12 @@ impl Writer {
                         &saved.id,
                         &format!("Outbox note {}", saved.id),
                     )?;
+                    if implied {
+                        self.state.append_outbox_provenance(&saved.id, "", false)?;
+                        return Ok(None);
+                    }
                     return Err(
-                        state::Error::Corrupt("Outbox provenance unavailable".into()).into(),
+                        state::Error::Corrupt(format!("Outbox provenance unavailable for {}", saved.id)).into(),
                     );
                 }
                 for id in ids {
