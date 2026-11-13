@@ -80,7 +80,9 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     check_test_secret_seams(args.test_secret_seams, cfg!(debug_assertions))?;
     if args.test_secret_seams {
-        eprintln!("WARNING: --test-secret-seams enabled: owner sessions can write test fixture records");
+        eprintln!(
+            "WARNING: --test-secret-seams enabled: owner sessions can write test fixture records"
+        );
     }
     let test_clock = args.test_clock.as_deref().map(test_clock).transpose()?;
     if !args.vault.is_dir() {

@@ -25,18 +25,48 @@ pub const BRAVE_SETTINGS: &str = "brave_settings";
 
 /// Exact managed names and dynamic families. Not a blanket vendor-prefix reservation.
 pub fn reserved_secret(name: &str) -> bool {
-    [AI_ACCOUNTS, AI_SETTINGS, GOOGLE_SETTINGS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-     GOOGLE_REFRESH_TOKEN, GOOGLE_ACCOUNT, GOOGLE_GMAIL_STATE, GOOGLE_CALENDAR_STATE,
-     GOOGLE_GMAIL_TRASHED, GITSYNC_SETTINGS, GITSYNC_TOKEN, GITSYNC_SSH_KEY,
-     GITSYNC_KNOWN_HOSTS, GITSYNC_KEY, GITSYNC_STATE, BRAVE_API_KEY].contains(&name)
-        || [AI_KEY_PREFIX, AI_CHATGPT_PREFIX, AI_USAGE_PREFIX,
-            GITSYNC_FRESHNESS_PUBLISH_PREFIX, GITSYNC_FRESHNESS_RECEIVE_PREFIX]
-            .iter().any(|prefix| name.starts_with(prefix))
+    [
+        AI_ACCOUNTS,
+        AI_SETTINGS,
+        GOOGLE_SETTINGS,
+        GOOGLE_CLIENT_ID,
+        GOOGLE_CLIENT_SECRET,
+        GOOGLE_REFRESH_TOKEN,
+        GOOGLE_ACCOUNT,
+        GOOGLE_GMAIL_STATE,
+        GOOGLE_CALENDAR_STATE,
+        GOOGLE_GMAIL_TRASHED,
+        GITSYNC_SETTINGS,
+        GITSYNC_TOKEN,
+        GITSYNC_SSH_KEY,
+        GITSYNC_KNOWN_HOSTS,
+        GITSYNC_KEY,
+        GITSYNC_STATE,
+        BRAVE_API_KEY,
+    ]
+    .contains(&name)
+        || [
+            AI_KEY_PREFIX,
+            AI_CHATGPT_PREFIX,
+            AI_USAGE_PREFIX,
+            GITSYNC_FRESHNESS_PUBLISH_PREFIX,
+            GITSYNC_FRESHNESS_RECEIVE_PREFIX,
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 
 /// Only these records are fixture seams. The caller must separately require a test build,
 /// explicit startup opt-in and an owner session. Tokens never get this exception.
 pub fn test_seam_secret(name: &str) -> bool {
-    [AI_SETTINGS, GOOGLE_SETTINGS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
-     GOOGLE_REFRESH_TOKEN, GOOGLE_ACCOUNT].contains(&name) || name.starts_with(AI_CHATGPT_PREFIX)
+    [
+        AI_SETTINGS,
+        GOOGLE_SETTINGS,
+        GOOGLE_CLIENT_ID,
+        GOOGLE_CLIENT_SECRET,
+        GOOGLE_REFRESH_TOKEN,
+        GOOGLE_ACCOUNT,
+    ]
+    .contains(&name)
+        || name.starts_with(AI_CHATGPT_PREFIX)
 }

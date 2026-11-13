@@ -48,6 +48,7 @@ mod tests {
             "google_account",
             "google_gmail_state",
             "google_calendar_state",
+            "google_gmail_trashed",
         ] {
             assert!(!internal_script_secret(name), "{name}");
             assert!(proposed_secrets_refused(&[name.into()]).is_some(), "{name}");

@@ -509,7 +509,8 @@ pub async fn delete_secret(
     seams: Option<axum::Extension<crate::TestSecretSeams>>,
 ) -> Result<Json<Value>, ApiError> {
     if !name.starts_with(state::GITSYNC_FRESHNESS_RECEIVE_PREFIX)
-        && !test_seam_allowed(&name, &author, seams.is_some()) {
+        && !test_seam_allowed(&name, &author, seams.is_some())
+    {
         require_user_secret(&name)?;
     }
     let n = name.clone();
@@ -527,7 +528,9 @@ pub async fn delete_secret(
 }
 
 fn test_seam_allowed(name: &str, author: &state::Author, enabled: bool) -> bool {
-    cfg!(debug_assertions) && enabled && matches!(author, state::Author::Session(_))
+    cfg!(debug_assertions)
+        && enabled
+        && matches!(author, state::Author::Session(_))
         && state::test_seam_secret(name)
 }
 
