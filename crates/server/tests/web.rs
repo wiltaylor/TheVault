@@ -4,7 +4,10 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use reqwest::blocking::Client;
-use reqwest::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE};
+use reqwest::header::{
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY,
+    STRICT_TRANSPORT_SECURITY, X_FRAME_OPTIONS,
+};
 use serde_json::{Value, json};
 use testkit::TestServer;
 
@@ -160,6 +163,14 @@ fn serves_the_web_client_without_credentials() {
     assert_eq!(index.status().as_u16(), 200);
     assert_eq!(index.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
     assert_eq!(index.headers()[CACHE_CONTROL], "no-cache");
+    let csp = index.headers()[CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(csp.contains("default-src 'self'"), "{csp}");
+    assert!(csp.contains("script-src 'self'"), "{csp}");
+    assert!(csp.contains("object-src 'none'"), "{csp}");
+    assert!(!index.headers().contains_key(STRICT_TRANSPORT_SECURITY));
+    assert!(csp.contains("connect-src 'self' https:;"), "{csp}");
+    assert_eq!(index.headers()[X_FRAME_OPTIONS], "DENY");
+    assert_eq!(index.headers()[REFERRER_POLICY], "no-referrer");
     assert!(index.text().unwrap().contains("shell"));
 
     // A client route that names no file loads the shell.

@@ -43,6 +43,56 @@ template default {
 const WCL: &str = "text/plain; charset=utf-8";
 
 #[test]
+fn session_cookies_are_secure_on_https_requests_and_https_sites() {
+    let api = Api::start();
+    let plain = api.login(testkit::PASSWORD);
+    assert_eq!(plain.status(), 200);
+    assert!(
+        !plain.headers()[SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Secure")
+    );
+
+    let https = api
+        .req("POST", "/api/login", Auth::None)
+        .header("x-forwarded-proto", "https")
+        .json(&json!({ "password": testkit::PASSWORD }))
+        .send()
+        .unwrap();
+    assert_eq!(https.status(), 200);
+    assert!(
+        https.headers()[SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Secure")
+    );
+
+    let configured = TestServer::start_with_env(seed, &[("VAULT_SITE_HTTPS", "true")]);
+    let login = Client::new()
+        .post(configured.url("/api/login"))
+        .json(&json!({ "password": testkit::PASSWORD }))
+        .send()
+        .unwrap();
+    assert_eq!(login.status(), 200);
+    let cookie = login.headers()[SET_COOKIE].to_str().unwrap();
+    assert!(cookie.contains("Secure"), "{cookie}");
+    let pair = cookie.split(';').next().unwrap();
+    let logout = Client::new()
+        .post(configured.url("/api/logout"))
+        .header(COOKIE, pair)
+        .send()
+        .unwrap();
+    assert_eq!(logout.status(), 204);
+    assert!(
+        logout.headers()[SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .contains("Secure")
+    );
+}
+
+#[test]
 fn apply_and_encoded_note_routes_cannot_write_server_transcripts() {
     let api = Api::start();
     let token = api.token("thread-probes", "write");
