@@ -2299,10 +2299,7 @@ fn sent_copy_account_upgrade_preserves_user_handlers_and_is_idempotent() {
         open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
         assert_eq!(read(root, path).unwrap(), current);
         let source = if edited {
-            old.replace(
-                "function      = \"copy_sent\"",
-                "function      = \"custom_copy\"",
-            )
+            old.replace("\"google_settings\"", "\"custom_settings\"")
         } else {
             old.clone()
         };
@@ -2371,6 +2368,7 @@ fn the_outbox_template_ticket_180_shipped_is_replaced_and_no_note_changes() {
     );
     // The start after the steps brings the old `multiple` attachments to the list form.
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    run_step_again(&w, "0015_outbox_sent_copy_account");
     assert_eq!(read(root, path).unwrap(), current);
     assert_eq!(read(root, &note_path).unwrap(), before);
     let schema = w.schema();
@@ -2476,6 +2474,7 @@ fn the_outbox_statuses_become_draft_ready_sending_and_failed() {
     );
     // The start after the steps brings the old `multiple` attachments to the list form.
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    run_step_again(&w, "0015_outbox_sent_copy_account");
     assert_eq!(read(root, path).unwrap(), current);
     assert_eq!(outbox_status(&w, &draft), "draft");
     assert_eq!(outbox_status(&w, &review), "draft");
