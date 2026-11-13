@@ -70,7 +70,7 @@ fn ownership_or_warn<T>(result: std::io::Result<T>) -> anyhow::Result<Option<T>>
             Err(error).context("locking vault ownership")
         }
         Err(error) => {
-            tracing::warn!(%error, "cannot lock vault ownership; starting without ownership lock");
+            eprintln!("warning: cannot lock vault ownership: {error}; starting without ownership lock");
             Ok(None)
         }
     }
