@@ -1,11 +1,63 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 const source = readFileSync('deploy/compose.yaml', 'utf8');
 const example = readFileSync('deploy/.env.example', 'utf8');
 const hasCompose = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' }).status === 0;
+
+// Scan production sources across all workspace crates, not tests or build.rs.
+// Resolve literal reads and named constants, including the browser's local
+// `var` closure. Clap arguments and unrelated VAULT strings are not env::var reads.
+function runtimeKeys(root = 'crates') {
+  const keys = new Set();
+  function visit(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) visit(path);
+      else if (entry.name.endsWith('.rs')) {
+        const rust = readFileSync(path, 'utf8');
+        if (!/env\s*::\s*var(?:_os)?\s*\(/.test(rust)) continue;
+        const constants = Object.fromEntries([...rust.matchAll(/const\s+(\w+)\s*:\s*&str\s*=\s*"([^"]+)"/g)]
+          .map(m => [m[1], m[2]]));
+        for (const match of rust.matchAll(/(?:env\s*::\s*var(?:_os)?|\bvar)\s*\(\s*(?:"([^"]+)"|([A-Z][A-Z0-9_]*))\s*\)/g)) {
+          const key = match[1] ?? constants[match[2]];
+          assert.ok(key, `unresolved environment constant ${match[2]} in ${path}`);
+          if (!key.startsWith('VAULT_')) continue;
+          if (!key.startsWith('VAULT_TEST_') && key !== 'VAULT_SERVER_BIN') keys.add(key);
+        }
+      }
+    }
+  }
+  for (const crate of readdirSync(root, { withFileTypes: true })) {
+    if (crate.isDirectory()) visit(`${root}/${crate.name}/src`);
+  }
+  return [...keys].sort();
+}
+
+test('server runtime environment keys are forwarded or deliberately allowlisted', t => {
+  const keys = runtimeKeys();
+  const allowed = JSON.parse(readFileSync('deploy/env-allowlist.json', 'utf8'));
+  const compose = process.env.COMPOSE_ENV_CHECK_FILE
+    ? readFileSync(process.env.COMPOSE_ENV_CHECK_FILE, 'utf8') : source;
+  const server = compose.match(/^  thevault:\n([\s\S]*?)(?=^  [a-z]|^networks:)/m)?.[1];
+  assert.ok(server, 'thevault service must exist');
+  const environment = server.match(/^    environment:\n([\s\S]*?)(?=^    \S)/m)?.[1] ?? '';
+  const forwarded = new Set([...environment.matchAll(/^      (VAULT_[A-Z0-9_]+):\s*\S/gm)].map(m => m[1]));
+  t.diagnostic(`runtime keys: ${keys.join(', ')}`);
+  for (const [key, reason] of Object.entries(allowed)) {
+    assert.ok(keys.includes(key), `stale allowlist key: ${key}`);
+    assert.ok(typeof reason === 'string' && reason.trim(), `${key} needs a reason`);
+  }
+  assert.deepEqual(keys.filter(key => !forwarded.has(key) && !Object.hasOwn(allowed, key)), [],
+    'runtime keys missing from thevault environment (forward or allowlist with a reason)');
+});
+
+test('HTTPS example and container default remain explicit', () => {
+  assert.match(source, /VAULT_SITE_HTTPS: \$\{VAULT_SITE_HTTPS:-0\}/);
+  assert.match(example, /^VAULT_SITE_HTTPS=0$/m);
+});
 
 // Minimal renderer for the Compose operators used here. Docker config is preferred
 // when installed. No daemon, images, containers or production access are needed.

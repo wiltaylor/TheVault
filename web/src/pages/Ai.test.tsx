@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiAccountStatus, AiStatus } from "../api";
 
 const aiStatus = vi.fn();
+const classifierSettings = vi.fn();
+const classifierAccount = vi.fn();
 const aiSaveSettings = vi.fn();
 const aiCreateAccount = vi.fn();
 const aiUpdateAccount = vi.fn();
@@ -24,6 +26,8 @@ vi.mock("../api", async (orig) => {
     api: {
       ...real.api,
       aiStatus,
+      classifierSettings,
+      classifierAccount,
       aiSaveSettings,
       aiCreateAccount,
       aiUpdateAccount,
@@ -107,6 +111,34 @@ const AUTH_URL = "https://auth.openai.com/api/accounts/authorize?client_id=dynam
 
 beforeEach(() => {
   aiModels.mockResolvedValue(ANTHROPIC_MODELS);
+  classifierSettings.mockResolvedValue({ accounts: [], classifiers: [] });
+});
+
+it("repairs classifier accounts without changing defaults or testing providers", async () => {
+  aiStatus.mockResolvedValue(status([CLAUDE, ROUTER]));
+  const diagnostics = {
+    accounts: [{ id: "router-id", name: "OpenRouter" }],
+    classifiers: ["agent_safety", "scam"].map((name) => ({
+      name, valid: true, reason: "incompatible_kind", model: "typesafe/jev-1.13",
+      resolved_account: "ChatGPT", resolved_account_id: "chatgpt-id", last_outcome: "not_recorded",
+      fields: ["title", "body"], types: ["email"],
+    })).concat([{ name: "broken", valid: false, reason: "invalid_definition", model: "", resolved_account: "",
+      resolved_account_id: "", last_outcome: "not_recorded", fields: [], types: [] }]),
+  };
+  classifierSettings.mockResolvedValue(diagnostics);
+  classifierAccount.mockResolvedValue(diagnostics);
+  render(() => <Ai />);
+  const picker = await screen.findByLabelText("Account for agent_safety");
+  expect(within(picker).getByRole("option", { name: "OpenRouter" })).toBeTruthy();
+  expect(within(picker).queryByRole("option", { name: "ChatGPT" })).toBeNull();
+  expect(screen.getByLabelText("Account for scam")).toBeTruthy();
+  expect(screen.queryByLabelText("Account for broken")).toBeNull();
+  fireEvent.change(picker, { target: { value: "router-id" } });
+  await waitFor(() => expect(classifierAccount).toHaveBeenCalledWith("agent_safety", "router-id"));
+  expect(aiSetDefault).not.toHaveBeenCalled();
+  expect(aiTest).not.toHaveBeenCalled();
+  expect(aiModels).not.toHaveBeenCalled();
+  expect(screen.getByText(/attachment text and provenance/)).toBeTruthy();
 });
 
 afterEach(() => {

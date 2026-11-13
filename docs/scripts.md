@@ -171,7 +171,7 @@ The options, a map, or `Value::Null` for the defaults:
 
 | Option | Means | Default |
 |--------|-------|---------|
-| `images` | `"download"` stores images as assets; `"link"` leaves each as a link paragraph, or its alt text | `"link"` |
+| `images` | `"download"` stores images as assets; `"inline"` stores CID/data images but never fetches remote images; `"link"` leaves each as a link paragraph, or its alt text | `"link"` |
 | `cid` | `{ <Content-ID>: <asset id> }`: the stored parts a `cid:` image shows, compared without angle brackets or case. An empty asset id says the part was too large to store | `{}` |
 | `deadline` | Milliseconds since the epoch after which remote images are left pending | none |
 | `quotes` | Fold quoted reply history and signatures into collapsed toggles | `false` |

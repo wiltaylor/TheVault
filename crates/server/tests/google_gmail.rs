@@ -70,14 +70,7 @@ impl Gmail {
             ("google_refresh_token", DEFAULT_REFRESH_TOKEN),
             ("google_settings", settings.as_str()),
         ] {
-            expect(
-                gmail
-                    .req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({ "value": value }))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            gmail.put_secret(name, value);
         }
         let task = format!(
             r#"label         = "Gmail sync"
@@ -227,11 +220,27 @@ paused        = true
     }
 
     fn put_secret(&self, name: &str, value: &str) {
-        expect(
-            self.req("PUT", &format!("/api/secrets/{name}"))
-                .json(&json!({ "value": value }))
+        let mut request = self.req("PUT", &format!("/api/secrets/{name}"));
+        if name == "google_settings" {
+            let login = self
+                .client
+                .post(self.server.url("/api/login"))
+                .json(&json!({"password": testkit::PASSWORD}))
                 .send()
-                .unwrap(),
+                .unwrap();
+            let cookie = login.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap();
+            request = self
+                .client
+                .put(self.server.url(&format!("/api/secrets/{name}")))
+                .header("cookie", cookie);
+        }
+        expect(
+            request.json(&json!({ "value": value })).send().unwrap(),
             200,
         );
     }
@@ -1115,7 +1124,10 @@ fn inline_data_and_remote_images_are_stored_where_they_stood() {
             { "filename": "notes.txt", "mime": "text/plain", "data": "notes" },
         ],
     }));
-    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    let gmail = Gmail::start(
+        google,
+        json!({ "gmail_mode": "all", "gmail_remote_images": true }),
+    );
     gmail.fetch_private();
     gmail.run_ok();
     let note = gmail.email("rich");
@@ -1239,7 +1251,10 @@ fn images_on_the_local_network_are_refused_without_fetch_private() {
         "subject": "Local",
         "html": format!(r#"<p>Look</p><img src="{}" alt="Hero">"#, web.url("/hero.png")),
     }));
-    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    let gmail = Gmail::start(
+        google,
+        json!({ "gmail_mode": "all", "gmail_remote_images": true }),
+    );
     gmail.run_ok();
     let blocks = body_blocks(&gmail.email("local"));
     assert_eq!(
@@ -1250,6 +1265,48 @@ fn images_on_the_local_network_are_refused_without_fetch_private() {
         )
     );
     assert!(web.requests().is_empty());
+}
+
+#[test]
+fn remote_images_default_off_preserves_data_images() {
+    let web = FakeWeb::start();
+    web.route("/hero.png", image_reply(png(1)));
+    let google = FakeGoogle::start();
+    google.add_message(json!({
+        "id": "private", "labels": ["INBOX"], "at": ago(1),
+        "from": "alex@example.com", "subject": "Private",
+        "text": "legacy",
+        "html": format!(r#"<img src="data:image/png;base64,{}"><img src="cid:logo"><img src="{}"><p>legacy</p>"#, b64(&png(2)), web.url("/hero.png")),
+        "attachments": [{ "filename": "logo.png", "mime": "image/png", "base64": b64(&png(3)), "content_id": "logo" }],
+    }));
+    let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
+    gmail.fetch_private();
+    gmail.run_ok();
+    let note = gmail.email("private");
+    let blocks = body_blocks(&note);
+    assert_eq!(blocks[0]["kind"], "image");
+    assert_eq!(
+        gmail.asset(blocks[0]["fields"]["asset"].as_str().unwrap()),
+        png(2)
+    );
+    assert!(web.requests().is_empty());
+    assert!(note["note"]["fields"].get("images_pending").is_none());
+    assert_eq!(blocks[1]["kind"], "image");
+    let cid_asset = blocks[1]["fields"]["asset"].as_str().unwrap();
+    assert_eq!(gmail.asset(cid_asset), png(3));
+    // Both provider-backed and stored-HTML reconversion obey the same default.
+    let provider = old_email(&gmail, "private", &["legacy"], json!({}));
+    let html = gmail.upload(
+        "gone.html",
+        format!(r#"<p>legacy</p><img src="{}">"#, web.url("/hero.png")).as_bytes(),
+    );
+    let stored = old_email(&gmail, "gone", &["legacy"], json!({ "html": html }));
+    gmail.run_ok();
+    assert!(web.requests().is_empty());
+    for id in [provider, stored] {
+        assert_eq!(gmail.note(&id)["note"]["fields"]["converter"], 2);
+    }
+    assert_eq!(gmail.asset(cid_asset), png(3));
 }
 
 #[test]
@@ -1265,7 +1322,10 @@ fn images_the_time_budget_leaves_out_wait_for_the_next_run() {
         "subject": "Later",
         "html": format!(r#"<p>Look</p><img src="{}" alt="Hero"><p>Done</p>"#, web.url("/hero.png")),
     }));
-    let gmail = Gmail::start(google, json!({ "gmail_mode": "all", "image_budget": 0 }));
+    let gmail = Gmail::start(
+        google,
+        json!({ "gmail_mode": "all", "gmail_remote_images": true, "image_budget": 0 }),
+    );
     gmail.fetch_private();
     gmail.run_ok();
     let note = gmail.email("later");
@@ -1279,9 +1339,13 @@ fn images_the_time_budget_leaves_out_wait_for_the_next_run() {
     );
     assert!(web.requests().is_empty());
 
-    // The next run, with time for images, fetches it into its place.
+    // Disabling consent prevents pending completion, even with time available.
     gmail.release_safety(&note);
     gmail.set_settings(json!({ "gmail_mode": "all" }));
+    gmail.run_ok();
+    assert!(web.requests().is_empty());
+    // The next opted-in run, with time for images, fetches it into its place.
+    gmail.set_settings(json!({ "gmail_mode": "all", "gmail_remote_images": true }));
     gmail.run_ok();
     let note = gmail.email("later");
     assert_eq!(

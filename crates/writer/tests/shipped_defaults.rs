@@ -1357,6 +1357,7 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
         secret_json(&w, "google_settings"),
         json!({
             "gmail_mode": "labels",
+            "gmail_remote_images": false,
             "gmail_labels": ["Work", "INBOX"],
             "gmail_window_days": 45,
             "gmail_backfill_to": null,

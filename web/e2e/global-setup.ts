@@ -140,7 +140,8 @@ export default async function globalSetup() {
 
   const server = spawn(
     binary("VAULT_SERVER_BIN", "vault-server"),
-    ["--vault", vault, "--listen", "127.0.0.1:0", "--web", join(web, "dist")],
+    ["--vault", vault, "--listen", "127.0.0.1:0", "--web", join(web, "dist"),
+      ...(process.env.E2E_TEST_CLOCK ? ["--test-clock", process.env.E2E_TEST_CLOCK] : [])],
     { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, VAULT_SECRET_KEY_FILE: key } },
   );
   let address: string;

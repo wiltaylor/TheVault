@@ -410,6 +410,7 @@ fn image_extension(url: &str) -> &'static str {
 /// `browser_capture {what, target, url, full_page, session, filename}`: a screenshot taken, or
 /// an image downloaded, into /work/captures in the box, then stored as [`save`] stores a file.
 pub async fn capture(
+    context: &script::RunContext,
     w: Arc<Writer>,
     b: &BrowserBox,
     direct: bool,
@@ -487,6 +488,7 @@ pub async fn capture(
     }
     let filename = text("filename").map(str::to_owned);
     save(
+        context,
         w,
         b,
         direct,
@@ -844,6 +846,7 @@ fn thumbnail(bytes: &[u8]) -> Option<String> {
 
 /// `browser_file {path}`. `may_send_image` is false once the turn has sent its images.
 pub async fn file(
+    context: &script::RunContext,
     b: &BrowserBox,
     call_id: &str,
     input: &Value,
@@ -854,7 +857,7 @@ pub async fn file(
     let Ok(_) = crate::browser_redaction::Redactor::load(state) else {
         return BrowserOut::error("browser credential redaction unavailable");
     };
-    let mut out = file_inner(b, call_id, input, may_send_image, images, state).await;
+    let mut out = file_inner(context, b, call_id, input, may_send_image, images, state).await;
     let Ok(redactor) = crate::browser_redaction::Redactor::load(state) else {
         return BrowserOut::error("browser credential redaction unavailable");
     };
@@ -863,6 +866,7 @@ pub async fn file(
 }
 
 async fn file_inner(
+    context: &script::RunContext,
     b: &BrowserBox,
     call_id: &str,
     input: &Value,
@@ -924,7 +928,7 @@ async fn file_inner(
             ));
         }
         let kind = media.clone();
-        let prepared = tokio::task::spawn_blocking(move || {
+        let prepared = crate::ai_chat::blocking(context, move || {
             let thumb = thumbnail(&bytes);
             ai_assets::prepare(bytes, &kind).map(|d| (d, thumb))
         })
@@ -1088,13 +1092,14 @@ fn put(w: &Writer, name: &str, file: &Path) -> Result<writer::Asset, ApplyError>
 
 /// Store `path` from the box as a new asset, named `filename` or after the file.
 pub async fn store(
+    context: &script::RunContext,
     w: Arc<Writer>,
     b: &BrowserBox,
     path: &str,
     filename: Option<&str>,
 ) -> Result<Value, ApplyError> {
     let w2 = w.clone();
-    let file: PathBuf = tokio::task::spawn_blocking(move || w2.incoming_file())
+    let file: PathBuf = crate::ai_chat::blocking(context, move || w2.incoming_file())
         .await
         .map_err(|e| ApplyError::Invalid(e.to_string()))??;
     fetch_to(b, path, &file)
@@ -1102,7 +1107,7 @@ pub async fn store(
         .map_err(ApplyError::Browser)?;
     let name = save_name(filename, path);
     let at = file.clone();
-    let asset = tokio::task::spawn_blocking(move || put(&w, &name, &at))
+    let asset = crate::ai_chat::blocking(context, move || put(&w, &name, &at))
         .await
         .map_err(|e| {
             let _ = std::fs::remove_file(&file);
@@ -1114,6 +1119,7 @@ pub async fn store(
 /// `browser_save {path, filename}`. `direct` says the file is stored at once: the downloads
 /// switch is off and the caller has `write`.
 pub async fn save(
+    context: &script::RunContext,
     w: Arc<Writer>,
     b: &BrowserBox,
     direct: bool,
@@ -1128,7 +1134,7 @@ pub async fn save(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     if direct {
-        return match store(w, b, path, given).await {
+        return match store(context, w, b, path, given).await {
             Ok(done) => {
                 let mut applied = done.clone();
                 applied["id"] = json!(call_id);
@@ -1318,6 +1324,7 @@ mod tests {
         }
         let images = Default::default();
         let out = file(
+            &script::RunContext::default(),
             &b,
             "test",
             &json!({"path":"test.txt"}),

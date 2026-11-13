@@ -30,6 +30,8 @@ export function createPagedRows(
   let loading = false;
   let wanted = 0;
   let generation = 0;
+  let refreshing: number | null = null;
+  let refreshPending = false;
 
   async function loadUntil(index: number) {
     wanted = Math.max(wanted, index);
@@ -54,7 +56,15 @@ export function createPagedRows(
   }
 
   async function reload() {
+    // Publish an in-flight refresh even when more events arrive. Invalidating it
+    // on every event can starve a busy view forever. Coalesce those events into
+    // one trailing refresh instead.
+    if (refreshing !== null) {
+      refreshPending = true;
+      return;
+    }
     const gen = ++generation;
+    refreshing = gen;
     loading = true;
     let fresh: Row[] = [];
     let cursor: string | null = null;
@@ -76,7 +86,14 @@ export function createPagedRows(
     } catch (e) {
       if (gen === generation) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (gen === generation) loading = false;
+      if (gen === generation) {
+        loading = false;
+        refreshing = null;
+        if (refreshPending) {
+          refreshPending = false;
+          void reload();
+        }
+      }
     }
   }
 
@@ -85,6 +102,8 @@ export function createPagedRows(
   createEffect(
     on(key, () => {
       generation++;
+      refreshing = null;
+      refreshPending = false;
       loading = false;
       next = null;
       wanted = 0;

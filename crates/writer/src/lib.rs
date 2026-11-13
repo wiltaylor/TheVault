@@ -41,6 +41,7 @@ mod assets;
 mod automation;
 mod batch;
 mod builtin;
+mod classifier_accounts;
 mod contacts;
 mod daily;
 mod defs;

@@ -309,6 +309,49 @@ fn confirmed_event_update_restart() {
 }
 
 #[test]
+fn queued_handler_keeps_live_parent_context_through_script_and_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    let (writer, handlers) = open(dir.path(), false);
+    let created = writer
+        .create("report", &json_note(json!({ "title": "Q3" })), &user())
+        .unwrap();
+    let context = script::RunContext::default();
+    let generation = writer.state().admit_automation().unwrap();
+    context.capture_stop_generation(generation);
+    context.scope(|| {
+        writer
+            .update(
+                &created.id,
+                &json_note(json!({ "title": "Q3 final" })),
+                Some(&created.version),
+                &Author::Token("test".into()),
+            )
+            .unwrap();
+    });
+    assert_eq!(writer.state().queued_jobs().unwrap().len(), 1);
+    context.restrict();
+    context.capture_stop_generation(generation);
+    let (send, recv) = std::sync::mpsc::channel();
+    writer.set_commit_hook(Some(Box::new(move |_| {
+        let _ = send.send(script::RunContext::current());
+        std::ops::ControlFlow::Continue(())
+    })));
+    handlers.start(&writer);
+    let observed = recv.recv_timeout(Duration::from_secs(30)).unwrap().unwrap();
+    assert_eq!(observed, context);
+    assert!(observed.is_restricted());
+    assert_eq!(observed.stop_generation(), Some(generation));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !writer.state().queued_jobs().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the queue never emptied");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(writer.state().failed_jobs().unwrap().is_empty());
+    assert!(script::RunContext::current().is_none());
+}
+
+#[test]
 fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());

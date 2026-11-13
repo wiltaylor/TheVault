@@ -128,6 +128,7 @@ struct Ctx {
     started: int,
     // The time after which images wait for a later run.
     images_until: int,
+    remote_images: bool,
     work: int,
     stopped: bool,
     imported: int,
@@ -839,7 +840,7 @@ fn build_body(ctx: Ctx, id: string, payload: Value, html_asset: string, known: M
     let options = Value::Map(#{
         "base64": Value::Bool(true),
         "quotes": Value::Bool(true),
-        "images": Value::String("download"),
+        "images": Value::String(if ctx.remote_images { "download" } else { "inline" }),
         "cid": Value::Map(cids),
         "deadline": Value::Int(ctx.images_until),
         "cut_text": Value::String(cut_text()),
@@ -1073,6 +1074,7 @@ fn with_body(body: Value, name: string, blocks: List[Value], set: Map[string, Va
 // Fetch the images that waited for this run: each email marked `images_pending`, up to
 // `images_batch`, gets `vault::complete_images` on its body.
 fn complete_images(ctx: Ctx) {
+    if !ctx.remote_images { return }
     let rows = match vault::query(fmt("from email where images_pending limit {}", images_batch())) {
         Ok(r) => r,
         Err(e) => {
@@ -1289,7 +1291,7 @@ fn reconvert_one(ctx: Ctx, id: string, names: Map[string, string]) -> Result[boo
         let options = Value::Map(#{
             "base64": Value::Bool(true),
             "quotes": Value::Bool(true),
-            "images": Value::String("download"),
+            "images": Value::String(if ctx.remote_images { "download" } else { "inline" }),
             "deadline": Value::Int(ctx.images_until),
             "cut_text": Value::String(cut_text()),
         })
@@ -1614,6 +1616,7 @@ fn new_ctx(endpoints: Value, token: string, started: int) -> Ctx {
         people: #{},
         started: started,
         images_until: started + time_budget(),
+        remote_images: false,
         work: 0,
         stopped: false,
         imported: 0,
@@ -1644,6 +1647,10 @@ fn trashed_refs() -> List[string] {
 }
 
 fn sync(ctx: Ctx, state: Map[string, Value], fields: Value) -> Result[(), string] {
+    ctx.remote_images = match fields.get("gmail_remote_images") {
+        Some(Value::Bool(b)) => b,
+        _ => false,
+    }
     // A test seam: how long into the run images may be fetched, in milliseconds.
     match fields.get("image_budget") {
         Some(Value::Int(ms)) => ctx.images_until = ctx.started + ms,
