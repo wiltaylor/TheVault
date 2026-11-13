@@ -362,7 +362,10 @@ fn history_preview_expires_on_the_fake_clock_without_provider_work() {
     c.post(s.url("/api/test/clock"))
         .bearer_auth(s.admin_token())
         .json(&json!({"advance":"PT10M"}))
-        .send().unwrap().error_for_status().unwrap();
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     assert_eq!(post(&s, &c, &cookie, "approve", approval(&p)).status(), 409);
     assert!(fake.requests().is_empty());
 }
