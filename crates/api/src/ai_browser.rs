@@ -281,8 +281,8 @@ async fn cleanup_worker(
                     let profile = b.clone().with_profile(id.clone());
                     let name = id.clone();
                     let context = context.clone();
-                    let task = deletes
-                        .spawn(async move { (id, profile.remove_profile(&context).await) });
+                    let task =
+                        deletes.spawn(async move { (id, profile.remove_profile(&context).await) });
                     task_ids.insert(task.id(), name);
                 }
             } else {
@@ -1346,19 +1346,23 @@ mod tests {
         let attempts = Arc::new(AtomicUsize::new(0));
         let count = attempts.clone();
         let app = axum::Router::new()
-            .route("/health", axum::routing::get(|| async {
-                axum::Json(json!({"profile_protocol": 1}))
-            }))
-            .route("/profile", axum::routing::delete(move || {
-                let count = count.clone();
-                async move {
-                    if count.fetch_add(1, Ordering::SeqCst) == 0 {
-                        axum::http::StatusCode::SERVICE_UNAVAILABLE
-                    } else {
-                        axum::http::StatusCode::NO_CONTENT
+            .route(
+                "/health",
+                axum::routing::get(|| async { axum::Json(json!({"profile_protocol": 1})) }),
+            )
+            .route(
+                "/profile",
+                axum::routing::delete(move || {
+                    let count = count.clone();
+                    async move {
+                        if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE
+                        } else {
+                            axum::http::StatusCode::NO_CONTENT
+                        }
                     }
-                }
-            }));
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let b = BrowserBox {
             base: format!("http://{}", listener.local_addr().unwrap()),
