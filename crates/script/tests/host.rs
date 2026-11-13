@@ -355,7 +355,12 @@ fn run() -> Result[int, string] {{
     work.allow_domains = vec![api.host()];
     context.restrict();
     let out = f.host.run(work);
-    assert!(out.result.unwrap_err().to_string().contains("this run has read outside text"));
+    assert!(
+        out.result
+            .unwrap_err()
+            .to_string()
+            .contains("this run has read outside text")
+    );
     assert!(out.log.contains("this run has read outside text"));
     assert!(api.requests().is_empty());
     let seen: Vec<_> = recv.try_iter().collect();
@@ -366,10 +371,14 @@ fn run() -> Result[int, string] {{
         assert_eq!(observed.stop_generation(), Some(generation));
     }
     assert_eq!(f.writer.list(None).unwrap().len(), 1);
-    let audit = f.writer.state().activity(&state::ActivityFilter {
-        kind: Some("run.outside_text_refused".into()),
-        ..Default::default()
-    }).unwrap();
+    let audit = f
+        .writer
+        .state()
+        .activity(&state::ActivityFilter {
+            kind: Some("run.outside_text_refused".into()),
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(audit.items.len(), 1);
     assert_eq!(audit.items[0].detail, json!({"action": "script_http"}));
     assert!(script::RunContext::current().is_none());
@@ -396,7 +405,12 @@ fn restricted_http_methods_and_recovered_context_cannot_escape() {
         work.allow_domains = vec![api.host()];
         // Even a job built with an unrelated default must inherit at submission.
         let out = recovered.scope(|| f.host.run(work));
-        assert!(out.result.unwrap_err().to_string().contains("this run has read outside text"));
+        assert!(
+            out.result
+                .unwrap_err()
+                .to_string()
+                .contains("this run has read outside text")
+        );
     }
     assert!(api.requests().is_empty());
     // Independent owner work does not inherit the recovered restriction.
