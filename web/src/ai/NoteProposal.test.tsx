@@ -39,8 +39,8 @@ vi.mock("../api", async (orig) => {
 });
 
 const { ApiError, api } = await import("../api");
-const { ChatPanel } = await import("./ChatPanel");
-const { newConversation, NOTE_CHANGED, NOTE_GONE } = await import("./store");
+const { ChatPanel, Conversation } = await import("./ChatPanel");
+const { createChatSession, newConversation, NOTE_CHANGED, NOTE_GONE } = await import("./store");
 
 const DOC = { fields: { title: "Reading list" }, blocks: [{ kind: "content", labels: ["body"], blocks: [{ kind: "paragraph", fields: { text: "Dune" } }] }] };
 
@@ -87,9 +87,10 @@ afterEach(() => {
 describe("note proposals", () => {
   it("keeps thread proposal actions disabled until the stream ends, without rebuilding the card", async () => {
     const start = vi.spyOn(api, "agentThreadStart").mockResolvedValue({ id: "thread-proposals" } as Awaited<ReturnType<typeof api.agentThreadStart>>);
+    const session = createChatSession({ threads: true });
     aiApply.mockResolvedValue({ op: "create", note_id: "01JNEW", version: "v1" });
     try {
-      const m = render(() => <ChatPanel noteId={() => ""} />);
+      const m = render(() => <Conversation session={session} noteId={() => ""} />);
       await propose(m, CREATE, DELETE);
       const card = await m.findByRole("region", { name: "Proposed new note Reading list" });
       const apply = m.getAllByRole("button", { name: "Apply" })[0]!;
@@ -106,6 +107,7 @@ describe("note proposals", () => {
       fireEvent.click(apply);
       await waitFor(() => expect(aiApply).toHaveBeenCalledWith(CREATE));
     } finally {
+      session.close();
       start.mockRestore();
     }
   });
