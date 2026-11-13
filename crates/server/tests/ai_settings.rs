@@ -1182,12 +1182,12 @@ fn an_accounts_secrets_take_names_the_secrets_route_accepts() {
 #[test]
 fn classifier_diagnostics_and_selection_never_refresh_chatgpt() {
     let api = Api::start();
+    let client = Client::new();
     let id = api.plan();
     api.put(&format!("/api/secrets/{}", ai::chatgpt_secret(&id)),
         json!({"value":json!({"client_id":"oaiapp_test","access_token":"expired",
             "refresh_token":api.siwc.refresh_token(),"expires_ms":1,"account":"test"}).to_string()}));
-    let login = api
-        .client
+    let login = client
         .post(api.server.url("/api/login"))
         .json(&json!({"password":testkit::PASSWORD}))
         .send()
@@ -1199,7 +1199,7 @@ fn classifier_diagnostics_and_selection_never_refresh_chatgpt() {
         .next()
         .unwrap();
     let before = api.siwc.requests().len();
-    api.client
+    client
         .get(api.server.url("/api/classifiers"))
         .header("cookie", cookie)
         .send()
@@ -1207,7 +1207,7 @@ fn classifier_diagnostics_and_selection_never_refresh_chatgpt() {
         .error_for_status()
         .unwrap();
     assert_eq!(
-        api.client
+        client
             .put(api.server.url("/api/classifiers/scam/account"))
             .header("cookie", cookie)
             .json(&json!({"account":id}))
