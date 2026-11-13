@@ -1,5 +1,8 @@
 //! Shared Android and desktop pairing admission and pinned HTTP transport.
-use std::{net::{IpAddr, SocketAddr, ToSocketAddrs}, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    time::Duration,
+};
 const TIMEOUT: Duration = Duration::from_secs(30);
 fn private_address(ip: IpAddr) -> bool {
     match ip {
@@ -71,17 +74,21 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             let mut bytes = [0; 4096];
             let n = stream.read(&mut bytes).unwrap();
             assert!(String::from_utf8_lossy(&bytes[..n]).contains("host: not-in-dns.invalid"));
             stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://8.8.8.8/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
         });
-        let url = reqwest::Url::parse(&format!("http://not-in-dns.invalid:{}", address.port())).unwrap();
+        let url =
+            reqwest::Url::parse(&format!("http://not-in-dns.invalid:{}", address.port())).unwrap();
         let client = client_resolving(&url, true, |host, _| {
             assert_eq!(host, "not-in-dns.invalid");
             Ok(vec![address])
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(client.get(url).send().unwrap().status(), 302);
         server.join().unwrap();
     }

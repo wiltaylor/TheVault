@@ -23,13 +23,20 @@ pub struct HttpWarning(std::sync::atomic::AtomicBool);
 
 impl HttpWarning {
     pub fn new(device: Option<&Device>) -> Self {
-        Self(std::sync::atomic::AtomicBool::new(
-            device.is_some_and(|d| d.server_url.trim().to_ascii_lowercase().starts_with("http://")),
-        ))
+        Self(std::sync::atomic::AtomicBool::new(device.is_some_and(
+            |d| {
+                d.server_url
+                    .trim()
+                    .to_ascii_lowercase()
+                    .starts_with("http://")
+            },
+        )))
     }
 
     pub fn take(&self) -> Option<&'static str> {
-        self.0.swap(false, std::sync::atomic::Ordering::Relaxed).then_some(HTTP_WARNING)
+        self.0
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+            .then_some(HTTP_WARNING)
     }
 }
 
@@ -176,8 +183,7 @@ pub fn pair(dir: &Path, tokens: &dyn TokenStore, req: &PairRequest) -> Result<De
         (None, Some(code)) => body["code"] = json!(code),
         _ => return Err("enter either the password or a pairing code".to_owned()),
     }
-    let client = transport::client(&server_url, req.confirm_http)
-        .map_err(|e| e.to_string())?;
+    let client = transport::client(&server_url, req.confirm_http).map_err(|e| e.to_string())?;
     let res = client
         .post(format!("{server_url}/api/devices/pair"))
         .json(&body)
@@ -236,7 +242,8 @@ mod tests {
             "http://127.0.0.1:8080"
         );
         assert!(normalise_url("vault.example.net").is_err());
-        assert!(normalise_url("https://").is_err());
+        assert!(normalise_thevault-heavy: slot 1 taken at 17:34:10 UTC
+url("https://").is_err());
     }
 
     struct NoTokens;
@@ -246,15 +253,22 @@ mod tests {
         use std::io::{Read, Write};
         struct Tokens(std::sync::Mutex<String>);
         impl TokenStore for Tokens {
-            fn get(&self, _: &str) -> Result<String, String> { Ok(self.0.lock().unwrap().clone()) }
-            fn set(&self, _: &str, token: &str) -> Result<(), String> { *self.0.lock().unwrap() = token.into(); Ok(()) }
+            fn get(&self, _: &str) -> Result<String, String> {
+                Ok(self.0.lock().unwrap().clone())
+            }
+            fn set(&self, _: &str, token: &str) -> Result<(), String> {
+                *self.0.lock().unwrap() = token.into();
+                Ok(())
+            }
         }
         for code in [false, true] {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://localhost:{}", listener.local_addr().unwrap().port());
             let server = std::thread::spawn(move || {
                 let (mut stream, _) = listener.accept().unwrap();
-                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
                 let mut bytes = Vec::new();
                 let mut buf = [0; 4096];
                 loop {
@@ -263,7 +277,16 @@ mod tests {
                     bytes.extend_from_slice(&buf[..n]);
                     if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
                         let headers = String::from_utf8_lossy(&bytes[..end]);
-                        let len: usize = headers.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length: ").map(str::to_owned)).unwrap().parse().unwrap();
+                        let len: usize = headers
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .map(str::to_owned)
+                            })
+                            .unwrap()
+                            .parse()
+                            .unwrap();
                         if bytes.len() >= end + 4 + len {
                             let body: Value = serde_json::from_slice(&bytes[end + 4..]).unwrap();
                             assert_eq!(body["platform"], "linux");
@@ -277,7 +300,13 @@ mod tests {
             });
             let dir = tempfile::tempdir().unwrap();
             let tokens = Tokens(std::sync::Mutex::new(String::new()));
-            let req = PairRequest { server_url: url, confirm_http: true, password: (!code).then(|| "fake".into()), code: code.then(|| "fake".into()), name: Some("test".into()) };
+            let req = PairRequest {
+                server_url: url,
+                confirm_http: true,
+                password: (!code).then(|| "fake".into()),
+                code: code.then(|| "fake".into()),
+                name: Some("test".into()),
+            };
             let d = pair(dir.path(), &tokens, &req).unwrap();
             assert_eq!(load(dir.path()).unwrap(), Some(d));
             assert_eq!(tokens.get("d").unwrap(), "t");
@@ -285,8 +314,12 @@ mod tests {
         }
     }
     impl TokenStore for NoTokens {
-        fn get(&self, _: &str) -> Result<String, String> { panic!("no token access") }
-        fn set(&self, _: &str, _: &str) -> Result<(), String> { panic!("no token storage") }
+        fn get(&self, _: &str) -> Result<String, String> {
+            panic!("no token access")
+        }
+        fn set(&self, _: &str, _: &str) -> Result<(), String> {
+            panic!("no token storage")
+        }
     }
 
     #[test]
@@ -299,22 +332,35 @@ mod tests {
                 ("http://127.0.0.1:9", false, "confirm"),
             ] {
                 let req = PairRequest {
-                    server_url: url.into(), confirm_http: confirmed,
+                    server_url: url.into(),
+                    confirm_http: confirmed,
                     password: (!code).then(|| "fake".into()),
-                    code: code.then(|| "fake".into()), name: Some("test".into()),
+                    code: code.then(|| "fake".into()),
+                    name: Some("test".into()),
                 };
-                assert!(pair(dir.path(), &NoTokens, &req).unwrap_err().contains(message));
+                assert!(
+                    pair(dir.path(), &NoTokens, &req)
+                        .unwrap_err()
+                        .contains(message)
+                );
                 assert!(load(dir.path()).unwrap().is_none());
             }
         }
-        let req: PairRequest = serde_json::from_value(json!({"server_url":"http://127.0.0.1","password":"fake"})).unwrap();
+        let req: PairRequest =
+            serde_json::from_value(json!({"server_url":"http://127.0.0.1","password":"fake"}))
+                .unwrap();
         assert!(!req.confirm_http);
     }
 
     #[test]
     fn existing_http_warning_once_per_start_without_changing_link() {
         for url in ["http://8.8.8.8", "http://127.0.0.1"] {
-            let d = Device { server_url: url.into(), device_id: "d".into(), device_name: "test".into(), vault_id: None };
+            let d = Device {
+                server_url: url.into(),
+                device_id: "d".into(),
+                device_name: "test".into(),
+                vault_id: None,
+            };
             let warning = HttpWarning::new(Some(&d));
             assert_eq!(warning.take(), Some(HTTP_WARNING));
             assert_eq!(warning.take(), None);
@@ -322,7 +368,12 @@ mod tests {
             assert_eq!(HttpWarning::new(Some(&d)).take(), Some(HTTP_WARNING));
         }
         assert_eq!(HttpWarning::new(None).take(), None);
-        let d = Device { server_url: "https://example.com".into(), device_id: "d".into(), device_name: "test".into(), vault_id: None };
+        let d = Device {
+            server_url: "https://example.com".into(),
+            device_id: "d".into(),
+            device_name: "test".into(),
+            vault_id: None,
+        };
         assert_eq!(HttpWarning::new(Some(&d)).take(), None);
     }
 
