@@ -1898,39 +1898,40 @@ impl Turn {
             )
         };
         let w = self.writer.clone();
-        let saved = self.blocking(move || {
-            agent_threads::save(&w, &id, &label, None, |t| {
-                t.transcript.messages = messages.clone();
-                if context.is_some() {
-                    t.transcript.context = context;
-                }
-                if let Some(q) = &question {
-                    t.question = q.clone();
-                }
-                for (k, v) in &steps {
-                    t.transcript.steps.insert(k.clone(), v.clone());
-                }
-                for p in &proposals {
-                    if !t.transcript.proposals.iter().any(|q| q.id() == p.id()) {
-                        t.transcript.proposals.push(p.clone());
+        let saved = self
+            .blocking(move || {
+                agent_threads::save(&w, &id, &label, None, |t| {
+                    t.transcript.messages = messages.clone();
+                    if context.is_some() {
+                        t.transcript.context = context;
                     }
-                }
-                for sub in &subagents {
-                    match t
-                        .transcript
-                        .subagents
-                        .iter_mut()
-                        .find(|x| x.call == sub.call)
-                    {
-                        Some(x) => *x = sub.clone(),
-                        None => t.transcript.subagents.push(sub.clone()),
+                    if let Some(q) = &question {
+                        t.question = q.clone();
                     }
-                }
+                    for (k, v) in &steps {
+                        t.transcript.steps.insert(k.clone(), v.clone());
+                    }
+                    for p in &proposals {
+                        if !t.transcript.proposals.iter().any(|q| q.id() == p.id()) {
+                            t.transcript.proposals.push(p.clone());
+                        }
+                    }
+                    for sub in &subagents {
+                        match t
+                            .transcript
+                            .subagents
+                            .iter_mut()
+                            .find(|x| x.call == sub.call)
+                        {
+                            Some(x) => *x = sub.clone(),
+                            None => t.transcript.subagents.push(sub.clone()),
+                        }
+                    }
+                })
+                .map(|_| ())
+                .map_err(|e| format!("thread {id} was not written: {}", e.body))
             })
-            .map(|_| ())
-            .map_err(|e| format!("thread {id} was not written: {}", e.body))
-        })
-        .await;
+            .await;
         match saved {
             Ok(Ok(())) => {}
             Ok(Err(e)) => eprintln!("{e}"),
@@ -1953,20 +1954,21 @@ impl Turn {
         let asks = self.asks;
         let skills = self.skills.section().map(str::to_owned);
         let uses_skills = crate::ai_skills::uses_skills(&agent);
-        let mut setup = match self.blocking(move || {
-            setup(
-                &w,
-                scope,
-                &agent,
-                account,
-                model,
-                note_id,
-                skills.as_deref(),
-                held,
-                asks,
-            )
-        })
-        .await
+        let mut setup = match self
+            .blocking(move || {
+                setup(
+                    &w,
+                    scope,
+                    &agent,
+                    account,
+                    model,
+                    note_id,
+                    skills.as_deref(),
+                    held,
+                    asks,
+                )
+            })
+            .await
         {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
@@ -2278,11 +2280,10 @@ impl Turn {
                     let agent = setup.agent.clone();
                     let target = target.clone();
                     let call = c.clone();
-                    let got = self.blocking(move || {
-                        crate::ai_scripts::call(&w, &agent, &target, &call)
-                    })
-                    .await
-                    .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                    let got = self
+                        .blocking(move || crate::ai_scripts::call(&w, &agent, &target, &call))
+                        .await
+                        .unwrap_or_else(|e| ToolOut::error(e.to_string()));
                     if !self
                         .emit(
                             "tool_result",
@@ -2492,11 +2493,12 @@ impl Turn {
                     let agent = setup.agent.clone();
                     let input = c.input.clone();
                     let sent = self.notified.clone();
-                    let got = self.blocking(move || {
-                        crate::ai_notify::notify(&w, scope, &agent, &limits, &sent, &input)
-                    })
-                    .await
-                    .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                    let got = self
+                        .blocking(move || {
+                            crate::ai_notify::notify(&w, scope, &agent, &limits, &sent, &input)
+                        })
+                        .await
+                        .unwrap_or_else(|e| ToolOut::error(e.to_string()));
                     if !self
                         .emit(
                             "tool_result",
@@ -2526,22 +2528,23 @@ impl Turn {
                 let mut limits = setup.limits.clone();
                 limits.parent = self.sub.as_ref().map(|s| s.parent.clone());
                 let agent = setup.agent.clone();
-                let got = self.blocking(move || {
-                    run_tool(
-                        &w,
-                        &author,
-                        scope,
-                        direct,
-                        held,
-                        &limits,
-                        &agent,
-                        &call,
-                        gmail_actions,
-                        unattended,
-                    )
-                })
-                .await
-                .unwrap_or_else(|e| ToolOut::error(e.to_string()));
+                let got = self
+                    .blocking(move || {
+                        run_tool(
+                            &w,
+                            &author,
+                            scope,
+                            direct,
+                            held,
+                            &limits,
+                            &agent,
+                            &call,
+                            gmail_actions,
+                            unattended,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| ToolOut::error(e.to_string()));
                 if c.name == "propose_agent_delete" {
                     crate::ai_browser::cleanup_retired(self.writer.clone());
                 }
@@ -2996,10 +2999,11 @@ impl Turn {
         };
         let w = self.writer.clone();
         let id = cred.account.clone();
-        let _ = self.blocking(move || {
-            crate::ai_settings::keep_usage(w.state(), &id, Some(&usage));
-        })
-        .await;
+        let _ = self
+            .blocking(move || {
+                crate::ai_settings::keep_usage(w.state(), &id, Some(&usage));
+            })
+            .await;
     }
 
     async fn done(&self, stop: &Stop, added: &[Message]) {
@@ -3183,84 +3187,86 @@ impl Turn {
         let by = author.clone();
         let sub_task = task.clone();
         let from = parent_thread.clone();
-        let ready = self.blocking(move || {
-            let task = sub_task;
-            let (mut agent, ignored, account, model) = match &named {
-                Some(name) => {
-                    let own = turn_agent(&w, Some(name)).map_err(|e| api_tool_error(&e))?;
-                    let both =
-                        crate::ai_subagents::intersect(&own.permissions, &parent.permissions);
-                    let (p, ignored) = crate::ai_subagents::narrow(&both, &narrowing);
-                    let mut a = own;
-                    a.permissions = p;
-                    // A named agent that names its account runs on it, with its model; any
-                    // other on the parent's account and model (subagents U3).
-                    let (account, model) = if a.account_ref().is_some() {
-                        (None, model)
-                    } else {
-                        (Some(account), model.or(Some(parent_model)))
-                    };
-                    (a, ignored, account, model)
-                }
-                None => {
-                    let (p, ignored) = crate::ai_subagents::narrow(&parent.permissions, &narrowing);
-                    let mut a = (*parent).clone();
-                    a.permissions = p;
-                    let base = parent
-                        .system_prompt
-                        .as_deref()
-                        .filter(|p| !p.trim().is_empty())
-                        .unwrap_or(ai::CHAT_PROMPT);
-                    let section = crate::ai_subagents::prompt_section(
+        let ready = self
+            .blocking(move || {
+                let task = sub_task;
+                let (mut agent, ignored, account, model) = match &named {
+                    Some(name) => {
+                        let own = turn_agent(&w, Some(name)).map_err(|e| api_tool_error(&e))?;
+                        let both =
+                            crate::ai_subagents::intersect(&own.permissions, &parent.permissions);
+                        let (p, ignored) = crate::ai_subagents::narrow(&both, &narrowing);
+                        let mut a = own;
+                        a.permissions = p;
+                        // A named agent that names its account runs on it, with its model; any
+                        // other on the parent's account and model (subagents U3).
+                        let (account, model) = if a.account_ref().is_some() {
+                            (None, model)
+                        } else {
+                            (Some(account), model.or(Some(parent_model)))
+                        };
+                        (a, ignored, account, model)
+                    }
+                    None => {
+                        let (p, ignored) =
+                            crate::ai_subagents::narrow(&parent.permissions, &narrowing);
+                        let mut a = (*parent).clone();
+                        a.permissions = p;
+                        let base = parent
+                            .system_prompt
+                            .as_deref()
+                            .filter(|p| !p.trim().is_empty())
+                            .unwrap_or(ai::CHAT_PROMPT);
+                        let section = crate::ai_subagents::prompt_section(
+                            &parent.label,
+                            &task,
+                            instructions.as_deref(),
+                        );
+                        a.system_prompt = Some(format!("{}\n{section}", base.trim_end()));
+                        (a, ignored, Some(account), model.or(Some(parent_model)))
+                    }
+                };
+                agent.permissions.subagents = schema::AgentSubagents::default();
+                let text = match &named {
+                    Some(_) => crate::ai_subagents::delegated_message(
                         &parent.label,
                         &task,
                         instructions.as_deref(),
-                    );
-                    a.system_prompt = Some(format!("{}\n{section}", base.trim_end()));
-                    (a, ignored, Some(account), model.or(Some(parent_model)))
-                }
-            };
-            agent.permissions.subagents = schema::AgentSubagents::default();
-            let text = match &named {
-                Some(_) => crate::ai_subagents::delegated_message(
-                    &parent.label,
-                    &task,
-                    instructions.as_deref(),
-                ),
-                None => task.clone(),
-            };
-            let origin = agent_threads::sub_origin(&from);
-            let t = agent_threads::create(
-                &w,
-                &agent.name,
-                agent_threads::title_of(&task).as_deref(),
-                &origin,
-            )
-            .map_err(|e| api_tool_error(&e))?;
-            let parent_ref = agent_threads::Parent {
-                thread: from,
-                turn: parent_turn,
-                call,
-            };
-            agent_threads::save(&w, &t.id, &agent.label, None, |t| {
-                t.transcript.parent = Some(parent_ref.clone());
+                    ),
+                    None => task.clone(),
+                };
+                let origin = agent_threads::sub_origin(&from);
+                let t = agent_threads::create(
+                    &w,
+                    &agent.name,
+                    agent_threads::title_of(&task).as_deref(),
+                    &origin,
+                )
+                .map_err(|e| api_tool_error(&e))?;
+                let parent_ref = agent_threads::Parent {
+                    thread: from,
+                    turn: parent_turn,
+                    call,
+                };
+                agent_threads::save(&w, &t.id, &agent.label, None, |t| {
+                    t.transcript.parent = Some(parent_ref.clone());
+                })
+                .map_err(|e| api_tool_error(&e))?;
+                let prepared = prepare_for(
+                    &w,
+                    &by,
+                    agent,
+                    true,
+                    Some(t.id.clone()),
+                    vec![Message::user(&text)],
+                    false,
+                    false,
+                )
+                .map_err(|e| api_tool_error(&e))?;
+                Ok::<_, ToolOut>((prepared, ignored, account, model, t.id, origin))
             })
-            .map_err(|e| api_tool_error(&e))?;
-            let prepared = prepare_for(
-                &w,
-                &by,
-                agent,
-                true,
-                Some(t.id.clone()),
-                vec![Message::user(&text)],
-                false,
-                false,
-            )
-            .map_err(|e| api_tool_error(&e))?;
-            Ok::<_, ToolOut>((prepared, ignored, account, model, t.id, origin))
-        })
-        .await
-        .map_err(|e| ToolOut::error(e.to_string()))??;
+            .await
+            .map_err(|e| ToolOut::error(e.to_string()))??;
         let (prepared, ignored, account, model, thread, origin) = ready;
         let agent = prepared.agent.name.clone();
         let delegated = c.input["agent"]
@@ -5427,7 +5433,11 @@ mod tests {
     async fn independent_turn_worker_is_unrestricted_after_failed_worker() {
         let restricted = RunContext::default();
         restricted.restrict();
-        assert!(blocking(&restricted, || panic!("test cleanup")).await.is_err());
+        assert!(
+            blocking(&restricted, || panic!("test cleanup"))
+                .await
+                .is_err()
+        );
         let fresh = RunContext::default();
         let observed = blocking(&fresh, || {
             let context = RunContext::current().unwrap();
