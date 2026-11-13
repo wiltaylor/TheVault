@@ -220,6 +220,30 @@ fn transcript_content_needs_runtime_capability_not_an_agent_author() {
         .unwrap();
 }
 
+#[test]
+fn gmail_metadata_is_owner_or_import_only() {
+    use state::Author;
+    use writer::Input;
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    for field in ["gmail_ref", "gmail_account", "gmail_deferred_parts"] {
+        let value = if field == "gmail_deferred_parts" { json!(["part"]) } else { json!("value") };
+        let input = Input::Json(json!({"fields":{"title":"Email",field:value}}));
+        for author in [Author::Agent("agent-token".into()), Author::AgentMail("assistant".into()), Author::Handler("script".into()), Author::Task("other".into()), Author::Token("user".into())] {
+            assert!(w.create("email", &input, &author).is_err(), "{field} {author:?}");
+            let empty = Input::Json(json!({"fields":{"title":"Email"}}));
+            let note = w.create("email", &empty, &Author::Session("owner".into())).unwrap();
+            assert!(w.update(&note.id, &input, Some(&note.version), &author).is_err(), "{field} {author:?}");
+        }
+        for author in [Author::Session("owner".into()), Author::Task("google_gmail".into())] {
+            let note = w.create("email", &input, &author).unwrap();
+            let empty = Input::Json(json!({"fields":{"title":"Email"}}));
+            w.update(&note.id, &empty, Some(&note.version), &author).unwrap();
+        }
+    }
+}
+
 fn open(root: &Path, key: Option<SecretKey>) -> Writer {
     let vault = Vault::init(root).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), key).unwrap();

@@ -1922,6 +1922,7 @@ impl Writer {
             self.check_outbox_owner(&doc, author)?;
         }
         self.check_calendar_write(change, author)?;
+        self.check_gmail_metadata_write(change, author)?;
         let archived = change.doc.as_ref().is_some_and(note::is_archived);
         let stamps = change.doc.as_ref().map(|d| {
             (
@@ -1934,6 +1935,7 @@ impl Writer {
         let original = change.doc.clone();
         self.hooks.before(change, author).map_err(Error::Rejected)?;
         self.check_calendar_write(change, author)?;
+        self.check_gmail_metadata_write(change, author)?;
         if change.doc == original {
             return Ok(());
         }
@@ -1950,6 +1952,30 @@ impl Writer {
             .type_def(&change.type_name)
             .ok_or_else(|| Error::UnknownType(change.type_name.clone()))?;
         change.doc = Some(note::arrange(ty, doc, &created, &updated));
+        Ok(())
+    }
+
+    fn check_gmail_metadata_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
+        if matches!(author, Author::Session(_))
+            || matches!(author, Author::Task(name) if name == "google_gmail")
+            || change.doc.is_none()
+        {
+            return Ok(());
+        }
+        let old = if change.event == Event::Create {
+            None
+        } else {
+            let (ty, text) = self.existing(&change.id)?;
+            Some(Input::Wcl(text).parse(&note_path(&ty, &change.id))?)
+        };
+        for name in ["gmail_ref", "gmail_account", "gmail_deferred_parts"] {
+            let field = |doc: Option<&schema::Doc>| doc.and_then(|d| d.field(name)).cloned();
+            if field(change.doc.as_ref()) != field(old.as_ref()) {
+                return Err(Error::Rejected(
+                    "only the owner session or Gmail import may change Gmail attachment metadata".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
