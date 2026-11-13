@@ -4,7 +4,7 @@ import { aiAccounts, startFake, useAccount } from "./ai";
 import { expect, logIn, test, vaultDir } from "./fixtures";
 
 test("Settings selects classifier accounts without provider calls or default changes", async ({ page, admin }) => {
-  const fake = await startFake("TESTKIT_FAKE_OPENAI_BIN", "testkit-fake-openai");
+  const fake = await startFake("TESTKIT_FAKE_OPENAI_BIN", "testkit-fake-openai", ["chat_completions"]);
   try {
     const beforeDefault = (await aiAccounts(admin)).default;
     const name = "Classifier fixture";
