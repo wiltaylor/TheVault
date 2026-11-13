@@ -209,14 +209,21 @@ impl RunContext {
     /// Never return an async future from this closure or hold this scope over await.
     /// Unrelated nested contexts join permanently, including existing clones.
     pub fn scope<T>(&self, f: impl FnOnce() -> T) -> T {
+        if let Some(parent) = Self::current() {
+            parent.join(self);
+        }
+        self.scope_recovered(f)
+    }
+
+    /// Host recovery boundary for an independently recorded queue/Outbox item.
+    /// Unlike `scope`, this does not join an unrelated ambient run. Never use it
+    /// for descendants or script-selected contexts, nor across an await.
+    pub fn scope_recovered<T>(&self, f: impl FnOnce() -> T) -> T {
         struct Restore(Option<RunContext>);
         impl Drop for Restore {
             fn drop(&mut self) {
                 CURRENT.with(|slot| *slot.borrow_mut() = self.0.take());
             }
-        }
-        if let Some(parent) = Self::current() {
-            parent.join(self);
         }
         let _restore = Restore(CURRENT.with(|slot| slot.replace(Some(self.clone()))));
         f()
@@ -233,6 +240,26 @@ fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
 #[cfg(test)]
 mod tests {
     use super::RunContext;
+
+    #[test]
+    fn independent_recovery_scope_restores_caller_without_joining_on_panic() {
+        let caller = RunContext::default();
+        let recovered = RunContext::default();
+        recovered.restrict();
+        caller.scope(|| {
+            let result = std::panic::catch_unwind(|| {
+                recovered.scope_recovered(|| {
+                    assert_eq!(RunContext::current(), Some(recovered.clone()));
+                    panic!("injected recovery failure");
+                });
+            });
+            assert!(result.is_err());
+            assert_eq!(RunContext::current(), Some(caller.clone()));
+            assert!(!caller.is_restricted());
+            assert_ne!(caller, recovered);
+        });
+        assert!(RunContext::current().is_none());
+    }
 
     #[test]
     fn recovered_component_is_not_sealed_while_another_owner_is_live() {

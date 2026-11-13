@@ -122,6 +122,21 @@ impl Writer {
         let Some(item) = payload["outbox"].as_str().filter(|s| !s.is_empty()) else {
             return Ok(());
         };
+        // External receipts must not inherit whichever API/handler job received
+        // them. The item owns its durable send context, including on restart.
+        if self.read(item).is_err() {
+            return Ok(());
+        }
+        let context = self.outbox_run_context(item).map_err(|e| e.to_string())?;
+        context.scope_recovered(|| self.finish_outbox_sms_scoped(command, item, &payload))
+    }
+
+    fn finish_outbox_sms_scoped(
+        &self,
+        command: &DeviceCommand,
+        item: &str,
+        payload: &Json,
+    ) -> Result<(), String> {
         // An item deleted since stays deleted.
         let Ok(note) = self.get(item) else {
             return Ok(());

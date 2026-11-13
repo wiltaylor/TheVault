@@ -265,14 +265,6 @@ fn record_failure(
     writer.state().record_activity(e);
 }
 
-// A restart has lost the live identity. Do not claim that recovered work is
-// unrestricted, and do not manufacture a stop admission from a payload number.
-fn recovered_context() -> RunContext {
-    let context = RunContext::default();
-    context.restrict();
-    context
-}
-
 impl Shared {
     fn writer(&self) -> Result<Arc<Writer>, String> {
         bound(&self.binding)
@@ -406,15 +398,28 @@ impl Shared {
             // Publish the durable rows and live contexts atomically relative to
             // the queue worker's lookup. No context lock is held during work.
             let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
-            match writer.state().queue_jobs(&queue) {
+            let context = RunContext::current().unwrap_or_default();
+            let queued = writer.publish_run_context(&context, |state, run_id| {
+                state.queue_jobs_with_provenance(&queue, run_id)
+            });
+            match queued {
                 Ok(ids) => {
-                    let context = RunContext::current().unwrap_or_default();
                     for id in ids {
                         contexts.insert(id, context.clone());
                     }
                 }
                 Err(e) => {
                     eprintln!("queueing after_* handlers: {e}");
+                    for payload in &queue {
+                        let _ = writer
+                            .state()
+                            .record_failed_job(payload, "handler provenance publication failed");
+                    }
+                    writer.state().record_activity(state::NewActivity::server(
+                        "handler.queue_failed",
+                        "automation",
+                        "Handler provenance publication failed; handlers were not executed",
+                    ));
                     return;
                 }
             }
@@ -427,10 +432,8 @@ impl Shared {
     /// The queue thread: run queued jobs, oldest first, until the writer is gone.
     fn run_queue(&self) {
         if let Ok(writer) = self.writer() {
-            recovered_context().scope(|| {
-                self.recover_sends(&writer, true);
-                self.recover_deletes(&writer);
-            });
+            self.recover_sends(&writer, true);
+            self.recover_deletes(&writer);
         }
         loop {
             let Ok(writer) = self.writer() else {
@@ -439,16 +442,30 @@ impl Shared {
             match writer.state().queued_jobs() {
                 Ok(jobs) => {
                     for job in jobs {
-                        let context = self
-                            .contexts
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .get(&job.id)
-                            .cloned()
-                            .unwrap_or_else(recovered_context);
-                        context.scope(|| {
+                        let context = match self.handler_context(&writer, job.id) {
+                            Ok(context) => context,
+                            Err(error) => {
+                                eprintln!("recovering handler provenance: {error}");
+                                continue;
+                            }
+                        };
+                        context.scope_recovered(|| {
                             let payload: Json =
                                 serde_json::from_str(&job.payload).unwrap_or(Json::Null);
+                            if payload["type"] == "outbox"
+                                && writer
+                                    .read(payload["id"].as_str().unwrap_or_default())
+                                    .is_ok()
+                            {
+                                let id = payload["id"].as_str().unwrap_or_default();
+                                match writer.outbox_run_context(id) {
+                                    Ok(item) => context.merge(&item),
+                                    Err(error) => {
+                                        eprintln!("recovering queued Outbox provenance: {error}");
+                                        return;
+                                    }
+                                }
+                            }
                             if payload["type"] == "outbox" {
                                 let id = payload["id"].as_str().unwrap_or_default();
                                 match writer.state().outbox_deadline(id) {
@@ -520,6 +537,7 @@ impl Shared {
                                     .remove(&job.id);
                             }
                         });
+                        writer.prune_run_contexts();
                     }
                 }
                 Err(e) => eprintln!("reading the handler queue: {e}"),
@@ -535,6 +553,17 @@ impl Shared {
             }
             *woken = false;
         }
+    }
+
+    fn handler_context(&self, writer: &Writer, id: i64) -> state::Result<RunContext> {
+        let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(context) = contexts.get(&id) {
+            return Ok(context.clone());
+        }
+        let run_id = writer.state().handler_provenance(id)?.unwrap_or_default();
+        let context = writer.recover_run_context(&run_id)?;
+        contexts.insert(id, context.clone());
+        Ok(context)
     }
 
     // The queue is serial, but SMS receipts and event write-back jobs are asynchronous.
@@ -560,57 +589,66 @@ impl Shared {
             {
                 continue;
             }
-            if text("kind") == "sms" && text("sent_at").is_empty() {
-                // The handler may auto-select the phone without storing it in `device`.
-                let command = writer.state().list_devices().ok().and_then(|devices| {
-                    devices.iter().find_map(|device| {
-                        writer
-                            .state()
-                            .device_command(&device.id, text("sent_ref"))
-                            .ok()
-                    })
-                });
-                if let Some(command) = command {
-                    match command.status {
-                        state::CommandStatus::Done | state::CommandStatus::Failed => {
-                            if let Err(e) = writer.finish_outbox_sms(&command) {
-                                eprintln!("recovering SMS receipt: {e}");
+            let context = match writer.outbox_run_context(&note.id) {
+                Ok(context) => context,
+                Err(error) => {
+                    eprintln!("recovering Outbox send provenance: {error}");
+                    continue;
+                }
+            };
+            context.scope_recovered(|| {
+                if text("kind") == "sms" && text("sent_at").is_empty() {
+                    // The handler may auto-select the phone without storing it in `device`.
+                    let command = writer.state().list_devices().ok().and_then(|devices| {
+                        devices.iter().find_map(|device| {
+                            writer
+                                .state()
+                                .device_command(&device.id, text("sent_ref"))
+                                .ok()
+                        })
+                    });
+                    if let Some(command) = command {
+                        match command.status {
+                            state::CommandStatus::Done | state::CommandStatus::Failed => {
+                                if let Err(e) = writer.finish_outbox_sms(&command) {
+                                    eprintln!("recovering SMS receipt: {e}");
+                                }
+                                return;
                             }
-                            continue;
+                            state::CommandStatus::Pending | state::CommandStatus::Delivered
+                                if !startup =>
+                            {
+                                return;
+                            }
+                            _ => {}
                         }
-                        state::CommandStatus::Pending | state::CommandStatus::Delivered
-                            if !startup =>
-                        {
-                            continue;
-                        }
-                        _ => {}
                     }
                 }
-            }
-            if !startup && text("kind") == "event" && text("sent_at").is_empty() {
-                // Failure to read the queue is not evidence that a write-back was abandoned.
-                let Ok(jobs) = writer.state().queued_jobs() else {
-                    continue;
-                };
-                if jobs.iter().any(|job| {
-                    let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
-                    p["script"] == "google_event"
-                        && (p["id"] == fields["event"] || p["id"] == fields["result"])
-                }) {
-                    continue;
+                if !startup && text("kind") == "event" && text("sent_at").is_empty() {
+                    // Failure to read the queue is not evidence that a write-back was abandoned.
+                    let Ok(jobs) = writer.state().queued_jobs() else {
+                        return;
+                    };
+                    if jobs.iter().any(|job| {
+                        let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
+                        p["script"] == "google_event"
+                            && (p["id"] == fields["event"] || p["id"] == fields["result"])
+                    }) {
+                        return;
+                    }
                 }
-            }
-            let payload = json!({
-                "type": "outbox", "id": note.id, "version": note.version,
-                "wcl": note.wcl, "event": "after_update", "script": "outbox_send",
-                "function": "reconcile_send", "allow_domains": handler.allow_domains,
-                "secrets": handler.secrets,
-            })
-            .to_string();
-            let (result, _) = self.run_job(writer, &payload);
-            if let Err(e) = result {
-                eprintln!("recovering interrupted Outbox send: {e}");
-            }
+                let payload = json!({
+                    "type": "outbox", "id": note.id, "version": note.version,
+                    "wcl": note.wcl, "event": "after_update", "script": "outbox_send",
+                    "function": "reconcile_send", "allow_domains": handler.allow_domains,
+                    "secrets": handler.secrets,
+                })
+                .to_string();
+                let (result, _) = self.run_job(writer, &payload);
+                if let Err(e) = result {
+                    eprintln!("recovering interrupted Outbox send: {e}");
+                }
+            });
         }
     }
 
@@ -636,33 +674,42 @@ impl Shared {
             {
                 continue;
             }
-            let payload = json!({
-                "type": "outbox", "id": note.id, "version": note.version,
-                "wcl": note.wcl, "event": "after_update", "script": "outbox_send",
-                "function": "reconcile_delete", "allow_domains": handler.allow_domains,
-                "secrets": handler.secrets,
-            })
-            .to_string();
-            let (result, _) = self.run_job(writer, &payload);
-            if let Err(error) = result {
-                // A host deadline bypasses script Result handling.
-                if let Ok(current) = writer.read(&note.id) {
-                    let mut body = doc_to_json(&current.doc);
-                    if body["fields"]["status"] == "sending" {
-                        body["fields"]["status"] = json!("failed");
-                        body["fields"]["error"] =
-                            json!(format!("The delete was interrupted; retry. {error}"));
-                        if let Err(e) = writer.update(
-                            &note.id,
-                            &Input::Json(body),
-                            Some(&current.version),
-                            &Author::Handler("outbox_send".into()),
-                        ) {
-                            eprintln!("recording interrupted Outbox deletion: {e}");
+            let context = match writer.outbox_run_context(&note.id) {
+                Ok(context) => context,
+                Err(error) => {
+                    eprintln!("recovering Outbox delete provenance: {error}");
+                    continue;
+                }
+            };
+            context.scope_recovered(|| {
+                let payload = json!({
+                    "type": "outbox", "id": note.id, "version": note.version,
+                    "wcl": note.wcl, "event": "after_update", "script": "outbox_send",
+                    "function": "reconcile_delete", "allow_domains": handler.allow_domains,
+                    "secrets": handler.secrets,
+                })
+                .to_string();
+                let (result, _) = self.run_job(writer, &payload);
+                if let Err(error) = result {
+                    // A host deadline bypasses script Result handling.
+                    if let Ok(current) = writer.read(&note.id) {
+                        let mut body = doc_to_json(&current.doc);
+                        if body["fields"]["status"] == "sending" {
+                            body["fields"]["status"] = json!("failed");
+                            body["fields"]["error"] =
+                                json!(format!("The delete was interrupted; retry. {error}"));
+                            if let Err(e) = writer.update(
+                                &note.id,
+                                &Input::Json(body),
+                                Some(&current.version),
+                                &Author::Handler("outbox_send".into()),
+                            ) {
+                                eprintln!("recording interrupted Outbox deletion: {e}");
+                            }
                         }
                     }
                 }
-            }
+            });
         }
     }
 
@@ -1140,6 +1187,61 @@ impl HandlerVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovered_send_and_failed_delete_writeback_use_each_items_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let writer = Arc::new(Writer::open(vault, state).unwrap());
+        writer
+            .upgrade_shipped_defaults(writer::Upkeep::Home)
+            .unwrap();
+        std::fs::write(dir.path().join("scripts/outbox_send.ws"), r#"use vault
+fn reconcile_send(note: Value) -> Result[(), string] {
+    vault::patch(note.get("id").unwrap().as_string().unwrap(), Value::Map(#{ "status": Value::String("failed"), "error": Value::String("reconciled") }), "")?
+    Ok(())
+}
+fn reconcile_delete(note: Value) -> Result[(), string] { Err("injected delete failure") }
+"#).unwrap();
+        let send = RunContext::default();
+        send.restrict();
+        let delete = RunContext::default();
+        for (context, kind, action) in [(&send, "email", "create"), (&delete, "event", "delete")] {
+            context.scope(|| {
+                writer.create("outbox", &Input::Json(json!({"fields": {
+                "title":"Recover", "kind":kind, "status":"sending", "event_action":action,
+                "to":["ann@example.com"]
+            }})), &Author::Session("test".into())).unwrap()
+            });
+        }
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let capture = observed.clone();
+        writer.set_commit_hook(Some(Box::new(move |_| {
+            capture.lock().unwrap().push(RunContext::current().unwrap());
+            std::ops::ControlFlow::Continue(())
+        })));
+        let handlers = Handlers::on_device(Limits::default());
+        handlers.bind(&writer);
+        let ambient = RunContext::default();
+        ambient.scope(|| {
+            handlers.shared.recover_sends(&writer, true);
+            handlers.shared.recover_deletes(&writer);
+            assert_eq!(RunContext::current(), Some(ambient.clone()));
+        });
+        let observed = observed.lock().unwrap();
+        assert!(observed.iter().any(|context| context == &send));
+        assert!(observed.iter().any(|context| context == &delete));
+        assert!(
+            observed
+                .iter()
+                .all(|context| context == &send || context == &delete)
+        );
+        assert_ne!(send, delete);
+        assert!(!delete.is_restricted());
+        assert!(!ambient.is_restricted());
+        assert!(RunContext::current().is_none());
+    }
 
     fn link(id: &str, event: &str) -> Link {
         Link {

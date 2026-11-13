@@ -14,6 +14,47 @@ fn open(path: &std::path::Path) -> State {
 }
 
 #[test]
+fn schema_33_handler_upgrade_preserves_payloads_and_atomic_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let s = open(&path);
+    let old = s.queue_jobs(&["legacy".into()]).unwrap()[0];
+    drop(s);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP TABLE handler_provenance; DROP TABLE outbox_provenance; PRAGMA user_version=33;",
+    )
+    .unwrap();
+    drop(conn);
+    let s = open(&path);
+    assert_eq!(s.queued_jobs().unwrap()[0].payload, "legacy");
+    assert_eq!(s.handler_provenance(old).unwrap(), None);
+    let lease = s
+        .lease_run_provenance(true, Some(s.admit_automation().unwrap()))
+        .unwrap();
+    let id = s
+        .queue_jobs_with_provenance(&["queued".into()], lease.id())
+        .unwrap()[0];
+    assert_eq!(
+        s.handler_provenance(id).unwrap().as_deref(),
+        Some(lease.id())
+    );
+    s.append_outbox_provenance("item", lease.id(), true)
+        .unwrap();
+    s.append_outbox_provenance("item", "later", false).unwrap();
+    assert_eq!(s.outbox_provenance("item").unwrap().len(), 2);
+    s.finish_job(id, Ok(()), "").unwrap();
+    assert!(s.handler_provenance(id).unwrap().is_none());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_handler_reference BEFORE INSERT ON handler_provenance BEGIN SELECT RAISE(ABORT, 'injected'); END;").unwrap();
+    assert!(
+        s.queue_jobs_with_provenance(&["not published".into()], lease.id())
+            .is_err()
+    );
+    assert_eq!(s.queued_jobs().unwrap().len(), 1);
+}
+
+#[test]
 fn schema_32_upgrade_and_dedup_keep_all_queue_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");

@@ -488,12 +488,12 @@ fn backup_keeps_the_schema_version_of_an_older_state_db() {
         conn.pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap()
     };
-    // Schema 33 adds trigger provenance references. Remove that table to reconstruct
-    // schema 32, then check backup preserves the version before upgrade.
+    // Schema 34 adds handler and Outbox provenance. Remove those tables to reconstruct
+    // schema 33, then check backup preserves the version before upgrade.
     let previous = {
         let conn = rusqlite::Connection::open(&db).unwrap();
         let previous = user_version(&conn) - 1;
-        conn.execute_batch("DROP TABLE trigger_provenance;")
+        conn.execute_batch("DROP TABLE handler_provenance; DROP TABLE outbox_provenance;")
             .unwrap();
         conn.pragma_update(None, "user_version", previous).unwrap();
         previous
@@ -526,7 +526,7 @@ fn backup_keeps_the_schema_version_of_an_older_state_db() {
     );
     let has_table: bool = copy
         .query_row(
-            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'trigger_provenance')",
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'handler_provenance')",
             [],
             |r| r.get(0),
         )

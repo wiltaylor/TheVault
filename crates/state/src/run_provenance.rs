@@ -276,6 +276,19 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
 }
 
 impl State {
+    /// Canonical host identity for live registries. Resolve validates every link.
+    pub fn run_provenance_root(&self, id: &str) -> Result<String> {
+        resolve(&self.conn(), id).map(|(root, _)| root)
+    }
+
+    pub fn queued_run_provenance(&self) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT p.run_id FROM trigger_provenance p JOIN trigger_jobs j ON j.id=p.job_id WHERE j.status IN ('waiting','admitted','running') UNION SELECT p.run_id FROM handler_provenance p JOIN handler_jobs j ON j.id=p.job_id WHERE j.status='queued' UNION SELECT run_id FROM outbox_provenance")?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn record_stale_run(&self, id: &str) -> Result<()> {
         record_failure(
             &mut self.conn(),

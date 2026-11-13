@@ -179,6 +179,76 @@ fn drafted_title(label: &str, count: usize) -> String {
 }
 
 impl Writer {
+    /// Persist host-owned recovery provenance before after-handlers can send.
+    /// A crash before this step leaves missing provenance, never fresh admission.
+    pub(crate) fn remember_outbox_contexts(&self, saved: &[crate::Saved]) -> crate::Result<()> {
+        for saved in saved.iter().filter(|s| s.type_name == "outbox") {
+            if saved.event == crate::Event::Delete {
+                self.state.remove_outbox_provenance(&saved.id)?;
+                let removed = self
+                    .outbox_contexts
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&saved.id);
+                drop(removed);
+                continue;
+            }
+            let context = script_core::RunContext::current().unwrap_or_default();
+            let mut contexts = self
+                .outbox_contexts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(old) = contexts.get(&saved.id) {
+                context.merge(old);
+            } else if saved.event != crate::Event::Create {
+                // Older references stay durable even if recovery is unavailable.
+                // Do not cache a replacement that would hide them.
+                let ids = self.state.outbox_provenance(&saved.id)?;
+                if ids.is_empty() || ids.iter().any(|id| id.is_empty()) {
+                    self.state.record_unavailable_run(&saved.id)?;
+                    continue;
+                }
+                for id in ids {
+                    context.merge(&self.recover_run_context(&id)?);
+                }
+            }
+            self.publish_run_context(&context, |state, run_id| {
+                state.append_outbox_provenance(
+                    &saved.id,
+                    run_id,
+                    saved.event == crate::Event::Create,
+                )
+            })?;
+            contexts.insert(saved.id.clone(), context);
+        }
+        Ok(())
+    }
+
+    /// Each recovered send/delete/receipt uses this item's context, not the job
+    /// that happened to discover it. Retain live owners to avoid false recovery.
+    pub fn outbox_run_context(&self, id: &str) -> state::Result<script_core::RunContext> {
+        let mut contexts = self
+            .outbox_contexts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(context) = contexts.get(id) {
+            return Ok(context.clone());
+        }
+        let ids = self.state.outbox_provenance(id)?;
+        if ids.is_empty() {
+            self.state.record_unavailable_run(id)?;
+            return Err(state::Error::Corrupt(
+                "Outbox provenance unavailable".into(),
+            ));
+        }
+        let context = script_core::RunContext::default();
+        for run_id in ids {
+            context.merge(&self.recover_run_context(&run_id)?);
+        }
+        contexts.insert(id.to_owned(), context.clone());
+        Ok(context)
+    }
+
     /// Apply admission limits under the writer's write lock. Refused automatic sends stay drafts.
     pub(crate) fn limit_outbox(
         &self,

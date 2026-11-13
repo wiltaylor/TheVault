@@ -16,6 +16,40 @@ fn setup() -> (tempfile::TempDir, Writer) {
 }
 
 #[test]
+fn shared_registry_reuses_joined_aliases_and_seals_after_last_queue_reference() {
+    let (_dir, w) = setup();
+    let a = script_core::RunContext::default();
+    let b = script_core::RunContext::default();
+    let a_id = a.persist(w.state()).unwrap();
+    let b_id = b.persist(w.state()).unwrap();
+    a.merge(&b);
+    drop(a);
+    drop(b);
+    let jobs = w
+        .state()
+        .queue_jobs_with_provenance(&["job".into()], &b_id)
+        .unwrap();
+    let a = w.recover_run_context(&a_id).unwrap();
+    let b = w.recover_run_context(&b_id).unwrap();
+    assert_eq!(a, b);
+    assert!(!a.is_restricted());
+    assert!(
+        w.state()
+            .automation_commit(a.stop_generation().unwrap())
+            .is_ok()
+    );
+    a.restrict();
+    drop(a);
+    drop(b);
+    w.prune_run_contexts();
+    assert!(!w.state().load_run_provenance(&a_id).is_sealed());
+    w.state().finish_job(jobs[0], Ok(()), "").unwrap();
+    w.prune_run_contexts();
+    assert!(w.state().load_run_provenance(&a_id).is_sealed());
+    assert!(w.state().load_run_provenance(&b_id).is_restricted());
+}
+
+#[test]
 fn run_context_bridges_admission_at_note_and_definition_commits() {
     let (dir, w) = setup();
     let context = script_core::RunContext::default();

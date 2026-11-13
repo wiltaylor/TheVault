@@ -179,8 +179,6 @@ pub struct Scheduler {
     host: Arc<Host>,
     clock: Arc<dyn Clock>,
     plan: Mutex<Plan>,
-    /// Serializes durable queue publication with same-process reconstruction.
-    trigger_contexts: Mutex<BTreeMap<String, RunContext>>,
     wake: Condvar,
     /// Runs agent triggers; only the server sets one.
     runner: OnceLock<Arc<dyn AgentRunner>>,
@@ -201,7 +199,6 @@ impl Scheduler {
             host,
             clock,
             plan: Mutex::new(Plan::default()),
-            trigger_contexts: Mutex::new(BTreeMap::new()),
             wake: Condvar::new(),
             runner: OnceLock::new(),
             gitsync: OnceLock::new(),

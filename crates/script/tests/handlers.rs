@@ -362,21 +362,37 @@ fn after_jobs_queued_when_the_server_stops_run_when_it_starts_again() {
         .create("report", &json_note(json!({ "title": "Q3" })), &user())
         .unwrap();
     // A token save: two quick saves by one browser session would merge into one version.
-    let saved = writer
-        .update(
-            &created.id,
-            &json_note(json!({ "title": "Q3 final" })),
-            Some(&created.version),
-            &Author::Token("test".into()),
-        )
-        .unwrap();
+    let context = script::RunContext::default();
+    let generation = writer.state().admit_automation().unwrap();
+    context.capture_stop_generation(generation);
+    let saved = context.scope(|| {
+        writer
+            .update(
+                &created.id,
+                &json_note(json!({ "title": "Q3 final" })),
+                Some(&created.version),
+                &Author::Token("test".into()),
+            )
+            .unwrap()
+    });
+    context.restrict();
     assert_eq!(writer.state().queued_jobs().unwrap().len(), 1);
     assert_eq!(writer.history(&saved.id).unwrap().len(), 2);
     drop(writer);
     drop(handlers);
+    drop(context);
 
     // The next start runs it.
-    let (writer, _handlers) = open(dir.path(), true);
+    let (writer, handlers) = open(dir.path(), false);
+    let (send, recv) = std::sync::mpsc::channel();
+    writer.set_commit_hook(Some(Box::new(move |_| {
+        let _ = send.send(script::RunContext::current());
+        std::ops::ControlFlow::Continue(())
+    })));
+    handlers.start(&writer);
+    let recovered = recv.recv_timeout(Duration::from_secs(30)).unwrap().unwrap();
+    assert!(recovered.is_restricted());
+    assert_eq!(recovered.stop_generation(), Some(generation));
     let deadline = Instant::now() + Duration::from_secs(300);
     while writer.history(&saved.id).unwrap().len() < 3 {
         assert!(Instant::now() < deadline, "the queued job never ran");

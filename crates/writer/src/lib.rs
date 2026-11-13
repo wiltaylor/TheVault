@@ -523,6 +523,8 @@ fn note_files(vault: &Vault) -> Result<Vec<(String, String)>> {
 
 /// The write path of one vault.
 pub struct Writer {
+    durable_contexts: Mutex<HashMap<String, script_core::RunContext>>,
+    outbox_contexts: Mutex<HashMap<String, script_core::RunContext>>,
     vault: Vault,
     state: State,
     clock: Arc<dyn Clock>,
@@ -583,6 +585,8 @@ impl Writer {
         feed::reconcile(&vault, &state)?;
         let schema = Schema::load(&vault)?;
         Ok(Writer {
+            durable_contexts: Mutex::new(HashMap::new()),
+            outbox_contexts: Mutex::new(HashMap::new()),
             vault,
             state,
             clock: Arc::new(SystemClock),
@@ -1859,6 +1863,7 @@ impl Writer {
         } else {
             author.clone()
         };
+        self.remember_outbox_contexts(&saved)?;
         self.hooks.after(&saved, &hook_author, &inner.schema);
         self.people_to_contacts(&people);
         self.outbox_notifications(&items);
