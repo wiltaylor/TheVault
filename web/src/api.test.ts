@@ -11,6 +11,17 @@ afterEach(() => {
 });
 
 describe("api", () => {
+  it("reads token server time from Date, and reports a missing header", async () => {
+    const onTime = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response('{"tokens":[]}', {
+      headers: { Date: "Fri, 13 Nov 2026 00:00:00 GMT" },
+    })));
+    expect(await api.tokens(onTime)).toEqual([]);
+    expect(onTime).toHaveBeenLastCalledWith(Date.UTC(2026, 10, 13));
+    vi.stubGlobal("fetch", respond(200, { tokens: [] }));
+    await api.tokens(onTime);
+    expect(onTime).toHaveBeenLastCalledWith(null);
+  });
   it("roundtrips token expiry and sends null for an indefinite token", async () => {
     const fetch = respond(201, { name: "cli", expires: 4102444800000 });
     vi.stubGlobal("fetch", fetch);

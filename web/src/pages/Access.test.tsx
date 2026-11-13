@@ -44,13 +44,16 @@ afterEach(() => {
 
 it("shows legacy, expired, stale and never-used tokens at the 90-day boundary", async () => {
   const now = Date.UTC(2026, 10, 13);
-  vi.spyOn(Date, "now").mockReturnValue(now);
+  vi.spyOn(Date, "now").mockReturnValue(now + 365 * 86400000);
   const old = now - 90 * 86400000;
-  tokens.mockResolvedValue([
+  tokens.mockImplementation(async (onTime) => {
+    onTime(now);
+    return [
     { name: "legacy", kind: "user", scope: "read", created: old, last_used: null, expires: null },
     { name: "expired", kind: "agent", scope: "write", created: old, last_used: old, expires: now },
     { name: "recent", kind: "device", scope: "write", created: old, last_used: old + 1, expires: now + 1 },
-  ]);
+    ];
+  });
   render(() => <Tokens />);
   const table = await screen.findByRole("table", { name: "Tokens" });
   expect(table.querySelector('[data-token="legacy"]')?.textContent).toContain("No expiry");
@@ -75,7 +78,7 @@ it("sends optional expiry and shows the returned expiry without redisplaying lis
   expect(screen.getByText(/^Expiry:/)?.textContent).not.toContain("No expiry");
   fireEvent.click(screen.getByRole("button", { name: "Done" }));
   expect(screen.queryByLabelText("Token secret")).toBeNull();
-  fireEvent.input(screen.getByLabelText("Expiry (local time, optional)"), { target: { value: "" } });
+  expect((screen.getByLabelText("Expiry (local time, optional)") as HTMLInputElement).value).toBe("");
   fireEvent.input(screen.getByLabelText("Name"), { target: { value: "cli2" } });
   await waitFor(() => expect((screen.getByRole("button", { name: "Create token" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Create token" }));
