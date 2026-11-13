@@ -493,16 +493,15 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
     .await;
     let mut revocation_unconfirmed = credential.is_err();
     if let Ok(Some((refresh, revoke))) = credential {
-        let revoked = g
+        let revoked = revoke_with_deadline(g
             .http
             .post(revoke)
             .form(&[
                 ("token", refresh.as_str()),
                 ("token_type_hint", "refresh_token"),
             ])
-            .send()
-            .await;
-        if !matches!(revoked, Ok(res) if res.status().is_success()) {
+            .send()).await;
+        if !revoked {
             revocation_unconfirmed = true;
         }
     }
@@ -559,8 +558,54 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
 }
 
 /// Only unreadable ciphertext is disposable. Storage failures must remain errors.
-fn unreadable_secret(e: &state::Error) -> bool {
-    matches!(e, state::Error::Corrupt(_) | state::Error::WrongKey { .. } | state::Error::KeyMissing { .. })
+fn unreadable_secret(e: &writer::Error) -> bool {
+    matches!(e, writer::Error::State(state::Error::Corrupt(_) | state::Error::WrongKey { .. } | state::Error::KeyMissing { .. }))
+}
+
+async fn revoke_with_deadline(
+    request: impl std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+) -> bool {
+    matches!(tokio::time::timeout(GOOGLE_TIMEOUT, request).await, Ok(Ok(res)) if res.status().is_success())
+}
+
+#[cfg(test)]
+mod disconnect_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn finish_and_disconnect_share_connection_exclusion() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), Some(state::SecretKey::generate())).unwrap();
+        let writer = Arc::new(Writer::open(vault, state).unwrap());
+        let host = Arc::new(script::Host::new(writer.clone(), 1, script::Limits::default(), script::Ai::of(&writer)));
+        let scheduler = Scheduler::new(writer, host, Arc::new(scheduler::TestClock::new(0))).unwrap();
+        let google = Arc::new(Google::new(scheduler));
+        let guard = google.connection.lock().await;
+        let finish = finish(State(google.clone()), Json(FinishBody { url: "invalid".into() }));
+        let disconnect = disconnect(State(google.clone()));
+        tokio::pin!(finish, disconnect);
+        // Neither route can even begin its work while the other owns the connection.
+        assert!(futures_util::poll!(&mut finish).is_pending());
+        assert!(futures_util::poll!(&mut disconnect).is_pending());
+        drop(guard);
+        assert!(finish.await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revocation_has_a_bounded_total_deadline() {
+        let began = tokio::time::Instant::now();
+        assert!(!revoke_with_deadline(std::future::pending()).await);
+        assert_eq!(began.elapsed(), GOOGLE_TIMEOUT);
+    }
+
+    #[test]
+    fn only_ciphertext_errors_allow_deletion() {
+        for e in [state::Error::Corrupt("test".into()), state::Error::WrongKey { detail: "test".into() }, state::Error::KeyMissing { path: None }] {
+            assert!(unreadable_secret(&e.into()));
+        }
+        assert!(!unreadable_secret(&state::Error::Io(std::io::Error::other("test")).into()));
+    }
 }
 
 #[derive(Deserialize)]
