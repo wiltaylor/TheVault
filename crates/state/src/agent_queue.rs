@@ -784,6 +784,15 @@ impl State {
         Ok(())
     }
 
+    pub fn trigger_recovery_subject(&self, id: i64) -> Result<String> {
+        Ok(self.conn().query_row(
+            "SELECT agent,trigger,note,queued_ms FROM trigger_jobs WHERE id=?1", [id], |r| {
+                Ok(format!("Trigger job {id} queued {}, agent {}, trigger {}, note {} (release by manual run or backfill)",
+                    r.get::<_, i64>(3)?, r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?.unwrap_or_default()))
+            },
+        )?)
+    }
+
     pub fn due_trigger_jobs(&self, now: i64) -> Result<Vec<TriggerJob>> {
         let conn = self.conn();
         conn.execute("UPDATE trigger_jobs SET status='expired', message='wait exceeded seven days' WHERE status='waiting' AND queued_ms<=?1", [now - WEEK])?;

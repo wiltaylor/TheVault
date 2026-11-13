@@ -458,6 +458,19 @@ impl Shared {
                                     .is_ok()
                             {
                                 let id = payload["id"].as_str().unwrap_or_default();
+                                // A pre-Stop job must not contaminate a newer
+                                // owner-authorized item by joining its old admission.
+                                if context
+                                    .stop_generation()
+                                    .is_none_or(|g| writer.state().automation_commit(g).is_err())
+                                {
+                                    if let Ok(subject) =
+                                        writer.state().handler_recovery_subject(job.id)
+                                    {
+                                        let _ = writer.state().record_stale_run_for(id, &subject);
+                                    }
+                                    return;
+                                }
                                 match writer.outbox_run_context(id) {
                                     Ok(item) => context.merge(&item),
                                     Err(error) => {
@@ -561,7 +574,8 @@ impl Shared {
             return Ok(context.clone());
         }
         let run_id = writer.state().handler_provenance(id)?.unwrap_or_default();
-        let context = writer.recover_run_context(&run_id)?;
+        let subject = writer.state().handler_recovery_subject(id)?;
+        let context = writer.recover_run_context_for(&run_id, &subject)?;
         contexts.insert(id, context.clone());
         Ok(context)
     }

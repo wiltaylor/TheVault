@@ -171,10 +171,15 @@ impl RunContext {
     /// recovery is recorded in activity. Queue owners must retain the queued
     /// record on error (including audit failure) and use a live-context registry.
     pub fn recover(database: &state::State, id: &str) -> state::Result<Self> {
+        Self::recover_for(database, id, id)
+    }
+
+    /// The host queue supplies its subject, never the script's claimed identity.
+    pub fn recover_for(database: &state::State, id: &str, subject: &str) -> state::Result<Self> {
         let (snapshot, lease) = match database.resume_run_provenance(id) {
             Ok(recovered) => recovered,
             Err(error) => {
-                database.record_unavailable_run(id)?;
+                database.record_unavailable_run_for(id, subject)?;
                 return Err(error);
             }
         };
@@ -190,7 +195,7 @@ impl RunContext {
             .stop_generation()
             .is_none_or(|generation| database.automation_commit(generation).is_err())
         {
-            database.record_stale_run(id)?;
+            database.record_stale_run_for(id, subject)?;
         }
         Ok(context)
     }

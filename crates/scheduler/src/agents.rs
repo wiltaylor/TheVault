@@ -1145,13 +1145,14 @@ impl Scheduler {
 
     fn trigger_context(&self, job_id: i64) -> state::Result<script::RunContext> {
         let state = self.writer.state();
+        let subject = state.trigger_recovery_subject(job_id)?;
         let mut ids = state.trigger_provenance(job_id)?;
         if ids.is_empty() {
             ids.push(String::new());
         }
         let context = script::RunContext::default();
         for id in ids {
-            let recovered = self.writer.recover_run_context(&id)?;
+            let recovered = self.writer.recover_run_context_for(&id, &subject)?;
             context.merge(&recovered);
         }
         Ok(context)

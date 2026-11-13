@@ -44,18 +44,32 @@ impl Writer {
     /// Shared by agent jobs, handlers and Outbox records. Aliases of one sealed
     /// component must not independently re-arm it and falsely become stale.
     pub fn recover_run_context(&self, id: &str) -> state::Result<script_core::RunContext> {
+        self.recover_run_context_for(id, id)
+    }
+
+    pub fn recover_run_context_for(
+        &self,
+        id: &str,
+        subject: &str,
+    ) -> state::Result<script_core::RunContext> {
         let mut contexts = self
             .durable_contexts
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let root = match self.state.run_provenance_root(id) {
             Ok(root) => root,
-            Err(_) => return script_core::RunContext::recover(&self.state, id),
+            Err(_) => return script_core::RunContext::recover_for(&self.state, id, subject),
         };
         if let Some(context) = contexts.get(&root) {
+            if context
+                .stop_generation()
+                .is_none_or(|g| self.state.automation_commit(g).is_err())
+            {
+                self.state.record_stale_run_for(id, subject)?;
+            }
             return Ok(context.clone());
         }
-        let context = script_core::RunContext::recover(&self.state, id)?;
+        let context = script_core::RunContext::recover_for(&self.state, id, subject)?;
         contexts.insert(root, context.clone());
         Ok(context)
     }

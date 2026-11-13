@@ -97,6 +97,7 @@ impl RunProvenanceLease {
             &self.id,
             "run.seal_failed",
             "Run provenance could not be sealed; recovery remains restricted and stale",
+            None,
         )
     }
 
@@ -171,8 +172,19 @@ fn record_failure(
     run_id: &str,
     kind: &str,
     summary: &str,
+    once: Option<&str>,
 ) -> Result<()> {
     let tx = conn.transaction()?;
+    if let Some(subject) = once {
+        let key = format!("run-audit:{kind}:{subject}");
+        if tx.execute(
+            "INSERT OR IGNORE INTO meta(key,value) VALUES (?1,'1')",
+            [key],
+        )? == 0
+        {
+            return Ok(());
+        }
+    }
     let id = crate::activity::next_id(&tx, now)?;
     tx.execute(
         "INSERT INTO activity(id,at_ms,kind,category,actor_kind,actor,summary,subject_kind,subject)
@@ -290,24 +302,38 @@ impl State {
     }
 
     pub fn record_stale_run(&self, id: &str) -> Result<()> {
+        self.record_stale_run_for(id, id)
+    }
+
+    pub fn record_stale_run_for(&self, id: &str, subject: &str) -> Result<()> {
         record_failure(
             &mut self.conn(),
             self.now(),
             id,
             "run.recovery_stale",
-            "Queued run recovered with a stale admission; its original provenance was retained",
+            &format!(
+                "{subject}: queued run recovered with a stale admission; its original provenance was retained. Outbox delivery stays held until an owner edit after Resume"
+            ),
+            Some(subject),
         )
     }
 
     /// Fallible audit before a queue consumes unavailable work. On failure the
     /// caller must leave the queue record pending, never execute it unaudited.
     pub fn record_unavailable_run(&self, id: &str) -> Result<()> {
+        self.record_unavailable_run_for(id, id)
+    }
+
+    pub fn record_unavailable_run_for(&self, id: &str, subject: &str) -> Result<()> {
         record_failure(
             &mut self.conn(),
             self.now(),
             id,
             "run.recovery_unavailable",
-            "Queued run could not recover its provenance and was not executed",
+            &format!(
+                "{subject}: queued work is held because its provenance is unavailable; owner action is required"
+            ),
+            Some(subject),
         )
     }
 

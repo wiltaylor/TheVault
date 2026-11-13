@@ -1669,6 +1669,12 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
+        // Provenance publication must precede every file commit and all of its
+        // fallible version/index follow-up. A failure aborts the whole save here,
+        // so it cannot silently skip unrelated committed notes' after-handlers.
+        for r in &rendered {
+            self.remember_outbox_context(&r.change, authors.get(&r.change.id).unwrap_or(author))?;
+        }
         let (generation, automation) = {
             let _acting = activity::acting_as(author);
             match inner.commit_hook.as_mut() {
@@ -1863,7 +1869,6 @@ impl Writer {
         } else {
             author.clone()
         };
-        self.remember_outbox_contexts(&saved)?;
         self.hooks.after(&saved, &hook_author, &inner.schema);
         self.people_to_contacts(&people);
         self.outbox_notifications(&items);

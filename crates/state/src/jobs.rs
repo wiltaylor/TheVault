@@ -76,6 +76,21 @@ impl State {
             .optional()?)
     }
 
+    pub fn handler_recovery_subject(&self, job_id: i64) -> Result<String> {
+        let (payload, queued): (String, i64) = self.conn().query_row(
+            "SELECT payload,queued_ms FROM handler_jobs WHERE id=?1",
+            [job_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let p: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
+        Ok(format!(
+            "Handler job {job_id} queued {queued}, script {}, note {} {} (release by editing the note as owner)",
+            p["script"].as_str().unwrap_or("unknown"),
+            p["type"].as_str().unwrap_or("unknown"),
+            p["id"].as_str().unwrap_or("unknown")
+        ))
+    }
+
     pub fn outbox_provenance(&self, note_id: &str) -> Result<Vec<String>> {
         let conn = self.conn();
         let mut stmt =
@@ -107,6 +122,19 @@ impl State {
     pub fn remove_outbox_provenance(&self, note_id: &str) -> Result<()> {
         self.conn()
             .execute("DELETE FROM outbox_provenance WHERE note_id=?1", [note_id])?;
+        Ok(())
+    }
+
+    /// Host-only owner action replaces an item's previous automation admission.
+    pub fn replace_outbox_provenance(&self, note_id: &str, run_id: &str) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM outbox_provenance WHERE note_id=?1", [note_id])?;
+        tx.execute(
+            "INSERT INTO outbox_provenance VALUES (?1,?2)",
+            params![note_id, run_id],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 

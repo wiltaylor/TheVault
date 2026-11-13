@@ -86,7 +86,7 @@ fn shared_registry_reuses_joined_aliases_and_seals_after_last_queue_reference() 
 }
 
 #[test]
-fn outbox_reference_failure_after_file_commit_is_visible_and_unavailable_on_restart() {
+fn outbox_reference_failure_aborts_before_any_file_commit() {
     let (dir, writer) = setup();
     writer
         .upgrade_shipped_defaults(writer::Upkeep::Home)
@@ -95,23 +95,15 @@ fn outbox_reference_failure_after_file_commit_is_visible_and_unavailable_on_rest
     conn.execute_batch("CREATE TRIGGER refuse_outbox_reference BEFORE INSERT ON outbox_provenance BEGIN SELECT RAISE(FAIL,'injected reference failure'); END;").unwrap();
     let context = script_core::RunContext::default();
     context.restrict();
-    assert!(
-        context
-            .scope(|| {
-                writer.create("outbox", &Input::Json(serde_json::json!({"fields": {
-        "title":"File committed", "kind":"email", "status":"sending", "to":["ann@example.com"]
-    }})), &Author::Session("owner".into()))
-            })
-            .is_err()
-    );
-    let notes = writer.list(Some("outbox")).unwrap();
-    assert_eq!(
-        notes.len(),
-        1,
-        "the file committed before reference publication failed"
-    );
-    let id = notes[0].id.clone();
-    assert!(writer.state().outbox_provenance(&id).unwrap().is_empty());
+    let result = context.scope(|| writer.batch(vec![
+        writer::Op::Create { type_name: "item".into(), input: Input::Wcl("title = \"Unrelated\"\n".into()) },
+        writer::Op::Create { type_name: "outbox".into(), input: Input::Json(serde_json::json!({"fields": {
+            "title":"Not committed", "kind":"email", "status":"sending", "to":["ann@example.com"]
+        }})) },
+    ], false, &Author::Session("owner".into())));
+    assert!(result.is_err());
+    assert!(writer.list(Some("outbox")).unwrap().is_empty());
+    assert!(writer.list(Some("item")).unwrap().is_empty());
     conn.execute_batch("DROP TRIGGER refuse_outbox_reference;")
         .unwrap();
     drop(conn);
@@ -120,18 +112,127 @@ fn outbox_reference_failure_after_file_commit_is_visible_and_unavailable_on_rest
     let vault = Vault::open(dir.path()).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
     let writer = Writer::open(vault, state).unwrap();
-    assert!(writer.outbox_run_context(&id).is_err());
-    assert!(writer.read(&id).is_ok());
+    assert!(writer.list(Some("outbox")).unwrap().is_empty());
+    assert!(writer.list(Some("item")).unwrap().is_empty());
+}
+
+#[test]
+fn first_outbox_update_after_restart_publishes_before_post_commit_failure() {
+    let (dir, writer) = setup();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let input = Input::Json(
+        serde_json::json!({"fields": {"title":"Old", "kind":"email", "status":"draft", "to":["ann@example.com"]}}),
+    );
+    let item = writer
+        .create("outbox", &input, &Author::Session("owner".into()))
+        .unwrap();
+    let old = writer.state().outbox_provenance(&item.id).unwrap()[0].clone();
+    drop(writer);
+    let vault = Vault::open(dir.path()).unwrap();
+    let state = State::open(&vault.server_dir().join("state.db"), None).unwrap();
+    assert!(state.load_run_provenance(&old).is_sealed());
+    let writer = Writer::open(vault, state).unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    conn.execute_batch("CREATE TRIGGER refuse_version BEFORE INSERT ON versions BEGIN SELECT RAISE(ABORT,'injected post-file failure'); END;").unwrap();
+    let update = script_core::RunContext::default();
+    update.restrict();
+    let changed = Input::Json(
+        serde_json::json!({"fields": {"title":"New", "kind":"email", "status":"draft", "to":["ann@example.com"]}}),
+    );
     assert!(
-        writer
-            .state()
-            .activity(&state::ActivityFilter::default())
+        update
+            .scope(|| writer.update(
+                &item.id,
+                &changed,
+                Some(&item.version),
+                &Author::Handler("test".into())
+            ))
+            .is_err()
+    );
+    assert!(
+        std::fs::read_to_string(dir.path().join(format!("notes/outbox/{}.wcl", item.id)))
             .unwrap()
+            .contains("New")
+    );
+    let ids = writer.state().outbox_provenance(&item.id).unwrap();
+    assert!(!ids.is_empty());
+    assert!(!writer.state().load_run_provenance(&old).is_sealed());
+    // The new reference is already active at the failed post-file boundary.
+    assert!(
+        ids.iter()
+            .any(|id| writer.state().load_run_provenance(id).is_restricted())
+    );
+    drop(update);
+    drop(writer);
+    let state = State::open(&dir.path().join(".vault/state.db"), None).unwrap();
+    assert!(
+        ids.iter()
+            .all(|id| state.load_run_provenance(id).is_restricted())
+    );
+}
+
+#[test]
+fn outbox_owner_action_replaces_stale_admission_but_automation_cannot() {
+    let (_dir, writer) = setup();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let input = Input::Json(
+        serde_json::json!({"fields": {"title":"Held", "kind":"email", "status":"draft", "to":["ann@example.com"]}}),
+    );
+    let item = writer
+        .create("outbox", &input, &Author::Session("owner".into()))
+        .unwrap();
+    writer.state().set_automation_stopped(true).unwrap();
+    writer.state().set_automation_stopped(false).unwrap();
+    for _ in 0..3 {
+        assert!(writer.outbox_run_context(&item.id).is_err());
+    }
+    let audits = writer
+        .state()
+        .activity(&state::ActivityFilter::default())
+        .unwrap();
+    assert_eq!(
+        audits
             .items
             .iter()
-            .any(|entry| entry.kind == "run.recovery_unavailable"
-                && entry.subject.as_deref() == Some(&id))
+            .filter(|a| a.kind == "run.recovery_stale" && a.summary.contains(&item.id))
+            .count(),
+        1
     );
+    let automation = script_core::RunContext::default();
+    let ready = Input::Json(
+        serde_json::json!({"fields": {"title":"Held", "kind":"email", "status":"ready", "to":["ann@example.com"]}}),
+    );
+    assert!(
+        automation
+            .scope(|| writer.update(
+                &item.id,
+                &ready,
+                Some(&item.version),
+                &Author::Handler("test".into())
+            ))
+            .is_err()
+    );
+    let fresh = script_core::RunContext::default();
+    fresh
+        .scope(|| {
+            writer.update(
+                &item.id,
+                &ready,
+                Some(&item.version),
+                &Author::Session("owner".into()),
+            )
+        })
+        .unwrap();
+    let recovered = writer.outbox_run_context(&item.id).unwrap();
+    assert_eq!(recovered, fresh);
+    recovered
+        .scope_recovered(|| writer.put_script("sent_after_resume", "fn run() {}\n"))
+        .unwrap();
+    assert_eq!(writer.state().outbox_provenance(&item.id).unwrap().len(), 1);
 }
 
 #[test]
