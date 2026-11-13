@@ -930,7 +930,8 @@ fn a_missing_message_or_missing_scope_does_not_clear_the_restore_ref() {
             api.google.delete_message("one");
         } else {
             let settings = json!({"gmail_labels": ["INBOX"], "scopes": [READONLY_SCOPE], "endpoints": api.google.endpoints()});
-            api.server.seed_secret("google_settings", &settings.to_string());
+            api.server
+                .seed_secret("google_settings", &settings.to_string());
         }
         expect(
             api.req("POST", &format!("/api/trash/{one}/restore"))

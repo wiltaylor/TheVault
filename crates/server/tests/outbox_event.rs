@@ -767,7 +767,8 @@ fn outbox_delete_disconnected_keeps_event_for_retry() {
             .unwrap()
             .contains("not connected")
     );
-    api.server.seed_secret("google_refresh_token", DEFAULT_REFRESH_TOKEN);
+    api.server
+        .seed_secret("google_refresh_token", DEFAULT_REFRESH_TOKEN);
     api.retry_delete(&item, &id);
 }
 
@@ -820,7 +821,10 @@ fn outbox_delete_no_network_keeps_event_and_manual_retry_succeeds() {
     drop(listener);
     let mut endpoints = api.google.endpoints();
     endpoints["calendar"] = json!(format!("http://{addr}/calendar/v3"));
-    api.server.seed_secret("google_settings", &json!({ "endpoints": endpoints }).to_string());
+    api.server.seed_secret(
+        "google_settings",
+        &json!({ "endpoints": endpoints }).to_string(),
+    );
     let item = api.delete_item(&id);
     api.settle();
     assert_eq!(api.fields(&item)["status"], "failed");
@@ -830,7 +834,10 @@ fn outbox_delete_no_network_keeps_event_and_manual_retry_succeeds() {
         api.google.event("primary", "standup").unwrap()["status"],
         "cancelled"
     );
-    api.server.seed_secret("google_settings", &json!({ "endpoints": api.google.endpoints() }).to_string());
+    api.server.seed_secret(
+        "google_settings",
+        &json!({ "endpoints": api.google.endpoints() }).to_string(),
+    );
     api.retry_delete(&item, &id);
 }
 
