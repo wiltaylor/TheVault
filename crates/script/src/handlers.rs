@@ -1189,6 +1189,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reopened_handler_queue_retains_staleness_and_unreadable_work() {
+        for unreadable in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let vault = store::Vault::init(dir.path()).unwrap();
+            let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+            let writer = Writer::open(vault, state).unwrap();
+            let context = RunContext::default();
+            context.restrict();
+            let run_id = context.persist(writer.state()).unwrap();
+            let generation = context.stop_generation().unwrap();
+            let reference = if unreadable { "missing-handler-run" } else { &run_id };
+            let id = writer.state().queue_jobs_with_provenance(&["{}".into()], reference).unwrap()[0];
+            drop(context);
+            drop(writer);
+            let vault = store::Vault::open(dir.path()).unwrap();
+            let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+            let writer = Arc::new(Writer::open(vault, state).unwrap());
+            writer.state().set_automation_stopped(true).unwrap();
+            writer.state().set_automation_stopped(false).unwrap();
+            let handlers = Handlers::on_device(Limits::default());
+            handlers.bind(&writer);
+            let recovered = handlers.shared.handler_context(&writer, id);
+            let kind = if unreadable {
+                assert!(recovered.is_err());
+                let snapshot = writer.state().load_run_provenance(reference);
+                assert!(snapshot.is_restricted());
+                assert!(writer.state().automation_commit(snapshot.stop_generation().unwrap()).is_err());
+                "run.recovery_unavailable"
+            } else {
+                let recovered = recovered.unwrap();
+                assert!(recovered.is_restricted());
+                assert_eq!(recovered.stop_generation(), Some(generation));
+                assert!(writer.state().automation_commit(generation).is_err());
+                "run.recovery_stale"
+            };
+            assert!(writer.state().queued_jobs().unwrap().iter().any(|job| job.id == id));
+            assert!(writer.state().activity(&state::ActivityFilter::default()).unwrap().items.iter().any(|entry| entry.kind == kind && entry.subject.as_deref() == Some(reference)));
+        }
+    }
+
+    #[test]
     fn recovered_send_and_failed_delete_writeback_use_each_items_context() {
         let dir = tempfile::tempdir().unwrap();
         let vault = store::Vault::init(dir.path()).unwrap();

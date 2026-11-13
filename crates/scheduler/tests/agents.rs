@@ -698,6 +698,79 @@ fn unavailable_agent_queue_is_visible_pending_and_never_executed() {
 }
 
 #[test]
+fn agent_recovery_storage_and_audit_failures_keep_work_pending_until_retry() {
+    for audit_failure in [false, true] {
+        let r = Rig::new();
+        r.agent("owl", NIGHTLY);
+        let context = script::RunContext::default();
+        context.restrict();
+        let run_id = context.persist(r.writer.state()).unwrap();
+        let id = r.writer.state().enqueue_trigger_with_provenance(
+            "owl", "nightly", None,
+            &json!({"title":"pending", "prompt":"queued"}).to_string(),
+            r.clock.now_ms(), false, &run_id,
+        ).unwrap().unwrap().0;
+        drop(context);
+        let r = r.reopen();
+        r.writer.state().set_automation_stopped(true).unwrap();
+        r.writer.state().set_automation_stopped(false).unwrap();
+        let conn = rusqlite::Connection::open(r._dir.path().join(".vault/state.db")).unwrap();
+        let table = if audit_failure { "activity" } else { "run_provenance_leases" };
+        conn.execute_batch(&format!("CREATE TRIGGER refuse_recovery BEFORE INSERT ON {table} BEGIN SELECT RAISE(FAIL,'injected recovery failure'); END;")).unwrap();
+        r.scheduler.tick();
+        assert!(r.fake.threads.lock().unwrap().is_empty());
+        assert!(r.fake.turns().is_empty());
+        assert!(r.writer.state().due_trigger_jobs(r.clock.now_ms()).unwrap().iter().any(|j| j.id == id));
+        if !audit_failure {
+            assert!(r.writer.state().activity(&state::ActivityFilter::default()).unwrap().items.iter().any(|a| a.kind == "run.recovery_unavailable" && a.subject.as_deref() == Some(&run_id)));
+        }
+        conn.execute_batch("DROP TRIGGER refuse_recovery;").unwrap();
+        r.advance(31);
+        assert_eq!(r.fake.turns().len(), 1);
+        let contexts = r.fake.contexts.lock().unwrap();
+        assert!(contexts[0].is_restricted());
+        assert!(r.writer.state().automation_commit(contexts[0].stop_generation().unwrap()).is_err());
+        assert!(r.writer.state().activity(&state::ActivityFilter::default()).unwrap().items.iter().any(|a| a.kind == "run.recovery_stale" && a.subject.as_deref() == Some(&run_id)));
+    }
+}
+
+#[test]
+fn restricted_agent_dedup_and_provider_retry_never_replace_older_provenance() {
+    let r = Rig::new();
+    r.agent("watcher", WATCHER);
+    let note = r.create("memo", "Dedup", "open", &Author::Agent("other".into()));
+    let older = script::RunContext::default();
+    older.restrict();
+    let generation = r.writer.state().admit_automation().unwrap();
+    older.capture_stop_generation(generation);
+    let fresh = script::RunContext::default();
+    let mut ids = Vec::new();
+    for (context, prompt) in [(&older, "older"), (&fresh, "replacement")] {
+        let result = r.writer.publish_run_context(context, |state, run_id| {
+            ids.push(run_id.to_owned());
+            state.enqueue_trigger_with_provenance(
+                "watcher", "opened", Some(&note),
+                &json!({"title":"Dedup", "prompt":prompt, "type":"memo", "op":"update"}).to_string(),
+                r.clock.now_ms(), false, run_id,
+            )
+        }).unwrap();
+        assert!(result.is_some());
+    }
+    *r.fake.fail.lock().unwrap() = Some("transient provider failure".into());
+    r.scheduler.tick();
+    assert_eq!(r.fake.turns().len(), 1);
+    assert_eq!(r.fake.turns()[0].2, "replacement");
+    *r.fake.fail.lock().unwrap() = None;
+    r.advance(61);
+    assert_eq!(r.fake.turns().len(), 2);
+    for context in r.fake.contexts.lock().unwrap().iter() {
+        assert!(context.is_restricted());
+        assert_eq!(context.stop_generation(), Some(generation));
+    }
+    assert_eq!(ids.len(), 2);
+}
+
+#[test]
 fn changes_to_one_note_within_the_debounce_coalesce_into_one_run() {
     let r = Rig::new();
     r.agent("watcher", WATCHER);
