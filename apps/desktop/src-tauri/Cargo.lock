@@ -6349,6 +6349,7 @@ dependencies = [
 name = "thevault-desktop"
 version = "0.1.12"
 dependencies = [
+ "anyhow",
  "ashpd",
  "axum",
  "embedded",
