@@ -70,14 +70,7 @@ impl Gmail {
             ("google_refresh_token", DEFAULT_REFRESH_TOKEN),
             ("google_settings", settings.as_str()),
         ] {
-            expect(
-                gmail
-                    .req("PUT", &format!("/api/secrets/{name}"))
-                    .json(&json!({ "value": value }))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            gmail.put_secret(name, value);
         }
         let task = format!(
             r#"label         = "Gmail sync"
@@ -227,8 +220,17 @@ paused        = true
     }
 
     fn put_secret(&self, name: &str, value: &str) {
+        let mut request = self.req("PUT", &format!("/api/secrets/{name}"));
+        if name == "google_settings" {
+            let login = self.client.post(self.server.url("/api/login"))
+                .json(&json!({"password": testkit::PASSWORD})).send().unwrap();
+            let cookie = login.headers()["set-cookie"].to_str().unwrap()
+                .split(';').next().unwrap();
+            request = self.client.put(self.server.url(&format!("/api/secrets/{name}")))
+                .header("cookie", cookie);
+        }
         expect(
-            self.req("PUT", &format!("/api/secrets/{name}"))
+            request
                 .json(&json!({ "value": value }))
                 .send()
                 .unwrap(),
