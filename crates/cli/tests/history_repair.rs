@@ -16,7 +16,11 @@ fn open(root: &Path) -> Writer {
 fn fixture() -> (TempDir, String, Vec<String>) {
     let dir = TempDir::new().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();
-    std::fs::write(dir.path().join("types/task.wcl"), "label = \"Task\"\n").unwrap();
+    std::fs::write(
+        dir.path().join("types/task.wcl"),
+        "label = \"Task\"\ntemplate default {\n  tab \"Main\" {\n    slot \"title\"\n  }\n}\n",
+    )
+    .unwrap();
     let w = open(dir.path());
     let by = Author::Token("fixture".into());
     let first = w
