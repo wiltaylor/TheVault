@@ -295,7 +295,10 @@ fn device_and_agent_tokens_restore_imported_email_without_changing_metadata() {
             .unwrap(),
         201,
     );
-    for token in [device["token"].as_str().unwrap().to_owned(), f.agent_token()] {
+    for token in [
+        device["token"].as_str().unwrap().to_owned(),
+        f.agent_token(),
+    ] {
         let before = f.note();
         expect(
             f.client
@@ -319,7 +322,10 @@ fn device_and_agent_tokens_restore_imported_email_without_changing_metadata() {
         );
         let after = f.note();
         for field in ["gmail_ref", "gmail_account", "gmail_deferred_parts"] {
-            assert_eq!(before["note"]["fields"][field], after["note"]["fields"][field]);
+            assert_eq!(
+                before["note"]["fields"][field],
+                after["note"]["fields"][field]
+            );
         }
     }
 }
