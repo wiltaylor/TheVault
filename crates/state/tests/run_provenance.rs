@@ -31,7 +31,10 @@ fn joined_component_waits_for_both_live_owners_across_connections() {
         let active = s.load_run_provenance(id);
         assert!(!active.is_sealed());
         assert!(active.is_restricted());
-        assert!(s.automation_commit(active.stop_generation().unwrap()).is_err());
+        assert!(
+            s.automation_commit(active.stop_generation().unwrap())
+                .is_err()
+        );
     }
     state::RunProvenanceLease::seal_all(&[right], true, None).unwrap();
     for id in [a.id(), b.id()] {
@@ -65,7 +68,8 @@ fn migration_from_31_preserves_sealed_provenance() {
     s.seal_run_provenance(p.id()).unwrap();
     drop(s);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE run_provenance_leases; PRAGMA user_version=31;").unwrap();
+    conn.execute_batch("DROP TABLE run_provenance_leases; PRAGMA user_version=31;")
+        .unwrap();
     drop(conn);
     let s = open(&path);
     assert!(s.load_run_provenance(p.id()).is_sealed());

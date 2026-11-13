@@ -69,6 +69,9 @@ impl RunProvenance {
 /// Not cloneable: transfer it on live joins, then seal all owned identities
 /// together when the last live context disappears. Dropping without sealing is
 /// safe and deliberately leaves recovery restricted/stale.
+/// Lease tokens are durable: a leaked or crashed owner cannot be mistaken for
+/// a completed owner, even through another connection or after restart. Such
+/// a component remains unsealed permanently rather than guessing it is safe.
 pub struct RunProvenanceLease {
     id: String,
     token: String,
@@ -120,7 +123,9 @@ impl RunProvenanceLease {
                 params![lease.token, lease.id],
             )? != 1
             {
-                return Err(Error::Corrupt("run provenance lease already released".into()));
+                return Err(Error::Corrupt(
+                    "run provenance lease already released".into(),
+                ));
             }
             let (root, snapshot) = resolve(&tx, &lease.id)?;
             restricted |= snapshot.restricted;
@@ -149,7 +154,9 @@ impl RunProvenanceLease {
 
 fn seal_component(conn: &Connection, root: &str) -> Result<()> {
     if has_live_leases(conn, root)? {
-        return Err(Error::Corrupt("run provenance still has live leases".into()));
+        return Err(Error::Corrupt(
+            "run provenance still has live leases".into(),
+        ));
     }
     conn.execute(
         "WITH RECURSIVE members(id) AS (
