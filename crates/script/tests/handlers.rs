@@ -490,7 +490,7 @@ fn after_update(note: Value) -> Result[(), string] {
     let current = vault::get(id)?
     let status = current.get("fields").unwrap().get("status").unwrap().as_string().unwrap()
     if status == "ready" {
-        let _ = vault::patch(id, Value::Map(#{ "status": Value::String("sending"), "error": Value::String("stand-in sent") }), "")?
+        let patched = vault::patch(id, Value::Map(#{ "status": Value::String("sending"), "error": Value::String("stand-in sent") }), "")?
     }
     Ok(())
 }
