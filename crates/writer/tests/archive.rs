@@ -45,7 +45,10 @@ fn oversized_history_creates_updates_recovers_and_restores() {
     let dir = tempfile::tempdir().unwrap();
     let w = setup(dir.path());
     let by = Author::Token("large-fixture".into());
-    let input = Input::Wcl(format!("title = \"{}\"\n", "x".repeat(64 * 1024 * 1024 + 1)));
+    let input = Input::Wcl(format!(
+        "title = \"{}\"\n",
+        "x".repeat(64 * 1024 * 1024 + 1)
+    ));
     let a = w.create("task", &input, &by).unwrap();
     assert!(a.wcl.len() > 64 * 1024 * 1024);
     let b = w
