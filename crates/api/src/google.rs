@@ -479,9 +479,9 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
         let revoke = Endpoints::of(&settings(w)?).revoke;
         Ok(refresh.map(|token| (token, revoke)))
     })
-    .await?;
-    let mut warning = None;
-    if let Some((refresh, revoke)) = credential {
+    .await;
+    let mut revocation_unconfirmed = credential.is_err();
+    if let Ok(Some((refresh, revoke))) = credential {
         let revoked = g
             .http
             .post(revoke)
@@ -492,9 +492,7 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
             .send()
             .await;
         if !matches!(revoked, Ok(res) if res.status().is_success()) {
-            warning = Some(
-                "Disconnected locally and paused Gmail and Calendar, but Google did not confirm token revocation. Revoke TheVault in your Google account security settings.",
-            );
+            revocation_unconfirmed = true;
         }
     }
 
@@ -519,16 +517,24 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
             writer::google::write_object(w.state(), name, &state)?;
         }
         // The scopes belong to the connection.
-        let mut s = object(w, SETTINGS)?;
-        if s.remove(SCOPES_KEY).is_some() {
-            writer::google::write_object(w.state(), SETTINGS, &s)?;
+        match object(w, SETTINGS) {
+            Ok(mut s) => {
+                if s.remove(SCOPES_KEY).is_some() {
+                    writer::google::write_object(w.state(), SETTINGS, &s)?;
+                }
+            }
+            // Unreadable settings cannot retain connection scopes or serve status reads.
+            // Deletion needs no decryption key, just like the other credential cleanup.
+            Err(_) => delete_secret(w, SETTINGS)?,
         }
         Ok(())
     })
     .await?;
     let mut out = status_of(&g).await?;
-    if let Some(warning) = warning {
-        out["revocation_warning"] = json!(warning);
+    if revocation_unconfirmed {
+        out["revocation_warning"] = json!(
+            "Disconnected locally and paused Gmail and Calendar, but Google did not confirm token revocation. Revoke TheVault in your Google account security settings."
+        );
     }
     Ok(Json(out))
 }
