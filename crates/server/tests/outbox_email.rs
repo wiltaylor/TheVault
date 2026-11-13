@@ -276,7 +276,10 @@ fn copy_sent(note: Value) -> Result[(), string] {
     );
     api.create("outbox", email(json!({}), vec![paragraph("Hello")]));
     let failed = api.server.settle_handlers();
-    assert!(!failed.is_empty(), "replacement handler unexpectedly succeeded");
+    assert!(
+        !failed.is_empty(),
+        "replacement handler unexpectedly succeeded"
+    );
     assert!(format!("{failed:?}").contains("Gmail attachment metadata"));
     assert!(api.copies("forged").is_empty());
 }
