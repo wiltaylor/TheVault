@@ -574,6 +574,9 @@ fn disconnect_completes_locally_with_a_sanitized_warning_when_revocation_fails()
     assert!(warning.contains("Disconnected locally"), "{warning}");
     assert!(warning.contains("did not confirm"), "{warning}");
     assert!(!warning.contains(DEFAULT_REFRESH_TOKEN), "{warning}");
+    for private in [DEFAULT_REFRESH_TOKEN, "Could not revoke", "invalid_token"] {
+        assert!(!out.to_string().contains(private), "{out}");
+    }
     assert_eq!(api.google.requests_to("/revoke").len(), 1);
     assert!(api.google.revoked().is_empty());
     assert!(!api.secrets().contains(&"google_refresh_token".to_owned()));
@@ -592,12 +595,24 @@ fn disconnect_completes_locally_when_settings_are_undecryptable() {
     disconnect_with_undecryptable_secret("google_settings");
 }
 
+#[test]
+fn disconnect_clears_undecryptable_task_cursors() {
+    disconnect_with_undecryptable_secret("google_gmail_state");
+    disconnect_with_undecryptable_secret("google_calendar_state");
+}
+
 fn disconnect_with_undecryptable_secret(name: &str) {
     let api = Api::start();
     api.tasks(false);
     api.endpoints();
     let auth = api.connect_start("loopback");
     expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+    if name.ends_with("_state") {
+        api.put_secret(
+            name,
+            &json!({"history_id": "42", "sync_tokens": {"primary": "old"}}).to_string(),
+        );
+    }
     let db = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
     assert_eq!(
         db.execute("UPDATE secrets SET ciphertext=x'00' WHERE name=?1", [name],)
@@ -614,10 +629,12 @@ fn disconnect_with_undecryptable_secret(name: &str) {
     );
     assert_eq!(out["connected"], false);
     assert_eq!(out["account"], Value::Null);
-    assert_eq!(
-        out["revocation_warning"],
-        "Disconnected locally and paused Gmail and Calendar, but Google did not confirm token revocation. Revoke TheVault in your Google account security settings."
-    );
+    if !name.ends_with("_state") {
+        assert_eq!(
+            out["revocation_warning"],
+            "Disconnected locally and paused Gmail and Calendar, but Google did not confirm token revocation. Revoke TheVault in your Google account security settings."
+        );
+    }
     let remaining = api.secrets();
     for secret in SECRETS {
         if secret != "google_settings" || name == "google_settings" {
@@ -627,35 +644,148 @@ fn disconnect_with_undecryptable_secret(name: &str) {
     for task in TASKS {
         assert!(api.paused(task));
     }
-    assert!(api.google.requests_to("/revoke").is_empty());
+    if name != "google_settings" {
+        assert!(remaining.contains(&"google_settings".to_owned()));
+    }
+    if name.ends_with("_state") {
+        assert!(!remaining.contains(&name.to_owned()));
+        assert_eq!(api.google.requests_to("/revoke").len(), 1);
+    } else {
+        assert!(api.google.requests_to("/revoke").is_empty());
+    }
 }
 
 #[test]
-fn disconnect_times_out_revocation_and_still_completes_locally() {
-    let api = Api::with_google(
-        FakeGoogle::builder()
-            .revoke_delay(Duration::from_secs(31))
-            .start(),
+fn disconnect_completes_locally_after_5xx_or_refused_connection() {
+    let provider = testkit::StandIn::start();
+    provider.route(
+        "/revoke",
+        testkit::Reply::text(503, "Could not revoke invalid_token provider-private"),
     );
+    disconnect_with_revoke_endpoint(&provider.url("/revoke"));
+    assert_eq!(provider.requests().len(), 1);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/revoke", listener.local_addr().unwrap());
+    drop(listener);
+    disconnect_with_revoke_endpoint(&url);
+}
+
+#[test]
+fn disconnect_never_follows_307_or_308_with_the_token() {
+    let destination = testkit::StandIn::start();
+    for status in [307, 308] {
+        let provider = testkit::StandIn::start();
+        provider.route(
+            "/revoke",
+            testkit::Reply::text(status, "").header("Location", &destination.url("/leak")),
+        );
+        disconnect_with_revoke_endpoint(&provider.url("/revoke"));
+        assert_eq!(provider.requests().len(), 1);
+    }
+    assert!(destination.requests().is_empty());
+}
+
+fn disconnect_with_revoke_endpoint(revoke: &str) {
+    let api = Api::start();
     api.tasks(false);
     api.endpoints();
     let auth = api.connect_start("loopback");
     expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
 
-    let began = Instant::now();
+    let mut settings = api.server.secret_json("google_settings");
+    settings["endpoints"]["revoke"] = json!(revoke);
+    api.put_secret("google_settings", &settings.to_string());
     let out = expect(
         api.post("/api/integrations/google/disconnect")
             .send()
             .unwrap(),
         StatusCode::OK,
     );
-    assert!(began.elapsed() >= Duration::from_secs(30));
     assert!(out["revocation_warning"].is_string(), "{out}");
     assert_eq!(out["connected"], false);
-    assert_eq!(api.google.requests_to("/revoke").len(), 1);
+    for private in [
+        DEFAULT_REFRESH_TOKEN,
+        "Could not revoke",
+        "invalid_token",
+        "provider-private",
+    ] {
+        assert!(!out.to_string().contains(private), "{out}");
+    }
     for task in TASKS {
         assert!(api.paused(task));
     }
+}
+
+#[test]
+fn disconnect_completes_with_a_missing_key_file() {
+    let vault = tempfile::tempdir().unwrap();
+    store::Vault::init(vault.path()).unwrap();
+    let token = testkit::seed_credentials(vault.path());
+    let db = state::State::open(
+        &vault.path().join(".vault/state.db"),
+        Some(state::SecretKey::generate()),
+    )
+    .unwrap();
+    for name in SECRETS
+        .into_iter()
+        .chain(["google_gmail_state", "google_calendar_state"])
+    {
+        db.set_secret(name, "{}").unwrap();
+    }
+    drop(db);
+    // An explicitly configured missing key refuses server startup. The supported no-key
+    // mode is an absent default key, isolated from the user's real configuration.
+    let missing = vault.path().join("missing-config");
+    let server = TestServer::start_existing(vault, &token, &[("XDG_CONFIG_HOME", &missing)]);
+    let out = expect(
+        Client::new()
+            .post(server.url("/api/integrations/google/disconnect"))
+            .bearer_auth(&token)
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
+    assert_eq!(out["connected"], false);
+    assert!(out["revocation_warning"].is_string());
+    let db = rusqlite::Connection::open(server.vault_path().join(".vault/state.db")).unwrap();
+    let count: i64 = db
+        .query_row(
+            "SELECT count(*) FROM secrets WHERE name LIKE 'google_%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn disconnect_preserves_settings_on_a_non_decrypt_read_error() {
+    let api = Api::start();
+    api.endpoints();
+    let auth = api.connect_start("loopback");
+    expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
+    let db = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
+    // A SQLite column conversion error is not corrupt ciphertext or a decryption error.
+    db.execute(
+        "UPDATE secrets SET nonce='not a blob' WHERE name='google_settings'",
+        [],
+    )
+    .unwrap();
+    expect(
+        api.post("/api/integrations/google/disconnect")
+            .send()
+            .unwrap(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    );
+    let count: i64 = db
+        .query_row(
+            "SELECT count(*) FROM secrets WHERE name='google_settings'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(api.google.requests_to("/revoke").is_empty());
 }
 
 #[test]

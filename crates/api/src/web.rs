@@ -30,8 +30,7 @@ pub async fn serve(root: Arc<PathBuf>, req: Request) -> Response {
     };
     match tokio::task::spawn_blocking(move || read(&root, &rel)).await {
         Ok(Some((name, bytes))) => {
-            let site_https = std::env::var("VAULT_SITE_HTTPS")
-                .is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
+            let site_https = crate::auth::site_https();
             file_response(&name, bytes, method == Method::HEAD, site_https)
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),

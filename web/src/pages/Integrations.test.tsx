@@ -202,7 +202,9 @@ describe("GoogleCard", () => {
     render(() => <GoogleCard protocol="http:" assign={vi.fn()} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
-    expect(await screen.findByText(warning)).toBeTruthy();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(warning);
+    expect(alert.classList.contains("google-revocation-warning")).toBe(true);
     expect(screen.queryByText("Disconnected. The Gmail and Calendar sync are paused.")).toBeNull();
     expect(await screen.findByRole("button", { name: "Connect Google" })).toBeTruthy();
   });

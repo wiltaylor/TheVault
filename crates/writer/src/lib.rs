@@ -704,6 +704,26 @@ impl Writer {
         if inner_has_type(&inner, name) {
             return Ok(false);
         }
+        // Possession of a sync key is not permission to bind local scripts or secrets.
+        // Owner-authorized put_type deliberately does not use this admission rule.
+        let definition = TypeDef::parse(name, source)
+            .map_err(|e| Error::InvalidType(schema::SchemaError(vec![e])))?;
+        if !definition.handlers.is_empty()
+            || definition.extra.iter().any(|(key, _)| {
+                matches!(
+                    key.as_str(),
+                    "script" | "function" | "allow_domains" | "secrets"
+                )
+            })
+        {
+            return Err(Error::InvalidType(schema::SchemaError(vec![Invalid {
+                file: type_path(name),
+                issues: vec![Issue::new(
+                    "type",
+                    "peer type declares executable capabilities",
+                )],
+            }])));
+        }
         self.put_types_locked(inner, &[(name, source)])?;
         Ok(true)
     }
