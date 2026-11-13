@@ -355,6 +355,19 @@ fn history_known_price_matches_recorded_fake_charges_and_failure_is_once_visible
 }
 
 #[test]
+fn history_preview_expires_on_the_fake_clock_without_provider_work() {
+    let fake = FakeDecisions::start();
+    let (s, c, cookie) = setup(&fake);
+    let p = preview(&s, &c, &cookie);
+    c.post(s.url("/api/test/clock"))
+        .bearer_auth(s.admin_token())
+        .json(&json!({"advance":"PT10M"}))
+        .send().unwrap().error_for_status().unwrap();
+    assert_eq!(post(&s, &c, &cookie, "approve", approval(&p)).status(), 409);
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
 fn history_restart_retains_uncertain_attempt_and_resumes_only_pending_items() {
     let fake = FakeDecisions::start();
     let (mut s, c, cookie) = setup(&fake);
@@ -377,7 +390,10 @@ fn history_restart_retains_uncertain_attempt_and_resumes_only_pending_items() {
     let attempts = done["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), 3);
     assert_eq!(attempts[0]["outcome"], "interrupted_no_retry");
-    assert!(attempts[1..].iter().all(|a| a["outcome"] == "succeeded"), "{done}");
+    assert!(
+        attempts[1..].iter().all(|a| a["outcome"] == "succeeded"),
+        "{done}"
+    );
     assert_eq!(fake.requests().len(), 3);
     let mut ids: Vec<_> = attempts.iter().map(|a| a["id"].as_str().unwrap()).collect();
     ids.sort();
