@@ -1698,7 +1698,7 @@ impl ToolOut {
 
 /// Capture before spawning. The guard is created and dropped on the blocking
 /// worker, never on a runtime thread across an await.
-fn blocking<F, T>(context: &RunContext, work: F) -> tokio::task::JoinHandle<T>
+pub(crate) fn blocking<F, T>(context: &RunContext, work: F) -> tokio::task::JoinHandle<T>
 where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
@@ -1785,7 +1785,8 @@ impl Turn {
         // The items the turn drafted into Review share one notification, which the writer raised
         // as each was written (outbox X10); the agent's next turn starts another. The Outbox
         // tools draft as the agent, the Assistant included.
-        self.writer.end_outbox_drafts(&name);
+        self.run_context
+            .scope(|| self.writer.end_outbox_drafts(&name));
     }
 
     /// Keep what an unattended turn reports.
@@ -1985,7 +1986,10 @@ impl Turn {
         let temporary_browser = if self.sub.as_ref().is_some_and(|s| s.throwaway) {
             if let Some(b) = setup.browser.take() {
                 let id = ulid::Ulid::new().to_string();
-                if let Err(e) = self.writer.begin_temporary_browser_profile(&id) {
+                if let Err(e) = self
+                    .run_context
+                    .scope(|| self.writer.begin_temporary_browser_profile(&id))
+                {
                     self.failed(&AiError::new(ErrorKind::Unavailable, e.to_string()), &[])
                         .await;
                     return;
@@ -2378,8 +2382,14 @@ impl Turn {
                     && let Some(b) = &setup.browser
                 {
                     let got = if c.name == crate::ai_skills::INSTALL_TOOL {
-                        crate::ai_skills::install(self.writer.clone(), b, &setup.agent, &c.input)
-                            .await
+                        crate::ai_skills::install(
+                            &self.run_context,
+                            self.writer.clone(),
+                            b,
+                            &setup.agent,
+                            &c.input,
+                        )
+                        .await
                     } else {
                         self.browser_tool(&c, b, &setup, images_sent).await
                     };
@@ -2724,11 +2734,26 @@ impl Turn {
         let f = crate::ai_web::fetcher(setup.fetch_private);
         if call.name == "fetch_url" {
             let may_send = images_sent < ai_assets::IMAGE_LIMIT;
-            crate::ai_web::fetch_url(f, &call.id, &call.input, may_send, &self.images).await
+            crate::ai_web::fetch_url(
+                &self.run_context,
+                f,
+                &call.id,
+                &call.input,
+                may_send,
+                &self.images,
+            )
+            .await
         } else {
             let direct = setup.direct.downloads;
-            crate::ai_web::download_asset(self.writer.clone(), f, direct, &call.id, &call.input)
-                .await
+            crate::ai_web::download_asset(
+                &self.run_context,
+                self.writer.clone(),
+                f,
+                direct,
+                &call.id,
+                &call.input,
+            )
+            .await
         }
     }
 
@@ -2756,12 +2781,20 @@ impl Turn {
             "browser_run" => crate::ai_browser::run(b, &call.input, self.writer.state()).await,
             "browser_capture" => {
                 let direct = setup.direct.downloads;
-                crate::ai_browser::capture(self.writer.clone(), b, direct, &call.id, &call.input)
-                    .await
+                crate::ai_browser::capture(
+                    &self.run_context,
+                    self.writer.clone(),
+                    b,
+                    direct,
+                    &call.id,
+                    &call.input,
+                )
+                .await
             }
             "browser_file" => {
                 let may_send = images_sent < ai_assets::IMAGE_LIMIT;
                 crate::ai_browser::file(
+                    &self.run_context,
                     b,
                     &call.id,
                     &call.input,
@@ -2773,7 +2806,15 @@ impl Turn {
             }
             _ => {
                 let direct = setup.direct.downloads;
-                crate::ai_browser::save(self.writer.clone(), b, direct, &call.id, &call.input).await
+                crate::ai_browser::save(
+                    &self.run_context,
+                    self.writer.clone(),
+                    b,
+                    direct,
+                    &call.id,
+                    &call.input,
+                )
+                .await
             }
         }
     }

@@ -167,6 +167,7 @@ fn host_of(url: &Url) -> String {
 
 /// `fetch_url {url}`. `may_send_image` is false once the turn has sent its images.
 pub async fn fetch_url(
+    context: &script::RunContext,
     f: &Fetcher,
     call_id: &str,
     input: &Value,
@@ -208,7 +209,7 @@ pub async fn fetch_url(
     if is_html(&media) {
         let html = String::from_utf8_lossy(&got.body).into_owned();
         let base = got.url.clone();
-        let page = tokio::task::spawn_blocking(move || ai::html::page_text(&html, &base))
+        let page = crate::ai_chat::blocking(context, move || ai::html::page_text(&html, &base))
             .await
             .unwrap_or(ai::html::Page {
                 title: None,
@@ -246,7 +247,7 @@ pub async fn fetch_url(
             return done(head, "metadata", Vec::new(), web);
         }
         let body = got.body;
-        let extracted = tokio::task::spawn_blocking(move || writer::extract_pdf_text(body))
+        let extracted = crate::ai_chat::blocking(context, move || writer::extract_pdf_text(body))
             .await
             .unwrap_or(Extracted::Busy);
         return match extracted.text() {
@@ -276,7 +277,7 @@ pub async fn fetch_url(
             return done(head, "metadata", Vec::new(), web);
         }
         let body = got.body;
-        let extracted = tokio::task::spawn_blocking(move || writer::extract_text(kind, body))
+        let extracted = crate::ai_chat::blocking(context, move || writer::extract_text(kind, body))
             .await
             .unwrap_or(Extracted::Busy);
         return match extracted.text() {
@@ -321,7 +322,7 @@ pub async fn fetch_url(
         }
         let body = got.body;
         let kind = media.clone();
-        let prepared = tokio::task::spawn_blocking(move || ai_assets::prepare(body, &kind))
+        let prepared = crate::ai_chat::blocking(context, move || ai_assets::prepare(body, &kind))
             .await
             .unwrap_or_else(|e| Err(e.to_string()));
         return match prepared {
@@ -349,6 +350,7 @@ pub async fn fetch_url(
 /// `download_asset {url, filename}`. `direct` says the download is made at once: the switch is
 /// off and the caller has `write`.
 pub async fn download_asset(
+    context: &script::RunContext,
     w: Arc<Writer>,
     f: &Fetcher,
     direct: bool,
@@ -363,7 +365,7 @@ pub async fn download_asset(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     if direct {
-        return match store_download(w, f, url, given).await {
+        return match store_download(context, w, f, url, given).await {
             Ok(done) => {
                 let mut applied = done.clone();
                 applied["id"] = json!(call_id);
@@ -471,18 +473,19 @@ fn stored(asset: &writer::Asset, url: &str) -> Value {
 /// Download `url` and store it as a new asset, as `download_asset` does with its switch off.
 /// Nothing is stored, and no file is left behind, when the download fails.
 pub async fn store_download(
+    context: &script::RunContext,
     w: Arc<Writer>,
     f: &Fetcher,
     url: &str,
     filename: Option<&str>,
 ) -> Result<Value, ApplyError> {
     let w2 = w.clone();
-    let file: PathBuf = tokio::task::spawn_blocking(move || w2.incoming_file())
+    let file: PathBuf = crate::ai_chat::blocking(context, move || w2.incoming_file())
         .await
         .map_err(|e| ApplyError::Invalid(e.to_string()))??;
     let name = download(f, url, filename, &file).await?;
     let put = file.clone();
-    let asset = tokio::task::spawn_blocking(move || put_downloaded(&w, &name, &put))
+    let asset = crate::ai_chat::blocking(context, move || put_downloaded(&w, &name, &put))
         .await
         .map_err(|e| {
             let _ = std::fs::remove_file(&file);
