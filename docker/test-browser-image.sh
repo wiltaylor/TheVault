@@ -203,7 +203,7 @@ headed_ready=$(cat <<'JS'
 async (page) => {
   await page.bringToFront();
   await page.waitForFunction(() => document.visibilityState === 'visible' &&
-    innerWidth > 0 && innerHeight > 0, { timeout: 30000 });
+    innerWidth > 0 && innerHeight > 0, null, { timeout: 30000 });
   await page.evaluate(() => Promise.race([
     new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))),
     new Promise((_, reject) => setTimeout(() => reject(new Error('No visible compositor frame within 30s')), 30000))
