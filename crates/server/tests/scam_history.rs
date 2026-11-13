@@ -134,7 +134,7 @@ fn wait(s: &TestServer, c: &Client, cookie: &str, f: impl Fn(&Value) -> bool) ->
 fn response() -> Value {
     json!({"id":"history", "model":"jev", "answers":{
         "scam":{"type":"noul","noul":0.1},
-        "category":{"type":"choice","choice":"other","confidence":0.9,"probabilities":{"other":1.0}}
+        "category":{"type":"choice","choice":"other","confidence":0.9,"probabilities":{"scam":0.0,"spam":0.0,"marketing":0.0,"personal":0.0,"transactional":0.0,"other":1.0}}
     },"usage":{"input_tokens":3,"output_tokens":2}})
 }
 
@@ -328,7 +328,8 @@ fn history_known_price_matches_recorded_fake_charges_and_failure_is_once_visible
             .iter()
             .filter(|a| a["outcome"] == "succeeded")
             .count(),
-        2
+        2,
+        "{done}"
     );
     assert_eq!(
         outcomes
@@ -376,7 +377,7 @@ fn history_restart_retains_uncertain_attempt_and_resumes_only_pending_items() {
     let attempts = done["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), 3);
     assert_eq!(attempts[0]["outcome"], "interrupted_no_retry");
-    assert!(attempts[1..].iter().all(|a| a["outcome"] == "succeeded"));
+    assert!(attempts[1..].iter().all(|a| a["outcome"] == "succeeded"), "{done}");
     assert_eq!(fake.requests().len(), 3);
     let mut ids: Vec<_> = attempts.iter().map(|a| a["id"].as_str().unwrap()).collect();
     ids.sort();
