@@ -1324,6 +1324,7 @@ mod tests {
         }
         let images = Default::default();
         let out = file(
+            &script::RunContext::default(),
             &b,
             "test",
             &json!({"path":"test.txt"}),
