@@ -788,7 +788,7 @@ mod tests {
             "permissions { change_types = []\n}\n",
             "permissions { skills = []\n}\n",
             "permissions { browser = true\n}\n",
-            "permissions { browser_secrets = [\"login\"]\n}\n",
+            "permissions { browser = true\n browser_secrets = [\"login\"]\n}\n",
             "permissions { gmail_actions = true\n}\n",
             "permissions { confirm { agents = false\n}\n}\n",
             "permissions { web { search = false\n}\n}\n",
@@ -798,11 +798,21 @@ mod tests {
             let after = format!("{field}{trigger}");
             Agent::parse("helper", &after).unwrap();
             for (before, after) in [(trigger, after.as_str()), (after.as_str(), trigger)] {
-                assert!(triggered_agent_changed(&json!({"name":"helper", "before":before, "after":after})), "{field}");
+                assert!(
+                    triggered_agent_changed(
+                        &json!({"name":"helper", "before":before, "after":after})
+                    ),
+                    "{field}"
+                );
             }
-            assert!(!triggered_agent_changed(&json!({"name":"helper", "before":"", "after":field})), "{field}");
+            assert!(
+                !triggered_agent_changed(&json!({"name":"helper", "before":"", "after":field})),
+                "{field}"
+            );
         }
-        assert!(!triggered_agent_changed(&json!({"name":"helper", "before":trigger, "after":format!("\n{trigger}\n")})));
+        assert!(!triggered_agent_changed(
+            &json!({"name":"helper", "before":trigger, "after":format!("\n{trigger}\n")})
+        ));
     }
 
     #[test]
@@ -843,7 +853,10 @@ mod tests {
                 "enabled = false\n\ntrigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"closed\\\"\"\n prompt = \"Read.\"\n}\n"
             )
         )));
-        assert!(triggered_agent_changed(&change(Some(note), Some("not valid WCL"))));
+        assert!(triggered_agent_changed(&change(
+            Some(note),
+            Some("not valid WCL")
+        )));
         assert!(triggered_agent_changed(&json!({"name":"helper"})));
     }
 
