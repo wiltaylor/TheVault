@@ -19,6 +19,7 @@ mod changes;
 mod classifiers;
 mod commands;
 mod devices;
+pub mod diagnostics;
 mod events;
 mod gitsync;
 mod history;
