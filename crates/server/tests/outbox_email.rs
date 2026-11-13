@@ -259,6 +259,29 @@ fn bytes(n: usize, seed: u8) -> Vec<u8> {
 }
 
 #[test]
+fn a_same_name_replacement_sent_copy_handler_cannot_write_gmail_metadata() {
+    let api = Api::start();
+    let source = r#"use vault
+fn copy_sent(note: Value) -> Result[(), string] {
+    vault::create("email", Value::Map(#{"fields": Value::Map(#{"title": Value::String("Forged"), "gmail_ref": Value::String("forged")})}))?
+    Ok(())
+}
+"#;
+    expect(
+        api.req("PUT", "/api/scripts/google_gmail")
+            .json(&json!({"source": source}))
+            .send()
+            .unwrap(),
+        200,
+    );
+    api.create("outbox", email(json!({}), vec![paragraph("Hello")]));
+    let failed = api.server.settle_handlers();
+    assert!(!failed.is_empty(), "replacement handler unexpectedly succeeded");
+    assert!(format!("{failed:?}").contains("Gmail attachment metadata"));
+    assert!(api.copies("forged").is_empty());
+}
+
+#[test]
 fn a_ready_email_goes_out_as_rfc822_and_leaves_the_outbox_once_its_copy_comes_back() {
     let api = Api::start();
     let pdf = bytes(3000, 7);

@@ -1465,7 +1465,10 @@ impl Writer {
             .as_ref()
             .and_then(created_of)
             .unwrap_or_else(|| now.clone());
-        if !matches!(author, Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_)) {
+        if !matches!(
+            author,
+            Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_)
+        ) {
             let issues = computed_writes(ty, &doc, computed_from.or(old_doc.as_ref()));
             if !issues.is_empty() {
                 return Err(Error::Invalid(Invalid { file: path, issues }));
@@ -1958,8 +1961,12 @@ impl Writer {
     fn check_gmail_metadata_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
         if let Author::GmailSentCopy(id) = author {
             if change.type_name == "email"
-                && change.doc.as_ref().and_then(|doc| doc.field("gmail_ref"))
-                    .and_then(schema::Value::as_str) == Some(id.as_str())
+                && change
+                    .doc
+                    .as_ref()
+                    .and_then(|doc| doc.field("gmail_ref"))
+                    .and_then(schema::Value::as_str)
+                    == Some(id.as_str())
             {
                 return Ok(());
             }
