@@ -39,7 +39,8 @@ test("a delayed ready item shows minutes and Cancel send returns it to Draft", a
   await item.getByRole("button", { name: "Cancel send" }).click();
   await expect(item).toHaveCount(0);
   await page.getByRole("tab", { name: "Draft", exact: true }).click();
-  await expect(page.getByRole("link", { name: "Delayed email", exact: true })).toBeVisible();
+  // By note, not by title: other runs on the same server leave drafts of the same name.
+  await expect(page.locator(`a[href="/notes/${saved.id}"]`, { hasText: "Delayed email" })).toBeVisible();
   const stored = await (await admin.get(`/api/notes/${saved.id}`)).json();
   expect(stored.note.fields.status).toBe("draft");
   expect(stored.note.fields.sent_at).toBeUndefined();
