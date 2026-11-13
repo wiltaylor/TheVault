@@ -73,6 +73,7 @@ impl Fixture {
         }
         let task = format!(
             r#"label = "Gmail"
+schedule = "*/10 * * * *"
 script = "google_gmail"
 timeout = "PT5M"
 allow_domains = ["{}"]
