@@ -1689,13 +1689,11 @@ impl Writer {
         // so it cannot silently skip unrelated committed notes' after-handlers.
         let mut owner_outbox = Vec::new();
         for r in &rendered {
-            if let Some(context) = self
-                .remember_outbox_context(
-                    &r.change,
-                    authors.get(&r.change.id).unwrap_or(author),
-                    !submitted.contains(&r.change.id),
-                )?
-            {
+            if let Some(context) = self.remember_outbox_context(
+                &r.change,
+                authors.get(&r.change.id).unwrap_or(author),
+                !submitted.contains(&r.change.id),
+            )? {
                 owner_outbox.push((r.change.id.clone(), context));
             }
         }
