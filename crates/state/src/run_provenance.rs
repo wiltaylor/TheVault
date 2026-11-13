@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS run_provenance (
     id TEXT PRIMARY KEY,
     format INTEGER NOT NULL,
     restricted INTEGER NOT NULL,
+    sealed INTEGER NOT NULL DEFAULT 0,
     stop_generation INTEGER,
     parent TEXT
 );
@@ -27,6 +28,7 @@ pub struct RunProvenance {
     id: String,
     restricted: bool,
     generation: Option<Generation>,
+    sealed: bool,
 }
 
 impl RunProvenance {
@@ -42,11 +44,16 @@ impl RunProvenance {
         self.generation
     }
 
+    pub fn is_sealed(&self) -> bool {
+        self.sealed
+    }
+
     fn unknown(id: &str) -> Self {
         Self {
             id: id.to_owned(),
             restricted: true,
             generation: Some(Generation::stale()),
+            sealed: false,
         }
     }
 }
@@ -75,13 +82,14 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
         id: id.to_owned(),
         restricted: false,
         generation: None,
+        sealed: true,
     };
     loop {
         if !seen.insert(cursor.clone()) {
             return Err(Error::Corrupt("run provenance cycle".into()));
         }
-        let (format, restricted, generation, parent) = conn.query_row(
-            "SELECT format, restricted, stop_generation, parent FROM run_provenance WHERE id=?1",
+        let (format, restricted, generation, parent, sealed) = conn.query_row(
+            "SELECT format, restricted, stop_generation, parent, sealed FROM run_provenance WHERE id=?1",
             [&cursor],
             |r| {
                 Ok((
@@ -89,11 +97,13 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
                     r.get::<_, i64>(1)?,
                     r.get::<_, Option<i64>>(2)?,
                     r.get::<_, Option<String>>(3)?,
+                    r.get::<_, i64>(4)?,
                 ))
             },
         )?;
         if format != 1
             || !matches!(restricted, 0 | 1)
+            || !matches!(sealed, 0 | 1)
             || generation.is_some_and(|value| value > current)
         {
             return Err(Error::Corrupt("invalid run provenance format".into()));
@@ -105,6 +115,7 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
             })
             .transpose()?;
         snapshot.restricted |= restricted == 1;
+        snapshot.sealed &= sealed == 1;
         snapshot.generation = oldest(snapshot.generation, generation);
         match parent {
             Some(parent) => cursor = parent,
@@ -130,15 +141,40 @@ impl State {
             id,
             restricted,
             generation,
+            sealed: false,
         })
     }
 
     /// Recover from host-owned storage, failing closed on any read/format error.
     /// Unknown provenance is restricted AND stale, even after Stop/Resume.
+    /// An interrupted unsealed run is restricted because exposure may have
+    /// happened after its last successful write. Sealed unrestricted runs stay
+    /// unrestricted. A readable record retains its recorded admission identity.
     pub fn load_run_provenance(&self, id: &str) -> RunProvenance {
         resolve(&self.conn(), id)
-            .map(|(_, snapshot)| snapshot)
+            .map(|(_, mut snapshot)| {
+                snapshot.restricted |= !snapshot.sealed;
+                snapshot
+            })
             .unwrap_or_else(|_| RunProvenance::unknown(id))
+    }
+
+    /// Seal only after no live context can gain restriction or join another run.
+    /// This is a host lifecycle operation, not a script or queue-payload option.
+    /// A failed seal leaves recovery conservative. Sealing an entire component
+    /// requires that all its live owners have finished, not merely one job.
+    pub fn seal_run_provenance(&self, id: &str) -> Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let (root, _) = resolve(&tx, id)?;
+        tx.execute(
+            "WITH RECURSIVE members(id) AS (
+                SELECT ?1 UNION SELECT p.id FROM run_provenance p JOIN members m ON p.parent=m.id
+             ) UPDATE run_provenance SET sealed=1 WHERE id IN (SELECT id FROM members)",
+            [root],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Add restriction/admission information, never replace earlier information.
@@ -154,8 +190,9 @@ impl State {
         let (root, mut snapshot) = resolve(&tx, id)?;
         snapshot.restricted |= restricted;
         snapshot.generation = oldest(snapshot.generation, generation);
+        snapshot.sealed = false;
         tx.execute(
-            "UPDATE run_provenance SET restricted=?2, stop_generation=?3 WHERE id=?1",
+            "UPDATE run_provenance SET restricted=?2, stop_generation=?3, sealed=0 WHERE id=?1",
             params![
                 root,
                 snapshot.restricted,
@@ -175,7 +212,7 @@ impl State {
         let (b_root, b) = resolve(&tx, b)?;
         if a_root != b_root {
             tx.execute(
-                "UPDATE run_provenance SET restricted=?2, stop_generation=?3 WHERE id=?1",
+                "UPDATE run_provenance SET restricted=?2, stop_generation=?3, sealed=0 WHERE id=?1",
                 params![
                     a_root,
                     a.restricted || b.restricted,
