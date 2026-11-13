@@ -1173,9 +1173,12 @@ fn classifier_diagnostics_and_selection_never_refresh_chatgpt() {
     let api = Api::start();
     let client = Client::new();
     let id = api.plan();
-    api.server.seed_secret(&ai::chatgpt_secret(&id),
+    api.server.seed_secret(
+        &ai::chatgpt_secret(&id),
         &json!({"client_id":"oaiapp_test","access_token":"expired",
-            "refresh_token":api.siwc.refresh_token(),"expires_ms":1,"account":"test"}).to_string());
+            "refresh_token":api.siwc.refresh_token(),"expires_ms":1,"account":"test"})
+        .to_string(),
+    );
     let login = client
         .post(api.server.url("/api/login"))
         .json(&json!({"password":testkit::PASSWORD}))
