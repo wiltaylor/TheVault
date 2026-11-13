@@ -103,7 +103,9 @@ impl Manifest {
             });
         }
         if probe.format != FORMAT {
-            return Err(Error::Malformed("legacy manifest refused; upgrade every peer and republish".into()));
+            return Err(Error::Malformed(
+                "legacy manifest refused; upgrade every peer and republish".into(),
+            ));
         }
         serde_json::from_slice(&json).map_err(|e| Error::Malformed(format!("manifest: {e}")))
     }

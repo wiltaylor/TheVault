@@ -47,7 +47,13 @@ pub fn open_note(key: &SyncKey, path: &str, blob: &[u8]) -> Result<(String, Vec<
 
 /// Splits `bytes` into part blobs of at most `part_bytes` each, in order. An empty asset is one
 /// empty part. `part_bytes` must exceed a blob's overhead.
-pub fn split(key: &SyncKey, layout: &Layout<'_>, id: &str, bytes: &[u8], part_bytes: usize) -> Vec<Vec<u8>> {
+pub fn split(
+    key: &SyncKey,
+    layout: &Layout<'_>,
+    id: &str,
+    bytes: &[u8],
+    part_bytes: usize,
+) -> Vec<Vec<u8>> {
     assert!(
         part_bytes > OVERHEAD,
         "a part must hold more than the {OVERHEAD} bytes of a blob's overhead"
@@ -56,12 +62,23 @@ pub fn split(key: &SyncKey, layout: &Layout<'_>, id: &str, bytes: &[u8], part_by
     if bytes.is_empty() {
         return vec![key.seal(&layout.asset_part(id, 0), &[])];
     }
-    bytes.chunks(chunk).enumerate().map(|(i, c)| key.seal(&layout.asset_part(id, i), c)).collect()
+    bytes
+        .chunks(chunk)
+        .enumerate()
+        .map(|(i, c)| key.seal(&layout.asset_part(id, i), c))
+        .collect()
 }
 
 /// Reassembles an asset from its part blobs, in order, and checks it is `size` bytes with
 /// sha256 `sha256`. `id` names the asset in the error.
-pub fn join<I>(key: &SyncKey, layout: &Layout<'_>, parts: I, id: &str, size: u64, sha256: &str) -> Result<Vec<u8>>
+pub fn join<I>(
+    key: &SyncKey,
+    layout: &Layout<'_>,
+    parts: I,
+    id: &str,
+    size: u64,
+    sha256: &str,
+) -> Result<Vec<u8>>
 where
     I: IntoIterator,
     I::Item: AsRef<[u8]>,

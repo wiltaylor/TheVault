@@ -39,7 +39,10 @@ fn a_manifest_round_trips() {
     assert_eq!(m.format, FORMAT);
     assert_eq!(FORMAT, 2);
     let blob = m.seal(&key);
-    assert_eq!(Manifest::open(&key, &gitsync::Layout::new(&key, "vault-a"), &blob).unwrap(), m);
+    assert_eq!(
+        Manifest::open(&key, &gitsync::Layout::new(&key, "vault-a"), &blob).unwrap(),
+        m
+    );
     // Deterministic, like every blob.
     assert_eq!(m.seal(&key), blob);
 }
@@ -73,7 +76,11 @@ fn the_json_uses_the_spec_field_names() {
 fn a_manifest_under_another_key_is_a_key_mismatch() {
     let blob = sample().seal(&SyncKey::generate());
     assert!(matches!(
-        Manifest::open(&SyncKey::generate(), &gitsync::Layout::new(&SyncKey::generate(), "vault-a"), &blob),
+        Manifest::open(
+            &SyncKey::generate(),
+            &gitsync::Layout::new(&SyncKey::generate(), "vault-a"),
+            &blob
+        ),
         Err(Error::KeyMismatch)
     ));
 }
@@ -82,13 +89,24 @@ fn a_manifest_under_another_key_is_a_key_mismatch() {
 fn a_newer_format_is_refused_before_its_shape_is_read() {
     let key = SyncKey::generate();
     // A future manifest whose shape this build cannot read.
-    let blob = key.seal(&gitsync::Layout::new(&key, "vault-a").manifest(), br#"{"format": 3, "notes": "something else"}"#);
+    let blob = key.seal(
+        &gitsync::Layout::new(&key, "vault-a").manifest(),
+        br#"{"format": 3, "notes": "something else"}"#,
+    );
     match Manifest::open(&key, &gitsync::Layout::new(&key, "vault-a"), &blob) {
         Err(Error::NewerFormat { found, supported }) => {
             assert_eq!((found, supported), (3, FORMAT));
         }
         other => panic!("{other:?}"),
     }
-    let err = Manifest::open(&key, &gitsync::Layout::new(&key, "vault-a"), &key.seal(&gitsync::Layout::new(&key, "vault-a").manifest(), b"not json")).unwrap_err();
+    let err = Manifest::open(
+        &key,
+        &gitsync::Layout::new(&key, "vault-a"),
+        &key.seal(
+            &gitsync::Layout::new(&key, "vault-a").manifest(),
+            b"not json",
+        ),
+    )
+    .unwrap_err();
     assert!(matches!(err, Error::Malformed(_)), "{err:?}");
 }

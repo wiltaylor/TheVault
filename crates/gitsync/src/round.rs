@@ -552,7 +552,9 @@ impl Round<'_> {
             ));
         }
 
-        let open_defs = |defs: &[DefEntry], taxonomy: bool| -> std::result::Result<BTreeMap<String, String>, Skip> {
+        let open_defs = |defs: &[DefEntry],
+                         taxonomy: bool|
+         -> std::result::Result<BTreeMap<String, String>, Skip> {
             let found: Vec<(&DefEntry, &str)> = defs
                 .iter()
                 .filter_map(|d| oids.get(&d.path).map(|o| (d, o.as_str())))
@@ -563,7 +565,11 @@ impl Round<'_> {
                 .map_err(Skip::new)?;
             let mut out = BTreeMap::new();
             for ((d, _), blob) in found.into_iter().zip(blobs) {
-                let path = if taxonomy { layout.taxonomy(&d.name) } else { layout.type_def(&d.name) };
+                let path = if taxonomy {
+                    layout.taxonomy(&d.name)
+                } else {
+                    layout.type_def(&d.name)
+                };
                 if d.path != path {
                     return Err(Skip::new("definition path does not match its identity"));
                 }
@@ -606,7 +612,10 @@ impl Round<'_> {
             }
             let opened = pack::open_note(self.key, &path, &blob).and_then(|(t, wcl)| {
                 if t != entry.note_type || pack::sha256_hex(&wcl) != entry.hash {
-                    return Err(Error::Corrupt { id: entry.id.clone(), detail: "manifest note type or hash mismatch".into() });
+                    return Err(Error::Corrupt {
+                        id: entry.id.clone(),
+                        detail: "manifest note type or hash mismatch".into(),
+                    });
                 }
                 let wcl =
                     String::from_utf8(wcl).map_err(|_| Error::Malformed("not UTF-8".into()))?;
@@ -828,8 +837,15 @@ impl Round<'_> {
                     .collect::<Result<_>>()?;
                 let parts = self.git.cat_blobs(&oids)?;
                 let layout = Layout::new(self.key, &b.peer);
-                if asset.parts.iter().enumerate().any(|(i, p)| *p != layout.asset_part(id, i)) {
-                    return Err(Error::Malformed("asset part path does not match its identity".into()));
+                if asset
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .any(|(i, p)| *p != layout.asset_part(id, i))
+                {
+                    return Err(Error::Malformed(
+                        "asset part path does not match its identity".into(),
+                    ));
                 }
                 let bytes = pack::join(self.key, &layout, parts, id, asset.size, &asset.sha256)?;
                 self.w.put_asset_with_id(id, &asset.filename, bytes)?;

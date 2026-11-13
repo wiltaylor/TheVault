@@ -46,7 +46,10 @@ fn an_exact_multiple_and_an_empty_asset() {
 
     let parts = split(&key, &layout, "A", &[], part);
     assert_eq!(parts.len(), 1);
-    assert_eq!(join(&key, &layout, &parts, "A", 0, &sha256_hex(&[])).unwrap(), b"");
+    assert_eq!(
+        join(&key, &layout, &parts, "A", 0, &sha256_hex(&[])).unwrap(),
+        b""
+    );
 }
 
 #[test]

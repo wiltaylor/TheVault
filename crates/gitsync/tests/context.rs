@@ -17,39 +17,89 @@ fn altered_context_and_manifest_are_refused_then_upgraded_peer_imports() {
     let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
     let layout = Layout::new(&key, peer);
     let text = memo("Bound note", "share", "yes");
-    let mut manifest = Manifest::new(Named { vault_id: peer.into(), name: "peer".into() });
-    manifest.types.push(DefEntry { name: "memo".into(), path: layout.type_def("memo") });
+    let mut manifest = Manifest::new(Named {
+        vault_id: peer.into(),
+        name: "peer".into(),
+    });
+    manifest.types.push(DefEntry {
+        name: "memo".into(),
+        path: layout.type_def("memo"),
+    });
     manifest.notes.push(NoteEntry {
-        id: id.into(), note_type: "memo".into(), origin: peer.into(),
-        hash: gitsync::pack::sha256_hex(text.as_bytes()), path: layout.note(id), assets: vec![],
+        id: id.into(),
+        note_type: "memo".into(),
+        origin: peer.into(),
+        hash: gitsync::pack::sha256_hex(text.as_bytes()),
+        path: layout.note(id),
+        assets: vec![],
     });
     let temp = tempfile::tempdir().unwrap();
     let git = Git::new(temp.path().join("repo"), Auth::None).unwrap();
     git.ensure_bare_clone(&repo.url()).unwrap();
-    for case in ["note swap", "definition swap", "hash", "type", "path", "legacy blob", "legacy manifest", "valid"] {
+    for case in [
+        "note swap",
+        "definition swap",
+        "hash",
+        "type",
+        "path",
+        "legacy blob",
+        "legacy manifest",
+        "valid",
+    ] {
         let mut m = manifest.clone();
-        let note_path = if case == "note swap" { layout.note("another") } else { layout.note(id) };
-        let def_path = if case == "definition swap" { layout.taxonomy("memo") } else { layout.type_def("memo") };
-        if case == "hash" { m.notes[0].hash = "00".repeat(32); }
-        if case == "type" { m.notes[0].note_type = "task".into(); }
-        if case == "path" { m.notes[0].id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC".into(); }
-        if case == "legacy manifest" { m.format = 1; }
+        let note_path = if case == "note swap" {
+            layout.note("another")
+        } else {
+            layout.note(id)
+        };
+        let def_path = if case == "definition swap" {
+            layout.taxonomy("memo")
+        } else {
+            layout.type_def("memo")
+        };
+        if case == "hash" {
+            m.notes[0].hash = "00".repeat(32);
+        }
+        if case == "type" {
+            m.notes[0].note_type = "task".into();
+        }
+        if case == "path" {
+            m.notes[0].id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZC".into();
+        }
+        if case == "legacy manifest" {
+            m.format = 1;
+        }
         let mut blob = m.seal(&key);
-        if case == "legacy blob" { blob[4] = 1; }
+        if case == "legacy blob" {
+            blob[4] = 1;
+        }
         let files = BTreeMap::from([
             (layout.manifest(), blob),
-            (layout.type_def("memo"), key.seal(&def_path, MEMO.as_bytes())),
-            (layout.note(id), gitsync::pack::seal_note(&key, &note_path, "memo", text.as_bytes())),
+            (
+                layout.type_def("memo"),
+                key.seal(&def_path, MEMO.as_bytes()),
+            ),
+            (
+                layout.note(id),
+                gitsync::pack::seal_note(&key, &note_path, "memo", text.as_bytes()),
+            ),
         ]);
         let tree = git.write_tree(&files).unwrap();
         let commit = git.commit_tree(&tree, "context fixture").unwrap();
         git.force_push(&commit, &layout.branch()).unwrap();
         let report = receiver.sync();
         if case == "valid" {
-            assert!(report["skipped_branches"].as_array().unwrap().is_empty(), "{report}");
-            assert_eq!(receiver.note(id).unwrap()["title"], "Bound note");
+            assert!(
+                report["skipped_branches"].as_array().unwrap().is_empty(),
+                "{report}"
+            );
+            assert_eq!(receiver.field(id, "title"), "Bound note");
         } else {
-            assert_eq!(report["skipped_branches"].as_array().unwrap().len(), 1, "{case}: {report}");
+            assert_eq!(
+                report["skipped_branches"].as_array().unwrap().len(),
+                1,
+                "{case}: {report}"
+            );
             assert!(receiver.note(id).is_none(), "{case}");
             if case.starts_with("legacy") {
                 assert!(s(&report["skipped_branches"][0]["reason"]).contains("upgrade"));

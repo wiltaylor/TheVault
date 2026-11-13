@@ -136,6 +136,25 @@ Change both under **Schedule**, in **Warn above (MB)** and **Refuse above (MB)**
 | Host key | The SSH host's key changed since it was pinned. Check with your host before you disconnect and set up again. |
 | Size refused | The published branch is over the refuse limit. Narrow the export query, or raise the limit. |
 
+## Format 2 upgrade
+
+Format 2 binds every encrypted object to its publishing instance, object kind
+and logical ID, and each asset part to its position. The canonical keyed path
+is authenticated and included in deterministic nonce derivation. Notes must
+also match the manifest's type and plaintext hash. Unchanged context and
+content still produce identical blobs.
+
+There is no legacy decryption fallback. Format 1 branches are skipped with an
+upgrade message, not imported or treated as deleted content. Upgrade every
+instance, retaining each local vault and the existing sync key, then run sync
+on each instance to republish its local data in format 2. An older build cannot
+read format 2 blobs. Mixed-version peers do not exchange changes until upgraded.
+Do not remove the only local copy of data before that peer has republished it.
+This requires no key rotation or manual repository history rewrite.
+
+Context binding does not detect replay of an older valid snapshot at the same
+context. Durable peer freshness is separate work (TV-264).
+
 ## Rotating the sync key
 
 To rotate the key, select **Generate a new key** on one instance. The next round on that instance re-encrypts its whole branch with the new key. Every other instance reports a key mismatch for that branch until you paste the new key into it.

@@ -13,14 +13,24 @@ fn a_blob_round_trips() {
     assert_eq!(blob[4], BLOB_VERSION);
     assert_eq!(blob.len(), OVERHEAD + b"hello notes".len());
     assert_eq!(key.open("test-context", &blob).unwrap(), b"hello notes");
-    assert_eq!(key.open("test-context", &key.seal("test-context", b"")).unwrap(), b"");
+    assert_eq!(
+        key.open("test-context", &key.seal("test-context", b""))
+            .unwrap(),
+        b""
+    );
 }
 
 #[test]
 fn the_same_plaintext_gives_the_same_blob() {
     let key = fixed();
-    assert_eq!(key.seal("test-context", b"same"), key.seal("test-context", b"same"));
-    assert_ne!(key.seal("test-context", b"same"), key.seal("test-context", b"other"));
+    assert_eq!(
+        key.seal("test-context", b"same"),
+        key.seal("test-context", b"same")
+    );
+    assert_ne!(
+        key.seal("test-context", b"same"),
+        key.seal("test-context", b"other")
+    );
     // Another key seals the same plaintext differently.
     assert_ne!(
         key.seal("test-context", b"same"),
@@ -48,20 +58,32 @@ fn an_altered_blob_is_a_key_mismatch() {
     let mut blob = key.seal("test-context", b"hello");
     let last = blob.len() - 1;
     blob[last] ^= 1;
-    assert!(matches!(key.open("test-context", &blob), Err(Error::KeyMismatch)));
+    assert!(matches!(
+        key.open("test-context", &blob),
+        Err(Error::KeyMismatch)
+    ));
     // So is a changed header, which is authenticated too.
     let mut blob = key.seal("test-context", b"hello");
     blob[0] = b'X';
-    assert!(matches!(key.open("test-context", &blob), Err(Error::Malformed(_))));
+    assert!(matches!(
+        key.open("test-context", &blob),
+        Err(Error::Malformed(_))
+    ));
 }
 
 #[test]
 fn a_short_or_foreign_blob_is_malformed() {
     let key = fixed();
-    assert!(matches!(key.open("test-context", b"TVGS"), Err(Error::Malformed(_))));
+    assert!(matches!(
+        key.open("test-context", b"TVGS"),
+        Err(Error::Malformed(_))
+    ));
     let mut blob = key.seal("test-context", b"hello");
     blob[4] = 9;
-    assert!(matches!(key.open("test-context", &blob), Err(Error::Malformed(_))));
+    assert!(matches!(
+        key.open("test-context", &blob),
+        Err(Error::Malformed(_))
+    ));
 }
 
 #[test]
@@ -107,9 +129,17 @@ fn canonical_context_binds_instance_kind_id_and_part_position() {
     let a = gitsync::Layout::new(&key, "a");
     let b = gitsync::Layout::new(&key, "b");
     let contexts = [
-        a.manifest(), b.manifest(), a.note("one"), a.note("two"), b.note("one"),
-        a.type_def("one"), a.type_def("two"), a.taxonomy("one"),
-        a.asset_part("one", 0), a.asset_part("one", 1), a.asset_part("two", 0),
+        a.manifest(),
+        b.manifest(),
+        a.note("one"),
+        a.note("two"),
+        b.note("one"),
+        a.type_def("one"),
+        a.type_def("two"),
+        a.taxonomy("one"),
+        a.asset_part("one", 0),
+        a.asset_part("one", 1),
+        a.asset_part("two", 0),
     ];
     for context in &contexts {
         let blob = key.seal(context, b"identical content");
