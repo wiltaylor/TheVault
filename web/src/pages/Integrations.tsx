@@ -202,6 +202,7 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
   const [reconnecting, setReconnecting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
+  const [revocationWarning, setRevocationWarning] = createSignal<string | null>(null);
   const [pending, setPending] = createSignal<Action | null>(null);
   const busy = () => pending() !== null;
   const doing = (a: Action) => pending() === a;
@@ -265,6 +266,7 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
     ev.preventDefault();
     void act("finish", async () => {
       setStatus(await api.googleFinish(pasted().trim()));
+      setRevocationWarning(null);
       setReconnecting(false);
       setAuthUrl(null);
       setPasted("");
@@ -277,7 +279,8 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
     void act("disconnect", async () => {
       const out = await api.googleDisconnect();
       setStatus(out);
-      setNotice(out.revocation_warning ?? "Disconnected. The Gmail and Calendar sync are paused.");
+      setRevocationWarning(out.revocation_warning ?? null);
+      setNotice(out.revocation_warning ? null : "Disconnected. The Gmail and Calendar sync are paused.");
     });
   }
 
@@ -496,6 +499,9 @@ export function GoogleCard(props: { protocol?: string; assign?: (url: string) =>
       </Show>
       <Show when={notice()}>
         <p class="muted">{notice()}</p>
+      </Show>
+      <Show when={revocationWarning()}>
+        <p class="google-revocation-warning" role="alert">{revocationWarning()}</p>
       </Show>
     </section>
   );

@@ -112,6 +112,7 @@ pub struct Google {
     scheduler: Arc<Scheduler>,
     pending: Mutex<HashMap<String, Pending>>,
     http: reqwest::Client,
+    connection: tokio::sync::Mutex<()>,
     attachment_fetch: tokio::sync::Semaphore,
 }
 
@@ -121,7 +122,9 @@ impl Google {
             attachment_fetch: tokio::sync::Semaphore::new(1),
             scheduler,
             pending: Mutex::default(),
+            connection: tokio::sync::Mutex::new(()),
             http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(GOOGLE_TIMEOUT)
                 .build()
                 .unwrap_or_default(),
@@ -337,6 +340,7 @@ pub struct FinishBody {
 
 /// `POST /api/integrations/google/finish`.
 pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<Value>, ApiError> {
+    let _connection = g.connection.lock().await;
     let url = Url::parse(b.url.trim()).map_err(|_| {
         ApiError::bad_request(
             "paste the whole address from the browser's address bar, starting http://127.0.0.1",
@@ -466,6 +470,8 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
 
 /// `POST /api/integrations/google/disconnect`.
 pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
+    // Finish must not install and unpause a new connection during this revocation.
+    let _connection = g.connection.lock().await;
     // Stop new scheduled runs before revoking the credential they use.
     let s = g.scheduler.clone();
     tokio::task::spawn_blocking(move || {
@@ -487,16 +493,17 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
     .await;
     let mut revocation_unconfirmed = credential.is_err();
     if let Ok(Some((refresh, revoke))) = credential {
-        let revoked = g
-            .http
-            .post(revoke)
-            .form(&[
-                ("token", refresh.as_str()),
-                ("token_type_hint", "refresh_token"),
-            ])
-            .send()
-            .await;
-        if !matches!(revoked, Ok(res) if res.status().is_success()) {
+        let revoked = revoke_with_deadline(
+            g.http
+                .post(revoke)
+                .form(&[
+                    ("token", refresh.as_str()),
+                    ("token_type_hint", "refresh_token"),
+                ])
+                .send(),
+        )
+        .await;
+        if !revoked {
             revocation_unconfirmed = true;
         }
     }
@@ -507,7 +514,14 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
         }
         // The cursors belong to the account: a later connection lists everything again.
         for (_, _, name) in TASKS {
-            let mut state = object(w, name)?;
+            let mut state = match writer::google::read_object(w.state(), name) {
+                Ok(state) => state,
+                Err(e) if unreadable_secret(&e) => {
+                    delete_secret(w, name)?;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             if state.is_empty() {
                 continue;
             }
@@ -522,7 +536,7 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
             writer::google::write_object(w.state(), name, &state)?;
         }
         // The scopes belong to the connection.
-        match object(w, SETTINGS) {
+        match writer::google::read_object(w.state(), SETTINGS) {
             Ok(mut s) => {
                 if s.remove(SCOPES_KEY).is_some() {
                     writer::google::write_object(w.state(), SETTINGS, &s)?;
@@ -530,7 +544,8 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
             }
             // Unreadable settings cannot retain connection scopes or serve status reads.
             // Deletion needs no decryption key, just like the other credential cleanup.
-            Err(_) => delete_secret(w, SETTINGS)?,
+            Err(e) if unreadable_secret(&e) => delete_secret(w, SETTINGS)?,
+            Err(e) => return Err(e.into()),
         }
         Ok(())
     })
@@ -542,6 +557,89 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
         );
     }
     Ok(Json(out))
+}
+
+/// Only unreadable ciphertext is disposable. Storage failures must remain errors.
+fn unreadable_secret(e: &writer::Error) -> bool {
+    matches!(
+        e,
+        writer::Error::State(
+            state::Error::Corrupt(_)
+                | state::Error::WrongKey { .. }
+                | state::Error::KeyMissing { .. }
+        )
+    )
+}
+
+async fn revoke_with_deadline(
+    request: impl std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+) -> bool {
+    matches!(tokio::time::timeout(GOOGLE_TIMEOUT, request).await, Ok(Ok(res)) if res.status().is_success())
+}
+
+#[cfg(test)]
+mod disconnect_tests {
+    use super::*;
+
+    #[test]
+    fn finish_and_disconnect_share_connection_exclusion() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(
+            &vault.server_dir().join("state.db"),
+            Some(state::SecretKey::generate()),
+        )
+        .unwrap();
+        let writer = Arc::new(Writer::open(vault, state).unwrap());
+        let host = Arc::new(script::Host::new(
+            writer.clone(),
+            1,
+            script::Limits::default(),
+            script::Ai::of(&writer),
+        ));
+        let scheduler =
+            Scheduler::new(writer, host, Arc::new(scheduler::TestClock::new(0))).unwrap();
+        let google = Arc::new(Google::new(scheduler));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let guard = google.connection.lock().await;
+            let finish = finish(
+                State(google.clone()),
+                Json(FinishBody {
+                    url: "invalid".into(),
+                }),
+            );
+            let disconnect = disconnect(State(google.clone()));
+            tokio::pin!(finish, disconnect);
+            // Neither route can even begin its work while the other owns the connection.
+            assert!(futures_util::poll!(&mut finish).is_pending());
+            assert!(futures_util::poll!(&mut disconnect).is_pending());
+            drop(guard);
+            assert!(finish.await.is_err());
+        });
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revocation_has_a_bounded_total_deadline() {
+        let began = tokio::time::Instant::now();
+        assert!(!revoke_with_deadline(std::future::pending()).await);
+        assert_eq!(began.elapsed(), GOOGLE_TIMEOUT);
+    }
+
+    #[test]
+    fn only_ciphertext_errors_allow_deletion() {
+        for e in [
+            state::Error::Corrupt("test".into()),
+            state::Error::WrongKey {
+                detail: "test".into(),
+            },
+            state::Error::KeyMissing { path: None },
+        ] {
+            assert!(unreadable_secret(&e.into()));
+        }
+        assert!(!unreadable_secret(
+            &state::Error::Io(std::io::Error::other("test")).into()
+        ));
+    }
 }
 
 #[derive(Deserialize)]

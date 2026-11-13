@@ -9776,6 +9776,12 @@ button.toast-action {
   overflow-wrap: anywhere;
 }
 
+.google-revocation-warning {
+  padding: 0.6rem;
+  border-left: 3px solid #b57900;
+  background: color-mix(in srgb, #eab308 15%, transparent);
+}
+
 .device-health-warning {
   margin: 0.5rem 0 0;
   padding: 0.4rem 0.6rem;
