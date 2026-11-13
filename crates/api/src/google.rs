@@ -112,6 +112,7 @@ pub struct Google {
     scheduler: Arc<Scheduler>,
     pending: Mutex<HashMap<String, Pending>>,
     http: reqwest::Client,
+    connection: tokio::sync::Mutex<()>,
     attachment_fetch: tokio::sync::Semaphore,
 }
 
@@ -121,7 +122,9 @@ impl Google {
             attachment_fetch: tokio::sync::Semaphore::new(1),
             scheduler,
             pending: Mutex::default(),
+            connection: tokio::sync::Mutex::new(()),
             http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(GOOGLE_TIMEOUT)
                 .build()
                 .unwrap_or_default(),
@@ -337,6 +340,7 @@ pub struct FinishBody {
 
 /// `POST /api/integrations/google/finish`.
 pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<Value>, ApiError> {
+    let _connection = g.connection.lock().await;
     let url = Url::parse(b.url.trim()).map_err(|_| {
         ApiError::bad_request(
             "paste the whole address from the browser's address bar, starting http://127.0.0.1",
@@ -466,6 +470,8 @@ pub async fn finish(State(g): Shared, Json(b): Json<FinishBody>) -> Result<Json<
 
 /// `POST /api/integrations/google/disconnect`.
 pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
+    // Finish must not install and unpause a new connection during this revocation.
+    let _connection = g.connection.lock().await;
     // Stop new scheduled runs before revoking the credential they use.
     let s = g.scheduler.clone();
     tokio::task::spawn_blocking(move || {
@@ -507,7 +513,14 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
         }
         // The cursors belong to the account: a later connection lists everything again.
         for (_, _, name) in TASKS {
-            let mut state = object(w, name)?;
+            let mut state = match writer::google::read_object(w.state(), name) {
+                Ok(state) => state,
+                Err(e) if unreadable_secret(&e) => {
+                    delete_secret(w, name)?;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             if state.is_empty() {
                 continue;
             }
@@ -522,7 +535,7 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
             writer::google::write_object(w.state(), name, &state)?;
         }
         // The scopes belong to the connection.
-        match object(w, SETTINGS) {
+        match writer::google::read_object(w.state(), SETTINGS) {
             Ok(mut s) => {
                 if s.remove(SCOPES_KEY).is_some() {
                     writer::google::write_object(w.state(), SETTINGS, &s)?;
@@ -530,7 +543,8 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
             }
             // Unreadable settings cannot retain connection scopes or serve status reads.
             // Deletion needs no decryption key, just like the other credential cleanup.
-            Err(_) => delete_secret(w, SETTINGS)?,
+            Err(e) if unreadable_secret(&e) => delete_secret(w, SETTINGS)?,
+            Err(e) => return Err(e.into()),
         }
         Ok(())
     })
@@ -542,6 +556,11 @@ pub async fn disconnect(State(g): Shared) -> Result<Json<Value>, ApiError> {
         );
     }
     Ok(Json(out))
+}
+
+/// Only unreadable ciphertext is disposable. Storage failures must remain errors.
+fn unreadable_secret(e: &state::Error) -> bool {
+    matches!(e, state::Error::Corrupt(_) | state::Error::WrongKey { .. } | state::Error::KeyMissing { .. })
 }
 
 #[derive(Deserialize)]
