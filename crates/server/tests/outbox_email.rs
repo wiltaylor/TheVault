@@ -259,6 +259,45 @@ fn bytes(n: usize, seed: u8) -> Vec<u8> {
 }
 
 #[test]
+fn a_sent_copy_keeps_the_connected_account_and_lists_deferred_parts_for_the_owner() {
+    let api = Api::start();
+    let asset = api.upload("large.pdf", bytes(800 * 1024, 7));
+    let id = api.create(
+        "outbox",
+        email(json!({"attachments": [asset]}), vec![paragraph("Attached")]),
+    );
+    api.settle();
+    let sent = api.sent();
+    let copies = api.copies(&sent.id);
+    assert_eq!(copies.len(), 1);
+    let copy_id = copies[0]["id"].as_str().unwrap();
+    let fields = api.fields(copy_id);
+    assert_eq!(fields["gmail_account"], DEFAULT_ACCOUNT);
+    assert_eq!(fields["gmail_deferred_parts"].as_array().unwrap().len(), 1);
+    assert!(api.gone(&id));
+
+    let owner = Client::new();
+    let login = owner
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    assert_eq!(login.status(), 200);
+    let cookie = login.headers()["set-cookie"].to_str().unwrap();
+    let parts = expect(
+        owner
+            .get(api.server.url(&format!("/api/integrations/google/attachments/{copy_id}")))
+            .header("cookie", cookie.split(';').next().unwrap())
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert_eq!(parts["parts"].as_array().unwrap().len(), 1);
+    assert_eq!(parts["parts"][0]["fetchable"], true);
+    assert_eq!(parts["parts"][0]["size"], 800 * 1024);
+}
+
+#[test]
 fn a_same_name_replacement_sent_copy_handler_cannot_write_gmail_metadata() {
     let api = Api::start();
     let source = r#"use vault
