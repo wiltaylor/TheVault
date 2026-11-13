@@ -234,91 +234,101 @@ pub fn cleanup_retired(w: Arc<Writer>) {
     tokio::spawn(async move {
         let context = cleanup_context();
         let _flight = Flight;
-        let mut retries = std::collections::HashMap::<String, (Instant, Duration)>::new();
-        let mut active = std::collections::HashSet::<String>::new();
-        let mut deletes = tokio::task::JoinSet::new();
-        let mut task_ids = std::collections::HashMap::new();
-        let mut offline_until = Instant::now();
-        let mut offline_delay = Duration::from_secs(30);
-        loop {
-            let ids = context
-                .scope(|| w.retired_browser_profiles())
-                .unwrap_or_default();
-            retries.retain(|id, _| ids.contains(id));
-            let now = Instant::now();
-            let due: Vec<_> = ids
-                .iter()
-                .filter(|id| {
-                    !active.contains(*id) && retries.get(*id).is_none_or(|(next, _)| *next <= now)
-                })
-                .take(64_usize.saturating_sub(active.len()))
-                .cloned()
-                .collect();
-            if offline_until <= now
-                && let Some(first) = due.first()
+        cleanup_worker(w, b, &WAKE, context).await;
+    });
+}
+
+async fn cleanup_worker(
+    w: Arc<Writer>,
+    b: BrowserBox,
+    wake: &tokio::sync::Notify,
+    context: script::RunContext,
+) {
+    use tokio::time::Instant;
+    let mut retries = std::collections::HashMap::<String, (Instant, Duration)>::new();
+    let mut active = std::collections::HashSet::<String>::new();
+    let mut deletes = tokio::task::JoinSet::new();
+    let mut task_ids = std::collections::HashMap::new();
+    let mut offline_until = Instant::now();
+    let mut offline_delay = Duration::from_secs(30);
+    loop {
+        let ids = context
+            .scope(|| w.retired_browser_profiles())
+            .unwrap_or_default();
+        retries.retain(|id, _| ids.contains(id));
+        let now = Instant::now();
+        let due: Vec<_> = ids
+            .iter()
+            .filter(|id| {
+                !active.contains(*id) && retries.get(*id).is_none_or(|(next, _)| *next <= now)
+            })
+            .take(64_usize.saturating_sub(active.len()))
+            .cloned()
+            .collect();
+        if offline_until <= now
+            && let Some(first) = due.first()
+        {
+            // Only a failed health/protocol check starts global offline backoff.
+            if b.clone()
+                .with_profile(first.clone())
+                .check_protocol()
+                .await
+                .is_ok()
             {
-                // Only a failed health/protocol check starts global offline backoff.
-                if b.clone()
-                    .with_profile(first.clone())
-                    .check_protocol()
-                    .await
-                    .is_ok()
-                {
-                    offline_delay = Duration::from_secs(30);
-                    for id in due {
-                        active.insert(id.clone());
-                        let profile = b.clone().with_profile(id.clone());
-                        let name = id.clone();
-                        let context = context.clone();
-                        let task = deletes
-                            .spawn(async move { (id, profile.remove_profile(&context).await) });
-                        task_ids.insert(task.id(), name);
-                    }
-                } else {
-                    offline_until = Instant::now() + offline_delay;
-                    offline_delay = (offline_delay * 2).min(Duration::from_secs(900));
+                offline_delay = Duration::from_secs(30);
+                for id in due {
+                    active.insert(id.clone());
+                    let profile = b.clone().with_profile(id.clone());
+                    let name = id.clone();
+                    let context = context.clone();
+                    let task = deletes
+                        .spawn(async move { (id, profile.remove_profile(&context).await) });
+                    task_ids.insert(task.id(), name);
                 }
-            }
-            let next = if active.len() >= 64 {
-                None
-            } else if offline_until > Instant::now() {
-                Some(offline_until)
             } else {
-                retries
-                    .iter()
-                    .filter(|(id, _)| !active.contains(*id))
-                    .map(|(_, (next, _))| *next)
-                    .min()
-            };
-            // A new retirement can wake the scheduler while earlier DELETEs are
-            // still in flight. Awaiting a whole batch would still delay resets.
-            tokio::select! {
-                result = deletes.join_next_with_id(), if !deletes.is_empty() => {
-                    let completion = match result {
-                        Some(Ok((task, (id, result)))) => { task_ids.remove(&task); Some((id, result)) },
-                        Some(Err(error)) => task_ids.remove(&error.id()).map(|id| (id, Err(format!("delete task failed: {error}")))),
-                        None => None,
-                    };
-                    if let Some((id, result)) = completion {
-                        active.remove(&id);
-                        match result {
-                            Ok(()) => { let _ = context.scope(|| w.browser_profile_removed(&id)); retries.remove(&id); }
-                            Err(e) => {
-                                eprintln!("retired browser profile cleanup failed: {e}");
-                                let delay = retries.get(&id).map_or(Duration::from_secs(30), |(_, delay)| (*delay * 2).min(Duration::from_secs(900)));
-                                retries.insert(id, (Instant::now() + delay, delay));
-                            }
+                offline_until = Instant::now() + offline_delay;
+                offline_delay = (offline_delay * 2).min(Duration::from_secs(900));
+            }
+        }
+        let next = if active.len() >= 64 {
+            None
+        } else if offline_until > Instant::now() {
+            Some(offline_until)
+        } else {
+            retries
+                .iter()
+                .filter(|(id, _)| !active.contains(*id))
+                .map(|(_, (next, _))| *next)
+                .min()
+        };
+        // A new retirement can wake the scheduler while earlier DELETEs are
+        // still in flight. Awaiting a whole batch would still delay resets.
+        tokio::select! {
+            result = deletes.join_next_with_id(), if !deletes.is_empty() => {
+                let completion = match result {
+                    Some(Ok((task, (id, result)))) => { task_ids.remove(&task); Some((id, result)) },
+                    Some(Err(error)) => task_ids.remove(&error.id()).map(|id| (id, Err(format!("delete task failed: {error}")))),
+                    None => None,
+                };
+                if let Some((id, result)) = completion {
+                    active.remove(&id);
+                    match result {
+                        Ok(()) => { let _ = context.scope(|| w.browser_profile_removed(&id)); retries.remove(&id); }
+                        Err(e) => {
+                            eprintln!("retired browser profile cleanup failed: {e}");
+                            let delay = retries.get(&id).map_or(Duration::from_secs(30), |(_, delay)| (*delay * 2).min(Duration::from_secs(900)));
+                            retries.insert(id, (Instant::now() + delay, delay));
                         }
                     }
                 }
-                _ = WAKE.notified() => {},
-                _ = async {
-                    if let Some(next) = next { tokio::time::sleep_until(next.into()).await; }
-                    else { std::future::pending::<()>().await; }
-                } => {},
             }
+            _ = wake.notified() => {},
+            _ = async {
+                if let Some(next) = next { tokio::time::sleep_until(next.into()).await; }
+                else { std::future::pending::<()>().await; }
+            } => {},
         }
-    });
+    }
 }
 
 /// The client the tools share: no overall timeout, each request sets its own.
@@ -1318,6 +1328,78 @@ mod tests {
         assert!(b.remove_profile(&context).await.is_ok());
         assert_ne!(context, owner);
         assert!(script::RunContext::current().is_none());
+        server.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_cleanup_retries_and_accepts_later_retirements() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let writer = Arc::new(Writer::open(vault, state).unwrap());
+        let owner = script::RunContext::default();
+        owner.capture_stop_generation(writer.state().admit_automation().unwrap());
+        owner.restrict();
+        owner.scope(|| writer.retire_browser_profile("first").unwrap());
+        let context = owner.scope(cleanup_context);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let count = attempts.clone();
+        let app = axum::Router::new()
+            .route("/health", axum::routing::get(|| async {
+                axum::Json(json!({"profile_protocol": 1}))
+            }))
+            .route("/profile", axum::routing::delete(move || {
+                let count = count.clone();
+                async move {
+                    if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        axum::http::StatusCode::NO_CONTENT
+                    }
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let b = BrowserBox {
+            base: format!("http://{}", listener.local_addr().unwrap()),
+            token: String::new(),
+            profile: None,
+            secret_browser: false,
+        };
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let wake = Arc::new(tokio::sync::Notify::new());
+        let worker = tokio::spawn({
+            let writer = writer.clone();
+            let wake = wake.clone();
+            let context = context.clone();
+            async move { cleanup_worker(writer, b, &wake, context).await }
+        });
+        // Bounded fake-clock steps drive the real retry scheduler and HTTP tasks.
+        for _ in 0..1000 {
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(1)).await;
+            if writer.retired_browser_profiles().unwrap().is_empty() {
+                break;
+            }
+        }
+        assert!(writer.retired_browser_profiles().unwrap().is_empty());
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        writer.retire_browser_profile("later").unwrap();
+        wake.notify_one();
+        for _ in 0..1000 {
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(1)).await;
+            if writer.retired_browser_profiles().unwrap().is_empty() {
+                break;
+            }
+        }
+        assert!(writer.retired_browser_profiles().unwrap().is_empty());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert!(context.is_restricted());
+        assert_ne!(context, owner);
+        assert!(context.stop_generation().is_none());
+        assert!(script::RunContext::current().is_none());
+        worker.abort();
         server.abort();
     }
 
