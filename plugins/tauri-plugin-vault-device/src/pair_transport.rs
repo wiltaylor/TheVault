@@ -140,4 +140,3 @@ mod tests {
         assert!(http_addresses(&url, true, resolved).is_ok());
     }
 }
-

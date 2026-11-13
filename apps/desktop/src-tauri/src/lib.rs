@@ -500,7 +500,8 @@ async fn desktop(state: &App, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
             .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR)),
         (Method::GET, "/_desktop/status") => json_response(StatusCode::OK, &status_json(state)),
         (Method::POST, "/_desktop/http-warning") => json_response(
-            StatusCode::OK, &json!({ "message": state.http_warning.take() }),
+            StatusCode::OK,
+            &json!({ "message": state.http_warning.take() }),
         ),
         (Method::POST, "/_desktop/update/skip") => {
             if let Some(release) = state.updates.offered() {
