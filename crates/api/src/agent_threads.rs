@@ -1218,11 +1218,15 @@ pub(crate) fn pending_json(value: Value) -> axum::response::Response {
 /// Exact compact serde_json encoding length, without allocating an encoded copy.
 pub(crate) fn json_bytes(value: &Value) -> usize {
     fn string_bytes(s: &str) -> usize {
-        2 + s.as_bytes().iter().map(|b| match b {
-            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 8 | 12 => 2,
-            0..=31 => 6,
-            _ => 1,
-        }).sum::<usize>()
+        2 + s
+            .as_bytes()
+            .iter()
+            .map(|b| match b {
+                b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 8 | 12 => 2,
+                0..=31 => 6,
+                _ => 1,
+            })
+            .sum::<usize>()
     }
     match value {
         Value::Null => 4,
@@ -1231,12 +1235,21 @@ pub(crate) fn json_bytes(value: &Value) -> usize {
         Value::Number(n) => n.to_string().len(),
         Value::String(s) => string_bytes(s),
         Value::Array(a) => 2 + a.len().saturating_sub(1) + a.iter().map(json_bytes).sum::<usize>(),
-        Value::Object(o) => 2 + o.len().saturating_sub(1) + o.iter().map(|(k, v)| string_bytes(k) + 1 + json_bytes(v)).sum::<usize>(),
+        Value::Object(o) => {
+            2 + o.len().saturating_sub(1)
+                + o.iter()
+                    .map(|(k, v)| string_bytes(k) + 1 + json_bytes(v))
+                    .sum::<usize>()
+        }
     }
 }
 
 fn response_too_large() -> ApiError {
-    ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "response_too_large", "This response exceeds the 32 MiB Login-metadata scan limit. Narrow the query or use an owner session.")
+    ApiError::new(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "response_too_large",
+        "This response exceeds the 32 MiB Login-metadata scan limit. Narrow the query or use an owner session.",
+    )
 }
 
 /// A single response boundary for every authenticated content route, including errors.
@@ -1255,7 +1268,10 @@ pub(crate) async fn redact_response(
         }
         let (mut parts, _) = response.into_parts();
         parts.headers.remove(axum::http::header::CONTENT_LENGTH);
-        return Ok(axum::response::Response::from_parts(parts, axum::body::Body::from(value.to_string())));
+        return Ok(axum::response::Response::from_parts(
+            parts,
+            axum::body::Body::from(value.to_string()),
+        ));
     }
     // The owner pays no buffering/parsing cost, even for a large response.
     if crate::tasks::may_manage_login_secrets(w, author)? {
@@ -1456,11 +1472,18 @@ mod tests {
     fn compact_json_measure_matches_encoder() {
         let controls: String = (0..=127).map(char::from).collect();
         for value in [
-            json!({}), json!([]), json!(null), json!(true), json!(false),
+            json!({}),
+            json!([]),
+            json!(null),
+            json!(true),
+            json!(false),
             json!([0, -1, u64::MAX, i64::MIN, 1.25, 1e100, -0.0]),
             json!({"\"\\\n": [controls, "é日本語😀", "</script>"]}),
         ] {
-            assert_eq!(json_bytes(&value), serde_json::to_vec(&value).unwrap().len());
+            assert_eq!(
+                json_bytes(&value),
+                serde_json::to_vec(&value).unwrap().len()
+            );
         }
     }
 
@@ -1485,19 +1508,49 @@ mod tests {
         };
         let mut value = serde_json::to_value(page).unwrap();
         value["notice"] = json!("some notes may be held");
-        for author in [state::Author::Token("reader".into()), state::Author::Session("owner".into())] {
-            let generic = redact_response(&w, &author, "/api/query", Json(value.clone()).into_response()).await.unwrap();
+        for author in [
+            state::Author::Token("reader".into()),
+            state::Author::Session("owner".into()),
+        ] {
+            let generic = redact_response(
+                &w,
+                &author,
+                "/api/query",
+                Json(value.clone()).into_response(),
+            )
+            .await
+            .unwrap();
             let mut pending = pending_json(value.clone());
             // The extension owns the only authoritative value, not this unrelated body.
             *pending.body_mut() = axum::body::Body::from("untrusted replacement");
-            let fast = redact_response(&w, &author, "/api/query", pending).await.unwrap();
-            let generic = axum::body::to_bytes(generic.into_body(), REDACTION_LIMIT).await.unwrap();
-            let fast = axum::body::to_bytes(fast.into_body(), REDACTION_LIMIT).await.unwrap();
+            let fast = redact_response(&w, &author, "/api/query", pending)
+                .await
+                .unwrap();
+            let generic = axum::body::to_bytes(generic.into_body(), REDACTION_LIMIT)
+                .await
+                .unwrap();
+            let fast = axum::body::to_bytes(fast.into_body(), REDACTION_LIMIT)
+                .await
+                .unwrap();
             assert_eq!(fast, generic);
-            assert_eq!(json_bytes(&value), serde_json::to_vec(&value).unwrap().len());
+            assert_eq!(
+                json_bytes(&value),
+                serde_json::to_vec(&value).unwrap().len()
+            );
         }
         let oversized = pending_json(json!({"text":"x".repeat(REDACTION_LIMIT)}));
-        assert_eq!(redact_response(&w, &state::Author::Token("reader".into()), "/api/query", oversized).await.unwrap_err().status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            redact_response(
+                &w,
+                &state::Author::Token("reader".into()),
+                "/api/query",
+                oversized
+            )
+            .await
+            .unwrap_err()
+            .status,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
     }
 
     #[tokio::test]

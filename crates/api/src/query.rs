@@ -44,8 +44,7 @@ fn budgeted_query(
             return Ok(result);
         }
         // Re-run against the same locked index so the engine returns the correct cursor.
-        page.size = (rows.saturating_mul(PAGE_BYTE_BUDGET) / bytes)
-            .clamp(1, rows - 1);
+        page.size = (rows.saturating_mul(PAGE_BYTE_BUDGET) / bytes).clamp(1, rows - 1);
     }
 }
 
