@@ -1871,6 +1871,23 @@ export async function streamTurn(turn: string, after: number, onEvent: (e: Strea
 
 const enc = encodeURIComponent;
 
+export interface ClassifierSettings {
+  accounts: { id: string; name: string }[];
+  classifiers: {
+    name: string;
+    valid: boolean;
+    reason: string;
+    account?: string | null;
+    resolved_account?: string;
+    resolved_account_id?: string;
+    model?: string;
+    fields?: string[];
+    types?: string[];
+    filter?: string | null;
+    last_outcome: string;
+  }[];
+}
+
 export const api = {
   login: (password: string) => request<{ expires_in: number }>("POST", "/api/login", { password }),
   logout: () => request<void>("POST", "/api/logout"),
@@ -2187,6 +2204,9 @@ export const api = {
   browserStatus: () => request<BrowserStatus>("GET", "/api/integrations/browser"),
   /** Settings > AI: the accounts and the global settings (accounts A7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
+  classifierSettings: () => request<ClassifierSettings>("GET", "/api/classifiers"),
+  classifierAccount: (name: string, account: string) =>
+    request<ClassifierSettings>("PUT", `/api/classifiers/${encodeURIComponent(name)}/account`, { account }),
   /** Save the global settings: the context switch and share, and the confirmation and internet switches, each partial. */
   aiSaveSettings: (settings: { confirm?: Partial<AiConfirm>; web?: Partial<AiWeb>; context?: Partial<AiContext> }) =>
     request<AiStatus>("PUT", "/api/integrations/ai/settings", settings),

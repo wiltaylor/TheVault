@@ -371,6 +371,7 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         && envelope.to_string().len() > writer::agent_safety::ENVELOPE_LIMIT
     {
         let _ = writer.finish_agent_safety(&saved.id, hash, "held", "too_large");
+        last_outcome(writer, config, "held_too_large");
         return None;
     }
     let prepared = (|| {
@@ -394,6 +395,7 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
     let (credential, request) = match prepared {
         Ok(p) => p,
         Err(e) => {
+            last_outcome(writer, config, "setup_failed");
             if let Some(hash) = &safety_hash {
                 let _ = writer.finish_agent_safety(&saved.id, hash, "held", "decision_failed");
             }
@@ -406,7 +408,10 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         }
     };
     let began = Instant::now();
+    // Persist before sending. An interrupted attempt is never represented as a success.
+    last_outcome(writer, config, "attempting");
     let mut result = decisions::decide(&credential, &request, Duration::from_secs(30));
+    let mut outcome = if result.is_ok() { "succeeded" } else { "provider_failed" };
     let usage = result.as_ref().map_or_else(
         |e| e.usage,
         |r| ai::Usage {
@@ -439,6 +444,7 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         match apply(writer, saved, config, response) {
             Ok(saved) => version = Some(saved.version),
             Err(_) => {
+                outcome = "write_failed";
                 let mut error = AiError::new(
                     ErrorKind::Invalid,
                     "Classifier write failed or note changed",
@@ -468,6 +474,7 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         };
         let _ = writer.finish_agent_safety(&saved.id, hash, status, reason);
     }
+    last_outcome(writer, config, outcome);
     tracing::info!(target: "ai",
         "{} classifier={} note={}",
         decisions::trail(&credential, &request, &result, began.elapsed()),
@@ -494,6 +501,12 @@ fn run(writer: &Writer, saved: &Saved, config: &Classifier) -> Option<String> {
         }
     }
     version
+}
+
+fn last_outcome(writer: &Writer, config: &Classifier, outcome: &str) {
+    if writer.state().set_meta(&format!("classifier_last_outcome:{}", config.name), outcome).is_err() {
+        tracing::error!(target: "ai", "classifier: outcome=error:diagnostic_write");
+    }
 }
 
 fn configuration_warning(writer: &Writer, config: &Classifier, error: &AiError) {

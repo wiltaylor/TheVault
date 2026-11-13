@@ -555,6 +555,8 @@ fn safety_rest_read_route_inventory() {
         "/api/assets/trash",
         "/api/assets/{id}",
         "/api/assets/{id}/usage",
+        // TV-252: owner-session-only local setup metadata, no note content.
+        "/api/classifiers",
         "/api/clients",
         "/api/clients/cli/{target}",
         "/api/clients/latest/{kind}",
@@ -641,6 +643,7 @@ fn safety_rest_mutation_route_inventory() {
     actual.sort_unstable();
     actual.dedup();
     let reviewed = [
+        ("put", "/api/classifiers/{name}/account", "owner session only, local account field edit, no note content"),
         ("delete", "/api/agents/{name}", "admin scope required"),
         (
             "delete",
