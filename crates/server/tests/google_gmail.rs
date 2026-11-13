@@ -222,18 +222,25 @@ paused        = true
     fn put_secret(&self, name: &str, value: &str) {
         let mut request = self.req("PUT", &format!("/api/secrets/{name}"));
         if name == "google_settings" {
-            let login = self.client.post(self.server.url("/api/login"))
-                .json(&json!({"password": testkit::PASSWORD})).send().unwrap();
-            let cookie = login.headers()["set-cookie"].to_str().unwrap()
-                .split(';').next().unwrap();
-            request = self.client.put(self.server.url(&format!("/api/secrets/{name}")))
+            let login = self
+                .client
+                .post(self.server.url("/api/login"))
+                .json(&json!({"password": testkit::PASSWORD}))
+                .send()
+                .unwrap();
+            let cookie = login.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap();
+            request = self
+                .client
+                .put(self.server.url(&format!("/api/secrets/{name}")))
                 .header("cookie", cookie);
         }
         expect(
-            request
-                .json(&json!({ "value": value }))
-                .send()
-                .unwrap(),
+            request.json(&json!({ "value": value })).send().unwrap(),
             200,
         );
     }
