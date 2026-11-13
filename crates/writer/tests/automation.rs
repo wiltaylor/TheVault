@@ -48,7 +48,10 @@ fn stopped_and_stale_commits_leave_files_history_and_index_unchanged() {
             ));
             let result: Result<(), Error> =
                 w.commit_checked(|_| Ok(vec![Change::write("scripts/stale.ws", b"stale")]));
-            assert!(matches!(result, Err(Error::State(state::Error::AutomationRefused))));
+            assert!(matches!(
+                result,
+                Err(Error::State(state::Error::AutomationRefused))
+            ));
         });
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(w.history(&note.id).unwrap().len(), history);
@@ -80,7 +83,11 @@ fn stop_and_resume_during_before_handler_refuses_commit_without_waiting_for_hand
     impl writer::Hooks for Paused {
         fn before(&self, _: &mut writer::NoteChange, _: &Author) -> Result<(), String> {
             self.entered.send(()).unwrap();
-            self.proceed.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+            self.proceed
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
             Ok(())
         }
     }
@@ -95,14 +102,21 @@ fn stop_and_resume_during_before_handler_refuses_commit_without_waiting_for_hand
     let worker = w.clone();
     let thread = std::thread::spawn(move || {
         worker.with_automation(generation, || {
-            worker.create("item", &Input::Wcl("title = \"Race\"\n".into()), &Author::Agent("run".into()))
+            worker.create(
+                "item",
+                &Input::Wcl("title = \"Race\"\n".into()),
+                &Author::Agent("run".into()),
+            )
         })
     });
     entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     w.state().set_automation_stopped(true).unwrap();
     w.state().set_automation_stopped(false).unwrap();
     proceed_tx.send(()).unwrap();
-    assert!(matches!(thread.join().unwrap(), Err(Error::State(state::Error::AutomationRefused))));
+    assert!(matches!(
+        thread.join().unwrap(),
+        Err(Error::State(state::Error::AutomationRefused))
+    ));
     assert!(!dir.path().join("notes/item").exists());
 }
 
