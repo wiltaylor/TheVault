@@ -77,6 +77,72 @@ fn user() -> Author {
 }
 
 #[test]
+fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
+    for ty in ["event", "event_series"] {
+        for forged in [
+            "google_ref = \"forged\"\n",
+            "etag = \"forged\"\n",
+            "attendees = [\"forged\"]\n",
+            "attendees_raw = \"forged\"\n",
+            "my_response = \"accepted\"\n",
+            "status = \"cancelled\"\n",
+            "send_updates = true\n",
+            "send_updates = \"all\"\n",
+            "dict snapshot { title = \"forged\" }\n",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let hooks = Recorder::default();
+            let w = open(dir.path(), hooks.clone());
+            w.put_type(ty, TASK).unwrap();
+            let text = format!("title = \"peer\"\n{forged}");
+            assert!(matches!(w.create_remote(ID, ty, &text, &gitsync()), Err(Error::Rejected(_))));
+            assert!(w.state().history(ID).unwrap().is_empty());
+            assert_eq!(w.note_state(ID).unwrap(), NoteState::Absent);
+            assert!(!dir.path().join(format!("notes/{ty}/{ID}.wcl")).exists());
+
+            let base = w.create_remote(ID, "task", FROM_A, &gitsync()).unwrap();
+            assert!(matches!(w.replace_remote(ID, ty, &text, &base.version, &gitsync()), Err(Error::Rejected(_))));
+            assert_eq!(w.read(ID).unwrap().wcl, base.wcl);
+            assert_eq!(w.state().history(ID).unwrap().len(), 1);
+            assert_eq!(w.list(Some(ty)).unwrap().len(), 0);
+
+            // Authenticated home-server feed may carry exactly the same fields.
+            w.apply_remote(&writer::Remote::Put { id: ID.into(), type_name: ty.into(), wcl: text.clone() }).unwrap();
+            let before = w.read(ID).unwrap();
+            let changed = text.replace("forged", "changed").replace("true", "\"all\"").replace("cancelled", "confirmed").replace("accepted", "declined");
+            assert!(matches!(w.replace_remote(ID, ty, &changed, &before.version, &gitsync()), Err(Error::Rejected(_))));
+            assert_eq!(w.read(ID).unwrap().wcl, before.wcl);
+            assert_eq!(w.state().history(ID).unwrap().len(), 2);
+            let same = text.replace("\"peer\"", "\"title edit\"");
+            w.replace_remote(ID, ty, &same, &before.version, &gitsync()).unwrap();
+            assert!(hooks.0.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn device_upload_calendar_guard_runs_before_handlers() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = Recorder::default();
+    let w = open(dir.path(), hooks.clone());
+    w.put_type("event", TASK).unwrap();
+    let (device, _) = w.state().pair_device(&state::NewDevice {
+        name: "test", platform: "linux", capabilities: "{}", settings: "{}",
+    }).unwrap();
+    let author = Author::Token(device.token_id);
+    let forged = Input::Wcl("title = \"device\"\ngoogle_ref = \"forged\"\n".into());
+    assert!(matches!(w.create_with_id(ID, "event", &forged, &author), Err(Error::Rejected(_))));
+    assert!(w.state().history(ID).unwrap().is_empty());
+    assert!(hooks.0.lock().unwrap().is_empty());
+    let saved = w.create_with_id(ID, "event", &Input::Wcl("title = \"device\"\n".into()), &author).unwrap();
+    hooks.0.lock().unwrap().clear();
+    assert!(matches!(w.update(ID, &forged, Some(&saved.version), &author), Err(Error::Rejected(_))));
+    assert_eq!(w.read(ID).unwrap().wcl, saved.wcl);
+    assert_eq!(w.state().history(ID).unwrap().len(), 1);
+    assert!(hooks.0.lock().unwrap().is_empty());
+}
+
+#[test]
 fn an_imported_note_keeps_its_id_and_text_names_its_instance_and_runs_no_handler() {
     let dir = tempfile::tempdir().unwrap();
     let hooks = Recorder::default();
