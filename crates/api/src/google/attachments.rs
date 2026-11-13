@@ -66,7 +66,7 @@ fn parts(note: &writer::Note) -> Result<Vec<Part>, ApiError> {
                 || part.part.len() > 256
                 || part.attachment.is_empty()
                 || part.attachment.len() > 2048
-                || part.size <= 716800
+                || part.size <= vocab::GMAIL_IMPORT_ATTACHMENT_BYTES
                 || part.filename.is_empty()
                 || part.filename.len() > 255
                 || part.filename == "."

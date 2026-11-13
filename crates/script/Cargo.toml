@@ -17,6 +17,7 @@ wscript.workspace = true
 writer.workspace = true
 schema.workspace = true
 state.workspace = true
+vocab.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 # Runs the image downloads of vault::html_to_blocks on the guarded async fetcher (rich-import H3).
