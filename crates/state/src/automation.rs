@@ -25,6 +25,14 @@ pub struct AutomationState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Generation(i64);
 
+impl Generation {
+    /// Select an existing admission, never manufacture one from a counter.
+    /// Both identities must come from the same writer-owned State authority.
+    pub fn oldest(self, other: Self) -> Self {
+        if self.0 <= other.0 { self } else { other }
+    }
+}
+
 impl State {
     pub fn automation_state(&self) -> Result<AutomationState> {
         Ok(self.conn().query_row(

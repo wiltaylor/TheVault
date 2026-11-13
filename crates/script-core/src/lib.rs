@@ -25,6 +25,7 @@
 pub mod convert;
 mod device;
 pub mod run;
+mod run_context;
 mod vault;
 mod vault_module;
 
@@ -41,6 +42,7 @@ use wscript::std_modules::DynValue;
 use wscript::{CompiledUnit, Context, Fault, HostError, IntoValue, Module, Vm, VmConfig};
 
 pub use device::{DeviceAccess, DeviceData, DeviceExtensions, NoDevice, Switches, device_module};
+pub use run_context::RunContext;
 pub use vault::Vault;
 pub use vault_module::vault_module;
 pub use vocab::{Archived, Author};
@@ -201,9 +203,22 @@ pub struct Job {
     /// What the caller needs to know about the run from inside a host call, through
     /// [`current_job`]. The host does not read it.
     pub context: Json,
+    /// Host-owned provenance shared with the caller and every descendant.
+    run_context: RunContext,
 }
 
 impl Job {
+    pub fn run_context(&self) -> &RunContext {
+        &self.run_context
+    }
+
+    /// Explicit provenance cannot discard either prior or caller restrictions.
+    pub fn set_run_context(&mut self, context: RunContext) {
+        self.run_context.clone().scope(|| {
+            self.run_context = context.inherit_current();
+        });
+    }
+
     /// A job calling `function` of script `name` with no arguments, no hosts and no secrets.
     pub fn new(kind: Kind, name: &str, source: &str, function: &str) -> Job {
         Job {
@@ -221,6 +236,7 @@ impl Job {
             timezone: None,
             timeout: None,
             context: Json::Null,
+            run_context: RunContext::current().unwrap_or_default(),
         }
     }
 }
@@ -393,7 +409,8 @@ impl Host {
     }
 
     /// Run `job` on a worker and wait for it to end.
-    pub fn run(&self, job: Job) -> Outcome {
+    pub fn run(&self, mut job: Job) -> Outcome {
+        job.set_run_context(job.run_context.clone());
         let limits = Limits {
             timeout: job.timeout.unwrap_or(self.limits.timeout),
             ..self.limits.clone()
@@ -466,7 +483,8 @@ fn worker(rx: &Mutex<Receiver<Request>>, contexts: &Contexts) {
         let engine = engines
             .entry(job.kind.registration())
             .or_insert_with(|| Engine::new(contexts.for_kind(job.kind).clone()));
-        let outcome = engine.execute(job, limits);
+        let context = job.run_context.clone();
+        let outcome = context.scope(|| engine.execute(job, limits));
         let _ = reply.send(outcome);
     }
 }

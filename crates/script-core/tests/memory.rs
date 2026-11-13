@@ -15,6 +15,118 @@ struct Memory {
     notes: Mutex<BTreeMap<String, Stored>>,
 }
 
+struct ContextProbe {
+    barrier: Arc<std::sync::Barrier>,
+    seen: Arc<Mutex<Vec<script_core::RunContext>>>,
+}
+
+impl Extensions for ContextProbe {
+    fn modules(&self, _: Kind, _: &Arc<dyn Vault>) -> Vec<Module> {
+        let barrier = self.barrier.clone();
+        let seen = self.seen.clone();
+        let mut module = Module::new("probe");
+        module.fn_("context", move || -> Fault<Result<bool, String>> {
+            let context = script_core::RunContext::current().unwrap();
+            assert_eq!(
+                script_core::current_job(|job| job.run_context().clone()),
+                Some(context.clone())
+            );
+            let nested = Job::new(Kind::Before, "nested", "", "run");
+            assert_eq!(nested.run_context(), &context);
+            barrier.wait();
+            seen.lock().unwrap().push(context.clone());
+            Fault(Ok(Ok(context.is_restricted())))
+        });
+        vec![module]
+    }
+}
+
+#[test]
+fn parallel_workers_carry_live_context_without_enforcement_or_leaks() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host::with_extensions(
+        Arc::new(Memory::default()),
+        2,
+        limits(),
+        &ContextProbe {
+            barrier: Arc::new(std::sync::Barrier::new(2)),
+            seen: seen.clone(),
+        },
+    );
+    let context = script_core::RunContext::default();
+    let dir = tempfile::tempdir().unwrap();
+    let state = state::State::open(&dir.path().join("state.db"), None).unwrap();
+    let generation = state.admit_automation().unwrap();
+    context.capture_stop_generation(generation);
+    let mut job = context.scope(|| {
+        Job::new(
+            Kind::Task,
+            "context",
+            "use probe\nfn run() -> Result[bool, string] { probe::context() }\n",
+            "run",
+        )
+    });
+    // Script-controlled context is independent of host provenance.
+    job.context = json!({"restricted": false, "stop_generation": 999});
+    context.restrict();
+    let results = std::thread::scope(|scope| {
+        let first = scope.spawn(|| host.run(job.clone()));
+        let second = scope.spawn(|| host.run(job.clone()));
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+    for result in results {
+        assert_eq!(result.result.unwrap(), json!(true));
+    }
+    for observed in seen.lock().unwrap().iter() {
+        assert_eq!(observed, &context);
+        observed.capture_stop_generation(generation);
+        assert_eq!(observed.stop_generation(), Some(generation));
+    }
+    assert!(script_core::RunContext::current().is_none());
+    // Reuse both workers for independent, unrestricted jobs.
+    let job = Job::new(Kind::Task, "context", &job.source, "run");
+    let results = std::thread::scope(|scope| {
+        let first = scope.spawn(|| host.run(job.clone()));
+        let second = scope.spawn(|| host.run(job.clone()));
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+    for result in results {
+        assert_eq!(result.result.unwrap(), json!(false));
+    }
+}
+
+#[test]
+fn explicit_default_and_prebuilt_job_cannot_escape_restricted_caller() {
+    let context = script_core::RunContext::default();
+    context.restrict();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host::with_extensions(
+        Arc::new(Memory::default()),
+        1,
+        limits(),
+        &ContextProbe {
+            barrier: Arc::new(std::sync::Barrier::new(1)),
+            seen: seen.clone(),
+        },
+    );
+    let mut job = Job::new(
+        Kind::Task,
+        "probe",
+        "use probe\nfn run() -> Result[bool, string] { probe::context() }\n",
+        "run",
+    );
+    context.scope(|| job.set_run_context(script_core::RunContext::default()));
+    assert_eq!(job.run_context(), &context);
+    job.set_run_context(script_core::RunContext::default());
+    assert_eq!(host.run(job.clone()).result.unwrap(), json!(true));
+    let prebuilt = Job::new(Kind::Task, "probe", &job.source, "run");
+    assert_eq!(
+        context.scope(|| host.run(prebuilt)).result.unwrap(),
+        json!(true)
+    );
+    assert!(seen.lock().unwrap().iter().all(|c| c == &context));
+}
+
 struct Stored {
     type_name: String,
     version: u64,

@@ -323,6 +323,52 @@ fn run() -> string {
 }
 
 #[test]
+fn live_context_survives_http_and_writer_commits_without_new_refusals() {
+    let f = fixture();
+    let api = StandIn::start();
+    api.route("/context", Reply::text(200, "ok"));
+    let context = script::RunContext::default();
+    let generation = f.writer.state().admit_automation().unwrap();
+    context.capture_stop_generation(generation);
+    let (send, recv) = std::sync::mpsc::channel();
+    f.writer.set_commit_hook(Some(Box::new(move |_| {
+        let _ = send.send(script::RunContext::current().unwrap());
+        std::ops::ControlFlow::Continue(())
+    })));
+    let src = format!(
+        r#"use http
+use vault
+fn run() -> Result[int, string] {{
+    vault::create("task", Value::Map(#{{
+        "fields": Value::Map(#{{ "title": Value::String("before") }}),
+    }}))?
+    let r = http::post("{}", #{{}}, "payload")?
+    vault::create("task", Value::Map(#{{
+        "fields": Value::Map(#{{ "title": Value::String("after") }}),
+    }}))?
+    Ok(r.status)
+}}
+"#,
+        api.url("/context")
+    );
+    let mut work = context.scope(|| job(Kind::Task, &src));
+    work.allow_domains = vec![api.host()];
+    context.restrict();
+    assert_eq!(f.host.run(work).result.unwrap(), json!(200));
+    assert_eq!(api.requests().len(), 1);
+    assert_eq!(api.requests()[0].body, b"payload");
+    let seen: Vec<_> = recv.try_iter().collect();
+    assert!(seen.len() >= 2);
+    for observed in seen {
+        assert_eq!(observed, context);
+        assert!(observed.is_restricted());
+        assert_eq!(observed.stop_generation(), Some(generation));
+    }
+    assert_eq!(f.writer.list(None).unwrap().len(), 2);
+    assert!(script::RunContext::current().is_none());
+}
+
+#[test]
 fn http_reaches_an_allowed_host_and_refuses_any_other() {
     let f = fixture();
     let api = StandIn::start();
