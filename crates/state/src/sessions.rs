@@ -49,11 +49,11 @@ impl StreamCredential {
         } else {
             "SELECT EXISTS(SELECT 1 FROM sessions WHERE id_hash = ?1 AND expires_ms > ?2)"
         };
-        Ok(self.conn.lock().unwrap_or_else(|e| e.into_inner()).query_row(
-            sql,
-            params![self.hash, self.clock.now_ms()],
-            |r| r.get(0),
-        )?)
+        Ok(self
+            .conn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .query_row(sql, params![self.hash, self.clock.now_ms()], |r| r.get(0))?)
     }
 }
 
@@ -156,11 +156,16 @@ impl State {
 #[cfg(test)]
 mod stream_tests {
     use super::*;
-    use std::sync::{Arc, atomic::{AtomicI64, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    };
 
     struct Clock(AtomicI64);
     impl crate::Clock for Clock {
-        fn now_ms(&self) -> i64 { self.0.load(Ordering::SeqCst) }
+        fn now_ms(&self) -> i64 {
+            self.0.load(Ordering::SeqCst)
+        }
     }
 
     #[test]
@@ -170,15 +175,26 @@ mod stream_tests {
         let db = State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
         let (id, expires) = db.create_session(None).unwrap();
         let credential = db.stream_credential(&id, false);
-        clock.0.store(1_000 + SESSION_RENEW_MS + 1, Ordering::SeqCst);
+        clock
+            .0
+            .store(1_000 + SESSION_RENEW_MS + 1, Ordering::SeqCst);
         assert!(credential.is_valid().unwrap());
-        let row: (i64, i64) = db.conn().query_row("SELECT last_seen_ms, expires_ms FROM sessions", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let row: (i64, i64) = db
+            .conn()
+            .query_row("SELECT last_seen_ms, expires_ms FROM sessions", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
         assert_eq!(row, (1_000, expires));
         let conn = db.conn.clone();
-        assert!(std::thread::spawn(move || {
-            let _lock = conn.lock().unwrap();
-            panic!("poison test");
-        }).join().is_err());
+        assert!(
+            std::thread::spawn(move || {
+                let _lock = conn.lock().unwrap();
+                panic!("poison test");
+            })
+            .join()
+            .is_err()
+        );
         assert!(credential.is_valid().unwrap());
     }
 }

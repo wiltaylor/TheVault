@@ -825,7 +825,10 @@ mod tests {
         let clock = Arc::new(CountClock(std::sync::atomic::AtomicUsize::new(0)));
         let db = state::State::open_with_clock(&path, None, clock.clone()).unwrap();
         let (_, secret) = db.create_token("busy", Scope::Read).unwrap();
-        let stream = guard_stream(futures_util::stream::repeat(()), db.stream_credential(&secret, true));
+        let stream = guard_stream(
+            futures_util::stream::repeat(()),
+            db.stream_credential(&secret, true),
+        );
         tokio::pin!(stream);
         clock.0.store(0, Ordering::SeqCst);
         for _ in 0..1_000 {
@@ -835,9 +838,17 @@ mod tests {
         tokio::time::advance(STREAM_CHECK_INTERVAL).await;
         assert_eq!(stream.next().await, Some(()));
         assert_eq!(clock.0.load(Ordering::SeqCst), 2);
-        rusqlite::Connection::open(path).unwrap().execute("DROP TABLE tokens", []).unwrap();
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .execute("DROP TABLE tokens", [])
+            .unwrap();
         tokio::time::advance(STREAM_CHECK_INTERVAL).await;
-        assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next()).await.unwrap(), None);
+        assert_eq!(
+            tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next())
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -846,11 +857,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = state::State::open(&dir.path().join("state.db"), None).unwrap();
         let (_, secret) = db.create_token("closed", Scope::Read).unwrap();
-        let stream = guard_stream(futures_util::stream::repeat(()), db.stream_credential(&secret, true));
+        let stream = guard_stream(
+            futures_util::stream::repeat(()),
+            db.stream_credential(&secret, true),
+        );
         tokio::pin!(stream);
         assert_eq!(stream.next().await, Some(()));
         drop(db);
-        assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next()).await.unwrap(), None);
+        assert_eq!(
+            tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next())
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -900,7 +919,13 @@ mod tests {
                 _ => clock.0.store(expiry, Ordering::SeqCst),
             }
             let started = tokio::time::Instant::now();
-            assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, next).await.unwrap(), None, "{mode}");
+            assert_eq!(
+                tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, next)
+                    .await
+                    .unwrap(),
+                None,
+                "{mode}"
+            );
             assert!(started.elapsed() <= STREAM_CHECK_INTERVAL, "{mode}");
             if mode != "fallback" && !mode.contains("expiry") {
                 assert_eq!(started.elapsed(), Duration::ZERO, "signal for {mode}");
@@ -941,7 +966,12 @@ mod tests {
         tokio::pin!(stream);
         clock.0.store(2_000, Ordering::SeqCst);
         tokio::time::advance(STREAM_CHECK_INTERVAL).await;
-        assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next()).await.unwrap(), None);
+        assert_eq!(
+            tokio::time::timeout(STREAM_CHECK_INTERVAL * 2, stream.next())
+                .await
+                .unwrap(),
+            None
+        );
 
         let (id, expiry) = db.create_session(None).unwrap();
         let stream = guard_stream(
