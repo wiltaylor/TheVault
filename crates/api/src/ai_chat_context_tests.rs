@@ -4,7 +4,7 @@ use super::*;
 use scheduler::{AgentRunner, TurnReport};
 use std::sync::{Mutex, mpsc as sync};
 use std::time::Duration;
-use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, TestAccount};
+use testkit::{AiSeed, AnthropicMessage, AnthropicReply, FakeAnthropic, TestAccount};
 
 struct Probe(Arc<Mutex<Vec<(Author, RunContext)>>>);
 
@@ -97,10 +97,15 @@ permissions {
             json!({"type": "item", "note": json!({"fields": {"title": title}}).to_string()}),
         )
     };
+    let overloaded = || {
+        AnthropicReply::error(529, "overloaded_error", "Overloaded").header("retry-after", "3600")
+    };
+    fake.push(overloaded());
     fake.push(create("parent", "Parent note"));
     fake.push(AnthropicMessage::new().tool_use("child", "start_subagent", json!({
         "task": "Make a note", "instructions": null, "agent": null, "permissions": null, "model": null
     })));
+    fake.push(overloaded());
     fake.push(create("sub", "Child note"));
     fake.push(AnthropicMessage::text("Child done."));
     fake.push(AnthropicMessage::text("Parent done."));
