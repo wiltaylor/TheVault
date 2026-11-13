@@ -918,11 +918,9 @@ fn run(cli: Cli) -> Result<Value, Fail> {
         Command::Passwd { password_stdin } => local::passwd(vault, password_stdin),
         Command::Reindex => local::reindex(vault),
         Command::StateSize { warning_bytes } => {
-            let report = state::diagnostics::state_size(
-                &vault.join(".vault/state.db"),
-                warning_bytes,
-            )
-            .map_err(Fail::from_display("state"))?;
+            let report =
+                state::diagnostics::state_size(&vault.join(".vault/state.db"), warning_bytes)
+                    .map_err(Fail::from_display("state"))?;
             serde_json::to_value(report).map_err(Fail::from_display("state"))
         }
         Command::PruneThreadHistory { keep, apply } => {

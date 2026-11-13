@@ -24,8 +24,14 @@ fn mixed_utf8_history_and_live_wal_are_read_only() {
     let path = dir.path().join("state.db");
     let state = State::open(&path, None).unwrap();
     let author = Author::Token("fixture".into());
-    for (id, kind, text) in [("a", "email", "é"), ("a", "email", "abc"), ("b", "task", "")] {
-        state.record_distinct_version(id, kind, &author, text).unwrap();
+    for (id, kind, text) in [
+        ("a", "email", "é"),
+        ("a", "email", "abc"),
+        ("b", "task", ""),
+    ] {
+        state
+            .record_distinct_version(id, kind, &author, text)
+            .unwrap();
     }
     let history = state.history("a").unwrap();
     let database = std::fs::read(&path).unwrap();
@@ -46,5 +52,8 @@ fn mixed_utf8_history_and_live_wal_are_read_only() {
     assert!(state_size(&path, total + 1).unwrap().warning.is_none());
     assert_eq!(state.history("a").unwrap(), history);
     assert_eq!(std::fs::read(&path).unwrap(), database);
-    assert_eq!(std::fs::read(path.with_file_name("state.db-wal")).unwrap(), wal);
+    assert_eq!(
+        std::fs::read(path.with_file_name("state.db-wal")).unwrap(),
+        wal
+    );
 }

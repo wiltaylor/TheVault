@@ -9,12 +9,25 @@ fn size_diagnostics_are_local_and_advisory() {
     std::fs::create_dir(dir.path().join(".vault")).unwrap();
     let path = dir.path().join(".vault/state.db");
     let state = state::State::open(&path, None).unwrap();
-    state.record_version("mail", "email", &state::Author::Token("fixture".into()), "é").unwrap();
+    state
+        .record_version(
+            "mail",
+            "email",
+            &state::Author::Token("fixture".into()),
+            "é",
+        )
+        .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_vault"))
-        .arg("--vault").arg(dir.path())
+        .arg("--vault")
+        .arg(dir.path())
         .args(["state-size", "--warning-bytes", "1"])
-        .output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["history"][0]["content_bytes"], 2);
     assert_eq!(report["history"][0]["versions"], 1);
