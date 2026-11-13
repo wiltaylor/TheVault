@@ -2091,13 +2091,15 @@ impl Turn {
             };
             let mut began = Instant::now();
             let trail = |began: Instant, usage: Usage, outcome: Outcome| {
-                if let Err(e) = self.run_context.scope(|| self.writer.state().record_ai_usage(
-                    &setup.cred.account,
-                    &setup.model,
-                    "agent",
-                    usage.input,
-                    usage.output,
-                )) {
+                if let Err(e) = self.run_context.scope(|| {
+                    self.writer.state().record_ai_usage(
+                        &setup.cred.account,
+                        &setup.model,
+                        "agent",
+                        usage.input,
+                        usage.output,
+                    )
+                }) {
                     eprintln!("ai: recording agent usage: {e}");
                 }
                 let line = ai::trail_line(
@@ -2786,7 +2788,9 @@ impl Turn {
                 )
                 .await
             }
-            "browser_run" => crate::ai_browser::run(&self.run_context, b, &call.input, self.writer.state()).await,
+            "browser_run" => {
+                crate::ai_browser::run(&self.run_context, b, &call.input, self.writer.state()).await
+            }
             "browser_capture" => {
                 let direct = setup.direct.downloads;
                 crate::ai_browser::capture(
@@ -2874,13 +2878,15 @@ impl Turn {
         };
         let began = Instant::now();
         let record = |usage: Usage| {
-            if let Err(e) = self.run_context.scope(|| self.writer.state().record_ai_usage(
-                &setup.cred.account,
-                &setup.model,
-                "agent",
-                usage.input,
-                usage.output,
-            )) {
+            if let Err(e) = self.run_context.scope(|| {
+                self.writer.state().record_ai_usage(
+                    &setup.cred.account,
+                    &setup.model,
+                    "agent",
+                    usage.input,
+                    usage.output,
+                )
+            }) {
                 eprintln!("ai: recording compaction usage: {e}");
             }
         };
@@ -2902,13 +2908,15 @@ impl Turn {
             }
         }
         self.keep_usage(&setup.cred, stream.plan_usage()).await;
-        if let Err(e) = self.run_context.scope(|| self.writer.state().record_ai_usage(
-            &setup.cred.account,
-            &setup.model,
-            "agent",
-            usage.input,
-            usage.output,
-        )) {
+        if let Err(e) = self.run_context.scope(|| {
+            self.writer.state().record_ai_usage(
+                &setup.cred.account,
+                &setup.model,
+                "agent",
+                usage.input,
+                usage.output,
+            )
+        }) {
             eprintln!("ai: recording compaction usage: {e}");
         }
         let line = ai::trail_line(

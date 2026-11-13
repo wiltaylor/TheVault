@@ -860,20 +860,24 @@ mod timeout_tests {
         let vault = store::Vault::init(root.path()).unwrap();
         let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
         let generation = state.admit_automation().unwrap();
-        let a = Arc::new(Ai::new(Arc::new(writer::Writer::open(vault, state).unwrap())));
+        let a = Arc::new(Ai::new(Arc::new(
+            writer::Writer::open(vault, state).unwrap(),
+        )));
         let context = script::RunContext::default();
         context.capture_stop_generation(generation);
         let expected = context.clone();
         let (release, wait) = std::sync::mpsc::channel();
-        let work = context.scope(|| tokio::spawn(serialized_apply(a.clone(), move |w| {
-            wait.recv_timeout(Duration::from_secs(5)).unwrap();
-            let actual = script::RunContext::current().unwrap();
-            assert_eq!(actual, expected);
-            assert!(actual.is_restricted());
-            assert_eq!(actual.stop_generation(), Some(generation));
-            w.retire_browser_profile("apply-context-test").unwrap();
-            Ok(Value::Null)
-        })));
+        let work = context.scope(|| {
+            tokio::spawn(serialized_apply(a.clone(), move |w| {
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                let actual = script::RunContext::current().unwrap();
+                assert_eq!(actual, expected);
+                assert!(actual.is_restricted());
+                assert_eq!(actual.stop_generation(), Some(generation));
+                w.retire_browser_profile("apply-context-test").unwrap();
+                Ok(Value::Null)
+            }))
+        });
         tokio::task::yield_now().await;
         context.restrict();
         release.send(()).unwrap();
@@ -881,7 +885,9 @@ mod timeout_tests {
         serialized_apply(a, |_| {
             assert!(script::RunContext::current().is_none());
             Ok(Value::Null)
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert!(script::RunContext::current().is_none());
     }
 

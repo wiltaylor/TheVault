@@ -44,7 +44,8 @@ async fn proposal(
     let name = input["secret"].as_str().ok_or("invalid_request")?;
     if !agent.permissions.browser
         || !agent.permissions.browser_secrets.iter().any(|s| s == name)
-        || !context.scope(|| state.browser_secret_active(&agent.name, name))
+        || !context
+            .scope(|| state.browser_secret_active(&agent.name, name))
             .map_err(|_| "secret_unavailable")?
     {
         return Err("secret_not_allowed");
@@ -74,15 +75,17 @@ async fn proposal(
     .await?;
     let origin = state::canonical_origin(page["origin"].as_str().ok_or("invalid_origin")?)
         .ok_or("invalid_origin")?;
-    let login = context.scope(|| state.get_login_secret(name))
+    let login = context
+        .scope(|| state.get_login_secret(name))
         .map_err(|_| "secret_unavailable")?
         .ok_or("unknown_secret")?;
     if !login.origins.is_empty() && !login.origins.contains(&origin) {
         return Err("origin_mismatch");
     }
     let p = json!({"id":call_id,"agent":agent.name,"op":"browser_secret","secret":name,"field":field,"target":target,"session":session,"origin":origin,"browser_profile":b.profile,"unrestricted_origin":login.origins.is_empty()});
-    let redactor =
-        context.scope(|| crate::browser_redaction::Redactor::load(state)).map_err(|_| "secret_unavailable")?;
+    let redactor = context
+        .scope(|| crate::browser_redaction::Redactor::load(state))
+        .map_err(|_| "secret_unavailable")?;
     // Do not publish a credential even when it coincides with request metadata. Do not
     // silently change the selector/origin the owner is being asked to authorize either.
     if p.as_object()
@@ -225,12 +228,14 @@ async fn fill(
     if !agent.permissions.browser || !agent.permissions.browser_secrets.iter().any(|s| s == name) {
         return Err("secret_not_allowed");
     }
-    if !context.scope(|| state.is_login_secret(name))
+    if !context
+        .scope(|| state.is_login_secret(name))
         .map_err(|_| "secret_unavailable")?
     {
         return Err("unknown_secret");
     }
-    if !context.scope(|| state.browser_secret_active(&agent.name, name))
+    if !context
+        .scope(|| state.browser_secret_active(&agent.name, name))
         .map_err(|_| "secret_unavailable")?
     {
         return Err("secret_not_allowed");
@@ -246,14 +251,16 @@ async fn fill(
     if input.get("origin").is_some() && input["origin"].as_str() != Some(origin.as_str()) {
         return Err("origin_changed");
     }
-    let login = context.scope(|| state.get_login_secret(name))
+    let login = context
+        .scope(|| state.get_login_secret(name))
         .map_err(|_| "secret_unavailable")?
         .ok_or("unknown_secret")?;
     if !login.origins.is_empty() && !login.origins.iter().any(|allowed| allowed == origin) {
         return Err("origin_mismatch");
     }
     // Recheck after the network await: deletion/recreation or revocation invalidates the grant.
-    if !context.scope(|| state.browser_secret_active(&agent.name, name))
+    if !context
+        .scope(|| state.browser_secret_active(&agent.name, name))
         .map_err(|_| "secret_unavailable")?
     {
         return Err("secret_not_allowed");
@@ -397,14 +404,28 @@ mod tests {
         );
         let mut unsafe_input = input.clone();
         unsafe_input["target"] = json!(format!("#{password}"));
-        let unsafe_out = call(&context, &b, &state, &agent, "unsafe", &unsafe_input, false, true).await;
+        let unsafe_out = call(
+            &context,
+            &b,
+            &state,
+            &agent,
+            "unsafe",
+            &unsafe_input,
+            false,
+            true,
+        )
+        .await;
         assert!(unsafe_out.event.is_none());
         assert!(unsafe_out.content.contains("unsafe_metadata"));
         assert!(!unsafe_out.trail.unwrap().contains(password));
 
         let mut denied = agent.clone();
         denied.permissions.browser_secrets.clear();
-        assert!(authorized(&context, &b, &state, &denied, &input).await.is_error);
+        assert!(
+            authorized(&context, &b, &state, &denied, &input)
+                .await
+                .is_error
+        );
         let missing = json!({"secret":"missing", "field":"password", "target":"#password", "session":"default"});
         let mut named_missing = agent.clone();
         named_missing
@@ -451,7 +472,9 @@ mod tests {
         let mut username = input.clone();
         username["field"] = json!("username");
         assert_eq!(
-            authorized(&context, &b, &state, &agent, &username).await.content,
+            authorized(&context, &b, &state, &agent, &username)
+                .await
+                .content,
             "filled"
         );
         assert_eq!(bodies.lock().unwrap()[1]["value"], "fabricated-user");
@@ -475,7 +498,11 @@ mod tests {
         assert!(!answer.summary.to_string().contains(&code));
         assert!(!answer.trail.unwrap().contains(&code));
         let locked = state::State::open(&dir.path().join("state.db"), None).unwrap();
-        assert!(authorized(&context, &b, &locked, &agent, &input).await.is_error);
+        assert!(
+            authorized(&context, &b, &locked, &agent, &input)
+                .await
+                .is_error
+        );
         state.revoke_browser_secrets("tester").unwrap();
         assert!(
             authorized(&context, &b, &state, &agent, &input)
