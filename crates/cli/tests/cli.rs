@@ -802,7 +802,8 @@ fn isolated_off_host_restore_drill() {
     )
     .unwrap();
     let vault_id = db.vault_id().unwrap();
-    db.set_secret("drill", "synthetic-no-provider-value").unwrap();
+    db.set_secret("drill", "synthetic-no-provider-value")
+        .unwrap();
     drop(db);
 
     let archive = tmp_path(&dirs, "off-host.sqlar");
@@ -827,8 +828,15 @@ fn isolated_off_host_restore_drill() {
         Some(state::SecretKey::load_file(recovery_key).unwrap()),
     )
     .unwrap();
-    assert_eq!(recovered.get_secret("drill").unwrap().as_deref(), Some("synthetic-no-provider-value"));
-    assert_eq!(std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl")).unwrap(), content);
+    assert_eq!(
+        recovered.get_secret("drill").unwrap().as_deref(),
+        Some("synthetic-no-provider-value")
+    );
+    assert_eq!(
+        std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl"))
+            .unwrap(),
+        content
+    );
     drop(recovered);
 
     let corrupt = tmp_path(&dirs, "corrupt.sqlar");
@@ -836,8 +844,15 @@ fn isolated_off_host_restore_drill() {
     let rejected = tmp_path(&dirs, "rejected-recovery");
     recovery.fails(&["restore-backup", &corrupt, &rejected], "");
     assert!(!Path::new(&rejected).exists());
-    assert_eq!(std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl")).unwrap(), content);
-    assert_eq!(std::fs::read(key_path).unwrap(), std::fs::read(recovery_key).unwrap());
+    assert_eq!(
+        std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl"))
+            .unwrap(),
+        content
+    );
+    assert_eq!(
+        std::fs::read(key_path).unwrap(),
+        std::fs::read(recovery_key).unwrap()
+    );
 }
 
 /// A vault with no vault id has no key file to find, so `--include-key` fails before it writes
