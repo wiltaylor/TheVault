@@ -77,11 +77,21 @@ fn compressed_and_legacy_restore_are_exact_and_corruption_writes_nothing() {
     let path = dir.path().join(format!("notes/task/{}.wcl", a.id));
     let before = std::fs::read(&path).unwrap();
     let mut bomb: Vec<u8> = conn
-        .query_row("SELECT content FROM versions WHERE token=?1", [&a.version], |r| r.get(0))
+        .query_row(
+            "SELECT content FROM versions WHERE token=?1",
+            [&a.version],
+            |r| r.get(0),
+        )
         .unwrap();
     bomb[4..12].copy_from_slice(&(64 * 1024 * 1024 + 1u64).to_le_bytes());
-    conn.execute("UPDATE versions SET content=?1 WHERE token=?2", rusqlite::params![bomb, a.version]).unwrap();
-    let error = w.restore_version(&a.id, &a.version, Some(&old.version), &by).unwrap_err();
+    conn.execute(
+        "UPDATE versions SET content=?1 WHERE token=?2",
+        rusqlite::params![bomb, a.version],
+    )
+    .unwrap();
+    let error = w
+        .restore_version(&a.id, &a.version, Some(&old.version), &by)
+        .unwrap_err();
     assert!(error.to_string().contains("limit"));
     assert_eq!(std::fs::read(&path).unwrap(), before);
     conn.execute(
