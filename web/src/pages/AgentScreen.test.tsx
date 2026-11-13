@@ -501,6 +501,22 @@ describe("the General tab", () => {
 });
 
 describe("the Permissions tab", () => {
+  it("round-trips an explicit approval rule through Save and reload", async () => {
+    await open();
+    const p = await tab("Permissions");
+    fireEvent.input(p.getByLabelText("Rule type"), { target: { value: "email" } });
+    fireEvent.input(p.getByLabelText("Rule fields"), { target: { value: "processed" } });
+    fireEvent.input(p.getByLabelText("Rule daily cap"), { target: { value: "200" } });
+    fireEvent.click(p.getByText("Add update rule"));
+    fireEvent.click(p.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    const saved = (sent().permissions as Agent["permissions"]).approval_rules;
+    expect(saved).toEqual([{ operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 }]);
+    cleanup();
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, approval_rules: saved } }));
+    await open("/agents/inbox_triage/settings/permissions");
+    expect(await screen.findByText(/update email: processed — 200/)).toBeTruthy();
+  });
   it("asks before entering secrets by default and saves an explicit opt-out", async () => {
     await open();
     const p = await tab("Permissions");

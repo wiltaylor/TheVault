@@ -11,7 +11,7 @@ it("adds a narrow update without discarding stored held rules", () => {
   render(() => <ApprovalRules permissions={permissions} editable set={set} />);
   fireEvent.input(screen.getByLabelText("Rule type"), { target: { value: "email" } });
   fireEvent.input(screen.getByLabelText("Rule fields"), { target: { value: "processed" } });
-  fireEvent.input(screen.getByLabelText("Daily cap"), { target: { value: "200" } });
+  fireEvent.input(screen.getByLabelText("Rule daily cap"), { target: { value: "200" } });
   fireEvent.click(screen.getByText("Add update rule"));
   expect(set).toHaveBeenCalledWith([...permissions.approval_rules!, { operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 }]);
   expect(screen.getByText(/held, never automatic/)).toBeTruthy();
@@ -23,7 +23,7 @@ it.each(["-1", "1.5", "9007199254740992", "", "NaN"])("rejects invalid cap %s", 
   render(() => <ApprovalRules permissions={permissions} editable set={set} />);
   fireEvent.input(screen.getByLabelText("Rule type"), { target: { value: "email" } });
   fireEvent.input(screen.getByLabelText("Rule fields"), { target: { value: "processed" } });
-  fireEvent.input(screen.getByLabelText("Daily cap"), { target: { value: cap } });
+  fireEvent.input(screen.getByLabelText("Rule daily cap"), { target: { value: cap } });
   fireEvent.click(screen.getByText("Add update rule"));
   expect(set).not.toHaveBeenCalled();
   expect(screen.getByRole("alert")).toBeTruthy();

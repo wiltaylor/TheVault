@@ -12,12 +12,16 @@ it("preserves independent change permissions in an unrelated form edit", () => {
     permissions: {
       tools: null, types: ["email", "person"], change_types: ["email"],
       change_fields: { email: ["processed"] }, confirm: {}, web: {},
+      approval_rules: [{ operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 }],
     },
   } as unknown as Agent;
   const form = agentForm(agent);
   form.label = "Renamed";
   expect(form.permissions.change_types).toEqual(["email"]);
   expect(form.permissions.change_fields).toEqual({ email: ["processed"] });
+  expect(form.permissions.approval_rules).toEqual(agent.permissions.approval_rules);
+  form.permissions.approval_rules![0]!.fields.push("subject");
+  expect(agent.permissions.approval_rules![0]!.fields).toEqual(["processed"]);
   form.permissions.change_fields!.email!.push("subject");
   expect(agent.permissions.change_fields).toEqual({ email: ["processed"] });
 });

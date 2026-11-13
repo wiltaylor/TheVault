@@ -31,7 +31,7 @@ export function ApprovalRules(p: { permissions: AgentPermissions; editable: bool
     <Show when={p.editable} fallback={<p>Open the web app with an owner session to edit rules.</p>}>
       <label>Rule type<input value={type()} onInput={(e) => setType(e.currentTarget.value)} /></label>
       <label>Rule fields<input value={fields()} onInput={(e) => setFields(e.currentTarget.value)} placeholder="processed" /></label>
-      <label>Daily cap<input value={cap()} onInput={(e) => setCap(e.currentTarget.value)} inputmode="numeric" /></label>
+      <label>Rule daily cap<input value={cap()} onInput={(e) => setCap(e.currentTarget.value)} inputmode="numeric" /></label>
       <button type="button" onClick={add}>Add update rule</button>
       <p>To edit a rule, remove it and add its replacement, then Save. This authorizes future matching updates, not just the current proposals.</p>
       <Show when={error()}><p role="alert">{error()}</p></Show>
