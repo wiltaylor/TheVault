@@ -68,6 +68,7 @@ export function GoogleSettingsForm(props: {
   onSave: (settings: GoogleSettings) => void;
 }) {
   const [mode, setMode] = createSignal(props.settings.gmail_mode);
+  const [remoteImages, setRemoteImages] = createSignal(props.settings.gmail_remote_images === true);
   const [labels, setLabels] = createSignal(props.settings.gmail_labels);
   const [days, setDays] = createSignal(String(props.settings.gmail_window_days));
   const [backfill, setBackfill] = createSignal(props.settings.gmail_backfill_to ?? "");
@@ -89,6 +90,7 @@ export function GoogleSettingsForm(props: {
     setProblem(null);
     props.onSave({
       gmail_mode: mode(),
+      gmail_remote_images: remoteImages(),
       gmail_labels: labels(),
       gmail_window_days: n,
       gmail_backfill_to: backfill() || null,
@@ -100,6 +102,7 @@ export function GoogleSettingsForm(props: {
   return (
     <form class="admin-form google-settings" aria-label="Google sync settings" novalidate onSubmit={save}>
       <h3>What to sync</h3>
+      <label><input type="checkbox" checked={remoteImages()} onChange={(e) => setRemoteImages(e.currentTarget.checked)} />Allow remote mail images (tells senders when mail is read)</label>
       <div class="form-grid">
         <label for="google-gmail-mode">Gmail mode</label>
         <select

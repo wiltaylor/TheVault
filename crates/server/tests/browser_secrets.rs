@@ -4,6 +4,63 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use testkit::{PASSWORD, TestServer};
 
+#[test]
+fn google_image_consent_secret_changes_require_owner_session() {
+    let server = TestServer::start();
+    let client = Client::new();
+    let url = server.url("/api/secrets/google_settings");
+    let initial = json!({"gmail_remote_images": false, "gmail_mode": "all"});
+    let response = client
+        .put(&url)
+        .bearer_auth(server.admin_token())
+        .json(&json!({"value": initial.to_string()}))
+        .send()
+        .unwrap();
+    assert!(response.status().is_success());
+    let enabled = json!({"gmail_remote_images": true, "gmail_mode": "all"});
+    let response = client
+        .put(&url)
+        .bearer_auth(server.admin_token())
+        .json(&json!({"value": enabled.to_string()}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+    let error: Value = response.json().unwrap();
+    assert_eq!(error["error"], "session_required");
+    assert_eq!(server.secret_json("google_settings"), initial);
+
+    let login = client
+        .post(server.url("/api/login"))
+        .json(&json!({"password": PASSWORD}))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let response = client
+        .put(&url)
+        .header("cookie", cookie)
+        .json(&json!({"value": enabled.to_string()}))
+        .send()
+        .unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(server.secret_json("google_settings"), enabled);
+    // Tokens cannot revoke consent by changing or omitting the field either.
+    for value in [initial, json!({"gmail_mode": "all"})] {
+        let response = client
+            .put(&url)
+            .bearer_auth(server.admin_token())
+            .json(&json!({"value": value.to_string()}))
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+        assert_eq!(server.secret_json("google_settings"), enabled);
+    }
+}
+
 fn large_note_server(count: usize, bytes: usize) -> TestServer {
     TestServer::start_seeded(|vault| {
         std::fs::create_dir_all(vault.join("types")).unwrap();

@@ -150,6 +150,7 @@ struct HostOptions {
     base64: bool,
     detect: bool,
     download: bool,
+    remote: bool,
     cid: HashMap<String, String>,
     deadline: Option<i64>,
 }
@@ -174,10 +175,10 @@ impl HostOptions {
         }
         let download = match v["images"].as_str() {
             None | Some("link") => false,
-            Some("download") => true,
+            Some("download" | "inline") => true,
             Some(other) => {
                 return Err(format!(
-                    "images is {other:?}: it must be \"download\" or \"link\""
+                    "images is {other:?}: it must be \"download\", \"inline\" or \"link\""
                 ));
             }
         };
@@ -194,6 +195,7 @@ impl HostOptions {
             base64: flag("base64"),
             detect: flag("detect"),
             download,
+            remote: v["images"].as_str() != Some("inline"),
             cid,
             deadline: v["deadline"].as_i64(),
         })
@@ -338,6 +340,7 @@ struct HostImages<'a> {
     vault: &'a Arc<dyn Vault>,
     ai: &'a Ai,
     download: bool,
+    remote: bool,
     cid: &'a HashMap<String, String>,
     deadline: Option<i64>,
     /// The runtime and fetcher of this call's downloads, made at the first.
@@ -351,6 +354,7 @@ impl<'a> HostImages<'a> {
             vault,
             ai,
             download: o.download,
+            remote: o.remote,
             cid: &o.cid,
             deadline: o.deadline,
             fetch: None,
@@ -467,7 +471,8 @@ impl Images for HostImages<'_> {
                     None => Placed::Failed("the message holds no such part".into()),
                 },
                 Src::Data { bytes, .. } => self.store(bytes.clone(), None),
-                Src::Remote(url) => self.remote(url),
+                Src::Remote(url) if self.remote => self.remote(url),
+                Src::Remote(_) => Placed::Link,
             }
         };
         self.note(src, alt, &placed);
