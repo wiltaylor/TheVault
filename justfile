@@ -122,7 +122,7 @@ web-e2e-test: web-build (require-tool "cargo")
 # Build the Linux desktop app (debug, no bundles) into apps/desktop/src-tauri/target/debug/thevault
 [group('desktop')]
 desktop-build: (require-tool "cargo-tauri") web-build
-	cd apps/desktop && cargo tauri build --debug --no-bundle --locked
+	cd apps/desktop && cargo tauri build --debug --no-bundle -- --locked
 
 # Run the desktop app's unit tests, then the S6 end-to-end tests with tauri-driver under Xvfb
 [group('desktop')]
@@ -145,10 +145,10 @@ desktop-release: (require-tool "cargo-tauri") (require-tool "jq") (require-tool 
 	if [[ $version == *-* ]]; then
 		# An rpm version holds no -, so Tauri cannot write a pre-release's rpm: bundle the same build
 		# as an rpm of the release version, which linux-packages.sh below renames to the pre-release.
-		tauri build --locked --bundles appimage,deb
+		tauri build --bundles appimage,deb -- --locked
 		tauri bundle --bundles rpm --config "{\"version\": \"${version%%-*}\"}"
 	else
-		tauri build --locked --bundles appimage,deb,rpm
+		tauri build --bundles appimage,deb,rpm -- --locked
 	fi
 	mkdir -p target/desktop-release
 	cp apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage apps/desktop/src-tauri/target/release/bundle/deb/*.deb apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm target/desktop-release/
