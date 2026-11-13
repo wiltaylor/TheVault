@@ -84,6 +84,8 @@ fn main() -> anyhow::Result<()> {
     {
         bail!("web folder {} has no index.html", web.display());
     }
+    std::fs::create_dir_all(args.vault.join(".vault"))?;
+    let _owner = store::lock_owner(&args.vault).context("locking vault ownership")?;
     let vault = store::Vault::init(&args.vault)
         .with_context(|| format!("opening vault {}", args.vault.display()))?;
     let clients = args

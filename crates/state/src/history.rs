@@ -32,7 +32,7 @@ pub const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const SNAPSHOT_MAGIC: &[u8; 4] = b"VHS\x01";
 const SNAPSHOT_HEADER: usize = 44;
 
-fn encode_snapshot(content: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn encode_snapshot(content: &[u8]) -> Result<Vec<u8>> {
     if content.len() > MAX_SNAPSHOT_BYTES {
         return Err(Error::Corrupt(
             "history snapshot exceeds 64 MiB limit".into(),

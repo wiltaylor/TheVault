@@ -25,6 +25,20 @@ pub use skills::{
 };
 pub use vault::{LAYOUT_DIRS, Vault};
 
+/// Lifetime ownership for the server and offline history repair. Never unlink this file.
+/// Closing the returned handle (including process exit) releases the lock.
+pub fn lock_owner(root: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(".vault/owner.lock"))?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, format!("vault is in use by a server or history repair: {e}")))?;
+    Ok(file)
+}
+
 /// Errors from the vault store.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

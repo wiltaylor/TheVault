@@ -24,6 +24,7 @@ pub mod diagnostics;
 mod events;
 mod gitsync;
 mod history;
+pub mod history_repair;
 mod jobs;
 mod notifications;
 mod pins;

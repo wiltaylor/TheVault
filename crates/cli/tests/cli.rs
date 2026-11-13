@@ -1754,6 +1754,9 @@ fn every_command_prints_json() {
         "",
     );
 
+    run("history-check", &["--vault", &dir], "");
+    run("history-repair", &["--vault", &dir, "--all"], "");
+
     // App builds: published into a folder, then listed by the server (which has none of its own).
     let build = tmp_path(&scratch, "app-arm64-debug.apk");
     std::fs::write(&build, b"apk").unwrap();

@@ -10,6 +10,7 @@
 mod backup;
 mod client;
 mod config;
+mod history_repair;
 mod local;
 mod starter;
 
@@ -155,6 +156,19 @@ enum Command {
     },
     /// Every version of a note.
     History { id: String },
+    /// Check local history integrity without opening or changing the vault.
+    HistoryCheck,
+    /// Offline, owner-confirmed repair of corrupt history. Back up the vault first.
+    HistoryRepair {
+        /// A note ID. Required unless --all is given.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+        /// Confirm exactly these note IDs (comma-separated). No bare --yes.
+        #[arg(long, value_delimiter = ',', num_args = 1)]
+        yes: Vec<String>,
+    },
     /// Read-only local state.db history and file sizes. No server or provider calls.
     StateSize {
         /// Warn when database plus WAL file lengths reach this many bytes.
@@ -917,6 +931,8 @@ fn run(cli: Cli) -> Result<Value, Fail> {
         } => local::init(&dir, starter, password_stdin),
         Command::Passwd { password_stdin } => local::passwd(vault, password_stdin),
         Command::Reindex => local::reindex(vault),
+        Command::HistoryCheck => history_repair::check(vault),
+        Command::HistoryRepair { id, all, yes } => history_repair::repair(vault, id, all, yes),
         Command::StateSize { warning_bytes } => {
             let report =
                 state::diagnostics::state_size(&vault.join(".vault/state.db"), warning_bytes)
@@ -1336,6 +1352,8 @@ fn remote(api: &Api, url: &str, command: Command) -> Result<Value, Fail> {
         | Command::Init { .. }
         | Command::Passwd { .. }
         | Command::Reindex
+        | Command::HistoryCheck
+        | Command::HistoryRepair { .. }
         | Command::PruneThreadHistory { .. }
         | Command::Backup { .. }
         | Command::RestoreBackup { .. }
