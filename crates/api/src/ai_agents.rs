@@ -837,10 +837,28 @@ mod tests {
         let second = "trigger second {\n mention = true\n prompt = \"Second.\"\n}\n";
         let before = format!("{first}{second}");
         let after = format!("{second}{first}");
-        assert_eq!(Agent::parse("helper", &before).unwrap().mention_trigger("memo").unwrap().name, "first");
-        assert_eq!(Agent::parse("helper", &after).unwrap().mention_trigger("memo").unwrap().name, "second");
-        assert!(triggered_agent_changed(&json!({"name":"helper", "before":before, "after":after})));
-        assert!(!triggered_agent_changed(&json!({"name":"helper", "before":before, "after":format!("\n{before}")})));
+        assert_eq!(
+            Agent::parse("helper", &before)
+                .unwrap()
+                .mention_trigger("memo")
+                .unwrap()
+                .name,
+            "first"
+        );
+        assert_eq!(
+            Agent::parse("helper", &after)
+                .unwrap()
+                .mention_trigger("memo")
+                .unwrap()
+                .name,
+            "second"
+        );
+        assert!(triggered_agent_changed(
+            &json!({"name":"helper", "before":before, "after":after})
+        ));
+        assert!(!triggered_agent_changed(
+            &json!({"name":"helper", "before":before, "after":format!("\n{before}")})
+        ));
     }
 
     #[test]
