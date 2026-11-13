@@ -14,7 +14,7 @@ fn open(path: &std::path::Path) -> State {
 }
 
 #[test]
-fn schema_33_handler_upgrade_preserves_payloads_and_atomic_provenance() {
+fn schema_34_handler_upgrade_preserves_payloads_and_atomic_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
     let s = open(&path);
@@ -22,7 +22,7 @@ fn schema_33_handler_upgrade_preserves_payloads_and_atomic_provenance() {
     drop(s);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "DROP TABLE handler_provenance; DROP TABLE outbox_provenance; PRAGMA user_version=33;",
+        "DROP TABLE handler_provenance; DROP TABLE outbox_provenance; PRAGMA user_version=34;",
     )
     .unwrap();
     drop(conn);
@@ -55,7 +55,7 @@ fn schema_33_handler_upgrade_preserves_payloads_and_atomic_provenance() {
 }
 
 #[test]
-fn schema_32_upgrade_and_dedup_keep_all_queue_provenance() {
+fn schema_33_upgrade_and_dedup_keep_all_queue_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
     let s = open(&path);
@@ -65,7 +65,7 @@ fn schema_32_upgrade_and_dedup_keep_all_queue_provenance() {
         .unwrap();
     drop(s);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE trigger_provenance; PRAGMA user_version=32;")
+    conn.execute_batch("DROP TABLE trigger_provenance; PRAGMA user_version=33;")
         .unwrap();
     drop(conn);
     let s = open(&path);
@@ -191,7 +191,7 @@ fn abandoned_lease_cannot_be_sealed_by_another_owner() {
 }
 
 #[test]
-fn migration_from_31_preserves_sealed_provenance() {
+fn migration_from_32_preserves_sealed_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
     let s = open(&path);
@@ -199,7 +199,7 @@ fn migration_from_31_preserves_sealed_provenance() {
     s.seal_run_provenance(p.id()).unwrap();
     drop(s);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TABLE run_provenance_leases; PRAGMA user_version=31;")
+    conn.execute_batch("DROP TABLE run_provenance_leases; PRAGMA user_version=32;")
         .unwrap();
     drop(conn);
     let s = open(&path);

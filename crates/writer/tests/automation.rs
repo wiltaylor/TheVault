@@ -31,7 +31,7 @@ fn upgrade_holds_queued_legacy_work_once_with_actionable_subjects() {
         .unwrap();
     drop(writer);
     let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
-    conn.execute_batch("DROP TABLE handler_provenance; DROP TABLE outbox_provenance; DROP TABLE trigger_provenance; PRAGMA user_version=32;").unwrap();
+    conn.execute_batch("DROP TABLE handler_provenance; DROP TABLE outbox_provenance; DROP TABLE trigger_provenance; DROP TABLE run_provenance_leases; PRAGMA user_version=32;").unwrap();
     drop(conn);
     for _ in 0..2 {
         let vault = Vault::open(dir.path()).unwrap();

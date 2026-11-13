@@ -488,8 +488,8 @@ fn backup_keeps_the_schema_version_of_an_older_state_db() {
         conn.pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap()
     };
-    // Schema 34 adds handler and Outbox provenance. Remove those tables to reconstruct
-    // schema 33, then check backup preserves the version before upgrade.
+    // Schema 35 adds handler and Outbox provenance. Remove those tables to reconstruct
+    // schema 34, then check backup preserves the version before upgrade.
     let previous = {
         let conn = rusqlite::Connection::open(&db).unwrap();
         let previous = user_version(&conn) - 1;
