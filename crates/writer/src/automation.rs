@@ -31,9 +31,16 @@ impl Writer {
     }
 
     pub(crate) fn automation_commit(&self) -> Result<Option<MutexGuard<'_, ()>>> {
-        let generation = GENERATIONS.with(|g| g.borrow().first().copied());
+        let explicit = GENERATIONS.with(|g| g.borrow().iter().copied().reduce(Generation::oldest));
+        let inherited = script_core::RunContext::current().and_then(|c| c.stop_generation());
+        let generation = match (explicit, inherited) {
+            (Some(a), Some(b)) => Some(a.oldest(b)),
+            (a, b) => a.or(b),
+        };
         generation
-            .map(|g| self.state.automation_commit(g).map_err(Into::into))
+            .map(|g| {
+                self.with_automation(g, || self.state.automation_commit(g).map_err(Into::into))
+            })
             .transpose()
     }
 }

@@ -523,6 +523,7 @@ fn install_commands(dir: &str, files: &[(String, Vec<u8>)]) -> Vec<String> {
 /// `install_skill_in_browser {name}`: the skill's files copied into the box, one `/run` command
 /// after another, stopping at the first that fails.
 pub async fn install(
+    context: &script::RunContext,
     w: std::sync::Arc<Writer>,
     b: &BrowserBox,
     agent: &Agent,
@@ -538,7 +539,7 @@ pub async fn install(
     };
     let agent = agent.clone();
     let input = input.clone();
-    let read = tokio::task::spawn_blocking(move || {
+    let read = crate::ai_chat::blocking(context, move || {
         let skill = skill_of(&w, &agent, &input)?;
         let mut files = Vec::with_capacity(skill.files.len());
         for f in &skill.files {
