@@ -741,8 +741,9 @@ impl Round<'_> {
             }
             assets.insert(&asset.id, &asset.sha256);
         }
-        let fingerprint =
-            pack::sha256_hex(&serde_json::to_vec(&(referenced, assets)).expect("references serialize"));
+        let fingerprint = pack::sha256_hex(
+            &serde_json::to_vec(&(referenced, assets)).expect("references serialize"),
+        );
         if let Err(e) =
             crate::freshness::receive(self.w.state(), &peer, manifest.sequence, &fingerprint)
         {
@@ -1332,11 +1333,6 @@ impl Round<'_> {
         let remote_ref = format!("refs/remotes/origin/{branch}");
         let remote_sequence = if self.git.tree_of(&remote_ref)?.is_some() {
             let entries = self.git.read_tree(&remote_ref)?;
-            let counter = (|| -> Result<RemoteCounter> {
-                let entry = entries
-                .iter()
-                .find(|e| e.path == layout.manifest() && e.kind == "blob")
-                .ok_or_else(|| fail("own remote branch has no manifest"))?;
             // Read only the authenticated identity and counter, so an upgrade can
             // republish its own older manifest without definition hashes.
             #[derive(serde::Deserialize)]
@@ -1345,10 +1341,14 @@ impl Round<'_> {
                 #[serde(default)]
                 sequence: u64,
             }
-            let blob = self.git.cat_blob(&entry.oid)?;
-            let json = self.key.open(&layout.manifest(), &blob)?;
-                serde_json::from_slice(&json)
-                    .map_err(|e| fail(format!("own remote manifest: {e}")))
+            let counter = (|| -> Result<RemoteCounter> {
+                let entry = entries
+                    .iter()
+                    .find(|e| e.path == layout.manifest() && e.kind == "blob")
+                    .ok_or_else(|| fail("own remote branch has no manifest"))?;
+                let blob = self.git.cat_blob(&entry.oid)?;
+                let json = self.key.open(&layout.manifest(), &blob)?;
+                serde_json::from_slice(&json).map_err(|e| fail(format!("own remote manifest: {e}")))
             })();
             let remote = match counter {
                 Ok(remote) => Some(remote),
@@ -1360,10 +1360,10 @@ impl Round<'_> {
                 }
             };
             if let Some(remote) = remote {
-            if remote.instance.vault_id != self.me {
-                return Err(fail("own remote manifest names a different instance"));
-            }
-            remote.sequence
+                if remote.instance.vault_id != self.me {
+                    return Err(fail("own remote manifest names a different instance"));
+                }
+                remote.sequence
             } else {
                 0
             }

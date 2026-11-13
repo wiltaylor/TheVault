@@ -268,9 +268,13 @@ fn publisher_seeds_from_authenticated_own_remote_counter_after_local_rollback() 
         push(&git, &key, peer, &files);
         let report = publisher.sync();
         assert_eq!(report["pushed"], true, "{case}: {report}");
-        assert!(report["warnings"].as_array().unwrap().iter().any(|w|
-            w.as_str().unwrap().contains("own remote manifest cannot supply a counter")
-        ), "{case}: {report}");
+        assert!(
+            report["warnings"].as_array().unwrap().iter().any(|w| w
+                .as_str()
+                .unwrap()
+                .contains("own remote manifest cannot supply a counter")),
+            "{case}: {report}"
+        );
         git.fetch_instance_branches().unwrap();
         assert_eq!(read().sequence, 51);
     }
