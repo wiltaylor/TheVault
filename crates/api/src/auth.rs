@@ -735,6 +735,12 @@ impl Drop for Profile {
     }
 }
 
+#[cfg(not(debug_assertions))]
+impl Drop for Profile {
+    #[inline(always)]
+    fn drop(&mut self) {}
+}
+
 /// Middleware for [`crate::owner_router`]: every request is the owner's session.
 pub async fn as_owner(mut req: Request, next: Next) -> Response {
     req.extensions_mut()
