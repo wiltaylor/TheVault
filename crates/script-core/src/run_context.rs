@@ -127,6 +127,9 @@ impl RunContext {
     /// when the complete snapshot is sealed atomically. A crash or failed seal
     /// restores restricted AND stale, including failed late-generation joins.
     pub fn persist(&self, database: &state::State) -> state::Result<String> {
+        // Capture before publication, not after restart. This observes Stop
+        // without refusing work, and never replaces an older admission.
+        self.capture_stop_generation(database.run_provenance_generation()?);
         let (restricted, generation) = {
             let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
             let root = self.root();
@@ -340,17 +343,41 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
         let context = RunContext::default();
+        let generation = database.admit_automation().unwrap();
         let id = context.persist(&database).unwrap();
         drop(context);
         assert!(!database.load_run_provenance(&id).is_restricted());
         let recovered = RunContext::recover(&database, &id);
         assert!(!recovered.is_restricted());
-        assert_eq!(recovered.stop_generation(), None);
+        assert_eq!(recovered.stop_generation(), Some(generation));
         assert!(!database.load_run_provenance(&id).is_sealed());
         recovered.restrict();
         drop(recovered);
         assert!(database.load_run_provenance(&id).is_restricted());
         assert!(database.load_run_provenance(&id).is_sealed());
+    }
+
+    #[test]
+    fn persisted_admission_cannot_be_revived_by_stop_and_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let before = RunContext::default();
+        let before_id = before.persist(&database).unwrap();
+        drop(before);
+        database.set_automation_stopped(true).unwrap();
+        let during = RunContext::default();
+        let during_id = during.persist(&database).unwrap(); // provenance, not enforcement
+        drop(during);
+        database.set_automation_stopped(false).unwrap();
+        for id in [before_id, during_id] {
+            let recovered = RunContext::recover(&database, &id);
+            recovered.capture_stop_generation(database.admit_automation().unwrap());
+            assert!(
+                database
+                    .automation_commit(recovered.stop_generation().unwrap())
+                    .is_err()
+            );
+        }
     }
 
     #[test]

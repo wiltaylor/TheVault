@@ -245,6 +245,18 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
 }
 
 impl State {
+    /// Capture provenance without enforcing Stop. Work created while stopped
+    /// gets a permanently stale identity, never an admission revived by Resume.
+    pub fn run_provenance_generation(&self) -> Result<Generation> {
+        let state = self.automation_state()?;
+        if state.stopped {
+            Ok(Generation::stale())
+        } else {
+            Generation::restore_stored(state.generation)
+                .ok_or_else(|| Error::Corrupt("invalid automation generation".into()))
+        }
+    }
+
     /// Start an unsealed lifecycle before a queue publishes this ID.
     pub fn lease_run_provenance(
         &self,
