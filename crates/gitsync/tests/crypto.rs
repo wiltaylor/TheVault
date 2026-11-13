@@ -157,9 +157,67 @@ fn canonical_context_binds_instance_kind_id_and_part_position() {
 
 #[test]
 fn legacy_blob_is_refused_without_fallback() {
+    use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+    use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+    use hkdf::Hkdf;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    // Construct a genuine format-1 fixture with the old key derivation and header-only AAD.
+    let hk = Hkdf::<Sha256>::new(None, &[7u8; 32]);
+    let mut enc = [0u8; 32];
+    let mut nonce_key = [0u8; 32];
+    hk.expand(b"enc", &mut enc).unwrap();
+    hk.expand(b"nonce", &mut nonce_key).unwrap();
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&nonce_key).unwrap();
+    mac.update(b"legacy");
+    let digest = mac.finalize().into_bytes();
+    let nonce = XNonce::from_slice(&digest[..24]);
+    let cipher = XChaCha20Poly1305::new((&enc).into());
+    let encrypted = cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: b"legacy",
+                aad: b"TVGS\x01",
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        cipher
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: &encrypted,
+                    aad: b"TVGS\x01"
+                }
+            )
+            .unwrap(),
+        b"legacy"
+    );
+    let mut blob = b"TVGS\x01".to_vec();
+    blob.extend_from_slice(nonce);
+    blob.extend_from_slice(&encrypted);
     let key = fixed();
-    let mut blob = key.seal("context", b"legacy");
-    blob[4] = 1;
     let err = key.open("context", &blob).unwrap_err();
     assert!(err.to_string().contains("upgrade every peer"));
+    // Changing only the version cannot upgrade the old authentication scheme.
+    blob[4] = BLOB_VERSION;
+    assert!(matches!(
+        key.open("context", &blob),
+        Err(Error::KeyMismatch)
+    ));
+    let modern = key.seal("context", b"legacy");
+    assert_ne!(modern[4], 1); // Old readers reject the version before decrypting.
+    assert!(
+        cipher
+            .decrypt(
+                XNonce::from_slice(&modern[5..29]),
+                Payload {
+                    msg: &modern[29..],
+                    aad: &modern[..5],
+                }
+            )
+            .is_err()
+    );
 }

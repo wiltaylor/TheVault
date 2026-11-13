@@ -1,7 +1,8 @@
 //! The shared key, and the blobs and names it makes (git-sync D4, D13, D14).
 //!
 //! The shared key is 32 random bytes, written as `tvsync1-` and base64url without padding. Three
-//! subkeys come from it through HKDF-SHA256, under the labels `enc`, `nonce` and `name`.
+//! subkeys come from it through HKDF-SHA256, under the labels `enc-v2`, `nonce-v2` and `name`.
+//! Version-specific encryption keys prevent nonce overlap with legacy blobs; names stay stable.
 //!
 //! A blob is `TVGS`, a version byte, a 24-byte nonce, then the XChaCha20-Poly1305 ciphertext of
 //! the plaintext, with the header and canonical object path as associated data. The nonce is
@@ -72,8 +73,8 @@ impl SyncKey {
         };
         Self {
             raw,
-            enc: derive("enc"),
-            nonce: derive("nonce"),
+            enc: derive("enc-v2"),
+            nonce: derive("nonce-v2"),
             name: derive("name"),
         }
     }
@@ -101,7 +102,8 @@ impl SyncKey {
         format!("{KEY_PREFIX}{}", URL_SAFE_NO_PAD.encode(self.raw))
     }
 
-    /// Encrypts `plaintext` into a blob. The same plaintext always gives the same blob.
+    /// Encrypts `plaintext` bound to a canonical object path. Identical context and plaintext
+    /// give identical blobs. Callers must derive the expected path, not trust a supplied path.
     pub fn seal(&self, context: &str, plaintext: &[u8]) -> Vec<u8> {
         let aad = associated_data(context);
         let mut mac =
