@@ -220,10 +220,95 @@ fn transcript_content_needs_runtime_capability_not_an_agent_author() {
         .unwrap();
 }
 
+#[test]
+fn gmail_metadata_is_owner_or_import_only() {
+    use state::Author;
+    use writer::Input;
+    let tmp = tempfile::tempdir().unwrap();
+    let w = open(tmp.path(), None);
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    for field in ["gmail_ref", "gmail_account", "gmail_deferred_parts"] {
+        let value = if field == "gmail_deferred_parts" {
+            json!(["part"])
+        } else {
+            json!("value")
+        };
+        let input = Input::Json(json!({"fields":{"title":"Email",field:value}}));
+        for author in [
+            Author::Agent("agent-token".into()),
+            Author::AgentMail("assistant".into()),
+            Author::Handler("script".into()),
+            Author::Task("other".into()),
+            Author::Token("user".into()),
+        ] {
+            assert!(
+                w.create("email", &input, &author).is_err(),
+                "{field} {author:?}"
+            );
+            let empty = Input::Json(json!({"fields":{"title":"Email"}}));
+            let note = w
+                .create("email", &empty, &Author::Session("owner".into()))
+                .unwrap();
+            assert!(
+                w.update(&note.id, &input, Some(&note.version), &author)
+                    .is_err(),
+                "{field} {author:?}"
+            );
+        }
+        for author in [
+            Author::Session("owner".into()),
+            Author::Task("google_gmail".into()),
+        ] {
+            let note = w.create("email", &input, &author).unwrap();
+            let empty = Input::Json(json!({"fields":{"title":"Email"}}));
+            w.update(&note.id, &empty, Some(&note.version), &author)
+                .unwrap();
+        }
+    }
+}
+
 fn open(root: &Path, key: Option<SecretKey>) -> Writer {
     let vault = Vault::init(root).unwrap();
     let state = State::open(&vault.server_dir().join("state.db"), key).unwrap();
     Writer::open(vault, state).unwrap()
+}
+
+#[test]
+fn restoring_email_refuses_metadata_changed_by_a_before_hook() {
+    use state::Author;
+    use writer::{Event, Hooks, Input, NoteChange};
+    struct Forge;
+    impl Hooks for Forge {
+        fn before(&self, change: &mut NoteChange, author: &Author) -> Result<(), String> {
+            if change.event == Event::Create && matches!(author, Author::Token(_)) {
+                change.doc = Some(
+                    Input::Json(json!({"fields":{"title":"Email","gmail_ref":"forged"}}))
+                        .parse("email")
+                        .unwrap(),
+                );
+            }
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path(), None).with_hooks(Box::new(Forge));
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let owner = Author::Session("owner".into());
+    let note = w
+        .create(
+            "email",
+            &Input::Json(json!({"fields":{"title":"Email","gmail_ref":"original"}})),
+            &owner,
+        )
+        .unwrap();
+    w.delete(&note.id, Some(&note.version), &owner).unwrap();
+    let error = w
+        .restore_from_trash(&note.id, &Author::Token("device".into()))
+        .unwrap_err();
+    assert!(error.to_string().contains("Gmail attachment metadata"));
+    assert_eq!(w.trash().unwrap().len(), 1);
+    w.restore_from_trash(&note.id, &Author::Agent("agent".into()))
+        .unwrap();
 }
 
 fn generation(root: &Path) -> u64 {

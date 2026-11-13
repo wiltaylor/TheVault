@@ -103,7 +103,7 @@ fn cut_text() -> string {
 
 // The largest attachment kept, in bytes.
 fn max_attachment() -> int {
-    716800
+    vault::gmail_attachment_limit()
 }
 
 fn day_ms() -> int {

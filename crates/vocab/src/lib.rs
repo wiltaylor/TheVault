@@ -5,6 +5,9 @@
 /// bases. A device refuses to sync with a server whose protocol is newer than it knows (D27).
 pub const SYNC_PROTOCOL: u32 = 1;
 
+/// Largest Gmail attachment downloaded automatically by the import task.
+pub const GMAIL_IMPORT_ATTACHMENT_BYTES: usize = 700 * 1024;
+
 /// The version of the vault file format in `docs/vault-format.md`. A device refuses to sync with a
 /// server whose format is newer than it knows, since it could write notes the server reads wrong
 /// (D27). Raise it with any change an older reader would misread.

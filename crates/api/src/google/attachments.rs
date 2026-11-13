@@ -17,6 +17,7 @@ struct Part {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Selection {
     account: String,
     message: String,
@@ -65,7 +66,7 @@ fn parts(note: &writer::Note) -> Result<Vec<Part>, ApiError> {
                 || part.part.len() > 256
                 || part.attachment.is_empty()
                 || part.attachment.len() > 2048
-                || part.size <= 716800
+                || part.size <= vocab::GMAIL_IMPORT_ATTACHMENT_BYTES
                 || part.filename.is_empty()
                 || part.filename.len() > 255
                 || part.filename == "."
@@ -298,6 +299,138 @@ pub(crate) async fn fetch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tower::ServiceExt;
+
+    // Exercise the route with real HTTP framing from a local synthetic provider.
+    async fn route_failure(mode: &'static str) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (arrived, received) = tokio::sync::oneshot::channel();
+        let provider = tokio::spawn(async move {
+            for step in 0..2 {
+                let (mut conn, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let mut buf = [0; 4096];
+                    let n = conn.read(&mut buf).await.unwrap();
+                    assert_ne!(n, 0);
+                    request.extend_from_slice(&buf[..n]);
+                }
+                if step == 0 {
+                    let body = r#"{"access_token":"fake"}"#;
+                    conn.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                    continue;
+                }
+                let _ = arrived.send(());
+                match mode {
+                    "length" => {
+                        // The advertised length is false. No large body is needed to refuse it.
+                        let _ = conn.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{{}}", MAX_RESPONSE + 1).as_bytes()).await;
+                    }
+                    "body" => {
+                        let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").await;
+                        let chunk = vec![b'x'; MAX_RESPONSE + 1];
+                        let _ = conn
+                            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                            .await;
+                        let _ = conn.write_all(&chunk).await;
+                        let _ = conn.write_all(b"\r\n0\r\n\r\n").await;
+                    }
+                    "size" => {
+                        let body = r#"{"data":"YWJj"}"#;
+                        let _ = conn.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+                    }
+                    "stall" => std::future::pending::<()>().await,
+                    _ => unreachable!(),
+                }
+                break;
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_owned();
+        let (google, id) = tokio::task::spawn_blocking(move || {
+            let vault = store::Vault::init(&path).unwrap();
+            let state = state::State::open(&vault.server_dir().join("state.db"), Some(state::SecretKey::generate())).unwrap();
+            let w = Arc::new(Writer::open(vault, state).unwrap());
+            w.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+            for name in [ACCOUNT, CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN] {
+                w.state().set_secret(name, "fake").unwrap();
+            }
+            w.state().set_secret(SETTINGS, &json!({"endpoints":{"token":format!("http://{addr}/token"),"gmail":format!("http://{addr}")}}).to_string()).unwrap();
+            let row = json!({"part":"part","attachment":"attachment","filename":"invoice.csv","size":800000}).to_string();
+            let note = w.create("email", &Input::Json(json!({"fields":{"title":"Mail","gmail_ref":"message","gmail_account":"fake","gmail_deferred_parts":[row]}})), &state::Author::Task("google_gmail".into())).unwrap();
+            let host = Arc::new(script::Host::new(w.clone(), 1, script::Limits::default(), script::Ai::of(&w)));
+            let scheduler = Scheduler::new(w, host, Arc::new(scheduler::TestClock::new(0))).unwrap();
+            (Arc::new(Google::new(scheduler)), note.id)
+        }).await.unwrap();
+        let app = axum::Router::new()
+            .route("/{id}", axum::routing::post(fetch))
+            .layer(axum::Extension(crate::Caller(state::Author::Session(
+                "owner".into(),
+            ))))
+            .with_state(google.clone());
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/{id}"))
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                json!({"account":"fake","message":"message","part":"part"}).to_string(),
+            ))
+            .unwrap();
+        let route = tokio::spawn(app.oneshot(request));
+        received.await.unwrap();
+        if mode == "stall" {
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(29)).await;
+            assert!(!route.is_finished());
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+        let response = route.await.unwrap().unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&body)
+                .contains("Gmail attachment fetch failed or exceeded its limits")
+        );
+        provider.abort();
+        if mode == "stall" {
+            tokio::time::resume();
+        }
+        tokio::task::spawn_blocking(move || {
+            let note = google.writer().read(&id).unwrap();
+            let json = doc_to_json(&note.doc);
+            assert!(json["fields"]["attachments"].is_null());
+            assert_eq!(
+                json["fields"]["gmail_deferred_parts"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn route_refuses_false_content_length() {
+        route_failure("length").await;
+    }
+    #[tokio::test]
+    async fn route_refuses_oversized_stream() {
+        route_failure("body").await;
+    }
+    #[tokio::test]
+    async fn route_refuses_decoded_size_mismatch() {
+        route_failure("size").await;
+    }
+    #[tokio::test]
+    async fn route_stalled_provider_uses_thirty_second_budget() {
+        route_failure("stall").await;
+    }
 
     #[tokio::test(start_paused = true)]
     async fn stalled_fetch_has_one_total_deadline_with_fake_clock() {
@@ -323,6 +456,16 @@ mod tests {
         assert!(bounded_json(response, 100).await.is_err());
         let response = reqwest::Response::from(axum::http::Response::new("{\"data\":\"AAAA\"}"));
         assert_eq!(bounded_json(response, 100).await.unwrap()["data"], "AAAA");
+    }
+
+    #[test]
+    fn selection_refuses_unknown_fields() {
+        assert!(
+            serde_json::from_value::<Selection>(json!({
+                "account":"fake", "message":"message", "part":"part", "filename":"forged"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
