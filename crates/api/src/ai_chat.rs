@@ -2444,6 +2444,7 @@ impl Turn {
                 // The capability is scoped to this call, never inherited by a sub agent.
                 let gmail_actions =
                     !self.unattended && self.sub.is_none() && setup.agent.permissions.gmail_actions;
+                let unattended = self.unattended;
                 let call = c.clone();
                 let direct = setup.direct;
                 let held = self.held;
@@ -2461,6 +2462,7 @@ impl Turn {
                         &agent,
                         &call,
                         gmail_actions,
+                        unattended,
                     )
                 })
                 .await
@@ -3756,6 +3758,7 @@ fn run_tool(
     agent: &Agent,
     call: &ToolCall,
     gmail_actions: bool,
+    unattended: bool,
 ) -> ToolOut {
     // The memory tools reach only the agent's own memories, and write as the agent (agents G21).
     if call.error.is_none() && agent_memory::is_memory_tool(&call.name) {
@@ -3777,9 +3780,68 @@ fn run_tool(
             return ToolOut::error(e.to_string());
         }
     }
+    // TV-245/246 own destructive activation and explicit owner caps. Confirmation-off is
+    // not an unattended destructive allowance: an unattended run keeps the proposal
+    // reviewable instead. An attended turn keeps its confirmation switches (ai D22).
+    let destructive = out.proposal.as_ref().is_some_and(|(event, p)| {
+        *event == "proposal" && matches!(p["op"].as_str(), Some("delete" | "archive"))
+    });
+    let held_destructive = destructive && unattended;
+    // A rule never approves a destructive change, attended or not.
+    let rule = if scope.allows(Scope::Write)
+        && !destructive
+        && agent.permissions.allows_tool(&call.name)
+        && w.agent(&agent.name)
+            .is_ok_and(|a| a.permissions.allows_tool(&call.name))
+    {
+        out.proposal
+            .as_ref()
+            .and_then(|(event, p)| approval_rule(w, &agent.name, event, p))
+    } else {
+        None
+    };
     match &out.proposal {
-        Some((event, p)) if direct.covers(event, p) => {
-            let (event, p) = (*event, p.clone());
+        Some((event, p)) if !held_destructive && (direct.covers(event, p) || rule.is_some()) => {
+            let (event, mut p) = (*event, p.clone());
+            let reservation = if let Some(rule) = rule {
+                let mut fields = rule.fields.clone();
+                fields.sort();
+                fields.dedup();
+                // No cap or array position in the bucket: editing a cap cannot reset usage.
+                let bucket = json!([rule.operation, rule.note_type, fields]).to_string();
+                let id = approval_attempt_id(&agent.name, event, &p);
+                let budget = state::ApprovalBudget {
+                    rule_daily: rule.daily_cap,
+                    agent_destructive_daily: None,
+                    vault_destructive_daily: None,
+                };
+                match w
+                    .state()
+                    .reserve_approval(&id, &agent.name, &bucket, false, budget)
+                {
+                    Ok(state::ApprovalReservation::Reserved) => {}
+                    // Over the cap the change is only a proposal, which an unattended run
+                    // with no review path refuses like any other (TV-84).
+                    Ok(state::ApprovalReservation::Capped) => {
+                        return if held == Held::Drop {
+                            ToolOut::error(HELD_REFUSAL)
+                        } else {
+                            out
+                        };
+                    }
+                    Ok(state::ApprovalReservation::AlreadyAttempted) => {
+                        return ToolOut::error(
+                            "This change was already attempted. Its outcome may be uncertain. Check the target; do not retry.",
+                        );
+                    }
+                    Err(e) => return ToolOut::error(e.to_string()),
+                }
+                p["_automatic_rule"] = serde_json::to_value(rule).expect("approval rule JSON");
+                p["_automatic_tool"] = json!(call.name);
+                Some(id)
+            } else {
+                None
+            };
             // A change made without the user's Apply to an Outbox item is the agent's, whoever
             // runs the turn, so the writer's review rules hold for it (outbox X2).
             let email = event == "proposal"
@@ -3788,15 +3850,17 @@ fn run_tool(
                         .as_str()
                         .and_then(|id| w.read(id).ok())
                         .is_some_and(|n| n.type_name == "email"));
-            let author = if email && gmail_actions {
-                Author::AgentMail(agent.name.clone())
-            } else if email || touches_outbox(w, event, &p) {
-                Author::Agent(agent.name.clone())
-            } else {
-                author.clone()
-            };
-            let mut made = make(w, &author, event, &p, out.summary);
-            if email && !gmail_actions && !made.is_error {
+            let author = change_author(
+                author,
+                &agent.name,
+                reservation.is_some(),
+                email,
+                gmail_actions,
+                touches_outbox(w, event, &p),
+            );
+            let mut made = make(w, &author, event, &p, out.summary, reservation.as_deref());
+            // A rule-approved write is the agent's own, so it skips Gmail like a trigger's.
+            if email && (!gmail_actions || reservation.is_some()) && !made.is_error {
                 let notice = "Gmail action skipped: the note change was applied only in the vault. Gmail archive/trash needs a user Apply or an opted-in foreground chat, never a trigger or mention run.";
                 made.summary["gmail_skipped"] = json!(notice);
                 let summary_message = made.summary["message"]
@@ -3821,6 +3885,68 @@ fn run_tool(
         Some(_) if held == Held::Drop => ToolOut::error(HELD_REFUSAL),
         _ => out,
     }
+}
+
+/// Who writes a change made without the user's Apply. A rule-approved write is always the
+/// agent's and never carries the Gmail capability, whatever `gmail_actions` says: the rule
+/// approved a field update, not a Gmail action.
+fn change_author(
+    caller: &Author,
+    agent: &str,
+    rule_approved: bool,
+    email: bool,
+    gmail_actions: bool,
+    touches_outbox: bool,
+) -> Author {
+    if rule_approved {
+        Author::Agent(agent.to_owned())
+    } else if email && gmail_actions {
+        Author::AgentMail(agent.to_owned())
+    } else if email || touches_outbox {
+        Author::Agent(agent.to_owned())
+    } else {
+        caller.clone()
+    }
+}
+
+/// Match the actual current note, never a model-provided type, before-image or diff.
+/// Only flat note updates are activated in A4. Calendar, Outbox, code and destructive
+/// operations cannot acquire approval through this evaluator.
+fn approval_rule(w: &Writer, agent: &str, event: &str, p: &Value) -> Option<schema::ApprovalRule> {
+    if event != "proposal" || p["op"].as_str().unwrap_or("update") != "update" {
+        return None;
+    }
+    let current = w.read(p["note_id"].as_str()?).ok()?;
+    if matches!(
+        current.type_name.as_str(),
+        "event" | "event_series" | "outbox" | "agent_thread" | "agent_memory"
+    ) {
+        return None;
+    }
+    let live = w.agent(agent).ok()?;
+    if !live.enabled {
+        return None;
+    }
+    let before = doc_to_json(&current.doc);
+    let after = &p["after"];
+    // No block changes, even an omitted block list, are field approvals.
+    if before["blocks"] != after["blocks"] {
+        return None;
+    }
+    let changes = diff(&before, after);
+    if changes.is_empty() {
+        return None;
+    }
+    live.permissions.approval_rules.into_iter().find(|rule| {
+        rule.operation == "update"
+            && rule.note_type == current.type_name
+            && changes.iter().all(|c| {
+                c["op"] == "field"
+                    && c["name"]
+                        .as_str()
+                        .is_some_and(|name| rule.fields.iter().any(|f| f == name))
+            })
+    })
 }
 
 /// What a trigger's run is told when a change would wait for an apply (TV-84). Such a change is
@@ -3848,8 +3974,52 @@ fn touches_outbox(w: &Writer, event: &str, p: &Value) -> bool {
 
 /// Make the change a tool proposed, as the caller: the `applied` event, and a result telling the
 /// model it was made and its new version. A failure writes nothing and goes back to the model.
-fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> ToolOut {
-    let done = match apply_change(w, author, event, p) {
+fn approval_attempt_id(agent: &str, event: &str, p: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    // One attempt per target/base version, independent of model call IDs, rule edits,
+    // dry-run timestamps and retry phrasing. Currently only updates reach this path.
+    format!(
+        "{:x}",
+        Sha256::digest(
+            json!([agent, event, p["op"], p["note_id"], p["base_version"]])
+                .to_string()
+                .as_bytes()
+        )
+    )
+}
+
+fn approval_proven_no_write(result: &Result<Value, ApplyError>) -> bool {
+    // Authorization and proposal-shape checks precede commit_checked_note. Conflict is
+    // the pre-write base-version check. Storage/index/state errors are never proof.
+    matches!(
+        result,
+        Err(ApplyError::Invalid(_)
+            | ApplyError::Stale(_)
+            | ApplyError::Refused(_)
+            | ApplyError::Write(writer::Error::Conflict { .. }))
+    )
+}
+
+fn make(
+    w: &Writer,
+    author: &Author,
+    event: &str,
+    p: &Value,
+    summary: Value,
+    reservation: Option<&str>,
+) -> ToolOut {
+    let result = apply_change(w, author, event, p);
+    let proven_no_write = approval_proven_no_write(&result);
+    if let Some(id) = reservation
+        && let Err(e) = w
+            .state()
+            .finish_approval(id, result.is_ok(), proven_no_write)
+    {
+        return ToolOut::error(format!(
+            "Mutation outcome bookkeeping failed: {e}. Check the target; do not retry."
+        ));
+    }
+    let done = match result {
         Ok(done) => done,
         Err(ApplyError::Write(writer::Error::Conflict {
             id,
@@ -3866,7 +4036,7 @@ fn make(w: &Writer, author: &Author, event: &str, p: &Value, summary: Value) -> 
             out.content = json!({
                 "error": message,
                 "details": details,
-                "message": "Nothing was written. Fix the problem and try again.",
+                "message": if proven_no_write { "Nothing was written." } else { "The write outcome is uncertain. Check the target; do not retry." },
             })
             .to_string();
             return out;
@@ -4064,6 +4234,18 @@ pub(crate) fn authorize_proposal(
             ));
         }
         Limits::of(&agent).check_event(w, event, p)?;
+        if let Some(saved_rule) = p.get("_automatic_rule") {
+            let live = approval_rule(w, name, event, p).and_then(|r| serde_json::to_value(r).ok());
+            if live.as_ref() != Some(saved_rule)
+                || !p["_automatic_tool"]
+                    .as_str()
+                    .is_some_and(|t| agent.permissions.allows_tool(t))
+            {
+                return Err(ApplyError::Refused(
+                    "Automatic approval rule changed or no longer matches.".into(),
+                ));
+            }
+        }
         if let Some(parent) = p["proposer_parent"].as_str() {
             let parent = crate::ai_agents::agent_named(w, parent)?
                 .ok_or_else(|| ApplyError::Refused("The parent agent no longer exists.".into()))?;
@@ -4071,6 +4253,15 @@ pub(crate) fn authorize_proposal(
                 return Err(ApplyError::Refused("The parent agent is disabled.".into()));
             }
             Limits::of(&parent).check_event(w, event, p)?;
+            if p.get("_automatic_rule").is_some()
+                && !p["_automatic_tool"]
+                    .as_str()
+                    .is_some_and(|t| parent.permissions.allows_tool(t))
+            {
+                return Err(ApplyError::Refused(
+                    "The parent no longer permits this tool.".into(),
+                ));
+            }
             let ceiling: Limits = serde_json::from_value(p["proposer_limits"].clone())
                 .map_err(|e| ApplyError::Invalid(format!("invalid delegation limits: {e}")))?;
             ceiling.check_event(w, event, p)?;
@@ -5119,6 +5310,255 @@ pub fn diff(before: &Value, after: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selective_approval_never_releases_uncertain_storage_failure() {
+        let mut p = json!({"id":"first-call","op":"update","note_id":"note","base_version":"v1","after":{"fields":{"status":"done"}}});
+        let id = approval_attempt_id("reader", "proposal", &p);
+        p["id"] = json!("different-retry-call");
+        p["after"]["fields"]["updated"] = json!("later");
+        assert_eq!(approval_attempt_id("reader", "proposal", &p), id);
+        assert!(!approval_proven_no_write(&Err(ApplyError::Write(
+            writer::Error::Store(store::Error::Interrupted)
+        ))));
+        assert!(!approval_proven_no_write(&Err(ApplyError::Write(
+            writer::Error::Rejected("unclassified writer failure".into())
+        ))));
+        assert!(approval_proven_no_write(&Err(ApplyError::Refused(
+            "revoked before commit".into()
+        ))));
+        assert!(approval_proven_no_write(&Err(ApplyError::Stale(
+            "old version".into()
+        ))));
+    }
+
+    #[test]
+    fn selective_approval_rechecks_live_rule_permissions_and_releases_proven_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        w.put_type("memo", "label = \"Memo\"\nfield status {\n kind = \"string\"\n}\ntemplate default { tab \"Main\" { slot \"title\" } }\n").unwrap();
+        let source = "permissions {\n approval_rule {\n operation = \"update\"\n type = \"memo\"\n fields = [\"status\"]\n daily_cap = 1\n }\n}\n";
+        w.put_agent("reader", source, |_| vec![]).unwrap();
+        let author = Author::Session("owner".into());
+        let n = w
+            .create(
+                "memo",
+                &Input::Json(json!({"fields":{"title":"One","status":"open"}})),
+                &author,
+            )
+            .unwrap();
+        let before = doc_to_json(&w.read(&n.id).unwrap().doc);
+        let mut after = before.clone();
+        after["fields"]["status"] = json!("closed");
+        let mut p = json!({"op":"update","note_id":n.id,"base_version":n.version,"after":after,"proposer":"reader"});
+        let rule = approval_rule(&w, "reader", "proposal", &p).unwrap();
+        p["_automatic_rule"] = serde_json::to_value(&rule).unwrap();
+        p["_automatic_tool"] = json!("propose_fields");
+        let budget = state::ApprovalBudget {
+            rule_daily: 1,
+            agent_destructive_daily: None,
+            vault_destructive_daily: None,
+        };
+        assert_eq!(
+            w.state()
+                .reserve_approval("attempt", "reader", "r", false, budget)
+                .unwrap(),
+            state::ApprovalReservation::Reserved
+        );
+        // The rule still matches, but the live field permission denies it at commit.
+        let restricted = source.replace(
+            "permissions {",
+            "permissions {\n change_fields = { memo: [\"title\"] }",
+        );
+        w.put_agent("reader", &restricted, |_| vec![]).unwrap();
+        let result = make(
+            &w,
+            &Author::Agent("reader".into()),
+            "proposal",
+            &p,
+            json!({}),
+            Some("attempt"),
+        );
+        assert!(result.is_error);
+        assert_eq!(doc_to_json(&w.read(&n.id).unwrap().doc), before);
+        // A proven authorization failure did not consume successful-write allowance.
+        assert_eq!(
+            w.state()
+                .reserve_approval("attempt", "reader", "r", false, budget)
+                .unwrap(),
+            state::ApprovalReservation::Reserved
+        );
+        w.put_agent("reader", source, |_| vec![]).unwrap();
+        let result = make(
+            &w,
+            &Author::Agent("reader".into()),
+            "proposal",
+            &p,
+            json!({}),
+            Some("attempt"),
+        );
+        assert!(!result.is_error, "{}", result.content);
+        assert_eq!(
+            w.state()
+                .reserve_approval("attempt", "reader", "r", false, budget)
+                .unwrap(),
+            state::ApprovalReservation::AlreadyAttempted
+        );
+        assert_eq!(
+            w.state()
+                .reserve_approval("next", "reader", "r", false, budget)
+                .unwrap(),
+            state::ApprovalReservation::Capped
+        );
+    }
+
+    #[test]
+    fn rule_approved_write_is_the_agents_and_never_carries_gmail() {
+        let owner = Author::Session("owner".into());
+        // S1: a rule approves a field update, never a Gmail action.
+        assert!(matches!(
+            change_author(&owner, "reader", true, true, true, false),
+            Author::Agent(name) if name == "reader"
+        ));
+        assert!(matches!(
+            change_author(&owner, "reader", true, false, true, false),
+            Author::Agent(name) if name == "reader"
+        ));
+        // Unchanged without a rule.
+        assert!(matches!(
+            change_author(&owner, "reader", false, true, true, false),
+            Author::AgentMail(name) if name == "reader"
+        ));
+        assert!(matches!(
+            change_author(&owner, "reader", false, true, false, false),
+            Author::Agent(name) if name == "reader"
+        ));
+        assert!(matches!(
+            change_author(&owner, "reader", false, false, true, true),
+            Author::Agent(name) if name == "reader"
+        ));
+        assert!(matches!(
+            change_author(&owner, "reader", false, false, true, false),
+            Author::Session(name) if name == "owner"
+        ));
+    }
+
+    /// A vault with type memo, agent `reader` from `permissions`, and one memo.
+    fn selective_fixture(permissions: &str) -> (tempfile::TempDir, Writer, Agent, String, Value) {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        w.put_type("memo", "label = \"Memo\"\nfield status {\n kind = \"string\"\n}\ntemplate default { tab \"Main\" { slot \"title\" } }\n").unwrap();
+        w.put_agent("reader", permissions, |_| vec![]).unwrap();
+        let n = w
+            .create(
+                "memo",
+                &Input::Json(json!({"fields":{"title":"One","status":"open"}})),
+                &Author::Session("owner".into()),
+            )
+            .unwrap();
+        let agent = w.agent("reader").unwrap();
+        let version = json!(n.version);
+        (root, w, agent, n.id, version)
+    }
+
+    fn tool_call(name: &str, input: Value) -> ToolCall {
+        ToolCall {
+            id: "call".into(),
+            name: name.into(),
+            input,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn capped_rule_is_refused_where_no_one_can_review_the_proposal() {
+        // daily_cap 0 grants no allowance, so the matching rule is capped at once.
+        let (_root, w, agent, id, version) = selective_fixture(
+            "permissions {\n approval_rule {\n operation = \"update\"\n type = \"memo\"\n fields = [\"status\"]\n daily_cap = 0\n }\n}\n",
+        );
+        let owner = Author::Session("owner".into());
+        let limits = Limits::of(&agent);
+        let call = tool_call(
+            "propose_fields",
+            json!({"id":id,"base_version":version,"fields":json!({"status":"closed"}).to_string()}),
+        );
+        let run = |held| {
+            run_tool(
+                &w,
+                &owner,
+                Scope::Write,
+                Direct::default(),
+                held,
+                &limits,
+                &agent,
+                &call,
+                false,
+                true,
+            )
+        };
+        // S2: an unknown unattended origin has no review path, so nothing is proposed.
+        let dropped = run(Held::Drop);
+        assert!(dropped.is_error, "{}", dropped.content);
+        assert!(dropped.proposal.is_none());
+        assert!(
+            dropped.content.contains("unattended"),
+            "{}",
+            dropped.content
+        );
+        // A reviewable origin keeps the capped change as a proposal.
+        let proposed = run(Held::Propose);
+        assert!(!proposed.is_error, "{}", proposed.content);
+        assert!(proposed.proposal.is_some());
+        let before = doc_to_json(&w.read(&id).unwrap().doc);
+        assert_eq!(before["fields"]["status"], json!("open"));
+    }
+
+    #[test]
+    fn confirm_off_delete_is_held_unattended_and_made_attended() {
+        let (_root, w, agent, id, _version) = selective_fixture(
+            "permissions {\n approval_rule {\n operation = \"delete\"\n type = \"memo\"\n daily_cap = 100\n }\n confirm {\n delete = false\n archive = false\n }\n}\n",
+        );
+        let owner = Author::Session("owner".into());
+        let limits = Limits::of(&agent);
+        let direct = Direct::of(confirm_of(&agent), Scope::Write);
+        assert!(direct.delete && direct.archive);
+        let call = tool_call("propose_delete", json!({"id":id}));
+        let run = |unattended| {
+            run_tool(
+                &w,
+                &owner,
+                Scope::Write,
+                direct,
+                Held::Propose,
+                &limits,
+                &agent,
+                &call,
+                false,
+                unattended,
+            )
+        };
+        // Unattended: neither the switch nor a destructive rule makes the change (D2).
+        let held = run(true);
+        assert!(!held.is_error, "{}", held.content);
+        assert!(held.proposal.is_some());
+        assert!(
+            !held.content.contains("moved to the trash"),
+            "{}",
+            held.content
+        );
+        // S4: an attended turn keeps its confirmation switch (ai D22).
+        let made = run(false);
+        assert!(!made.is_error, "{}", made.content);
+        assert!(
+            made.content.contains("moved to the trash"),
+            "{}",
+            made.content
+        );
+    }
 
     #[test]
     fn email_apply_without_agent_or_proposer_rechecks_agentmail_author() {
