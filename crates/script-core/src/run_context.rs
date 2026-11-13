@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
+use state::automation::Generation;
 
 /// Shared monotonic state for one run and all its descendants and retries.
 ///
@@ -13,12 +14,18 @@ pub struct RunContext(Arc<Mutex<State>>);
 #[derive(Debug, Default)]
 struct State {
     restricted: bool,
-    stop_generation: Option<u64>,
+    stop_generation: Option<Generation>,
+    parent: Option<RunContext>,
 }
+
+// Serializes root lookup, joins and mutations. No user code, writer lock,
+// database operation or await is allowed while holding this lock.
+static JOIN: Mutex<()> = Mutex::new(());
 
 impl PartialEq for RunContext {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        Arc::ptr_eq(&self.root().0, &other.root().0)
     }
 }
 
@@ -29,28 +36,53 @@ thread_local! {
 }
 
 impl RunContext {
+    // Caller holds JOIN. Root-to-root links cannot cycle.
+    fn root(&self) -> Self {
+        let mut root = self.clone();
+        loop {
+            let parent = root.0.lock().unwrap_or_else(|e| e.into_inner()).parent.clone();
+            match parent {
+                Some(parent) => root = parent,
+                None => return root,
+            }
+        }
+    }
+
+    fn join(&self, other: &Self) {
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        let root = self.root();
+        let other = other.root();
+        if Arc::ptr_eq(&root.0, &other.0) { return; }
+        let mut a = root.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut b = other.0.lock().unwrap_or_else(|e| e.into_inner());
+        a.restricted |= b.restricted;
+        a.stop_generation = oldest(a.stop_generation, b.stop_generation);
+        b.parent = Some(root.clone());
+    }
+
     /// Mark outside-text exposure. All existing clones observe this change.
     pub fn restrict(&self) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).restricted = true;
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).restricted = true;
     }
 
     pub fn is_restricted(&self) -> bool {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).restricted
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).restricted
     }
 
     /// Retain the oldest admitted generation, never a later replacement.
-    /// This is a provenance slot, not proof that admission was authorized.
-    pub fn capture_stop_generation(&self, generation: u64) {
-        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.stop_generation = Some(
-            state
-                .stop_generation
-                .map_or(generation, |old| old.min(generation)),
-        );
+    /// Only State can issue a credential. All credentials use one State authority.
+    pub fn capture_stop_generation(&self, generation: Generation) {
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        let root = self.root();
+        let mut state = root.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.stop_generation = oldest(state.stop_generation, Some(generation));
     }
 
-    pub fn stop_generation(&self) -> Option<u64> {
-        self.0
+    pub fn stop_generation(&self) -> Option<Generation> {
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        self.root().0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .stop_generation
@@ -63,7 +95,7 @@ impl RunContext {
 
     /// Install this context for synchronous host callbacks, restoring on panic.
     /// Never return an async future from this closure or hold this scope over await.
-    /// Nested work must use a clone of its parent's context, not a fresh default.
+    /// Unrelated nested contexts join permanently, including existing clones.
     pub fn scope<T>(&self, f: impl FnOnce() -> T) -> T {
         struct Restore(Option<RunContext>);
         impl Drop for Restore {
@@ -71,8 +103,16 @@ impl RunContext {
                 CURRENT.with(|slot| *slot.borrow_mut() = self.0.take());
             }
         }
+        if let Some(parent) = Self::current() { parent.join(self); }
         let _restore = Restore(CURRENT.with(|slot| slot.replace(Some(self.clone()))));
         f()
+    }
+}
+
+fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.oldest(b)),
+        (a, b) => a.or(b),
     }
 }
 
@@ -82,21 +122,30 @@ mod tests {
 
     #[test]
     fn descendants_share_late_restriction_and_oldest_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let old = state.admit_automation().unwrap();
+        state.set_automation_stopped(false).unwrap();
+        let new = state.admit_automation().unwrap();
         let parent = RunContext::default();
-        let children: Vec<_> = (0..8).map(|_| parent.clone()).collect();
-        parent.capture_stop_generation(20);
+        let children: Vec<_> = (0..8).map(|_| RunContext::default()).collect();
+        parent.capture_stop_generation(old);
         std::thread::scope(|scope| {
-            for (i, child) in children.iter().enumerate() {
+            for child in &children {
+                let parent = &parent;
                 scope.spawn(move || {
-                    child.capture_stop_generation(i as u64 + 10);
-                    child.restrict();
+                    child.capture_stop_generation(new);
+                    parent.scope(|| child.scope(|| {
+                        assert_eq!(RunContext::current().unwrap().stop_generation(), Some(old));
+                    }));
                 });
             }
         });
-        parent.capture_stop_generation(100);
+        children[0].restrict();
+        parent.capture_stop_generation(new);
         for child in &children {
             assert!(child.is_restricted());
-            assert_eq!(child.stop_generation(), Some(10));
+            assert_eq!(child.stop_generation(), Some(old));
             assert_eq!(child, &parent);
         }
         assert!(!RunContext::default().is_restricted());
@@ -105,20 +154,19 @@ mod tests {
     #[test]
     fn nested_scope_restores_after_panic_and_keeps_shared_state() {
         let parent = RunContext::default();
-        parent.capture_stop_generation(4);
+        parent.restrict();
         parent.scope(|| {
-            let child = RunContext::current().unwrap();
+            let child = RunContext::default();
             let result = std::panic::catch_unwind(|| {
                 child.scope(|| {
-                    child.restrict();
-                    child.capture_stop_generation(9);
+                    assert!(RunContext::current().unwrap().is_restricted());
                     panic!("test scope cleanup");
                 });
             });
             assert!(result.is_err());
             assert_eq!(RunContext::current(), Some(parent.clone()));
             assert!(parent.is_restricted());
-            assert_eq!(parent.stop_generation(), Some(4));
+            assert!(child.is_restricted());
         });
         assert!(RunContext::current().is_none());
     }

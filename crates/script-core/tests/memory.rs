@@ -54,7 +54,10 @@ fn parallel_workers_carry_live_context_without_enforcement_or_leaks() {
         },
     );
     let context = script_core::RunContext::default();
-    context.capture_stop_generation(3);
+    let dir = tempfile::tempdir().unwrap();
+    let state = state::State::open(&dir.path().join("state.db"), None).unwrap();
+    let generation = state.admit_automation().unwrap();
+    context.capture_stop_generation(generation);
     let mut job = context.scope(|| {
         Job::new(
             Kind::Task,
@@ -76,8 +79,8 @@ fn parallel_workers_carry_live_context_without_enforcement_or_leaks() {
     }
     for observed in seen.lock().unwrap().iter() {
         assert_eq!(observed, &context);
-        observed.capture_stop_generation(8);
-        assert_eq!(observed.stop_generation(), Some(3));
+        observed.capture_stop_generation(generation);
+        assert_eq!(observed.stop_generation(), Some(generation));
     }
     assert!(script_core::RunContext::current().is_none());
     // Reuse both workers for independent, unrestricted jobs.

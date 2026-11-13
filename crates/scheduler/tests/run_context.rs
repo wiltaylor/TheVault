@@ -12,7 +12,7 @@ use writer::{Hooks, NoteChange, Writer};
 struct Observation {
     context: RunContext,
     restricted: bool,
-    generation: Option<u64>,
+    generation: Option<state::automation::Generation>,
 }
 
 struct Probe(mpsc::Sender<Observation>);
@@ -35,6 +35,7 @@ struct Fixture {
     scheduler: Arc<Scheduler>,
     clock: Arc<TestClock>,
     seen: Mutex<mpsc::Receiver<Observation>>,
+    writer: Arc<Writer>,
     _dir: tempfile::TempDir,
 }
 
@@ -75,7 +76,7 @@ fn run() -> Result[Value, string] {
             Limits::default(),
             Ai::of(&writer),
         ));
-        let scheduler = Scheduler::new(writer, host, clock.clone()).unwrap();
+        let scheduler = Scheduler::new(writer.clone(), host, clock.clone()).unwrap();
         scheduler
             .put_task(
                 "probe",
@@ -83,6 +84,7 @@ fn run() -> Result[Value, string] {
             )
             .unwrap();
         Self {
+            writer,
             scheduler,
             clock,
             seen: Mutex::new(recv),
@@ -103,7 +105,8 @@ fn run() -> Result[Value, string] {
 fn task_retries_keep_live_restriction_and_oldest_generation_across_workers() {
     let f = Fixture::new();
     let parent = RunContext::default();
-    parent.capture_stop_generation(7);
+    let old = f.writer.state().admit_automation().unwrap();
+    parent.capture_stop_generation(old);
     let first = f
         .scheduler
         .trigger_with_context("probe", parent.clone())
@@ -112,11 +115,12 @@ fn task_retries_keep_live_restriction_and_oldest_generation_across_workers() {
     let seen = f.observe();
     assert_eq!(seen.context, parent);
     assert!(!seen.restricted);
-    assert_eq!(seen.generation, Some(7));
+    assert_eq!(seen.generation, Some(old));
 
     // Restrict after admission and failure, while the retry is waiting.
     parent.restrict();
-    parent.capture_stop_generation(99);
+    f.writer.state().set_automation_stopped(false).unwrap();
+    parent.capture_stop_generation(f.writer.state().admit_automation().unwrap());
     f.scheduler.reload().unwrap();
     for (delay, attempt) in [(1, 2), (2, 3)] {
         f.clock.advance(Duration::from_secs(delay));
@@ -126,7 +130,7 @@ fn task_retries_keep_live_restriction_and_oldest_generation_across_workers() {
         let seen = f.observe();
         assert_eq!(seen.context, parent);
         assert!(seen.restricted);
-        assert_eq!(seen.generation, Some(7));
+        assert_eq!(seen.generation, Some(old));
     }
     assert!(f.scheduler.status("probe").unwrap().retry.is_none());
     assert!(RunContext::current().is_none());
@@ -154,12 +158,13 @@ fn background_admission_carries_explicit_context_to_writer_callback() {
     let f = Fixture::new();
     let parent = RunContext::default();
     parent.restrict();
-    parent.capture_stop_generation(3);
+    let generation = f.writer.state().admit_automation().unwrap();
+    parent.capture_stop_generation(generation);
     f.scheduler
         .trigger_in_background_with_context("probe", parent.clone())
         .unwrap();
     let seen = f.observe();
     assert_eq!(seen.context, parent);
     assert!(seen.restricted);
-    assert_eq!(seen.generation, Some(3));
+    assert_eq!(seen.generation, Some(generation));
 }

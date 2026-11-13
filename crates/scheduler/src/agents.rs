@@ -272,7 +272,10 @@ mod persistence_retry_tests {
     fn lane_and_persistence_retry_keep_live_context() {
         let mut plan = AgentPlan::default();
         let context = script::RunContext::default();
-        context.capture_stop_generation(4);
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let old = state.admit_automation().unwrap();
+        context.capture_stop_generation(old);
         let job = AgentJob {
             run_context: context.clone(),
             source_notes: vec![],
@@ -294,13 +297,14 @@ mod persistence_retry_tests {
         assert!(matches!(plan.admit(job.clone(), 0), Admitted::Queued));
         plan.retry_persistence(job);
         context.restrict();
-        context.capture_stop_generation(99);
+        state.set_automation_stopped(false).unwrap();
+        context.capture_stop_generation(state.admit_automation().unwrap());
         let queued = plan.next_queued("clerk", 0).unwrap();
         let retry = plan.persist_retry.pop().unwrap();
         for retained in [queued, retry] {
             assert_eq!(retained.run_context, context);
             assert!(retained.run_context.is_restricted());
-            assert_eq!(retained.run_context.stop_generation(), Some(4));
+            assert_eq!(retained.run_context.stop_generation(), Some(old));
         }
     }
 

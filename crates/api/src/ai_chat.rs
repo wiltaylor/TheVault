@@ -5441,7 +5441,12 @@ mod tests {
     #[tokio::test]
     async fn blocking_turn_workers_share_late_restriction_and_job_provenance() {
         let context = RunContext::default();
-        context.capture_stop_generation(2);
+        let dir = tempfile::tempdir().unwrap();
+        let state = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let old = state.admit_automation().unwrap();
+        context.capture_stop_generation(old);
+        state.set_automation_stopped(false).unwrap();
+        let new = state.admit_automation().unwrap();
         let mut workers = Vec::new();
         let mut releases = Vec::new();
         for _ in 0..2 {
@@ -5450,11 +5455,11 @@ mod tests {
             workers.push(blocking(&context, move || {
                 let inherited = RunContext::current().unwrap();
                 wait.recv().unwrap();
-                inherited.capture_stop_generation(9);
+                inherited.capture_stop_generation(new);
                 let job = script_core::Job::new(script_core::Kind::Task, "child", "", "run");
                 assert_eq!(job.run_context, inherited);
                 assert!(job.run_context.is_restricted());
-                assert_eq!(job.run_context.stop_generation(), Some(2));
+                assert_eq!(job.run_context.stop_generation(), Some(old));
                 inherited
             }));
         }

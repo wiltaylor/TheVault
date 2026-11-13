@@ -317,7 +317,8 @@ fn queued_handler_keeps_live_parent_context_through_script_and_writer() {
         .create("report", &json_note(json!({ "title": "Q3" })), &user())
         .unwrap();
     let context = script::RunContext::default();
-    context.capture_stop_generation(4);
+    let generation = writer.state().admit_automation().unwrap();
+    context.capture_stop_generation(generation);
     context.scope(|| {
         writer
             .update(
@@ -330,7 +331,7 @@ fn queued_handler_keeps_live_parent_context_through_script_and_writer() {
     });
     assert_eq!(writer.state().queued_jobs().unwrap().len(), 1);
     context.restrict();
-    context.capture_stop_generation(99);
+    context.capture_stop_generation(generation);
     let (send, recv) = std::sync::mpsc::channel();
     writer.set_commit_hook(Some(Box::new(move |_| {
         let _ = send.send(script::RunContext::current());
@@ -340,7 +341,7 @@ fn queued_handler_keeps_live_parent_context_through_script_and_writer() {
     let observed = recv.recv_timeout(Duration::from_secs(30)).unwrap().unwrap();
     assert_eq!(observed, context);
     assert!(observed.is_restricted());
-    assert_eq!(observed.stop_generation(), Some(4));
+    assert_eq!(observed.stop_generation(), Some(generation));
     let deadline = Instant::now() + Duration::from_secs(30);
     while !writer.state().queued_jobs().unwrap().is_empty() {
         assert!(Instant::now() < deadline, "the queue never emptied");

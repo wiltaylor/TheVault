@@ -75,7 +75,7 @@ fn a_scheduled_task_calls_ai_and_its_run_keeps_the_trail_line() {
     // Provenance alone changes no provider behavior. TV-245 owns enforcement.
     let context = script::RunContext::default();
     context.restrict();
-    context.capture_stop_generation(4);
+    context.capture_stop_generation(writer.state().admit_automation().unwrap());
     fake.push(AnthropicMessage::text("Still allowed in this card.").usage(30, 4));
     let run = scheduler
         .trigger_with_context("summarise", context)
