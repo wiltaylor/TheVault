@@ -1335,6 +1335,19 @@ fn ai_accounts(w: &Writer) -> Result<()> {
         w.state.set_secret(name, value)?;
     }
     let table = json!({ "accounts": accounts, "default": default, "legacy": legacy });
+    // No account table exists yet. Explicit classifier references are all dangling,
+    // including legacy provider aliases that this migration is about to introduce.
+    let missing = ulid::Ulid::new().to_string();
+    w.pin_classifier_accounts(|reference| {
+        let matches = table["accounts"].as_array().is_some_and(|accounts| {
+            accounts.iter().any(|a| {
+                a["name"]
+                    .as_str()
+                    .is_some_and(|name| reference.trim().eq_ignore_ascii_case(name))
+            })
+        }) || table["legacy"].get(reference.trim()).is_some();
+        matches.then(|| missing.clone())
+    })?;
     w.state.set_secret(AI_ACCOUNTS, &table.to_string())?;
     for name in old {
         match w.state.delete_secret(name) {

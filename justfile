@@ -122,12 +122,12 @@ web-e2e-test: web-build (require-tool "cargo")
 # Build the Linux desktop app (debug, no bundles) into apps/desktop/src-tauri/target/debug/thevault
 [group('desktop')]
 desktop-build: (require-tool "cargo-tauri") web-build
-	cd apps/desktop && cargo tauri build --debug --no-bundle
+	cd apps/desktop && cargo tauri build --debug --no-bundle -- --locked
 
 # Run the desktop app's unit tests, then the S6 end-to-end tests with tauri-driver under Xvfb
 [group('desktop')]
 desktop-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (require-tool "gnome-keyring-daemon") desktop-build desktop-notifyd-build
-	cd apps/desktop/src-tauri && cargo test
+	cd apps/desktop/src-tauri && cargo test --locked
 	cargo build -p server -p testkit -p cli --bins
 	xvfb-run -a pnpm -C apps/desktop/e2e test
 
@@ -145,10 +145,10 @@ desktop-release: (require-tool "cargo-tauri") (require-tool "jq") (require-tool 
 	if [[ $version == *-* ]]; then
 		# An rpm version holds no -, so Tauri cannot write a pre-release's rpm: bundle the same build
 		# as an rpm of the release version, which linux-packages.sh below renames to the pre-release.
-		tauri build --bundles appimage,deb
+		tauri build --bundles appimage,deb -- --locked
 		tauri bundle --bundles rpm --config "{\"version\": \"${version%%-*}\"}"
 	else
-		tauri build --bundles appimage,deb,rpm
+		tauri build --bundles appimage,deb,rpm -- --locked
 	fi
 	mkdir -p target/desktop-release
 	cp apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage apps/desktop/src-tauri/target/release/bundle/deb/*.deb apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm target/desktop-release/
@@ -174,7 +174,7 @@ desktop-release-test: (require-tool "tauri-driver") (require-tool "xvfb-run") (r
 # Build the fake notification daemon the desktop end-to-end tests run on the session bus, into apps/desktop/src-tauri/target/debug/examples/fake-notifyd
 [private]
 desktop-notifyd-build: (require-tool "cargo")
-	cd apps/desktop/src-tauri && cargo build --example fake-notifyd
+	cd apps/desktop/src-tauri && cargo build --locked --example fake-notifyd
 
 # Check that packaging/aur/.SRCINFO matches the PKGBUILD, as makepkg prints it
 [group('desktop')]
@@ -202,7 +202,7 @@ aur-release: (require-tool "makepkg") (require-tool "jq")
 [group('android')]
 android-build target='aarch64': (require-tool "cargo-tauri") (require-tool "cargo-ndk") web-build
 	# Debug symbols make the APK about 500 MB; leave them out unless CARGO_PROFILE_DEV_DEBUG/STRIP say otherwise.
-	cd apps/android && env -u CARGO_TARGET_DIR CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}" CARGO_PROFILE_DEV_STRIP="${CARGO_PROFILE_DEV_STRIP:-symbols}" GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target {{target}}
+	cd apps/android && env -u CARGO_TARGET_DIR CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}" CARGO_PROFILE_DEV_STRIP="${CARGO_PROFILE_DEV_STRIP:-symbols}" GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false" cargo tauri android build --debug --apk --target {{target}} -- --locked
 
 # Run docs/android-manual-checks.md on a headless Android 15 emulator, and write the results to .scratch/emulator/RESULTS.generated.md; THEVAULT_APK tests another APK, a release APK too (its package id comes from the APK)
 [group('android')]
@@ -350,8 +350,8 @@ android-test: (require-tool "java") android-build
 	# Tauri generates source-tree files: its output must stay checkout-local.
 	unset CARGO_TARGET_DIR
 	app_target=$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)
-	cargo test -p tauri-plugin-vault-device -p thevault-android
-	cargo rustc -p tauri-plugin-vault-device --lib --crate-type cdylib
+	cargo test --locked -p tauri-plugin-vault-device -p thevault-android
+	cargo rustc --locked -p tauri-plugin-vault-device --lib --crate-type cdylib
 	export VAULT_CORE_LIBRARY="$app_target/debug/libtauri_plugin_vault_device.so"
 	cd gen/android
 	./gradlew --no-daemon testDebugUnitTest

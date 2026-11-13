@@ -877,6 +877,22 @@ fn optional_token_expiry_roundtrips_and_expired_tokens_get_401() {
         std::sync::Arc::new(Past),
     )
     .unwrap();
+    let code = state
+        .create_agent_code("expired-route", state::Scope::Write, 60_000)
+        .unwrap();
+    let (agent, agent_secret) = state.redeem_agent_code(&code.code).unwrap().unwrap();
+    assert_eq!(agent.kind, "agent");
+    expect(
+        api.req("GET", "/api/notes", Auth::Bearer(&agent_secret))
+            .send()
+            .unwrap(),
+        401,
+    );
+    let stored = state.list_tokens().unwrap();
+    let stored_agent = stored.iter().find(|t| t.name == agent.name).unwrap();
+    assert_eq!(stored_agent.last_used_ms, None);
+    assert_eq!(stored_agent.kind, "agent");
+    assert_eq!(stored_agent.scope, state::Scope::Write);
     let (_, expired) = state
         .create_token_with_expiry("expired", state::Scope::Admin, Some(1))
         .unwrap();

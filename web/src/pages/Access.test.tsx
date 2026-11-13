@@ -5,9 +5,10 @@ import type { AgentCode } from "../api";
 const createAgentCode = vi.fn();
 const copyText = vi.fn();
 const tokens = vi.fn();
+const createToken = vi.fn();
 vi.mock("../api", async (orig) => {
   const real = await orig<typeof import("../api")>();
-  return { ...real, api: { ...real.api, createAgentCode, tokens } };
+  return { ...real, api: { ...real.api, createAgentCode, tokens, createToken } };
 });
 vi.mock("../clipboard", () => ({ copyText }));
 
@@ -37,7 +38,48 @@ const issued: AgentCode = {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
+});
+
+it("shows legacy, expired, stale and never-used tokens at the 90-day boundary", async () => {
+  const now = Date.UTC(2026, 10, 13);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const old = now - 90 * 86400000;
+  tokens.mockResolvedValue([
+    { name: "legacy", kind: "user", scope: "read", created: old, last_used: null, expires: null },
+    { name: "expired", kind: "agent", scope: "write", created: old, last_used: old, expires: now },
+    { name: "recent", kind: "device", scope: "write", created: old, last_used: old + 1, expires: now + 1 },
+  ]);
+  render(() => <Tokens />);
+  const table = await screen.findByRole("table", { name: "Tokens" });
+  expect(table.querySelector('[data-token="legacy"]')?.textContent).toContain("No expiry");
+  expect(table.querySelector('[data-token="legacy"]')?.textContent).toContain("Never used in 90 days");
+  expect(table.querySelector('[data-token="expired"]')?.textContent).toContain("Expired");
+  expect(table.querySelector('[data-token="expired"]')?.textContent).toContain("Inactive for 90 days or more");
+  expect(table.querySelector('[data-token="recent"]')?.textContent).not.toMatch(/Expired|Inactive|Never used/);
+  expect(screen.getByText(/Agent tokens expire 90 days after/)).toBeTruthy();
+});
+
+it("sends optional expiry and shows the returned expiry without redisplaying listed secrets", async () => {
+  tokens.mockResolvedValue([]);
+  const date = "2099-01-02T12:00";
+  const expires = new Date(date).getTime();
+  createToken.mockResolvedValue({ name: "cli", kind: "user", scope: "read", expires, secret: "one-time" });
+  render(() => <Tokens />);
+  fireEvent.input(await screen.findByLabelText("Name"), { target: { value: "cli" } });
+  fireEvent.input(screen.getByLabelText("Expiry (local time, optional)"), { target: { value: date } });
+  fireEvent.click(screen.getByRole("button", { name: "Create token" }));
+  await screen.findByLabelText("Token secret");
+  expect(createToken).toHaveBeenCalledWith("cli", "read", expires);
+  expect(screen.getByText(/^Expiry:/)?.textContent).not.toContain("No expiry");
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  expect(screen.queryByLabelText("Token secret")).toBeNull();
+  fireEvent.input(screen.getByLabelText("Expiry (local time, optional)"), { target: { value: "" } });
+  fireEvent.input(screen.getByLabelText("Name"), { target: { value: "cli2" } });
+  await waitFor(() => expect((screen.getByRole("button", { name: "Create token" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Create token" }));
+  await waitFor(() => expect(createToken).toHaveBeenLastCalledWith("cli2", "read", null));
 });
 
 describe("ConnectAgent", () => {

@@ -582,6 +582,105 @@ mod disconnect_tests {
     use super::*;
 
     #[test]
+    fn queued_finish_cannot_reconnect_after_disconnect() {
+        disconnect_race(false);
+    }
+
+    #[test]
+    fn queued_finish_cannot_restore_deleted_settings() {
+        disconnect_race(true);
+    }
+
+    fn disconnect_race(remove_settings: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(
+            &vault.server_dir().join("state.db"),
+            Some(state::SecretKey::generate()),
+        )
+        .unwrap();
+        let writer = Arc::new(Writer::open(vault, state).unwrap());
+        let host = Arc::new(script::Host::new(
+            writer.clone(),
+            1,
+            script::Limits::default(),
+            script::Ai::of(&writer),
+        ));
+        let scheduler =
+            Scheduler::new(writer.clone(), host, Arc::new(scheduler::TestClock::new(0))).unwrap();
+        let google = Arc::new(Google::new(scheduler));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let app = axum::Router::new()
+                .route("/revoke", axum::routing::post({
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    move || async move {
+                        entered.notify_one();
+                        release.notified().await;
+                        StatusCode::OK
+                    }
+                }))
+                .route("/token", axum::routing::post(|| async {
+                    Json(json!({"refresh_token": "new-refresh", "access_token": "access", "scope": SCOPES}))
+                }))
+                .route("/userinfo", axum::routing::get(|| async {
+                    Json(json!({"email": "race@example.test"}))
+                }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let provider = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let saved = json!({"endpoints": {
+                "token": format!("{base}/token"),
+                "userinfo": format!("{base}/userinfo"),
+                "revoke": format!("{base}/revoke")
+            }});
+            for (name, value) in [(CLIENT_ID, "client"), (CLIENT_SECRET, "secret"), (REFRESH_TOKEN, "old-refresh")] {
+                writer.state().set_secret(name, value).unwrap();
+            }
+            writer.state().set_secret(SETTINGS, &saved.to_string()).unwrap();
+            google.pending().insert("race".into(), Pending {
+                verifier: "verifier".into(), redirect_uri: LOOPBACK_REDIRECT.into(),
+                endpoints: Endpoints::of(saved.as_object().unwrap()), started: Instant::now(),
+            });
+            let disconnect = disconnect(State(google.clone()));
+            tokio::pin!(disconnect);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::select! {
+                    _ = entered.notified() => {},
+                    result = &mut disconnect => panic!("disconnect ended before revoke: {result:?}"),
+                }
+            }).await.unwrap();
+            // The endpoint is already captured. Model settings removed during the request.
+            if remove_settings {
+                delete_secret(&writer, SETTINGS).unwrap();
+            }
+            let finish = finish(State(google.clone()), Json(FinishBody {
+                url: "http://127.0.0.1/?state=race&code=valid".into(),
+            }));
+            tokio::pin!(finish);
+            // Poll the actual valid finish while revoke remains open, not an invalid-input probe.
+            assert!(tokio::time::timeout(Duration::from_millis(100), &mut finish).await.is_err(),
+                "finish escaped serialization while revoke was held");
+            release.notify_one();
+            let _ = tokio::time::timeout(Duration::from_secs(5), &mut disconnect).await.unwrap().unwrap();
+            let error = tokio::time::timeout(Duration::from_secs(5), &mut finish).await.unwrap().unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+            for name in SECRETS.into_iter().chain([ACCOUNT]) {
+                assert!(writer.state().get_secret(name).unwrap().is_none(), "{name}");
+            }
+            let settings = writer.state().get_secret(SETTINGS).unwrap();
+            if remove_settings {
+                assert!(settings.is_none());
+            } else {
+                assert_eq!(serde_json::from_str::<Value>(&settings.unwrap()).unwrap(), saved);
+            }
+            provider.abort();
+        });
+    }
+
+    #[test]
     fn finish_and_disconnect_share_connection_exclusion() {
         let dir = tempfile::tempdir().unwrap();
         let vault = store::Vault::init(dir.path()).unwrap();

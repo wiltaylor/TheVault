@@ -37,7 +37,7 @@ pub(crate) fn seed_legacy(conn: &rusqlite::Connection) -> Result<()> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (id, agent, trigger, thread, at) in runs {
         let content = match thread {
-            Some(thread) => conn.query_row("SELECT content FROM versions WHERE note_id=?1 AND note_type='agent_thread' ORDER BY seq DESC LIMIT 1", [thread], |r| r.get::<_,String>(0)).optional()?,
+            Some(thread) => conn.query_row("SELECT content FROM versions WHERE note_id=?1 AND note_type='agent_thread' ORDER BY seq DESC LIMIT 1", [thread], |r| crate::history::snapshot_column(r, 0)).optional()?,
             None => None,
         };
         let note = content.as_deref().and_then(legacy_note);

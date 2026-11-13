@@ -40,6 +40,129 @@ fn author() -> Author {
     Author::Session("test".into())
 }
 
+#[test]
+fn oversized_history_creates_updates_recovers_and_restores() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = setup(dir.path());
+    let by = Author::Token("large-fixture".into());
+    let input = Input::Wcl(format!(
+        "title = \"{}\"\n",
+        "x".repeat(64 * 1024 * 1024 + 1)
+    ));
+    let a = w.create("task", &input, &by).unwrap();
+    assert!(a.wcl.len() > 64 * 1024 * 1024);
+    let b = w
+        .update(
+            &a.id,
+            &Input::Wcl("title = \"small\"\n".into()),
+            Some(&a.version),
+            &by,
+        )
+        .unwrap();
+    // Fail after the file commit so reopen must record the oversized snapshot.
+    w.set_commit_hook(Some(Box::new(|step| {
+        if step == store::CommitStep::Applied(0) {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    })));
+    assert!(w.update(&a.id, &input, Some(&b.version), &by).is_err());
+    drop(w);
+    let w = open(dir.path());
+    let current = w.current_version(&a.id).unwrap().unwrap();
+    assert_ne!(current, b.version);
+    let path = dir.path().join(format!("notes/task/{}.wcl", a.id));
+    assert!(w.version(&a.id, &current).unwrap().content == std::fs::read_to_string(path).unwrap());
+    let restored = w
+        .restore_version(&a.id, &a.version, Some(&current), &by)
+        .unwrap();
+    // Restore is a new write: only its updated stamp may differ from the snapshot.
+    assert!(
+        restored
+            .wcl
+            .lines()
+            .filter(|line| !line.starts_with("updated "))
+            .eq(a.wcl.lines().filter(|line| !line.starts_with("updated ")))
+    );
+    assert!(w.version(&a.id, &a.version).unwrap().content == a.wcl);
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    let kind: String = conn
+        .query_row(
+            "SELECT typeof(content) FROM versions WHERE token=?1",
+            [&a.version],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "text");
+}
+
+#[test]
+fn compressed_and_legacy_restore_are_exact_and_corruption_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = setup(dir.path());
+    let by = Author::Token("fixture".into());
+    let a = w
+        .create(
+            "task",
+            &Input::Wcl(format!("title = \"{}\"\n", "雪".repeat(10000))),
+            &by,
+        )
+        .unwrap();
+    let b = w
+        .update(
+            &a.id,
+            &Input::Wcl("title = \"changed\"\n".into()),
+            Some(&a.version),
+            &by,
+        )
+        .unwrap();
+    let restored = w
+        .restore_version(&a.id, &a.version, Some(&b.version), &by)
+        .unwrap();
+    assert_eq!(restored.wcl.as_bytes(), a.wcl.as_bytes());
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    conn.execute(
+        "UPDATE versions SET content=?1, content_bytes=NULL WHERE token=?2",
+        rusqlite::params![b.wcl, b.version],
+    )
+    .unwrap();
+    let old = w
+        .restore_version(&a.id, &b.version, Some(&restored.version), &by)
+        .unwrap();
+    assert_eq!(old.wcl.as_bytes(), b.wcl.as_bytes());
+    let path = dir.path().join(format!("notes/task/{}.wcl", a.id));
+    let before = std::fs::read(&path).unwrap();
+    let mut bomb: Vec<u8> = conn
+        .query_row(
+            "SELECT content FROM versions WHERE token=?1",
+            [&a.version],
+            |r| r.get(0),
+        )
+        .unwrap();
+    bomb[4..12].copy_from_slice(&(64 * 1024 * 1024 + 1u64).to_le_bytes());
+    conn.execute(
+        "UPDATE versions SET content=?1 WHERE token=?2",
+        rusqlite::params![bomb, a.version],
+    )
+    .unwrap();
+    let error = w
+        .restore_version(&a.id, &a.version, Some(&old.version), &by)
+        .unwrap_err();
+    assert!(error.to_string().contains("limit"));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    conn.execute(
+        "UPDATE versions SET content=x'56485302' WHERE token=?1",
+        [&a.version],
+    )
+    .unwrap();
+    assert!(
+        w.restore_version(&a.id, &a.version, Some(&old.version), &by)
+            .is_err()
+    );
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}
+
 fn create(w: &Writer, title: &str) -> Saved {
     w.create(
         "task",

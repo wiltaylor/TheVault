@@ -170,6 +170,7 @@ dependencies = [
  "query",
  "regex",
  "reqwest",
+ "rusqlite",
  "scheduler",
  "schema",
  "script",
@@ -3571,6 +3572,7 @@ version = "0.1.12"
 dependencies = [
  "argon2",
  "chacha20poly1305",
+ "lz4_flex",
  "rusqlite",
  "schema",
  "serde",
