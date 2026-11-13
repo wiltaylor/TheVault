@@ -745,10 +745,11 @@ impl Shared {
             {
                 let body = doc_to_json(&doc);
                 let fields = &body["fields"];
-                if fields["kind"] == "email" && fields["status"] == "sending" {
-                    if let Some(id) = fields["sent_ref"].as_str().filter(|id| !id.is_empty()) {
-                        job.author = Some(Author::GmailSentCopy(id.to_owned()));
-                    }
+                if fields["kind"] == "email"
+                    && fields["status"] == "sending"
+                    && let Some(id) = fields["sent_ref"].as_str().filter(|id| !id.is_empty())
+                {
+                    job.author = Some(Author::GmailSentCopy(id.to_owned()));
                 }
             }
             job.args = vec![json!({
