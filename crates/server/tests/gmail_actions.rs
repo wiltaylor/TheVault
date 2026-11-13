@@ -673,9 +673,11 @@ fn a_ref_the_handler_cannot_remember_still_trashes_and_notifies() {
 fn a_sync_task_without_the_trashed_secret_says_so() {
     let api = Api::start(&["one"], &[MODIFY_SCOPE]);
     let task = api.file("tasks/google_gmail.wcl");
-    let without = task
-        .replacen("\"google_gmail_trashed\", ", "", 1)
-        .replacen(", \"google_gmail_trashed\"", "", 1);
+    let without = task.replacen("\"google_gmail_trashed\", ", "", 1).replacen(
+        ", \"google_gmail_trashed\"",
+        "",
+        1,
+    );
     assert_ne!(without, task);
     expect(
         api.req("PUT", "/api/tasks/google_gmail")
