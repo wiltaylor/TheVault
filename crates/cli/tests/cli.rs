@@ -833,8 +833,7 @@ fn isolated_off_host_restore_drill() {
         Some("synthetic-no-provider-value")
     );
     assert_eq!(
-        std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl"))
-            .unwrap(),
+        std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl")).unwrap(),
         content
     );
     drop(recovered);
@@ -845,8 +844,7 @@ fn isolated_off_host_restore_drill() {
     recovery.fails(&["restore-backup", &corrupt, &rejected], "");
     assert!(!Path::new(&rejected).exists());
     assert_eq!(
-        std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl"))
-            .unwrap(),
+        std::fs::read(Path::new(&into).join("notes/task/01ARZ3NDEKTSV4RRFFQ69G5FAV.wcl")).unwrap(),
         content
     );
     assert_eq!(
