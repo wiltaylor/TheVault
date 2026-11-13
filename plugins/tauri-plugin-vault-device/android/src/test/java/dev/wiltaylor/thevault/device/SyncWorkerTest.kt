@@ -61,13 +61,15 @@ class SyncWorkerTest {
         val report = JSONObject(result.outputData.getString(SyncWorker.REPORT)!!)
         assertEquals(0, report.getInt("pulled"))
         // The device's settings (ticket 84) and its capture health (ticket 91), then the engine's
-        // round, in its order: handshake, bases, the asset list, the feed, the pins, bases again.
+        // round, in its order: handshake, bases, the asset list twice, the feed, the pins, bases again.
         assertEquals(
             listOf(
                 "GET /api/devices",
                 "PUT /api/devices/${FakeHome.DEVICE_ID}/health",
                 "GET /api/sync/info",
                 "PUT /api/devices/${FakeHome.DEVICE_ID}/bases",
+                // Before pushing, the engine reads the asset list to send a sticky denial (TV-194).
+                "GET /api/assets",
                 // The pull reads the asset list first, so its progress knows the files to fetch (ticket 144).
                 "GET /api/assets",
                 "GET /api/sync/changes?since=0&limit=500",
