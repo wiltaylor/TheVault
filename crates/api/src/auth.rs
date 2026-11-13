@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use axum::extract::{FromRequestParts, MatchedPath, Path, Request, State};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, RequestExt};
@@ -442,11 +442,15 @@ pub fn required_scope(method: &Method, path: &str) -> Option<Scope> {
 /// the server keeps the browser signed in.
 pub struct Sessions {
     writer: Arc<Writer>,
+    site_https: bool,
 }
 
 impl Sessions {
     pub fn new(writer: Arc<Writer>) -> Sessions {
-        Sessions { writer }
+        let site_https = std::env::var("VAULT_SITE_HTTPS").is_ok_and(|v| {
+            matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+        });
+        Sessions { writer, site_https }
     }
 
     /// Starts a session and returns its id.
@@ -587,6 +591,7 @@ pub async fn authenticate(
     }
     let response_author = granted.author.clone();
     let response_path = req.uri().path().to_owned();
+    let secure_cookie = sessions.site_https || request_is_https(req.headers(), req.uri());
     req.extensions_mut().insert(Caller(granted.author));
     req.extensions_mut().insert(GrantedScope(granted.scope));
     let mut res = next.run(req).await;
@@ -603,8 +608,10 @@ pub async fn authenticate(
     if let Some(id) = granted.renewed
         && !res.headers().contains_key(header::SET_COOKIE)
     {
-        res.headers_mut()
-            .insert(header::SET_COOKIE, session_cookie(&id, SESSION_TTL));
+        res.headers_mut().insert(
+            header::SET_COOKIE,
+            session_cookie(&id, SESSION_TTL, secure_cookie),
+        );
     }
     res
 }
@@ -623,10 +630,19 @@ pub struct LoginBody {
     password: String,
 }
 
-fn session_cookie(value: &str, max_age: Duration) -> HeaderValue {
+fn request_is_https(headers: &HeaderMap, uri: &Uri) -> bool {
+    uri.scheme_str() == Some("https")
+        || headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.eq_ignore_ascii_case("https"))
+}
+
+fn session_cookie(value: &str, max_age: Duration, secure: bool) -> HeaderValue {
     let cookie = format!(
-        "{SESSION_COOKIE}={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
-        max_age.as_secs()
+        "{SESSION_COOKIE}={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}{}",
+        max_age.as_secs(),
+        if secure { "; Secure" } else { "" },
     );
     HeaderValue::from_str(&cookie).expect("a session cookie is a valid header value")
 }
@@ -634,6 +650,7 @@ fn session_cookie(value: &str, max_age: Duration) -> HeaderValue {
 /// `POST /api/login`: check the password and start a session (OQ-S3).
 pub async fn login(
     State(sessions): State<Arc<Sessions>>,
+    uri: Uri,
     headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Result<Response, ApiError> {
@@ -669,22 +686,25 @@ pub async fn login(
     }
     let id = sessions.start(user_agent).await?;
     let mut res = Json(json!({ "expires_in": SESSION_TTL.as_secs() })).into_response();
+    let secure = sessions.site_https || request_is_https(&headers, &uri);
     res.headers_mut()
-        .insert(header::SET_COOKIE, session_cookie(&id, SESSION_TTL));
+        .insert(header::SET_COOKIE, session_cookie(&id, SESSION_TTL, secure));
     Ok(res)
 }
 
 /// `POST /api/logout`: end the request's session and clear its cookie.
 pub async fn logout(
     State(sessions): State<Arc<Sessions>>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     if let Some(id) = session_id(&headers) {
         sessions.end(id).await?;
     }
     let mut res = StatusCode::NO_CONTENT.into_response();
+    let secure = sessions.site_https || request_is_https(&headers, &uri);
     res.headers_mut()
-        .insert(header::SET_COOKIE, session_cookie("", Duration::ZERO));
+        .insert(header::SET_COOKIE, session_cookie("", Duration::ZERO, secure));
     Ok(res)
 }
 
