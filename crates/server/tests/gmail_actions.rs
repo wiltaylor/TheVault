@@ -895,18 +895,30 @@ fn trigger_and_mention_runs_cannot_use_the_gmail_switch() {
         api.settle();
         assert_eq!(fake.message_requests().len(), 3, "mention={mention}");
         assert_eq!(api.note(&one)["note"]["fields"]["processed"], true);
-        assert_eq!(api.emails().len(), 1);
+        // An unattended run does not delete by itself, even with the delete switch off: the
+        // delete waits as a proposal for the user's Apply (TV-243 D2, operator decision
+        // 01M79ZNSA5VV1GJHDK6HA61B32 of 2026-11-13, until the caps of TV-245/TV-246).
+        assert_eq!(api.emails().len(), 2, "mention={mention}");
         assert!(api.google.mail_actions().is_empty(), "mention={mention}");
-        assert_eq!(
-            api.server.secret_json("google_gmail_trashed"),
-            json!(["two"])
+        let held = fake.message_requests()[2].json().to_string();
+        assert!(!held.contains("moved to the trash"), "{held}");
+        let threads = expect(
+            api.req("GET", "/api/agents/clerk/threads").send().unwrap(),
+            200,
         );
+        let pending: i64 = threads["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["pending"].as_i64().unwrap_or(0))
+            .sum();
+        assert_eq!(pending, 1, "mention={mention}: {threads:#}");
         api.google.set_history_not_found(true);
         api.run_gmail();
         assert_eq!(
             api.emails().len(),
-            1,
-            "a trigger or mention delete must survive relisting"
+            2,
+            "the held delete changes nothing, also after relisting"
         );
         let runs = expect(
             api.req("GET", "/api/agents/clerk/runs").send().unwrap(),
