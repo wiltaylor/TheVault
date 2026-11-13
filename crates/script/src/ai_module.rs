@@ -114,6 +114,18 @@ impl Ai {
             .and_then(|w| ::ai::Settings::load(w.state()).ok())
             .is_some_and(|s| s.fetch_private)
     }
+
+    /// Log only the fixed policy outcome, never the HTTP arguments or credentials.
+    pub(crate) fn record_http_refusal(&self, author: &state::Author, reason: &str) {
+        if let Some((binding, _)) = &self.0
+            && let Some(w) = binding.get().and_then(Weak::upgrade)
+        {
+            w.state().record_activity(
+                state::NewActivity::new("run.outside_text_refused", "ai", author, reason)
+                    .detail(serde_json::json!({"action": "script_http"})),
+            );
+        }
+    }
 }
 
 pub fn module(access: Ai) -> Module {

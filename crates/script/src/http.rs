@@ -33,6 +33,9 @@ pub struct Response {
 
 type Reply = Fault<Result<Response, String>>;
 
+const OUTSIDE_TEXT_REFUSAL: &str =
+    "Action refused: this run has read outside text. Owner review is required.";
+
 pub fn module(client: Client, guarded: Client, ai: crate::Ai) -> Module {
     let mut m = Module::new("http");
     m.doc("HTTP to the hosts on this script's allowlist");
@@ -157,6 +160,16 @@ fn call(
         Ok(m) => m,
         Err(_) => return Ok(Err(format!("{method:?} is not an HTTP method"))),
     };
+    // Check the live shared context, not a snapshot taken when the job was queued.
+    // GET is not an exception: its URL and headers can carry data out too.
+    if script_core::RunContext::current().is_some_and(|c| c.is_restricted()) {
+        run::with(|r| {
+            r.log(OUTSIDE_TEXT_REFUSAL, true);
+            ai.record_http_refusal(&r.author, OUTSIDE_TEXT_REFUSAL);
+            Ok(())
+        })?;
+        return Ok(Err(OUTSIDE_TEXT_REFUSAL.into()));
+    }
     let mut req = client.request(method, url.clone()).timeout(remaining);
     for (name, value) in &headers {
         req = req.header(name, value);

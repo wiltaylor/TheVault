@@ -323,7 +323,7 @@ fn run() -> string {
 }
 
 #[test]
-fn live_context_survives_http_and_writer_commits_without_new_refusals() {
+fn late_restriction_refuses_http_before_the_provider_and_next_write() {
     let f = fixture();
     let api = StandIn::start();
     api.route("/context", Reply::text(200, "ok"));
@@ -354,18 +354,61 @@ fn run() -> Result[int, string] {{
     let mut work = context.scope(|| job(Kind::Task, &src));
     work.allow_domains = vec![api.host()];
     context.restrict();
-    assert_eq!(f.host.run(work).result.unwrap(), json!(200));
-    assert_eq!(api.requests().len(), 1);
-    assert_eq!(api.requests()[0].body, b"payload");
+    let out = f.host.run(work);
+    assert!(out.result.unwrap_err().to_string().contains("this run has read outside text"));
+    assert!(out.log.contains("this run has read outside text"));
+    assert!(api.requests().is_empty());
     let seen: Vec<_> = recv.try_iter().collect();
-    assert!(seen.len() >= 2);
+    assert!(!seen.is_empty());
     for observed in seen {
         assert_eq!(observed, context);
         assert!(observed.is_restricted());
         assert_eq!(observed.stop_generation(), Some(generation));
     }
-    assert_eq!(f.writer.list(None).unwrap().len(), 2);
+    assert_eq!(f.writer.list(None).unwrap().len(), 1);
+    let audit = f.writer.state().activity(&state::ActivityFilter {
+        kind: Some("run.outside_text_refused".into()),
+        ..Default::default()
+    }).unwrap();
+    assert_eq!(audit.items.len(), 1);
+    assert_eq!(audit.items[0].detail, json!({"action": "script_http"}));
     assert!(script::RunContext::current().is_none());
+}
+
+#[test]
+fn restricted_http_methods_and_recovered_context_cannot_escape() {
+    let f = fixture();
+    let api = StandIn::start();
+    api.route("/context", Reply::text(200, "ok"));
+    let context = script::RunContext::default();
+    context.capture_stop_generation(f.writer.state().admit_automation().unwrap());
+    context.restrict();
+    let id = context.persist(f.writer.state()).unwrap();
+    drop(context);
+    let recovered = script::RunContext::recover(f.writer.state(), &id);
+    assert!(recovered.is_restricted());
+    for method in ["GET", "POST", "DELETE", "PATCH"] {
+        let src = format!(
+            "use http\nfn run() -> Result[int, string] {{ Ok(http::request(\"{method}\", \"{}\", #{{}}, \"\")?.status) }}\n",
+            api.url("/context")
+        );
+        let mut work = job(Kind::Task, &src);
+        work.allow_domains = vec![api.host()];
+        // Even a job built with an unrelated default must inherit at submission.
+        let out = recovered.scope(|| f.host.run(work));
+        assert!(out.result.unwrap_err().to_string().contains("this run has read outside text"));
+    }
+    assert!(api.requests().is_empty());
+    // Independent owner work does not inherit the recovered restriction.
+    let src = format!(
+        "use http\nfn run() -> Result[int, string] {{ Ok(http::get(\"{}\", #{{}})?.status) }}\n",
+        api.url("/context")
+    );
+    let mut work = job(Kind::Task, &src);
+    work.author = Some(Author::Session("owner".into()));
+    work.allow_domains = vec![api.host()];
+    assert_eq!(f.host.run(work).result.unwrap(), json!(200));
+    assert_eq!(api.requests().len(), 1);
 }
 
 #[test]
