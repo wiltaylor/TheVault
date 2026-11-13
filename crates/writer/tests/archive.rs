@@ -59,9 +59,15 @@ fn oversized_history_creates_updates_recovers_and_restores() {
             &by,
         )
         .unwrap();
-    // External edits exercise recover's record_version path with oversized content.
-    let path = dir.path().join(format!("notes/task/{}.wcl", a.id));
-    std::fs::write(&path, &a.wcl).unwrap();
+    // Fail after the file commit so reopen must record the oversized snapshot.
+    w.set_commit_hook(Some(Box::new(|step| {
+        if step == store::CommitStep::Applied(0) {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    })));
+    assert!(w.update(&a.id, &input, Some(&b.version), &by).is_err());
     drop(w);
     let w = open(dir.path());
     let current = w.current_version(&a.id).unwrap().unwrap();
