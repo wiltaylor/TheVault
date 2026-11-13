@@ -748,7 +748,8 @@ pub fn save(
     // Store provenance outside the editable transcript and before publishing it.
     // Compaction and fresh owner replies must not clear exposure from this thread.
     if script_core::RunContext::current().is_some_and(|c| c.is_restricted()) {
-        w.state().set_meta(&format!("outside_text.thread.{id}"), "1")?;
+        w.state()
+            .set_meta(&format!("outside_text.thread.{id}"), "1")?;
     }
     let mut last = None;
     for _ in 0..RETRIES {
