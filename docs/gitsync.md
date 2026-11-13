@@ -7,9 +7,16 @@ warning before import or archive. Identical retries remain allowed. Rounds hold 
 file lock through publication, and reserve a sequence durably before pushing. Failed pushes
 can leave harmless gaps. Unchanged publication keeps its sequence and avoids another push.
 
-Checkpoints fingerprint the manifest blob and only the blobs it references, not unrelated
-files in the git tree. Each definition includes a plaintext SHA256, verified before import,
-as notes and assembled assets are verified.
+Checkpoints fingerprint the manifest blob and the note and definition blobs it references,
+not unrelated files in the git tree. Assets are pinned by their id and the assembled SHA256
+from the authenticated manifest, not by their part blobs, so a damaged part cannot change a
+checkpoint; the asset still fails its own check at import. Each definition includes a
+plaintext SHA256, verified before import, as notes and assembled assets are verified.
+
+If the publisher's own remote manifest is missing, cannot be decrypted (for example one
+written before sequences existed) or cannot be parsed, the round warns and publishes over it
+from the local counter. Only an authenticated manifest that names a different instance
+stops publishing.
 
 Upgrade every syncing vault together. Format-2 manifests without a positive sequence or
 without a plaintext SHA256 on every definition are
