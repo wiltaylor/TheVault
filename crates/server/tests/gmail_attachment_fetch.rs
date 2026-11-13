@@ -285,6 +285,46 @@ fn provider_failure_is_fixed_text_and_does_not_store_bytes() {
 }
 
 #[test]
+fn device_and_agent_tokens_restore_imported_email_without_changing_metadata() {
+    let f = Fixture::new();
+    let device = expect(
+        f.client
+            .post(f.server.url("/api/devices/pair"))
+            .json(&json!({"password":testkit::PASSWORD,"name":"restore","platform":"android"}))
+            .send()
+            .unwrap(),
+        201,
+    );
+    for token in [device["token"].as_str().unwrap().to_owned(), f.agent_token()] {
+        let before = f.note();
+        expect(
+            f.client
+                .delete(f.server.url(&format!(
+                    "/api/notes/{}?base_version={}",
+                    f.id,
+                    before["version"].as_str().unwrap()
+                )))
+                .header("cookie", &f.cookie)
+                .send()
+                .unwrap(),
+            200,
+        );
+        expect(
+            f.client
+                .post(f.server.url(&format!("/api/trash/{}/restore", f.id)))
+                .bearer_auth(token)
+                .send()
+                .unwrap(),
+            200,
+        );
+        let after = f.note();
+        for field in ["gmail_ref", "gmail_account", "gmail_deferred_parts"] {
+            assert_eq!(before["note"]["fields"][field], after["note"]["fields"][field]);
+        }
+    }
+}
+
+#[test]
 fn agent_token_cannot_preview_or_fetch() {
     let f = Fixture::new();
     let token = f.agent_token();

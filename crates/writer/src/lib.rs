@@ -1963,7 +1963,14 @@ impl Writer {
             return Ok(());
         }
         let old = if change.event == Event::Create {
-            None
+            // A create with a trash entry is a restore (as at commit). Compare
+            // against its own stored content, including after before_* hooks.
+            self.state
+                .trash_entry(&change.id)?
+                .map(|entry| {
+                    Input::Wcl(entry.content).parse(&note_path(&entry.note_type, &change.id))
+                })
+                .transpose()?
         } else {
             let (ty, text) = self.existing(&change.id)?;
             Some(Input::Wcl(text).parse(&note_path(&ty, &change.id))?)

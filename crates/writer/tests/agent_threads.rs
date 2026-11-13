@@ -273,6 +273,44 @@ fn open(root: &Path, key: Option<SecretKey>) -> Writer {
     Writer::open(vault, state).unwrap()
 }
 
+#[test]
+fn restoring_email_refuses_metadata_changed_by_a_before_hook() {
+    use state::Author;
+    use writer::{Event, Hooks, Input, NoteChange};
+    struct Forge;
+    impl Hooks for Forge {
+        fn before(&self, change: &mut NoteChange, author: &Author) -> Result<(), String> {
+            if change.event == Event::Create && matches!(author, Author::Token(_)) {
+                change.doc = Some(
+                    Input::Json(json!({"fields":{"title":"Email","gmail_ref":"forged"}}))
+                        .parse("email")
+                        .unwrap(),
+                );
+            }
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path(), None).with_hooks(Box::new(Forge));
+    w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    let owner = Author::Session("owner".into());
+    let note = w
+        .create(
+            "email",
+            &Input::Json(json!({"fields":{"title":"Email","gmail_ref":"original"}})),
+            &owner,
+        )
+        .unwrap();
+    w.delete(&note.id, Some(&note.version), &owner).unwrap();
+    let error = w
+        .restore_from_trash(&note.id, &Author::Token("device".into()))
+        .unwrap_err();
+    assert!(error.to_string().contains("Gmail attachment metadata"));
+    assert_eq!(w.trash().unwrap().len(), 1);
+    w.restore_from_trash(&note.id, &Author::Agent("agent".into()))
+        .unwrap();
+}
+
 fn generation(root: &Path) -> u64 {
     std::fs::read_to_string(root.join(".vault/generation"))
         .unwrap_or_default()
