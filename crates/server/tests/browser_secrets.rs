@@ -54,6 +54,10 @@ fn internal_secrets_refuse_put_and_delete_for_tokens_and_sessions() {
         }
     }
 }
+
+fn large_note_server(count: usize, bytes: usize) -> TestServer {
+    TestServer::start_seeded(|vault| {
+        std::fs::create_dir_all(vault.join("types")).unwrap();
         std::fs::create_dir_all(vault.join("notes/memo")).unwrap();
         std::fs::write(vault.join("types/memo.wcl"), "label = \"Memo\"\nfield status { kind = \"string\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
         for i in 0..count {
