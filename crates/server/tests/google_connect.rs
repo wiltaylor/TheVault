@@ -355,6 +355,7 @@ fn finish_writes_the_settings_keeping_the_endpoints_the_start_used() {
         settings,
         json!({
             "gmail_mode": "labels",
+            "gmail_remote_images": false,
             "gmail_labels": [],
             "gmail_window_days": 90,
             "gmail_backfill_to": null,
@@ -792,12 +793,21 @@ fn put_settings_validates_and_saves_keeping_the_endpoints() {
         .json(&json!({ "password": testkit::PASSWORD }))
         .send()
         .unwrap();
-    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
-    let out = expect(Client::new()
-        .put(api.server.url("/api/integrations/google/settings"))
-        .header("cookie", cookie)
-        .json(&consent)
-        .send().unwrap(), StatusCode::OK);
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let out = expect(
+        Client::new()
+            .put(api.server.url("/api/integrations/google/settings"))
+            .header("cookie", cookie)
+            .json(&consent)
+            .send()
+            .unwrap(),
+        StatusCode::OK,
+    );
     assert_eq!(out["settings"]["gmail_remote_images"], true);
     // Old clients cannot silently clear an owner's consent.
     expect(api.put_settings(good.clone()), StatusCode::OK);

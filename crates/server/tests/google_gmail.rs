@@ -1266,7 +1266,8 @@ fn remote_images_default_off_preserves_data_images() {
     google.add_message(json!({
         "id": "private", "labels": ["INBOX"], "at": ago(1),
         "from": "alex@example.com", "subject": "Private",
-        "html": format!(r#"<img src="data:image/png;base64,{}"><img src="cid:logo"><img src="{}">"#, b64(&png(2)), web.url("/hero.png")),
+        "text": "legacy",
+        "html": format!(r#"<img src="data:image/png;base64,{}"><img src="cid:logo"><img src="{}"><p>legacy</p>"#, b64(&png(2)), web.url("/hero.png")),
         "attachments": [{ "filename": "logo.png", "mime": "image/png", "base64": b64(&png(3)), "content_id": "logo" }],
     }));
     let gmail = Gmail::start(google, json!({ "gmail_mode": "all" }));
@@ -1286,7 +1287,10 @@ fn remote_images_default_off_preserves_data_images() {
     assert_eq!(gmail.asset(cid_asset), png(3));
     // Both provider-backed and stored-HTML reconversion obey the same default.
     let provider = old_email(&gmail, "private", &["legacy"], json!({}));
-    let html = gmail.upload("gone.html", format!(r#"<img src="{}">"#, web.url("/hero.png")).as_bytes());
+    let html = gmail.upload(
+        "gone.html",
+        format!(r#"<p>legacy</p><img src="{}">"#, web.url("/hero.png")).as_bytes(),
+    );
     let stored = old_email(&gmail, "gone", &["legacy"], json!({ "html": html }));
     gmail.run_ok();
     assert!(web.requests().is_empty());

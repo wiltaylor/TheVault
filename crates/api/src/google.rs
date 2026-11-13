@@ -23,7 +23,8 @@
 //!   lists everything again. A remote revocation failure does not stop local disconnect; the
 //!   answer carries a sanitized `revocation_warning` instead of claiming Google revoked it.
 //! - `PUT /api/integrations/google/settings` saves `{ gmail_mode, gmail_labels,
-//!   gmail_window_days, gmail_backfill_to, calendars, default_calendar }` into `google_settings`,
+//!   gmail_window_days, gmail_backfill_to, calendars, default_calendar, gmail_remote_images }` into `google_settings`,
+//!   `gmail_remote_images` defaults off and may only be supplied by an owner session.
 //!   keeping its `endpoints`. `gmail_mode` is `labels` or `all`, the window 1 to 3650 days, the
 //!   back-fill date `YYYY-MM-DD` or null, and `calendars` not empty.
 //! - `GET /api/integrations/google` answers `{ connected, account, client_stored, can_send,

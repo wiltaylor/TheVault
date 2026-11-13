@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ViewOriginalButton, hasRemoteImages, originalDocument, originalPolicy } from "./ViewOriginal";
+import { api } from "../api";
 
 const PAGE = '<p>Hello</p><img src="data:image/png;base64,AA" alt="inline"><img src="https://img.example.com/hero.png" alt="hero">';
 
@@ -10,7 +11,16 @@ vi.mock("../api", async (orig) => {
 });
 
 describe("View original", () => {
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+  it("offers no remote load without owner consent", async () => {
+    vi.mocked(api.googleStatus).mockResolvedValueOnce({ settings: { gmail_remote_images: false } } as Awaited<ReturnType<typeof api.googleStatus>>);
+    render(() => <ViewOriginalButton id="01JB8Z4K2MQ7V3X9T5R6W8Y2ZA" />);
+    fireEvent.click(screen.getByRole("button", { name: "View original" }));
+    const frame = await screen.findByTestId("original-frame");
+    expect(frame.getAttribute("srcdoc")).toContain("img-src data:;");
+    expect(screen.queryByRole("button", { name: "Load remote images" })).toBeNull();
+  });
 
   it("shows the original in a frame that runs no script and has no origin", async () => {
     render(() => <ViewOriginalButton id="01JB8Z4K2MQ7V3X9T5R6W8Y2ZA" />);
