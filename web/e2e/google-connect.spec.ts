@@ -42,7 +42,9 @@ async function tell(line: string): Promise<void> {
   expect(JSON.parse(await answer)).toEqual({ ok: line });
 }
 
-test.beforeAll(async () => {
+// Disconnect revokes the fake refresh token. Each test needs a fresh provider so a later
+// fixture does not reuse a token revoked by the connection lifecycle test.
+test.beforeEach(async () => {
   google = spawn(binary("TESTKIT_FAKE_GOOGLE_BIN", "testkit-fake-google"), [], { stdio: ["pipe", "pipe", "inherit"] });
   fake = await new Promise<Fake>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("testkit-fake-google did not report its address")), 30_000);
@@ -56,7 +58,7 @@ test.beforeAll(async () => {
   });
 });
 
-test.afterAll(() => {
+test.afterEach(() => {
   google?.kill();
 });
 
