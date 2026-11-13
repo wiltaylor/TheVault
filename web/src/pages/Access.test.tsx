@@ -67,7 +67,7 @@ it("sends optional expiry and shows the returned expiry without redisplaying lis
   const expires = new Date(date).getTime();
   createToken.mockResolvedValue({ name: "cli", kind: "user", scope: "read", expires, secret: "one-time" });
   render(() => <Tokens />);
-  fireEvent.input(screen.getByLabelText("Name"), { target: { value: "cli" } });
+  fireEvent.input(await screen.findByLabelText("Name"), { target: { value: "cli" } });
   fireEvent.input(screen.getByLabelText("Expiry (local time, optional)"), { target: { value: date } });
   fireEvent.click(screen.getByRole("button", { name: "Create token" }));
   await screen.findByLabelText("Token secret");
