@@ -707,7 +707,10 @@ pub(crate) struct Profile(&'static str, Option<std::time::Instant>);
 
 impl Profile {
     pub(crate) fn new(stage: &'static str) -> Self {
-        Self(stage, std::env::var_os("VAULT_QUERY_PROFILE").map(|_| std::time::Instant::now()))
+        Self(
+            stage,
+            std::env::var_os("VAULT_QUERY_PROFILE").map(|_| std::time::Instant::now()),
+        )
     }
 }
 
