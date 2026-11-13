@@ -168,9 +168,11 @@ fn serves_the_web_client_without_credentials() {
     assert!(csp.contains("script-src 'self'"), "{csp}");
     assert!(csp.contains("object-src 'none'"), "{csp}");
     assert!(!index.headers().contains_key(STRICT_TRANSPORT_SECURITY));
-    let spoofed = client.get(server.url("/"))
+    let spoofed = client
+        .get(server.url("/"))
         .header("x-forwarded-proto", "https")
-        .send().unwrap();
+        .send()
+        .unwrap();
     assert!(!spoofed.headers().contains_key(STRICT_TRANSPORT_SECURITY));
     assert!(csp.contains("connect-src 'self' https:;"), "{csp}");
     assert_eq!(index.headers()[X_FRAME_OPTIONS], "DENY");

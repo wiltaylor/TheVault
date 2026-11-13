@@ -69,7 +69,11 @@ fn session_cookies_are_secure_on_https_requests_and_https_sites() {
     );
 
     let trusted = TestServer::start_with_env(seed, &[("VAULT_TRUSTED_PROXIES", "caddy=127.0.0.1")]);
-    for (proto, secure) in [("https", true), (" HTTPS, http", true), ("http, https", false)] {
+    for (proto, secure) in [
+        ("https", true),
+        (" HTTPS, http", true),
+        ("http, https", false),
+    ] {
         let login = Client::new()
             .post(trusted.url("/api/login"))
             .header("x-forwarded-proto", proto)
@@ -77,7 +81,13 @@ fn session_cookies_are_secure_on_https_requests_and_https_sites() {
             .send()
             .unwrap();
         assert_eq!(login.status(), 200);
-        assert_eq!(login.headers()[SET_COOKIE].to_str().unwrap().contains("Secure"), secure);
+        assert_eq!(
+            login.headers()[SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .contains("Secure"),
+            secure
+        );
     }
 
     let configured = TestServer::start_with_env(seed, &[("VAULT_SITE_HTTPS", "true")]);

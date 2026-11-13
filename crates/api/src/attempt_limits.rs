@@ -319,21 +319,20 @@ pub struct TrustedProxy(pub bool);
 
 fn resolve(proxies: &[Proxy], peer: Key, headers: &HeaderMap) -> (Key, &'static str) {
     let peer = peer.map(|ip| ip.to_canonical());
-    let forwarded = trusted_proxy(proxies, peer)
-        .and_then(|p| {
-            // Reject duplicate headers rather than guessing which one a proxy wrote.
-            let mut values = headers.get_all(p.header).iter();
-            let value = values.next()?.to_str().ok()?;
-            if values.next().is_some() {
-                return None;
-            }
-            let value = if p.header == "x-forwarded-for" {
-                value.rsplit(',').next()
-            } else {
-                Some(value)
-            }?;
-            Some((Some(key(value.trim().parse::<IpAddr>().ok()?)), p.header))
-        });
+    let forwarded = trusted_proxy(proxies, peer).and_then(|p| {
+        // Reject duplicate headers rather than guessing which one a proxy wrote.
+        let mut values = headers.get_all(p.header).iter();
+        let value = values.next()?.to_str().ok()?;
+        if values.next().is_some() {
+            return None;
+        }
+        let value = if p.header == "x-forwarded-for" {
+            value.rsplit(',').next()
+        } else {
+            Some(value)
+        }?;
+        Some((Some(key(value.trim().parse::<IpAddr>().ok()?)), p.header))
+    });
     forwarded.unwrap_or((
         peer.map(key),
         if peer.is_some() {
