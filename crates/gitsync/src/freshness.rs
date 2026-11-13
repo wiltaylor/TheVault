@@ -4,6 +4,19 @@ use state::State;
 
 use crate::{Error, Result};
 
+/// Lock before fetching and keep the descriptor through push, including checkpoint writes.
+pub(crate) fn lock(dir: &std::path::Path) -> Result<std::fs::File> {
+    std::fs::create_dir_all(dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("freshness.lock"))?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)
+        .map_err(std::io::Error::from)?;
+    Ok(file)
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Checkpoint {
@@ -72,4 +85,41 @@ pub(crate) fn receive(state: &State, peer: &str, sequence: u64, hash: &str) -> R
         }
     }
     save(state, &name, sequence, hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_publishers_serialize_durable_reservations() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let key_file = root.join("key");
+        let key = state::SecretKey::create_file(&key_file).unwrap();
+        let database = root.join("state.db");
+        drop(State::open(&database, Some(key)).unwrap());
+        let barrier = std::sync::Barrier::new(8);
+        let mut sequences = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8).map(|i| {
+                let barrier = &barrier;
+                let database = &database;
+                let key_file = &key_file;
+                scope.spawn(move || {
+                    barrier.wait();
+                    let _lock = lock(root).unwrap();
+                    let key = state::SecretKey::load_file(key_file).unwrap();
+                    let state = State::open(database, Some(key)).unwrap();
+                    publication(&state, "publisher", &crate::pack::sha256_hex(&[i])).unwrap()
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+        });
+        sequences.sort_unstable();
+        assert_eq!(sequences, (1..=8).collect::<Vec<_>>());
+        let state = State::open(&database, Some(state::SecretKey::load_file(&key_file).unwrap())).unwrap();
+        let hash = crate::pack::sha256_hex(b"after restart");
+        assert_eq!(publication(&state, "publisher", &hash).unwrap(), 9);
+        assert_eq!(publication(&state, "publisher", &hash).unwrap(), 9);
+    }
 }

@@ -53,12 +53,15 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
                 id.to_owned()
             };
             let before = b.note(&id);
-            let publish = |text: &str| {
+            let mut sequence = 0;
+            let mut publish = |text: &str| {
+                sequence += 1;
                 let layout = Layout::new(&key, "calendar-peer");
                 let mut manifest = Manifest::new(Named {
                     vault_id: "calendar-peer".into(),
                     name: "peer".into(),
                 });
+                manifest.sequence = sequence;
                 manifest.notes.push(gitsync::NoteEntry {
                     id: id.clone(),
                     note_type: ty.into(),

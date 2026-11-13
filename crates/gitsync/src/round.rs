@@ -442,14 +442,7 @@ pub fn run_round(
     secrets: &Secrets,
     paths: &Paths,
 ) -> Result<Report> {
-    std::fs::create_dir_all(&paths.dir)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(paths.dir.join("freshness.lock"))?;
-    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)
-        .map_err(std::io::Error::from)?;
+    let _lock = crate::freshness::lock(&paths.dir)?;
     let key = secrets
         .key
         .as_ref()

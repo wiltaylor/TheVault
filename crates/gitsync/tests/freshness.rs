@@ -13,8 +13,8 @@ fn checkpoints_survive_restart_and_track_peers_independently() {
     let temp = tempfile::tempdir().unwrap();
     let git = Git::new(temp.path().join("repo"), Auth::None).unwrap();
     git.ensure_bare_clone(&repo.url()).unwrap();
-    let peer = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
-    let other = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZB";
+    let peer = "freshness_peer_a";
+    let other = "freshness_peer_b";
     let publish = |peer: &str, sequence: u64, name: &str| {
         let layout = Layout::new(&key, peer);
         let mut manifest = Manifest::new(Named {
@@ -22,7 +22,14 @@ fn checkpoints_survive_restart_and_track_peers_independently() {
             name: name.into(),
         });
         manifest.sequence = sequence;
-        let files = BTreeMap::from([(layout.manifest(), manifest.seal(&key))]);
+        let blob = if sequence == 0 {
+            let mut json = serde_json::to_value(&manifest).unwrap();
+            json.as_object_mut().unwrap().remove("sequence");
+            key.seal(&layout.manifest(), &serde_json::to_vec(&json).unwrap())
+        } else {
+            manifest.seal(&key)
+        };
+        let files = BTreeMap::from([(layout.manifest(), blob)]);
         let tree = git.write_tree(&files).unwrap();
         let commit = git
             .commit_tree(&tree, "synthetic freshness fixture")
