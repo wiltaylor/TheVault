@@ -21,6 +21,36 @@ function source(all: () => Row[]) {
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 describe("createPagedRows", () => {
+  it("publishes in-flight results under continuous events and coalesces a trailing refresh", async () => {
+    const pending: ((page: Page) => void)[] = [];
+    const fetchPage = () => new Promise<Page>((resolve) => pending.push(resolve));
+    const [tick, setTick] = createSignal(0);
+    let dispose!: () => void;
+    const data = createRoot((stop) => {
+      dispose = stop;
+      return createPagedRows(fetchPage, () => "q", 2, tick);
+    });
+    await settle();
+    pending.shift()!({ rows: [], total: 0, next: null });
+    await settle();
+    setTick(1);
+    for (let i = 2; i < 20; i++) setTick(i);
+    expect(pending).toHaveLength(1);
+    pending.shift()!({ rows: [row("a", "Todo")], total: 1, next: null });
+    await settle();
+    expect(data.rows().map((r) => r.id)).toEqual(["a"]);
+    expect(pending).toHaveLength(1);
+    setTick(20);
+    pending.shift()!({ rows: [row("b", "Todo")], total: 1, next: null });
+    await settle();
+    expect(data.rows().map((r) => r.id)).toEqual(["b"]);
+    pending.shift()!({ rows: [row("c", "Todo")], total: 1, next: null });
+    await settle();
+    expect(data.rows().map((r) => r.id)).toEqual(["c"]);
+    expect(pending).toHaveLength(0);
+    dispose();
+  });
+
   it("loads every page it holds again when refresh changes, and swaps the rows in without emptying", async () => {
     let all = [row("a", "Todo"), row("b", "Todo"), row("c", "Todo")];
     const { asked, fetchPage } = source(() => all);
