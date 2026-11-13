@@ -16,6 +16,16 @@ thread_local! {
 }
 
 impl Writer {
+    /// Mark content exposure independently of Jev clearance. Call only when
+    /// content is being supplied to a run, not while checking read permission.
+    pub fn expose_run_note(&self, kind: &str, doc: &schema::Doc) {
+        if self.incoming_agent_note(kind, doc)
+            && let Some(context) = script_core::RunContext::current()
+        {
+            context.restrict();
+        }
+    }
+
     /// Held and unindexed notes excluded before query conditions are evaluated.
     /// Call while holding the note index read guard.
     pub fn agent_excluded_notes(
@@ -154,6 +164,12 @@ fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
         .map_err(err)?;
     if agent_reading() {
         rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
+        for row in &rows {
+            if let Some(id) = row["id"].as_str() {
+                let note = w.read(id).map_err(err)?;
+                w.expose_run_note(&note.type_name, &note.doc);
+            }
+        }
         // Never reveal whether a particular reference set contains held notes.
         OMITTED.with(|n| n.set(1));
     }
@@ -208,6 +224,9 @@ impl Vault for Writer {
             return Err("Note is held from agents".into());
         }
         let n = self.read(id).map_err(err)?;
+        if agent_reading() {
+            self.expose_run_note(&n.type_name, &n.doc);
+        }
         let mut value = json!({
             "id": n.id,
             "type": n.type_name,

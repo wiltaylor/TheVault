@@ -30,6 +30,73 @@ fn create(w: &Writer, title: &str) -> writer::Saved {
 }
 
 #[test]
+fn cleared_get_and_links_restrict_the_live_run_but_permission_checks_do_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    w.activate_agent_safety().unwrap();
+    let mail = create(&w, "Incoming");
+    let linked = w
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Link", "link":mail.id}})),
+            &Author::Session("owner".into()),
+        )
+        .unwrap();
+    for id in [&mail.id, &linked.id] {
+        let hash = w.agent_safety(id).unwrap().fingerprint;
+        w.release_agent_safety(id, &hash, &Author::Session("owner".into()))
+            .unwrap();
+    }
+    for operation in ["permission", "get", "links", "owner"] {
+        let context = script_core::RunContext::default();
+        context.scope(|| {
+            let author = if operation == "owner" {
+                Author::Session("owner".into())
+            } else {
+                Author::Agent("helper".into())
+            };
+            let _acting = writer::acting_as(&author);
+            match operation {
+                "permission" => assert!(w.agent_may_read(&mail.id)),
+                "links" => assert_eq!(w.backlinks(&mail.id).unwrap().len(), 1),
+                _ => assert_eq!(w.get(&mail.id).unwrap()["id"], mail.id),
+            }
+        });
+        assert_eq!(context.is_restricted(), matches!(operation, "get" | "links"));
+    }
+}
+
+#[test]
+fn run_exposure_uses_typed_incoming_metadata_and_preserves_ownership_exclusions() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = state::SecretKey::generate();
+    let w = open_key(dir.path(), Some(key));
+    w.state()
+        .set_secret(writer::google::ACCOUNT, "owner@example.test")
+        .unwrap();
+    for (kind, fields, restricted) in [
+        ("email", serde_json::json!({}), true),
+        ("email", serde_json::json!({"labels":["system/SENT"]}), false),
+        ("email", serde_json::json!({"labels":["system/DRAFT"]}), false),
+        ("message", serde_json::json!({"direction":"in"}), true),
+        ("message", serde_json::json!({"direction":"out"}), false),
+        ("call", serde_json::json!({"direction":"in"}), true),
+        ("call", serde_json::json!({"direction":"out"}), false),
+        ("event", serde_json::json!({"organiser":"foreign@example.test"}), true),
+        ("event", serde_json::json!({"organiser":"OWNER@example.test"}), false),
+        ("event", serde_json::json!({}), false),
+        ("memo", serde_json::json!({"title":"incoming email"}), false),
+    ] {
+        let doc = Input::Json(serde_json::json!({"fields": fields}))
+            .parse("note.wcl")
+            .unwrap();
+        let context = script_core::RunContext::default();
+        context.scope(|| w.expose_run_note(kind, &doc));
+        assert_eq!(context.is_restricted(), restricted, "{kind}: {fields}");
+    }
+}
+
+#[test]
 fn backfill_clears_parent_and_member_without_trigger_but_ordinary_clearance_delivers() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("types")).unwrap();

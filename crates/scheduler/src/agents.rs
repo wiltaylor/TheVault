@@ -1665,6 +1665,20 @@ impl Scheduler {
     }
 
     fn run_agent_job_scoped(&self, job: &AgentJob) {
+        // Clearance permits reading content, not acting on its instructions.
+        // Inspect typed source metadata for calls, dispatches and event jobs,
+        // including recovered jobs, before opening a thread or invoking a model.
+        for id in job
+            .source_notes
+            .iter()
+            .map(String::as_str)
+            .chain(job.note.iter().map(|(id, _)| id.as_str()))
+        {
+            match self.writer.read(id) {
+                Ok(note) => self.writer.expose_run_note(&note.type_name, &note.doc),
+                Err(_) => job.run_context.restrict(),
+            }
+        }
         if job
             .source_notes
             .iter()

@@ -1586,6 +1586,7 @@ fn setup(
         .filter(|id| w.agent_may_read(id))
         && let Ok(n) = w.read(&id)
     {
+        w.expose_run_note(&n.type_name, &n.doc);
         let doc = doc_to_json(&n.doc);
         let title = doc["fields"]["title"]
             .as_str()
