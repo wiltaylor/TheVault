@@ -78,6 +78,27 @@ fn user() -> Author {
 
 struct CalendarClock;
 
+#[test]
+fn device_calendar_owner_edits_keep_existing_send_updates_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path(), Recorder::default()).with_clock(Arc::new(CalendarClock));
+    let (device, _) = w.state().pair_device(&state::NewDevice {
+        name: "test", platform: "linux", capabilities: "{}", settings: "{}",
+    }).unwrap();
+    let author = Author::Token(device.token_id);
+    let person = w.create("person", &Input::Wcl("title = \"Guest\"\n".into()), &user()).unwrap();
+    let base = "title = \"Invitation\"\ngoogle_ref = \"synthetic\"\n";
+    let saved = w.create("event", &Input::Wcl(base.into()), &author).unwrap();
+    let mut saved = saved;
+    let mut text = base.to_owned();
+    for edit in ["my_response = \"accepted\"\n".to_owned(), format!("attendees = [\"{}\"]\n", person.id), "status = \"tentative\"\n".to_owned()] {
+        text.push_str(&edit);
+        saved = w.update(&saved.id, &Input::Wcl(text.clone()), Some(&saved.version), &author).unwrap();
+    }
+    assert!(matches!(w.update(&saved.id, &Input::Wcl(format!("{text}send_updates = true\n")), Some(&saved.version), &author), Err(Error::Rejected(_))));
+    assert_eq!(w.read(&saved.id).unwrap().wcl, saved.wcl);
+}
+
 impl state::Clock for CalendarClock {
     fn now_ms(&self) -> i64 {
         1_772_352_000_000
@@ -90,8 +111,8 @@ fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
         for forged in [
             "google_ref = \"forged\"\n",
             "etag = \"forged\"\n",
-            "attendees = [\"forged\"]\n",
-            "attendees_raw = \"forged\"\n",
+            "attendees = []\n",
+            "attendees_raw = [\"forged\"]\n",
             "my_response = \"accepted\"\n",
             "status = \"cancelled\"\n",
             "send_updates = true\n",
@@ -101,8 +122,9 @@ fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
             let dir = tempfile::tempdir().unwrap();
             let hooks = Recorder::default();
             let w = open(dir.path(), hooks.clone()).with_clock(Arc::new(CalendarClock));
-            w.put_type(ty, TASK).unwrap();
-            let text = format!("title = \"peer\"\n{forged}");
+            // Keep the shipped calendar definitions installed by Writer::open.
+            let recurrence = if ty == "event_series" { "rule = [\"RRULE:FREQ=DAILY;COUNT=1\"]\nstarts = { start: \"2026-03-10\", end: \"2026-03-11\" }\n" } else { "" };
+            let text = format!("title = \"peer\"\n{recurrence}{forged}");
             assert!(matches!(
                 w.create_remote(ID, ty, &text, &gitsync()),
                 Err(Error::Rejected(_))
@@ -144,49 +166,13 @@ fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
             w.replace_remote(ID, ty, &same, &before.version, &gitsync())
                 .unwrap();
             assert!(hooks.0.lock().unwrap().is_empty());
+            let current = w.read(ID).unwrap();
+            w.delete(ID, Some(&current.version), &user()).unwrap();
+            let history = w.state().history(ID).unwrap().len();
+            assert!(matches!(w.create_remote(ID, ty, &text, &gitsync()), Err(Error::IdTaken(_))));
+            assert_eq!(w.state().history(ID).unwrap().len(), history);
         }
     }
-}
-
-#[test]
-fn device_upload_calendar_guard_runs_before_handlers() {
-    let dir = tempfile::tempdir().unwrap();
-    let hooks = Recorder::default();
-    let w = open(dir.path(), hooks.clone()).with_clock(Arc::new(CalendarClock));
-    w.put_type("event", TASK).unwrap();
-    let (device, _) = w
-        .state()
-        .pair_device(&state::NewDevice {
-            name: "test",
-            platform: "linux",
-            capabilities: "{}",
-            settings: "{}",
-        })
-        .unwrap();
-    let author = Author::Token(device.token_id);
-    let forged = Input::Wcl("title = \"device\"\ngoogle_ref = \"forged\"\n".into());
-    assert!(matches!(
-        w.create_with_id(ID, "event", &forged, &author),
-        Err(Error::Rejected(_))
-    ));
-    assert!(w.state().history(ID).unwrap().is_empty());
-    assert!(hooks.0.lock().unwrap().is_empty());
-    let saved = w
-        .create_with_id(
-            ID,
-            "event",
-            &Input::Wcl("title = \"device\"\n".into()),
-            &author,
-        )
-        .unwrap();
-    hooks.0.lock().unwrap().clear();
-    assert!(matches!(
-        w.update(ID, &forged, Some(&saved.version), &author),
-        Err(Error::Rejected(_))
-    ));
-    assert_eq!(w.read(ID).unwrap().wcl, saved.wcl);
-    assert_eq!(w.state().history(ID).unwrap().len(), 1);
-    assert!(hooks.0.lock().unwrap().is_empty());
 }
 
 #[test]

@@ -15,7 +15,7 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
         let repo = BareRepo::new();
         let b = Instance::start_seeded("B", |root| {
             crate::instance::seed(root);
-            std::fs::write(root.join("types/event.wcl"), MEMO).unwrap();
+
         });
         let key = SyncKey::parse(&b.generate_key()).unwrap();
         b.configure(&repo.url(), "", "from *", json!({}));
@@ -52,7 +52,7 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
                 name: "event".into(),
                 path: layout.type_def("event"),
             });
-            files.insert(layout.type_def("event"), key.seal(MEMO.as_bytes()));
+            files.insert(layout.type_def("event"), key.seal(include_bytes!("../../writer/defaults/event.wcl")));
             manifest.types.push(gitsync::DefEntry {
                 name: "memo".into(),
                 path: layout.type_def("memo"),
