@@ -25,6 +25,7 @@
 pub mod convert;
 mod device;
 pub mod run;
+mod run_context;
 mod vault;
 mod vault_module;
 
@@ -41,6 +42,7 @@ use wscript::std_modules::DynValue;
 use wscript::{CompiledUnit, Context, Fault, HostError, IntoValue, Module, Vm, VmConfig};
 
 pub use device::{DeviceAccess, DeviceData, DeviceExtensions, NoDevice, Switches, device_module};
+pub use run_context::RunContext;
 pub use vault::Vault;
 pub use vault_module::vault_module;
 pub use vocab::{Archived, Author};
@@ -201,6 +203,8 @@ pub struct Job {
     /// What the caller needs to know about the run from inside a host call, through
     /// [`current_job`]. The host does not read it.
     pub context: Json,
+    /// Host-owned provenance shared with the caller and every descendant.
+    pub run_context: RunContext,
 }
 
 impl Job {
@@ -221,6 +225,7 @@ impl Job {
             timezone: None,
             timeout: None,
             context: Json::Null,
+            run_context: RunContext::current().unwrap_or_default(),
         }
     }
 }
@@ -466,7 +471,8 @@ fn worker(rx: &Mutex<Receiver<Request>>, contexts: &Contexts) {
         let engine = engines
             .entry(job.kind.registration())
             .or_insert_with(|| Engine::new(contexts.for_kind(job.kind).clone()));
-        let outcome = engine.execute(job, limits);
+        let context = job.run_context.clone();
+        let outcome = context.scope(|| engine.execute(job, limits));
         let _ = reply.send(outcome);
     }
 }
