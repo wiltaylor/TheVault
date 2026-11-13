@@ -1149,7 +1149,7 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
     );
     let scheduled = api.agent_wcl("helper").unwrap();
 
-    // A changed schedule waits again. An unrelated label edit with the same definitions does not.
+    // A changed schedule and metadata edits both wait again.
     let rescheduled = scheduled.replace("0 2 * * *", "0 3 * * *");
     let events = api.one(
         &fake,
@@ -1177,8 +1177,10 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
         "propose_agent_change",
         json!({"name":"helper", "wcl":renamed}),
     );
-    assert!(find(&events, "agent_proposal").is_none(), "{events:?}");
-    assert_eq!(last(&events, "applied")["op"], "agent_change");
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    let proposal = last(&events, "agent_proposal").clone();
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     // Removing a definition is sensitive too, including when the target is disabled.
     let disabled = renamed.replace(
