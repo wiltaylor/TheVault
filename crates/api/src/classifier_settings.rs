@@ -165,7 +165,10 @@ pub(crate) fn pin_account(w: &Writer, accounts: &Accounts, id: &str) -> Result<(
         if !schema::is_name(name) {
             continue;
         }
-        let source = w.vault().read_text(&format!("classifiers/{name}.wcl"))?;
+        let source = w
+            .vault()
+            .read_text(&format!("classifiers/{name}.wcl"))
+            .map_err(|_| ApiError::bad_request("Cannot read classifier definition"))?;
         if let Ok(config) = Classifier::parse(name, &source)
             && let Some(reference) = config.account.as_deref()
             && reference != id
