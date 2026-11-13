@@ -805,6 +805,61 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn idle_streams_close_on_signals_and_fallback_without_renewal() {
+        use futures_util::StreamExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let clock = Arc::new(StreamClock(AtomicI64::new(1_000)));
+        let db = state::State::open_with_clock(&path, None, clock.clone()).unwrap();
+        let other = state::State::open_with_clock(&path, None, clock.clone()).unwrap();
+        for mode in [
+            "revoke",
+            "fallback",
+            "expiry",
+            "logout",
+            "session-expiry",
+            "logout-all",
+        ] {
+            let (secret, token, expiry) = if mode.starts_with("logout") || mode == "session-expiry"
+            {
+                let (id, expiry) = db.create_session(None).unwrap();
+                (id, false, expiry)
+            } else {
+                let expiry = clock.0.load(Ordering::SeqCst) + 1_000;
+                let (_, secret) = db
+                    .create_token_with_expiry(mode, Scope::Read, Some(expiry))
+                    .unwrap();
+                (secret, true, expiry)
+            };
+            let stream = guard_stream(
+                futures_util::stream::once(async {}).chain(futures_util::stream::pending()),
+                db.stream_credential(&secret, token),
+            );
+            tokio::pin!(stream);
+            assert_eq!(stream.next().await, Some(()));
+            let mut next = Box::pin(stream.next());
+            assert!(futures_util::poll!(&mut next).is_pending());
+            match mode {
+                "revoke" => db.revoke_token(mode).unwrap(),
+                "fallback" => other.revoke_token(mode).unwrap(),
+                "logout" => {
+                    db.end_session(&secret).unwrap();
+                }
+                "logout-all" => {
+                    db.end_all_sessions().unwrap();
+                }
+                _ => clock.0.store(expiry, Ordering::SeqCst),
+            }
+            let started = tokio::time::Instant::now();
+            assert_eq!(next.await, None, "{mode}");
+            assert!(started.elapsed() <= STREAM_CHECK_INTERVAL, "{mode}");
+            if mode != "fallback" && !mode.contains("expiry") {
+                assert_eq!(started.elapsed(), Duration::ZERO, "signal for {mode}");
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn live_credentials_revoke_expire_logout_and_isolation() {
         use futures_util::StreamExt;
         let dir = tempfile::tempdir().unwrap();
