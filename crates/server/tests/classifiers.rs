@@ -303,6 +303,32 @@ fn settings_are_session_only_and_repair_only_the_account_without_calls() {
         .unwrap();
     assert_eq!(legacy["reason"], "missing_account");
     assert!(legacy.get("resolved_account_id").is_none());
+    // A dangling name must not be adopted by either account creation or rename-to.
+    for (name, rename) in [("dangling create", false), ("dangling rename", true)] {
+        let source = CONFIG.replace("\"router\"", &format!("\"{name}\""));
+        std::fs::write(server.vault_path().join("classifiers/dangling.wcl"), source).unwrap();
+        let request = if rename {
+            client.put(server.url(&format!("/api/integrations/ai/accounts/{selected}")))
+        } else {
+            client.post(server.url("/api/integrations/ai/accounts"))
+        };
+        request
+            .header("cookie", &cookie)
+            .json(&json!({"name":name,"kind":"openai_compatible","base_url":fake.base_url()}))
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let diagnostics = read();
+        let dangling = diagnostics["classifiers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "dangling")
+            .unwrap();
+        assert_eq!(dangling["reason"], "missing_account");
+        assert!(dangling.get("resolved_account_id").is_none());
+    }
     assert!(fake.requests().is_empty(), "setup must not call Decisions");
 }
 

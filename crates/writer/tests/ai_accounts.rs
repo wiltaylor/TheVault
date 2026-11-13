@@ -71,6 +71,53 @@ fn settings(v: Value) -> (&'static str, String) {
 }
 
 #[test]
+fn migration_does_not_adopt_dangling_classifier_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = vault(dir.path(), &[("ai_openai_api_key", "fake-key".into())]);
+    let source = "account = \"OpenAI\"\ntypes = [\"memo\"]\nmodel = \"jev\"\nfields = [\"title\"]\nquestion scam { type = \"noul\" instructions = \"test\" target = \"scam\" }";
+    std::fs::write(dir.path().join("classifiers/dangling.wcl"), source).unwrap();
+    run_step(&w);
+    let text = w.vault().read_text("classifiers/dangling.wcl").unwrap();
+    let config = schema::Classifier::parse("dangling", &text).unwrap();
+    assert_ne!(config.account.as_deref(), Some("OpenAI"));
+    assert_ne!(config.account.unwrap(), id_of(&accounts(&w), "OpenAI"));
+}
+
+#[test]
+fn pin_rechecks_selection_committed_while_waiting_for_writer_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = std::sync::Arc::new(vault(dir.path(), &[]));
+    let source = "account = \"A\"\ntypes = [\"memo\"]\nmodel = \"jev\"\nfields = [\"title\"]\nquestion scam { type = \"noul\" instructions = \"test\" target = \"scam\" }";
+    std::fs::write(dir.path().join("classifiers/race.wcl"), source).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let other = w.clone();
+    let mut thread = None;
+    w.commit_checked(|_| {
+        thread = Some(std::thread::spawn(move || {
+            tx.send(()).unwrap();
+            other
+                .pin_classifier_accounts(|r| (r == "A").then(|| "pinned-A".into()))
+                .unwrap();
+        }));
+        rx.recv().unwrap();
+        Ok::<_, writer::Error>(vec![store::Change::ClassifierAccount {
+            path: "classifiers/race.wcl".into(),
+            contents: source.replace("\"A\"", "\"C\"").into_bytes(),
+        }])
+    })
+    .unwrap();
+    thread.unwrap().join().unwrap();
+    let text = w.vault().read_text("classifiers/race.wcl").unwrap();
+    assert_eq!(
+        schema::Classifier::parse("race", &text)
+            .unwrap()
+            .account
+            .as_deref(),
+        Some("C")
+    );
+}
+
+#[test]
 fn an_anthropic_key_alone_becomes_the_default_anthropic_account() {
     let dir = tempfile::tempdir().unwrap();
     let w = vault(

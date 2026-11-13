@@ -10,7 +10,8 @@ impl Writer {
     /// A concurrent selection is re-evaluated, never overwritten by a stale pin.
     pub fn pin_classifier_accounts(&self, decide: impl Fn(&str) -> Option<String>) -> Result<()> {
         for entry in std::fs::read_dir(self.vault().root().join("classifiers"))
-            .map_err(|e| Error::BadRequest(e.to_string()))? {
+            .map_err(|e| Error::BadRequest(e.to_string()))?
+        {
             let entry = entry.map_err(|e| Error::BadRequest(e.to_string()))?;
             let file = entry.file_name();
             let Some(name) = file.to_str().and_then(|s| s.strip_suffix(".wcl")) else {
@@ -29,7 +30,10 @@ impl Writer {
                     return Ok(vec![]);
                 };
                 let text = account_source(name, &source, &account)?;
-                Ok(vec![Change::ClassifierAccount { path, contents: text.into_bytes() }])
+                Ok(vec![Change::ClassifierAccount {
+                    path,
+                    contents: text.into_bytes(),
+                }])
             })?;
         }
         Ok(())

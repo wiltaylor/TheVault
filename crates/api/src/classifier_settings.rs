@@ -161,7 +161,11 @@ pub(crate) fn pin_account(w: &Writer, accounts: &Accounts, id: &str) -> Result<(
 }
 
 /// A newly introduced name cannot adopt a previously dangling classifier binding.
-pub(crate) fn pin_missing_name(w: &Writer, accounts: &Accounts, name: &str) -> Result<(), ApiError> {
+pub(crate) fn pin_missing_name(
+    w: &Writer,
+    accounts: &Accounts,
+    name: &str,
+) -> Result<(), ApiError> {
     let missing = ulid::Ulid::new().to_string();
     w.pin_classifier_accounts(|reference| {
         (reference.trim().eq_ignore_ascii_case(name.trim()) && accounts.find(reference).is_none())
