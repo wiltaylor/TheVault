@@ -548,8 +548,18 @@ pub(crate) fn triggers_changed(p: &Value) -> bool {
 
     let name = p["name"].as_str().unwrap_or_default();
     let parse = |key: &str| p[key].as_str().map(|wcl| Agent::parse(name, wcl));
+    if p["op"] == "delete" {
+        return match parse("before") {
+            Some(Ok(before)) => !before.triggers.is_empty(),
+            _ => true,
+        };
+    }
     match (parse("before"), parse("after")) {
-        (Some(Ok(before)), Some(Ok(after))) => definitions(&before) != definitions(&after),
+        (Some(Ok(before)), Some(Ok(after))) => {
+            definitions(&before) != definitions(&after)
+                || (before.enabled != after.enabled
+                    && (!before.triggers.is_empty() || !after.triggers.is_empty()))
+        }
         (Some(Ok(before)), None) => !before.triggers.is_empty(),
         (None, Some(Ok(after))) => !after.triggers.is_empty(),
         _ => true,

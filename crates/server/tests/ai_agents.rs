@@ -1130,6 +1130,12 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
     for token in [api.token(), api.token_of("agent-trigger-editor", "admin")] {
         let (status, body) = api.apply_as(&token, &forged);
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        if token == api.token() {
+            assert_eq!(body["error"], "not_permitted");
+            assert_eq!(body["message"], "Agent trigger changes need a signed-in session Apply.");
+        } else {
+            assert_eq!(body["error"], "needs_admin");
+        }
         assert!(api.agent_wcl("helper").is_none());
     }
     let (status, body) = api.apply_session(&proposal);
@@ -1153,6 +1159,8 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
     assert_eq!(api.agent_wcl("helper").as_deref(), Some(scheduled.as_str()));
     let (status, body) = api.apply(&proposal);
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert_eq!(body["message"], "Agent trigger changes need a signed-in session Apply.");
     let (status, body) = api.apply_session(&proposal);
     assert_eq!(status, StatusCode::OK, "{body}");
 
@@ -1187,6 +1195,57 @@ fn changed_triggers_wait_for_session_apply_despite_confirmation_and_token_metada
 }
 
 #[test]
+fn enabling_and_deleting_triggered_agents_need_session_apply() {
+    let api = Api::start();
+    let fake = FakeAnthropic::start();
+    api.anthropic(&fake, json!({"agents":false}));
+    let disabled = "label = \"Helper\"\nenabled = false\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n";
+    api.put_agent("helper", disabled);
+    let before = api.agent_wcl("helper").unwrap();
+    let enabled = before.replace("enabled = false", "enabled = true");
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_change",
+        json!({"name":"helper", "wcl":enabled}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
+    let (status, body) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "not_permitted");
+    assert_eq!(body["message"], "Agent trigger changes need a signed-in session Apply.");
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(api.agent_wcl("helper").as_deref(), proposal["after"].as_str());
+
+    let before = api.agent_wcl("helper").unwrap();
+    let events = api.one(
+        &fake,
+        None,
+        "propose_agent_delete",
+        json!({"name":"helper"}),
+    );
+    let proposal = last(&events, "agent_proposal").clone();
+    assert!(find(&events, "applied").is_none(), "{events:?}");
+    assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
+    // The delete writer ignores after, so sensitivity must ignore it too.
+    let mut forged = proposal.clone();
+    forged["after"] = json!(before);
+    for change in [&proposal, &forged] {
+        let (status, body) = api.apply(change);
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "not_permitted");
+        assert_eq!(body["message"], "Agent trigger changes need a signed-in session Apply.");
+        assert_eq!(api.agent_wcl("helper").as_deref(), Some(before.as_str()));
+    }
+    let (status, body) = api.apply_session(&proposal);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(api.agent_wcl("helper").is_none());
+}
+
+#[test]
 fn changed_note_trigger_filter_and_action_wait_for_session_apply_and_stay_stale_checked() {
     let api = Api::start();
     let fake = FakeAnthropic::start();
@@ -1208,6 +1267,8 @@ fn changed_note_trigger_filter_and_action_wait_for_session_apply_and_stay_stale_
         assert!(find(&events, "applied").is_none(), "{events:?}");
         let (status, body) = api.apply(&proposal);
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"], "not_permitted");
+        assert_eq!(body["message"], "Agent trigger changes need a signed-in session Apply.");
         let (status, body) = api.apply_session(&proposal);
         assert_eq!(status, StatusCode::OK, "{body}");
     }
