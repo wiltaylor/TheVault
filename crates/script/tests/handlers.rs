@@ -450,10 +450,17 @@ fn unreadable_handler_reference_fails_visibly_without_running_script() {
             .state()
             .activity(&state::ActivityFilter::default())
             .unwrap();
-        if writer.state().failed_jobs().unwrap().iter().any(|job| job.id == id) && entries.items.iter().any(|entry| {
-            entry.kind == "run.recovery_unavailable"
-                && entry.subject.as_deref() == Some("unreadable-handler")
-        }) {
+        if writer
+            .state()
+            .failed_jobs()
+            .unwrap()
+            .iter()
+            .any(|job| job.id == id)
+            && entries.items.iter().any(|entry| {
+                entry.kind == "run.recovery_unavailable"
+                    && entry.subject.as_deref() == Some("unreadable-handler")
+            })
+        {
             break;
         }
         assert!(
