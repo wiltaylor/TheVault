@@ -1872,6 +1872,23 @@ export async function streamTurn(turn: string, after: number, onEvent: (e: Strea
 
 const enc = encodeURIComponent;
 
+export interface ScamHistoryPreview {
+  fingerprint: string;
+  days: number;
+  until_ms: number;
+  count: number;
+  account: string;
+  model: string;
+  decisions_per_item: number;
+  unit_price: number;
+  estimated_usd: number;
+}
+export interface ScamHistoryProgress {
+  status: string;
+  count?: number;
+  estimated_usd?: number;
+  attempts: { id: string; outcome: string }[];
+}
 export interface ClassifierSettings {
   accounts: { id: string; name: string }[];
   classifiers: {
@@ -2206,6 +2223,9 @@ export const api = {
   /** Settings > AI: the accounts and the global settings (accounts A7). */
   aiStatus: () => request<AiStatus>("GET", "/api/integrations/ai"),
   classifierSettings: () => request<ClassifierSettings>("GET", "/api/classifiers"),
+  scamHistoryPreview: (days: number, price: number) => request<ScamHistoryPreview>("POST", "/api/classifiers/scam/history/preview", { days, estimated_usd_per_decision: price }),
+  scamHistoryApprove: (fingerprint: string, days: number, price: number) => request<ScamHistoryProgress>("POST", "/api/classifiers/scam/history/approve", { fingerprint, days, estimated_usd_per_decision: price, approve: true }),
+  scamHistoryProgress: () => request<ScamHistoryProgress>("GET", "/api/classifiers/scam/history"),
   classifierAccount: (name: string, account: string) =>
     request<ClassifierSettings>("PUT", `/api/classifiers/${encodeURIComponent(name)}/account`, { account }),
   /** Save the global settings: the context switch and share, and the confirmation and internet switches, each partial. */

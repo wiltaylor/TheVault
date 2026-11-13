@@ -121,6 +121,7 @@ mod original;
 mod pins;
 mod query;
 mod safety_backfill;
+mod scam_history;
 mod script_tools;
 mod skills;
 mod sync;
@@ -252,6 +253,15 @@ fn build() -> Built {
         .get("/api/openapi.json", openapi::serve)
         .get("/api/schema", inspect::schema)
         .get("/api/classifiers", classifier_settings::read)
+        .get("/api/classifiers/scam/history", scam_history::progress)
+        .post(
+            "/api/classifiers/scam/history/preview",
+            scam_history::preview,
+        )
+        .post(
+            "/api/classifiers/scam/history/approve",
+            scam_history::approve,
+        )
         .put(
             "/api/classifiers/{name}/account",
             classifier_settings::select,
