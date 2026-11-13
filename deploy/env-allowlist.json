@@ -1,0 +1,4 @@
+{
+  "VAULT_SECRET_KEY_FILE": "The Docker image sets /config/vault.key, backed by the config volume. Host paths must not override this container path.",
+  "VAULT_BROWSER_DESKTOP_URL": "The optional external desktop override is not needed by the bundled browser profile, which derives noVNC from VAULT_BROWSER_URL. Use a Compose override for a separate desktop service."
+}
