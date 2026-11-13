@@ -680,16 +680,28 @@ pub async fn apply(
 }
 
 /// The blocking worker owns serialization, not the cancellable HTTP future.
-async fn serialized_apply(
+fn serialized_apply(
     a: Arc<Ai>,
     f: impl FnOnce(&writer::Writer) -> Result<Value, ApiError> + Send + 'static,
-) -> Result<Value, ApiError> {
-    tokio::task::spawn_blocking(move || {
-        let _approval = a.approval_lock.lock().unwrap_or_else(|e| e.into_inner());
-        f(&a.writer)
-    })
-    .await
-    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?
+) -> impl std::future::Future<Output = Result<Value, ApiError>> + Send {
+    // Capture at submission, not when the future is first polled. Ordinary HTTP
+    // Apply has no run context today. TV-245 owns proposing-run provenance.
+    let context = script::RunContext::current();
+    let worker = tokio::task::spawn_blocking(move || {
+        let apply = || {
+            let _approval = a.approval_lock.lock().unwrap_or_else(|e| e.into_inner());
+            f(&a.writer)
+        };
+        match context {
+            Some(context) => context.scope(apply),
+            None => apply(),
+        }
+    });
+    async move {
+        worker.await.map_err(|e| {
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+        })?
+    }
 }
 
 /// Apply `change` as the caller, or, when it names the agent that proposed it, as that agent
@@ -841,6 +853,37 @@ pub async fn discard(
 #[cfg(test)]
 mod timeout_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn apply_worker_preserves_caller_without_inventing_proposal_provenance() {
+        let root = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(root.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let generation = state.admit_automation().unwrap();
+        let a = Arc::new(Ai::new(Arc::new(writer::Writer::open(vault, state).unwrap())));
+        let context = script::RunContext::default();
+        context.capture_stop_generation(generation);
+        let expected = context.clone();
+        let (release, wait) = std::sync::mpsc::channel();
+        let work = context.scope(|| tokio::spawn(serialized_apply(a.clone(), move |w| {
+            wait.recv_timeout(Duration::from_secs(5)).unwrap();
+            let actual = script::RunContext::current().unwrap();
+            assert_eq!(actual, expected);
+            assert!(actual.is_restricted());
+            assert_eq!(actual.stop_generation(), Some(generation));
+            w.retire_browser_profile("apply-context-test").unwrap();
+            Ok(Value::Null)
+        })));
+        tokio::task::yield_now().await;
+        context.restrict();
+        release.send(()).unwrap();
+        work.await.unwrap().unwrap();
+        serialized_apply(a, |_| {
+            assert!(script::RunContext::current().is_none());
+            Ok(Value::Null)
+        }).await.unwrap();
+        assert!(script::RunContext::current().is_none());
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelled_apply_keeps_serialization_until_worker_finishes() {
