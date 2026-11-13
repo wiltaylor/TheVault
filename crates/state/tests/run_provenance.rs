@@ -14,6 +14,35 @@ fn open(path: &std::path::Path) -> State {
 }
 
 #[test]
+fn failed_seal_is_visible_and_audit_failure_keeps_recovery_fallible() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let s = open(&path);
+    let lease = s.lease_run_provenance(false, None).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER fail_seal BEFORE UPDATE ON run_provenance
+         BEGIN SELECT RAISE(ABORT, 'injected seal failure'); END;",
+    )
+    .unwrap();
+    assert!(state::RunProvenanceLease::seal_all(&[lease], false, None).is_err());
+    // A fresh lease still records to activity even when provenance updates fail.
+    let lease = s.lease_run_provenance(false, None).unwrap();
+    lease.record_seal_failure().unwrap();
+    let activity = s.activity(&state::ActivityFilter::default()).unwrap();
+    assert_eq!(activity.items[0].kind, "run.seal_failed");
+    assert_eq!(activity.items[0].at_ms, 1234);
+    assert!(!s.load_run_provenance(lease.id()).is_sealed());
+    conn.execute_batch(
+        "CREATE TRIGGER fail_audit BEFORE INSERT ON activity
+         BEGIN SELECT RAISE(ABORT, 'injected audit failure'); END;",
+    )
+    .unwrap();
+    assert!(s.record_unavailable_run("missing").is_err());
+    assert!(lease.record_seal_failure().is_err());
+}
+
+#[test]
 fn joined_component_waits_for_both_live_owners_across_connections() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");

@@ -31,6 +31,11 @@ impl Drop for State {
             self.stop_generation,
         ) {
             eprintln!("sealing run provenance: {error}");
+            for lease in &self.durable {
+                if let Err(error) = lease.record_seal_failure() {
+                    eprintln!("recording failed run seal: {error}");
+                }
+            }
         }
     }
 }
@@ -157,19 +162,23 @@ impl RunContext {
     }
 
     /// Recover outside unrelated ambient scopes. Unknown/unreadable storage
-    /// returns restricted/stale without inventing an admission. Queue owners
-    /// must durably record this recovery and retain a live-context registry.
-    pub fn recover(database: &state::State, id: &str) -> Self {
-        let (snapshot, durable) = match database.resume_run_provenance(id) {
-            Ok((snapshot, lease)) => (snapshot, vec![lease]),
-            Err(_) => (state::RunProvenance::unavailable(id), Vec::new()),
+    /// returns an error, never a runnable context without a lease. The failed
+    /// recovery is recorded in activity. Queue owners must retain the queued
+    /// record on error (including audit failure) and use a live-context registry.
+    pub fn recover(database: &state::State, id: &str) -> state::Result<Self> {
+        let (snapshot, lease) = match database.resume_run_provenance(id) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                database.record_unavailable_run(id)?;
+                return Err(error);
+            }
         };
-        Self(Arc::new(Mutex::new(State {
+        Ok(Self(Arc::new(Mutex::new(State {
             restricted: snapshot.is_restricted(),
             stop_generation: snapshot.stop_generation(),
             parent: None,
-            durable,
-        })))
+            durable: vec![lease],
+        }))))
     }
 
     /// Capture the synchronous caller's context before crossing a worker boundary.
@@ -225,8 +234,8 @@ mod tests {
         a.scope(|| b.scope(|| {}));
         drop(a);
         drop(b);
-        let a = RunContext::recover(&database, &a_id);
-        let b = RunContext::recover(&database, &b_id);
+        let a = RunContext::recover(&database, &a_id).unwrap();
+        let b = RunContext::recover(&database, &b_id).unwrap();
         drop(a);
         b.restrict();
         for id in [&a_id, &b_id] {
@@ -347,7 +356,7 @@ mod tests {
         let id = context.persist(&database).unwrap();
         drop(context);
         assert!(!database.load_run_provenance(&id).is_restricted());
-        let recovered = RunContext::recover(&database, &id);
+        let recovered = RunContext::recover(&database, &id).unwrap();
         assert!(!recovered.is_restricted());
         assert_eq!(recovered.stop_generation(), Some(generation));
         assert!(!database.load_run_provenance(&id).is_sealed());
@@ -370,7 +379,7 @@ mod tests {
         drop(during);
         database.set_automation_stopped(false).unwrap();
         for id in [before_id, during_id] {
-            let recovered = RunContext::recover(&database, &id);
+            let recovered = RunContext::recover(&database, &id).unwrap();
             recovered.capture_stop_generation(database.admit_automation().unwrap());
             assert!(
                 database
@@ -388,8 +397,12 @@ mod tests {
         let active = database
             .create_run_provenance(false, Some(generation))
             .unwrap();
-        for id in ["missing", active.id()] {
-            let recovered = RunContext::recover(&database, id);
+        assert!(RunContext::recover(&database, "missing").is_err());
+        let activity = database.activity(&state::ActivityFilter::default()).unwrap();
+        assert_eq!(activity.items[0].kind, "run.recovery_unavailable");
+        assert_eq!(activity.items[0].subject.as_deref(), Some("missing"));
+        for id in [active.id()] {
+            let recovered = RunContext::recover(&database, id).unwrap();
             assert!(recovered.is_restricted());
             assert!(
                 database
@@ -419,6 +432,12 @@ mod tests {
         drop(b);
         assert!(!a_db.load_run_provenance(&a_id).is_sealed());
         assert!(!b_db.load_run_provenance(&b_id).is_sealed());
+        for (database, id) in [(&a_db, &a_id), (&b_db, &b_id)] {
+            let activity = database.activity(&state::ActivityFilter::default()).unwrap();
+            assert_eq!(activity.items.len(), 1);
+            assert_eq!(activity.items[0].kind, "run.seal_failed");
+            assert_eq!(activity.items[0].subject.as_ref(), Some(id));
+        }
     }
 
     #[test]

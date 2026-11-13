@@ -245,7 +245,7 @@ fn shorten(v: Value) -> Value {
 }
 
 /// The ULID of an entry made at `now_ms`, after every id `tx` already holds.
-fn next_id(tx: &Transaction<'_>, now_ms: i64) -> Result<String> {
+pub(crate) fn next_id(tx: &Transaction<'_>, now_ms: i64) -> Result<String> {
     let mut random = [0u8; 10];
     crate::random_bytes(&mut random);
     let random = random

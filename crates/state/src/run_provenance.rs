@@ -76,6 +76,7 @@ pub struct RunProvenanceLease {
     id: String,
     token: String,
     conn: Arc<Mutex<Connection>>,
+    clock: Arc<dyn crate::Clock>,
 }
 
 impl std::fmt::Debug for RunProvenanceLease {
@@ -87,6 +88,18 @@ impl std::fmt::Debug for RunProvenanceLease {
 }
 
 impl RunProvenanceLease {
+    /// Record a failed final seal in the owner's activity log. If storage itself
+    /// is unavailable, the durable lease remains unsealed for recovery to report.
+    pub fn record_seal_failure(&self) -> Result<()> {
+        record_failure(
+            &mut self.conn.lock().unwrap_or_else(|e| e.into_inner()),
+            self.clock.now_ms(),
+            &self.id,
+            "run.seal_failed",
+            "Run provenance could not be sealed; recovery remains restricted and stale",
+        )
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -150,6 +163,24 @@ impl RunProvenanceLease {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn record_failure(
+    conn: &mut Connection,
+    now: i64,
+    run_id: &str,
+    kind: &str,
+    summary: &str,
+) -> Result<()> {
+    let tx = conn.transaction()?;
+    let id = crate::activity::next_id(&tx, now)?;
+    tx.execute(
+        "INSERT INTO activity(id,at_ms,kind,category,actor_kind,actor,summary,subject_kind,subject)
+         VALUES (?1,?2,?3,'automation','server','server',?4,'run',?5)",
+        params![id, now, kind, summary, run_id],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn seal_component(conn: &Connection, root: &str) -> Result<()> {
@@ -245,6 +276,18 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
 }
 
 impl State {
+    /// Fallible audit before a queue consumes unavailable work. On failure the
+    /// caller must leave the queue record pending, never execute it unaudited.
+    pub fn record_unavailable_run(&self, id: &str) -> Result<()> {
+        record_failure(
+            &mut self.conn(),
+            self.now(),
+            id,
+            "run.recovery_unavailable",
+            "Queued run could not recover its provenance and was not executed",
+        )
+    }
+
     /// Capture provenance without enforcing Stop. Work created while stopped
     /// gets a permanently stale identity, never an admission revived by Resume.
     pub fn run_provenance_generation(&self) -> Result<Generation> {
@@ -273,6 +316,7 @@ impl State {
             id: snapshot.id,
             token,
             conn: self.conn.clone(),
+            clock: self.clock.clone(),
         })
     }
 
@@ -300,6 +344,7 @@ impl State {
                 id: id.to_owned(),
                 token,
                 conn: self.conn.clone(),
+                clock: self.clock.clone(),
             },
         ))
     }
