@@ -1703,7 +1703,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let context = context.clone();
+    let context = context.clone().inherit_current();
     tokio::task::spawn_blocking(move || context.scope(work))
 }
 
@@ -5457,9 +5457,9 @@ mod tests {
                 wait.recv().unwrap();
                 inherited.capture_stop_generation(new);
                 let job = script_core::Job::new(script_core::Kind::Task, "child", "", "run");
-                assert_eq!(job.run_context, inherited);
-                assert!(job.run_context.is_restricted());
-                assert_eq!(job.run_context.stop_generation(), Some(old));
+                assert_eq!(job.run_context(), &inherited);
+                assert!(job.run_context().is_restricted());
+                assert_eq!(job.run_context().stop_generation(), Some(old));
                 inherited
             }));
         }

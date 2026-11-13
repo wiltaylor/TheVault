@@ -121,8 +121,8 @@ pub trait AgentRunner: Send + Sync {
 /// One run to start: an agent's trigger, the first message and the thread's title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentJob {
-    /// Host-owned provenance, retained when a job is queued or retried in memory.
-    pub run_context: script::RunContext,
+    /// Live provenance for dispatch and mention jobs only.
+    run_context: script::RunContext,
     pub source_notes: Vec<String>,
     pub op: Option<String>,
     /// Durable trigger queue identity. Person-requested calls keep their existing lane.
@@ -269,46 +269,6 @@ mod persistence_retry_tests {
     }
 
     #[test]
-    fn lane_and_persistence_retry_keep_live_context() {
-        let mut plan = AgentPlan::default();
-        let context = script::RunContext::default();
-        let dir = tempfile::tempdir().unwrap();
-        let state = state::State::open(&dir.path().join("state.db"), None).unwrap();
-        let old = state.admit_automation().unwrap();
-        context.capture_stop_generation(old);
-        let job = AgentJob {
-            run_context: context.clone(),
-            source_notes: vec![],
-            scope: None,
-            caller: None,
-            op: None,
-            durable: None,
-            note: None,
-            agent: "clerk".to_owned(),
-            trigger: "test".to_owned(),
-            prompt: String::new(),
-            title: String::new(),
-            thread: None,
-            origin: None,
-        };
-        for _ in 0..MAX_RUNNING {
-            assert!(matches!(plan.admit(job.clone(), 0), Admitted::Start(_)));
-        }
-        assert!(matches!(plan.admit(job.clone(), 0), Admitted::Queued));
-        plan.retry_persistence(job);
-        context.restrict();
-        state.set_automation_stopped(false).unwrap();
-        context.capture_stop_generation(state.admit_automation().unwrap());
-        let queued = plan.next_queued("clerk", 0).unwrap();
-        let retry = plan.persist_retry.pop().unwrap();
-        for retained in [queued, retry] {
-            assert_eq!(retained.run_context, context);
-            assert!(retained.run_context.is_restricted());
-            assert_eq!(retained.run_context.stop_generation(), Some(old));
-        }
-    }
-
-    #[test]
     fn unknown_durable_provenance_is_not_unrestricted() {
         let recovered = recovered_context();
         assert!(recovered.is_restricted());
@@ -317,6 +277,8 @@ mod persistence_retry_tests {
     }
 }
 
+// Schedules, note events and backfill always restart from the durable queue.
+// Their placeholder contexts are not persisted. Durable provenance is TV-301.
 fn recovered_context() -> script::RunContext {
     let context = script::RunContext::default();
     context.restrict();
@@ -384,7 +346,7 @@ impl AgentPlan {
                 continue;
             };
             jobs.push(AgentJob {
-                run_context: script::RunContext::current().unwrap_or_default(),
+                run_context: script::RunContext::default(),
                 source_notes: vec![],
                 op: None,
                 durable: None,
@@ -880,7 +842,7 @@ impl Scheduler {
             };
             let Some(title) = title else { continue };
             jobs.push(AgentJob {
-                run_context: script::RunContext::current().unwrap_or_default(),
+                run_context: script::RunContext::default(),
                 source_notes: if e.op == "delete" {
                     vec![]
                 } else {
@@ -1204,7 +1166,7 @@ impl Scheduler {
                 .map_err(|e| e.to_string())?
                 .unwrap_or_default();
             let job = AgentJob {
-                run_context: script::RunContext::current().unwrap_or_default(),
+                run_context: script::RunContext::default(),
                 source_notes: vec![], // Durable jobs use trigger_note_allowed at start.
                 scope: None,
                 caller: None,
@@ -1340,7 +1302,7 @@ impl Scheduler {
             .collect::<Vec<_>>()
             .join("\n");
             let mut job = AgentJob {
-                run_context: script::RunContext::current().unwrap_or_default(),
+                run_context: script::RunContext::default(),
                 source_notes: vec![id.to_owned()],
                 op: None,
                 durable: None,

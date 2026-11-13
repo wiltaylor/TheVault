@@ -408,6 +408,7 @@ impl Scheduler {
 
     /// Trigger with the caller's live provenance, including across async boundaries.
     pub fn trigger_with_context(&self, name: &str, context: RunContext) -> Result<TaskRun> {
+        let context = context.inherit_current();
         let def = self.claim(name)?;
         self.run(&def, 1, context)
             .ok_or_else(|| Error::Running(name.to_owned()))
@@ -428,6 +429,7 @@ impl Scheduler {
         name: &str,
         context: RunContext,
     ) -> Result<TaskRun> {
+        let context = context.inherit_current();
         let def = self.claim(name)?;
         // No record or no thread, no run: let the task run again.
         let release = |e: Error| {
@@ -770,7 +772,7 @@ impl Scheduler {
         let outcome = match self.writer.read_script(&def.script) {
             Ok(source) => {
                 let mut job = Job::new(Kind::Task, &def.script, &source, &def.function);
-                job.run_context = context.clone();
+                job.set_run_context(context.clone());
                 job.allow_domains = def.allow_domains.clone();
                 job.secrets = def.secrets.clone();
                 job.read_paths = def.read_paths.clone();

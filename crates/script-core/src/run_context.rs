@@ -109,6 +109,14 @@ impl RunContext {
         CURRENT.with(|slot| slot.borrow().clone())
     }
 
+    /// Join explicit provenance with the synchronous caller before a worker boundary.
+    pub fn inherit_current(self) -> Self {
+        if let Some(parent) = Self::current() {
+            parent.join(&self);
+        }
+        self
+    }
+
     /// Install this context for synchronous host callbacks, restoring on panic.
     /// Never return an async future from this closure or hold this scope over await.
     /// Unrelated nested contexts join permanently, including existing clones.

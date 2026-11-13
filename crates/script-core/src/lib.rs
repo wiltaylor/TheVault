@@ -204,10 +204,21 @@ pub struct Job {
     /// [`current_job`]. The host does not read it.
     pub context: Json,
     /// Host-owned provenance shared with the caller and every descendant.
-    pub run_context: RunContext,
+    run_context: RunContext,
 }
 
 impl Job {
+    pub fn run_context(&self) -> &RunContext {
+        &self.run_context
+    }
+
+    /// Explicit provenance cannot discard either prior or caller restrictions.
+    pub fn set_run_context(&mut self, context: RunContext) {
+        self.run_context.clone().scope(|| {
+            self.run_context = context.inherit_current();
+        });
+    }
+
     /// A job calling `function` of script `name` with no arguments, no hosts and no secrets.
     pub fn new(kind: Kind, name: &str, source: &str, function: &str) -> Job {
         Job {
@@ -398,7 +409,8 @@ impl Host {
     }
 
     /// Run `job` on a worker and wait for it to end.
-    pub fn run(&self, job: Job) -> Outcome {
+    pub fn run(&self, mut job: Job) -> Outcome {
+        job.set_run_context(job.run_context.clone());
         let limits = Limits {
             timeout: job.timeout.unwrap_or(self.limits.timeout),
             ..self.limits.clone()

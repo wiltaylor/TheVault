@@ -28,11 +28,11 @@ impl Extensions for ContextProbe {
         module.fn_("context", move || -> Fault<Result<bool, String>> {
             let context = script_core::RunContext::current().unwrap();
             assert_eq!(
-                script_core::current_job(|job| job.run_context.clone()),
+                script_core::current_job(|job| job.run_context().clone()),
                 Some(context.clone())
             );
             let nested = Job::new(Kind::Before, "nested", "", "run");
-            assert_eq!(nested.run_context, context);
+            assert_eq!(nested.run_context(), &context);
             barrier.wait();
             seen.lock().unwrap().push(context.clone());
             Fault(Ok(Ok(context.is_restricted())))
@@ -84,7 +84,7 @@ fn parallel_workers_carry_live_context_without_enforcement_or_leaks() {
     }
     assert!(script_core::RunContext::current().is_none());
     // Reuse both workers for independent, unrestricted jobs.
-    job.run_context = script_core::RunContext::default();
+    job.set_run_context(script_core::RunContext::default());
     let results = std::thread::scope(|scope| {
         let first = scope.spawn(|| host.run(job.clone()));
         let second = scope.spawn(|| host.run(job.clone()));
