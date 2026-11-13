@@ -143,6 +143,11 @@ fn interrupted_write_rolls_back_on_restart() {
 
 #[test]
 fn migration_preserves_legacy_rows() {
+    if let Ok(path) = std::env::var("TV262_MIGRATION_DB") {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE; ALTER TABLE versions ADD COLUMN content_bytes INTEGER; PRAGMA user_version=32;").unwrap();
+        std::process::exit(0);
+    }
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("state.db");
     let state = State::open(&path, None).unwrap();
@@ -156,6 +161,14 @@ fn migration_preserves_legacy_rows() {
     conn.execute_batch("ALTER TABLE versions DROP COLUMN content_bytes; PRAGMA user_version=31;")
         .unwrap();
     drop(conn);
+    assert!(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "compressed_history::migration_preserves_legacy_rows"])
+            .env("TV262_MIGRATION_DB", &path)
+            .status()
+            .unwrap()
+            .success()
+    );
     let state = State::open(&path, None).unwrap();
     assert_eq!(state.head("note").unwrap().unwrap(), version);
     let conn = Connection::open(&path).unwrap();
