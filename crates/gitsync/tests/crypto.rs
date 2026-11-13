@@ -100,3 +100,36 @@ fn malformed_key_text_is_refused() {
 fn debug_hides_the_key() {
     assert_eq!(format!("{:?}", fixed()), "SyncKey(..)");
 }
+
+#[test]
+fn canonical_context_binds_instance_kind_id_and_part_position() {
+    let key = fixed();
+    let a = gitsync::Layout::new(&key, "a");
+    let b = gitsync::Layout::new(&key, "b");
+    let contexts = [
+        a.manifest(), b.manifest(), a.note("one"), a.note("two"), b.note("one"),
+        a.type_def("one"), a.type_def("two"), a.taxonomy("one"),
+        a.asset_part("one", 0), a.asset_part("one", 1), a.asset_part("two", 0),
+    ];
+    for context in &contexts {
+        let blob = key.seal(context, b"identical content");
+        assert_eq!(blob, key.seal(context, b"identical content"));
+        assert_eq!(key.open(context, &blob).unwrap(), b"identical content");
+        for other in &contexts {
+            if other != context {
+                assert!(matches!(key.open(other, &blob), Err(Error::KeyMismatch)));
+                // Context enters nonce derivation too, avoiding nonce reuse across AADs.
+                assert_ne!(&blob[5..29], &key.seal(other, b"identical content")[5..29]);
+            }
+        }
+    }
+}
+
+#[test]
+fn legacy_blob_is_refused_without_fallback() {
+    let key = fixed();
+    let mut blob = key.seal("context", b"legacy");
+    blob[4] = 1;
+    let err = key.open("context", &blob).unwrap_err();
+    assert!(err.to_string().contains("upgrade every peer"));
+}
