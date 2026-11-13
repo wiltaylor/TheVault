@@ -104,6 +104,10 @@ fn repair_head_opens_trashes_restores_and_audits() {
         params![bytes, versions[2]],
     )
     .unwrap();
+    // Startup invokes recovery only when the projection is behind the file commit.
+    let index = Connection::open(dir.path().join(".vault/index.db")).unwrap();
+    index.execute("DELETE FROM meta WHERE key='generation'", []).unwrap();
+    drop(index);
     assert!(
         Writer::open(
             store::Vault::open(dir.path()).unwrap(),
@@ -172,5 +176,16 @@ fn lock_refuses_repair_but_not_check_and_releases_on_close() {
     assert_eq!(check["corrupt"][0]["version"], versions[2]);
     drop(owner);
     let (ok, body) = cli(dir.path(), &["history-repair", &id, "--yes", &id]);
+    assert!(ok, "{body}");
+}
+
+#[test]
+fn running_server_holds_ownership() {
+    let server = testkit::TestServer::start();
+    assert!(store::lock_owner(server.vault_path()).is_err());
+    let (ok, body) = cli(server.vault_path(), &["history-repair", "--all"]);
+    assert!(!ok);
+    assert!(body.to_string().contains("in use"));
+    let (ok, body) = cli(server.vault_path(), &["history-check"]);
     assert!(ok, "{body}");
 }
