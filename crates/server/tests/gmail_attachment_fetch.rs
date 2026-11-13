@@ -285,7 +285,7 @@ fn provider_failure_is_fixed_text_and_does_not_store_bytes() {
 }
 
 #[test]
-fn device_and_agent_tokens_restore_imported_email_without_changing_metadata() {
+fn device_restores_imported_email_but_agent_http_restore_remains_held() {
     let f = Fixture::new();
     let device = expect(
         f.client
@@ -295,10 +295,7 @@ fn device_and_agent_tokens_restore_imported_email_without_changing_metadata() {
             .unwrap(),
         201,
     );
-    for token in [
-        device["token"].as_str().unwrap().to_owned(),
-        f.agent_token(),
-    ] {
+    for token in [device["token"].as_str().unwrap()] {
         let before = f.note();
         expect(
             f.client
@@ -324,6 +321,17 @@ fn device_and_agent_tokens_restore_imported_email_without_changing_metadata() {
                 .unwrap(),
             200,
         );
+        // Existing read-safety middleware cannot read a trashed note. It still
+        // refuses an agent token before the writer, even after owner release.
+        let denied = expect(
+            f.client
+                .post(f.server.url(&format!("/api/trash/{}/restore", f.id)))
+                .bearer_auth(f.agent_token())
+                .send()
+                .unwrap(),
+            403,
+        );
+        assert_eq!(denied["error"], "held");
         expect(
             f.client
                 .post(f.server.url(&format!("/api/trash/{}/restore", f.id)))
