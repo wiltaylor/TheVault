@@ -439,8 +439,13 @@ impl Shared {
             match writer.state().queued_jobs() {
                 Ok(jobs) => {
                     for job in jobs {
-                        let context = self.contexts.lock().unwrap_or_else(|e| e.into_inner())
-                            .get(&job.id).cloned().unwrap_or_else(recovered_context);
+                        let context = self
+                            .contexts
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .get(&job.id)
+                            .cloned()
+                            .unwrap_or_else(recovered_context);
                         context.scope(|| {
                             let payload: Json =
                                 serde_json::from_str(&job.payload).unwrap_or(Json::Null);
@@ -494,7 +499,8 @@ impl Shared {
                                     }
                                 }
                                 eprintln!("after_* handler job {} failed: {message}", job.id);
-                                let p: Json = serde_json::from_str(&job.payload).unwrap_or(Json::Null);
+                                let p: Json =
+                                    serde_json::from_str(&job.payload).unwrap_or(Json::Null);
                                 let s = |k: &str| p[k].as_str().unwrap_or_default().to_owned();
                                 record_failure(
                                     &writer,
@@ -508,7 +514,10 @@ impl Shared {
                             if let Err(e) = writer.state().finish_job(job.id, outcome, &log) {
                                 eprintln!("recording handler job {}: {e}", job.id);
                             } else {
-                                self.contexts.lock().unwrap_or_else(|e| e.into_inner()).remove(&job.id);
+                                self.contexts
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .remove(&job.id);
                             }
                         });
                     }
