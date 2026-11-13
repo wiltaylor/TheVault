@@ -501,6 +501,29 @@ describe("the General tab", () => {
 });
 
 describe("the Permissions tab", () => {
+  it("shows stored rules read-only in the app and preserves them on an unrelated Save", async () => {
+    appInfo.mockResolvedValue({ platform: "android" });
+    const rules: NonNullable<Agent["permissions"]["approval_rules"]> = [
+      { operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 },
+      { operation: "delete", note_type: "email", fields: [], daily_cap: 5 },
+    ];
+    agent.mockResolvedValue(triage({ permissions: { ...triage().permissions, approval_rules: rules } }));
+    await open();
+    const p = await tab("Permissions");
+    expect(await p.findByText(/update email: processed — 200/)).toBeTruthy();
+    expect(p.getByText(/held, never automatic/)).toBeTruthy();
+    expect(p.getByText("Open the web app with an owner session to edit rules.")).toBeTruthy();
+    expect(p.queryByLabelText("Rule type")).toBeNull();
+    expect(p.queryByText("Add update rule")).toBeNull();
+    expect(p.queryByRole("button", { name: /Remove rule/ })).toBeNull();
+    const general = await tab("General");
+    fireEvent.input(general.getByLabelText("Label"), { target: { value: "App renamed" } });
+    fireEvent.click(general.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putAgent).toHaveBeenCalled());
+    expect(sent().label).toBe("App renamed");
+    expect((sent().permissions as Agent["permissions"]).approval_rules).toEqual(rules);
+  });
+
   it("round-trips an explicit approval rule through Save and reload", async () => {
     await open();
     const p = await tab("Permissions");

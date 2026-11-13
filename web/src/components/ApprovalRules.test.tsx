@@ -35,3 +35,25 @@ it("shows rules read-only on the phone without edit controls", () => {
   expect(screen.queryByText("Remove rule 1")).toBeNull();
   expect(screen.getByText(/held, never automatic/)).toBeTruthy();
 });
+
+it.each([
+  { change_types: ["task"] },
+  { types: ["task"] },
+  { change_fields: { email: ["subject"] } },
+  { change_fields: { email: [] } },
+])("shows rules outside change permissions as never applicable: %j", (limits) => {
+  render(() => <ApprovalRules permissions={{ ...permissions, ...limits, approval_rules: [
+    { operation: "update", note_type: "email", fields: ["processed"], daily_cap: 200 },
+  ] }} editable={false} set={vi.fn()} />);
+  expect(screen.getByText(/never applies \(outside this agent's change permissions\)/)).toBeTruthy();
+  expect(screen.queryByText(/subject to server limits/)).toBeNull();
+});
+
+it("discloses attempted-update caps and unattended incoming-mail approvals", () => {
+  render(() => <ApprovalRules permissions={permissions} editable={false} set={vi.fn()} />);
+  expect(screen.getByText(/Caps count attempted updates/).textContent).toContain("released only when the write provably did not happen");
+  const disclosure = screen.getByText(/A rule also approves its matching update/).textContent;
+  expect(disclosure).toContain("unattended runs started by incoming mail");
+  expect(disclosure).toContain("without a matching rule is refused or held");
+  expect(disclosure).toContain("outside-text action guard is not yet in place");
+});
