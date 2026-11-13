@@ -482,6 +482,9 @@ pub async fn create_account(
     blocking_w(&a, move |w| {
         let s = w.state();
         let added = Accounts::change(s, api_error, |all| {
+            if let Some(name) = &input.name {
+                crate::classifier_settings::pin_missing_name(w, all, name)?;
+            }
             let added = all.add(input).map_err(account_error)?.clone();
             if key.is_some() && added.kind == Kind::ChatGpt {
                 return Err(ApiError::bad_request(
@@ -517,6 +520,9 @@ pub async fn update_account(
         Accounts::change(s, api_error, |all| {
             let id = account(all, &id)?.id;
             crate::classifier_settings::pin_account(w, all, &id)?;
+            if let Some(name) = &input.name {
+                crate::classifier_settings::pin_missing_name(w, all, name)?;
+            }
             let renamed = all.update(&id, input).map_err(account_error)?;
             if let Some(old) = renamed {
                 let new = all.get(&id).map(|a| a.name.clone()).unwrap_or_default();

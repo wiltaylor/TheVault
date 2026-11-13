@@ -153,29 +153,19 @@ pub async fn select(
 
 /// Pin legacy name bindings before the name can be reused. Deleted IDs fail closed.
 pub(crate) fn pin_account(w: &Writer, accounts: &Accounts, id: &str) -> Result<(), ApiError> {
-    for entry in std::fs::read_dir(w.vault().root().join("classifiers"))
-        .map_err(|_| ApiError::bad_request("Cannot read classifier definitions"))?
-    {
-        let entry =
-            entry.map_err(|_| ApiError::bad_request("Cannot read classifier definitions"))?;
-        let file = entry.file_name();
-        let Some(name) = file.to_str().and_then(|s| s.strip_suffix(".wcl")) else {
-            continue;
-        };
-        if !schema::is_name(name) {
-            continue;
-        }
-        let source = w
-            .vault()
-            .read_text(&format!("classifiers/{name}.wcl"))
-            .map_err(|_| ApiError::bad_request("Cannot read classifier definition"))?;
-        if let Ok(config) = Classifier::parse(name, &source)
-            && let Some(reference) = config.account.as_deref()
-            && reference != id
-            && accounts.find(reference).is_some_and(|a| a.id == id)
-        {
-            w.set_classifier_account(name, id)?;
-        }
-    }
+    w.pin_classifier_accounts(|reference| {
+        (reference != id && accounts.find(reference).is_some_and(|a| a.id == id))
+            .then(|| id.to_owned())
+    })?;
+    Ok(())
+}
+
+/// A newly introduced name cannot adopt a previously dangling classifier binding.
+pub(crate) fn pin_missing_name(w: &Writer, accounts: &Accounts, name: &str) -> Result<(), ApiError> {
+    let missing = ulid::Ulid::new().to_string();
+    w.pin_classifier_accounts(|reference| {
+        (reference.trim().eq_ignore_ascii_case(name.trim()) && accounts.find(reference).is_none())
+            .then(|| missing.clone())
+    })?;
     Ok(())
 }

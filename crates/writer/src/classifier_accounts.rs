@@ -6,6 +6,35 @@ use wcl_lang::ast::Item;
 use crate::{Error, Result, Writer};
 
 impl Writer {
+    /// Decide from the current field while holding the same lock as Settings writes.
+    /// A concurrent selection is re-evaluated, never overwritten by a stale pin.
+    pub fn pin_classifier_accounts(&self, decide: impl Fn(&str) -> Option<String>) -> Result<()> {
+        for entry in std::fs::read_dir(self.vault().root().join("classifiers"))
+            .map_err(|e| Error::BadRequest(e.to_string()))? {
+            let entry = entry.map_err(|e| Error::BadRequest(e.to_string()))?;
+            let file = entry.file_name();
+            let Some(name) = file.to_str().and_then(|s| s.strip_suffix(".wcl")) else {
+                continue;
+            };
+            if !schema::is_name(name) {
+                continue;
+            }
+            self.commit_checked(|w| {
+                let path = format!("classifiers/{name}.wcl");
+                let source = w.vault().read_text(&path)?;
+                let Ok(config) = Classifier::parse(name, &source) else {
+                    return Ok::<_, Error>(vec![]);
+                };
+                let Some(account) = config.account.as_deref().and_then(&decide) else {
+                    return Ok(vec![]);
+                };
+                let text = account_source(name, &source, &account)?;
+                Ok(vec![Change::ClassifierAccount { path, contents: text.into_bytes() }])
+            })?;
+        }
+        Ok(())
+    }
+
     /// Change only the top-level account field, under the writer lock. No note hooks run.
     pub fn set_classifier_account(&self, name: &str, account: &str) -> Result<()> {
         if !schema::is_name(name) {
