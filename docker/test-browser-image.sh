@@ -18,7 +18,7 @@
 # - the desktop is up: the XFCE session on display :1, noVNC serving vnc.html on 6080, and the
 #   terminal's and desktop's monospace font is JetBrainsMonoNL Nerd Font Mono, as xfconf reads it
 #   in the running session;
-# - `playwright-cli open about:blank --headed && playwright-cli screenshot` puts a Chromium window
+# - `playwright-cli open about:blank --headed` puts a Chromium window
 #   on the desktop, and /files and /file read the screenshot back as a PNG, and a headless session
 #   opens as well;
 # - a run past its timeout is killed;
@@ -194,7 +194,24 @@ check "xfce4-terminal uses JetBrainsMonoNL Nerd Font Mono, and so does the deskt
   jqe '.stdout == "JetBrainsMonoNL Nerd Font Mono 11\nfalse\nJetBrainsMonoNL Nerd Font Mono 10\n"' <<< "$r"
 
 # 4. playwright-cli drives a headed Chromium, and the screenshot reads back.
-r=$(run_cmd 'playwright-cli open about:blank --headed && playwright-cli screenshot' 180)
+# Opening about:blank and loading fonts do not imply a compositor frame exists.
+# On a fresh X display captureScreenshot can arrive before the first paint.
+# A visible document's second animation frame runs after a rendering opportunity,
+# unlike navigation/load or a fixed delay. Bound the wait so a hidden/unmapped
+# window fails rather than hanging. Verify X also sees a viewable Chromium window.
+headed_ready=$(cat <<'JS'
+async (page) => {
+  await page.bringToFront();
+  await page.waitForFunction(() => document.visibilityState === 'visible' &&
+    innerWidth > 0 && innerHeight > 0, null, { timeout: 30000 });
+  await page.evaluate(() => Promise.race([
+    new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('No visible compositor frame within 30s')), 30000))
+  ]));
+}
+JS
+)
+r=$(run_cmd "playwright-cli open about:blank --headed && playwright-cli run-code $(printf '%q' "$headed_ready") && xwininfo -root -tree | grep -i chrom | awk '{print \$1}' | xargs -r -n1 xwininfo -id | grep -q 'Map State: IsViewable' && playwright-cli screenshot" 180)
 printf '%s\n' "$r" > "$tmp/open.json"
 if ! jqe '.exit == 0 and .timed_out == false' <<< "$r"; then
   printf 'Headed browser command failed (exit, timeout, stdout and stderr):\n' >&2
