@@ -4,6 +4,7 @@
 
 /// The schema version the current build migrates every older `state.db` to.
 const EXPECTED_SCHEMA_VERSION: i64 = 30;
+mod automation;
 
 mod activity;
 mod ai_usage;
