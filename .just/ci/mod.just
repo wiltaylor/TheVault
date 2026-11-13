@@ -8,7 +8,14 @@ main:
 
 # Everything a change must pass before it can merge, the release scripts' tests too. Playwright runs separately in test-e2e
 [group('ci')]
-check: rust-tests-declared rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test emulator-harness-test release-test
+check: cargo-lock-check rust-tests-declared rust-fmt-check rust-lint apps-fmt-check apps-lint rust-test web-typecheck web-test emulator-harness-test release-test
+
+# Check that all workspace lockfiles match their manifests without network access
+[group('ci')]
+cargo-lock-check: (require-tool "cargo")
+	cargo metadata --locked --offline --format-version 1 --manifest-path Cargo.toml > /dev/null
+	cargo metadata --locked --offline --format-version 1 --manifest-path apps/android/src-tauri/Cargo.toml > /dev/null
+	cargo metadata --locked --offline --format-version 1 --manifest-path apps/desktop/src-tauri/Cargo.toml > /dev/null
 
 # Check Rust formatting without changing files
 [group('ci')]
