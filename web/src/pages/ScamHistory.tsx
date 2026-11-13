@@ -30,6 +30,7 @@ export function ScamHistory() {
       setPreview(await api.scamHistoryPreview(Number(days()), Number(price())));
     })}>Preview historical scam run</button>
     <Show when={preview()}>{(p) => <section aria-label="Scam run preview">
+      <p>Excludes the arrival classifier's two-day window, including its boundary. Maximum 5,000 items per preview.</p>
       <p>{p().count} items in {p().days} days through {new Date(p().until_ms).toISOString()}. Account: {p().account}. Model: {p().model}.</p>
       <p>{p().decisions_per_item} decisions per item × ${p().unit_price} per decision. Estimated total: ${p().estimated_usd} USD.</p>
       <p>Approval fingerprint: <code>{p().fingerprint}</code>. Expires after 10 minutes. Any changed input requires a new preview.</p>

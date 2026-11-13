@@ -146,7 +146,7 @@ fn snapshot(w: &Writer, id: &str) -> Result<Saved, ApiError> {
 }
 
 fn selection(w: &Writer, c: &Classifier, days: u32, until: i64) -> Result<Vec<Item>, ApiError> {
-    // Substitute only the shipped relative date clause, never discard the incoming predicates.
+    // Keep custom predicates, but enforce the historical bounds independently of precedence.
     let condition = c.condition.as_deref().ok_or_else(stale)?;
     let date = "sent >= now() - days(2)";
     if condition.matches(date).count() != 1 || !condition.ends_with(date) {
@@ -155,11 +155,8 @@ fn selection(w: &Writer, c: &Classifier, days: u32, until: i64) -> Result<Vec<It
         ));
     }
     let filter = format!(
-        "({}) && ((type == \"email\" && !under(labels, \"system/SENT\") && !under(labels, \"system/DRAFT\")) || (type == \"message\" && direction == \"in\"))",
-        condition.replace(
-            date,
-            &format!("(sent >= now() - days({days}) && sent <= now())")
-        )
+        "({}) && (sent >= now() - days({days}) && sent < now() - days(2)) && ((type == \"email\" && !under(labels, \"system/SENT\") && !under(labels, \"system/DRAFT\")) || (type == \"message\" && direction == \"in\"))",
+        condition.replace(date, "true")
     );
     let q = query::Query {
         from: query::From::Types(
@@ -209,6 +206,11 @@ fn selection(w: &Writer, c: &Classifier, days: u32, until: i64) -> Result<Vec<It
                 id,
                 fingerprint: hash(s.wcl.as_bytes()),
             });
+            if items.len() > 5_000 {
+                return Err(ApiError::bad_request(
+                    "Historical scam preview exceeds 5,000 items. Choose a shorter window.",
+                ));
+            }
         }
     }
     items.sort_by(|a, b| a.id.cmp(&b.id));
