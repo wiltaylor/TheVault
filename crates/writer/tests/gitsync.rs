@@ -76,6 +76,14 @@ fn user() -> Author {
     Author::Session("owner".into())
 }
 
+struct CalendarClock;
+
+impl state::Clock for CalendarClock {
+    fn now_ms(&self) -> i64 {
+        1_772_352_000_000
+    }
+}
+
 #[test]
 fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
     for ty in ["event", "event_series"] {
@@ -92,7 +100,7 @@ fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let hooks = Recorder::default();
-            let w = open(dir.path(), hooks.clone());
+            let w = open(dir.path(), hooks.clone()).with_clock(Arc::new(CalendarClock));
             w.put_type(ty, TASK).unwrap();
             let text = format!("title = \"peer\"\n{forged}");
             assert!(matches!(
@@ -144,7 +152,7 @@ fn calendar_peer_guard_rejects_whole_writes_and_trusts_only_home_feed() {
 fn device_upload_calendar_guard_runs_before_handlers() {
     let dir = tempfile::tempdir().unwrap();
     let hooks = Recorder::default();
-    let w = open(dir.path(), hooks.clone());
+    let w = open(dir.path(), hooks.clone()).with_clock(Arc::new(CalendarClock));
     w.put_type("event", TASK).unwrap();
     let (device, _) = w
         .state()
