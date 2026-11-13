@@ -102,11 +102,7 @@ impl Api {
             .account(TestAccount::anthropic(fake).model(MODEL))
             .secrets()
         {
-            api.ok(
-                "PUT",
-                &format!("/api/secrets/{name}"),
-                json!({ "value": value }),
-            );
+            api.server.seed_secret(&name, &value);
         }
         api.ok("PUT", "/api/scripts/stamp", json!({ "source": STAMP }));
         api.ok("PUT", "/api/secrets/api_key", json!({ "value": "k" }));

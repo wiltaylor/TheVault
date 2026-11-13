@@ -81,15 +81,7 @@ impl Fixture {
             ("google_refresh_token", DEFAULT_REFRESH_TOKEN),
             ("google_settings", settings.as_str()),
         ] {
-            expect(
-                client
-                    .put(server.url(&format!("/api/secrets/{name}")))
-                    .header("cookie", &cookie)
-                    .json(&json!({"value":value}))
-                    .send()
-                    .unwrap(),
-                200,
-            );
+            server.seed_secret(name, value);
         }
         let task = format!(
             r#"label = "Gmail"

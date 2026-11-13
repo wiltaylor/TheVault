@@ -95,11 +95,7 @@ impl Api {
             .account(TestAccount::anthropic(fake).model(MODEL))
             .secrets()
         {
-            api.send_ok(
-                "PUT",
-                &format!("/api/secrets/{name}"),
-                json!({ "value": value }),
-            );
+            api.server.seed_secret(&name, &value);
         }
         api.agent("lead", LEAD);
         api.agent("free_lead", FREE_LEAD);

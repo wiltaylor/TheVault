@@ -106,11 +106,7 @@ impl Api {
     }
 
     fn put_secret(&self, name: &str, value: &str) {
-        self.send(
-            "PUT",
-            &format!("/api/secrets/{name}"),
-            json!({ "value": value }),
-        );
+        self.server.seed_secret(name, value);
     }
 
     fn create(&self, type_name: &str, note: Value) -> String {

@@ -349,6 +349,16 @@ impl TestServer {
             .expect("seed fixture secret");
     }
 
+    /// Remove server-owned fixture state, without using the user-secrets API.
+    pub fn remove_seed_secret(&self, name: &str) {
+        let path = self.key_file.as_ref().expect("known fixture key file");
+        let key = state::SecretKey::load_file(path).expect("read fixture key");
+        state::State::open(&self.vault.path().join(".vault/state.db"), Some(key))
+            .expect("open fixture state")
+            .delete_secret(name)
+            .expect("remove fixture secret");
+    }
+
     /// The JSON value of secret `name`, or `Value::Null` when there is none.
     pub fn secret_json(&self, name: &str) -> serde_json::Value {
         self.secret(name).map_or(serde_json::Value::Null, |s| {

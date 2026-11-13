@@ -66,11 +66,7 @@ impl Api {
             .unwrap();
         let api = Api { server, client };
         for (name, value) in AiSeed::new().account(account).secrets() {
-            api.send(
-                "PUT",
-                &format!("/api/secrets/{name}"),
-                json!({ "value": value }),
-            );
+            api.server.seed_secret(&name, &value);
         }
         let res = api
             .client

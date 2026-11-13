@@ -420,7 +420,7 @@ pub struct SecretBody {
     origins: Option<Vec<String>>,
 }
 
-/// `PUT /api/secrets/{name}`: store or replace a secret, encrypted at rest.
+/// Internal state must go through its dedicated API, for every caller and secret kind.
 fn require_user_secret(name: &str) -> Result<(), ApiError> {
     let destination = match name {
         "ai_accounts" | "ai_settings" => Some("Settings > AI (the accounts API)"),
@@ -461,6 +461,7 @@ fn require_user_secret(name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// `PUT /api/secrets/{name}`: store or replace a user secret, encrypted at rest.
 pub async fn put_secret(
     State(w): Shared,
     Path(name): Path<String>,

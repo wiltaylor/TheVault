@@ -138,16 +138,7 @@ fn agent_decide_uses_fake_and_honours_tools_permission() {
         } else {
             value
         };
-        assert!(
-            client
-                .put(server.url(&format!("/api/secrets/{name}")))
-                .bearer_auth(server.admin_token())
-                .json(&json!({"value":value}))
-                .send()
-                .unwrap()
-                .status()
-                .is_success()
-        );
+        server.seed_secret(&name, &value);
     }
     for allowed in [true, false] {
         let tools = if allowed { "decide" } else { "get_note" };

@@ -125,11 +125,7 @@ impl Api {
             .account(TestAccount::anthropic(fake).model(MODEL))
             .secrets()
         {
-            api.ok(
-                reqwest::Method::PUT,
-                &format!("/api/secrets/{name}"),
-                Some(json!({ "value": value })),
-            );
+            api.server.seed_secret(&name, &value);
         }
         api
     }

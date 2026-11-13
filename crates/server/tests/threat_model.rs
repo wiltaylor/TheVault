@@ -221,11 +221,7 @@ impl Fixture {
             .setting("fetch_private", json!(true))
             .secrets()
         {
-            f.ok(
-                "PUT",
-                &format!("/api/secrets/{name}"),
-                json!({"value": value}),
-            );
+            f.server.seed_secret(&name, &value);
         }
         f.ok(
             "PUT",

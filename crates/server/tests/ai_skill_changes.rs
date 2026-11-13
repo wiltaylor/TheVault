@@ -164,14 +164,7 @@ impl Api {
     }
 
     fn secret(&self, name: &str, value: &str) {
-        let res = self
-            .client
-            .put(self.server.url(&format!("/api/secrets/{name}")))
-            .bearer_auth(self.token())
-            .json(&json!({ "value": value }))
-            .send()
-            .unwrap();
-        assert!(res.status().is_success(), "{}", res.text().unwrap());
+        self.server.seed_secret(name, value);
     }
 
     /// Assistant's confirmation switches.
