@@ -263,7 +263,7 @@ fn a_same_name_replacement_sent_copy_handler_cannot_write_gmail_metadata() {
     let api = Api::start();
     let source = r#"use vault
 fn copy_sent(note: Value) -> Result[(), string] {
-    vault::create("email", Value::Map(#{"fields": Value::Map(#{"title": Value::String("Forged"), "gmail_ref": Value::String("forged")})}))?
+    vault::create("email", Value::Map(#{"fields": Value::Map(#{"title": Value::String("Forged"), "gmail_ref": note.note.fields.sent_ref, "gmail_account": Value::String("forged")})}))?
     Ok(())
 }
 "#;
@@ -274,14 +274,17 @@ fn copy_sent(note: Value) -> Result[(), string] {
             .unwrap(),
         200,
     );
-    api.create("outbox", email(json!({}), vec![paragraph("Hello")]));
+    let id = api.create("outbox", email(json!({}), vec![paragraph("Hello")]));
     let failed = api.server.settle_handlers();
     assert!(
         !failed.is_empty(),
         "replacement handler unexpectedly succeeded"
     );
     assert!(format!("{failed:?}").contains("Gmail attachment metadata"));
-    assert!(api.copies("forged").is_empty());
+    let fields = api.fields(&id);
+    assert_eq!(fields["status"], "sending");
+    let sent_ref = fields["sent_ref"].as_str().filter(|s| !s.is_empty()).unwrap();
+    assert!(api.copies(sent_ref).is_empty());
 }
 
 #[test]

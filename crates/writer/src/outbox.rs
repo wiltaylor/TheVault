@@ -713,9 +713,13 @@ fn outbox_rule(
                 }
             }
         }
-        Author::Handler(name) | Author::Task(name) | Author::GmailSentCopy(name) => {
+        Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_) => {
+            let name = match author {
+                Author::Handler(name) | Author::Task(name) => name.as_str(),
+                _ => "google_gmail",
+            };
             let label = match author {
-                Author::Handler(_) => format!("handler {name}"),
+                Author::Handler(_) | Author::GmailSentCopy(_) => format!("handler {name}"),
                 _ => format!("task {name}"),
             };
             let Some(old) = old else {

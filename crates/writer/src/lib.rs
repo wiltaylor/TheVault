@@ -1960,6 +1960,8 @@ impl Writer {
 
     fn check_gmail_metadata_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
         if let Author::GmailSentCopy(id) = author
+            && change.event == Event::Create
+            && self.state.trash_entry(&change.id)?.is_none()
             && change.type_name == "email"
             && change
                 .doc
