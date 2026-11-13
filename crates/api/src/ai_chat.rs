@@ -1446,7 +1446,7 @@ impl Direct {
             // sub agents (subagents U2).
             "agent_proposal" => {
                 self.agents
-                    && !crate::ai_agents::triggers_changed(p)
+                    && !crate::ai_agents::triggered_agent_changed(p)
                     && p["grants_run_code"] != true
                     && p["grants_run_saved"] != true
                     && p["grants_subagents"] != true
@@ -3649,7 +3649,7 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "propose_agent_change",
-            "Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off, an Internet switch turned on, the Outbox switch send_without_review turned on, Browser automation turned on, Run wscript code or sub agents that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied, except that adding, removing or changing a trigger always waits for a signed-in session Apply.",
+"Propose an agent file for the user to apply: a change to an existing agent, or a new agent under a new name. It is checked as the agent write would check it, and refused when it would give the agent a tool, a note type, a confirmation switch turned off, an Internet switch turned on, the Outbox switch send_without_review turned on, Browser automation turned on, Run wscript code or sub agents that you do not have yourself; you cannot change your own file. The user sees a diff of the WCL and applies or discards it. When the user lets agent changes go ahead without asking, it is written at once and the result says applied, except that every semantic edit of an agent with triggers on either side, including metadata and permission reductions, waits for a signed-in session Apply. Formatting-only rewrites do not count.",
             json!({
                 "name": { "type": "string", "description": "The agent's name: an existing agent to change, or a new name (lowercase letters, digits and underscores, starting with a letter) to create one." },
                 "wcl": { "type": "string", "description": "The whole new agent file as WCL text, with everything it keeps." },

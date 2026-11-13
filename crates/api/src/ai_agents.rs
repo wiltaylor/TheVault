@@ -10,7 +10,6 @@
 //! a delete through [`Writer::delete_agent`], after checking the file is still the `before` the
 //! proposal showed.
 
-use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use schema::{ASSISTANT_AGENT, Agent};
@@ -533,19 +532,11 @@ pub(crate) fn proposer_of(w: &Writer, p: &Value) -> Result<Option<Agent>, ApplyE
     }
 }
 
-/// Whether an agent proposal adds, removes or changes a trigger definition. Parse the actual
+/// Whether an agent proposal semantically edits an agent with triggers. Parse the actual
 /// before and after files: no client metadata decides whether this sensitive change needs Apply.
 /// Trigger order is not a definition change. Invalid or incomplete files fail closed; the normal
 /// writer validation still reports their errors to a signed-in session.
-pub(crate) fn triggers_changed(p: &Value) -> bool {
-    fn definitions(agent: &Agent) -> BTreeMap<&str, &schema::Trigger> {
-        agent
-            .triggers
-            .iter()
-            .map(|trigger| (trigger.name.as_str(), trigger))
-            .collect()
-    }
-
+pub(crate) fn triggered_agent_changed(p: &Value) -> bool {
     let name = p["name"].as_str().unwrap_or_default();
     let parse = |key: &str| p[key].as_str().map(|wcl| Agent::parse(name, wcl));
     if p["op"] == "delete" {
@@ -555,10 +546,11 @@ pub(crate) fn triggers_changed(p: &Value) -> bool {
         };
     }
     match (parse("before"), parse("after")) {
-        (Some(Ok(before)), Some(Ok(after))) => {
-            definitions(&before) != definitions(&after)
-                || (before.enabled != after.enabled
-                    && (!before.triggers.is_empty() || !after.triggers.is_empty()))
+        (Some(Ok(mut before)), Some(Ok(mut after))) => {
+            let triggered = !before.triggers.is_empty() || !after.triggers.is_empty();
+            before.triggers.sort_by(|a, b| a.name.cmp(&b.name));
+            after.triggers.sort_by(|a, b| a.name.cmp(&b.name));
+            triggered && before != after
         }
         (Some(Ok(before)), None) => !before.triggers.is_empty(),
         (None, Some(Ok(after))) => !after.triggers.is_empty(),
@@ -567,8 +559,8 @@ pub(crate) fn triggers_changed(p: &Value) -> bool {
 }
 
 /// Apply an `agent_proposal` (agents G20), when the agent file is still the proposal's `before`
-/// and the change stays within the proposing agent's permissions as they are now. A trigger
-/// addition, removal or definition change needs a signed-in session, never a bearer token.
+/// and the change stays within the proposing agent's permissions as they are now. Semantic
+/// edits with triggers on either side need a signed-in session, never a bearer token.
 pub(crate) fn apply_agent(w: &Writer, p: &Value, session: bool) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
@@ -584,7 +576,7 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value, session: bool) -> Result<Value,
             "the agent {name} changed since the proposal, so nothing was written"
         )));
     }
-    if triggers_changed(p) && !session {
+    if triggered_agent_changed(p) && !session {
         return Err(ApplyError::Refused(
             "Agent trigger changes need a signed-in session Apply.".into(),
         ));
@@ -779,22 +771,71 @@ mod tests {
     }
 
     #[test]
+    fn triggered_agent_semantic_fields_and_formatting() {
+        let trigger = "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Read.\"\n}\n";
+        for field in [
+            "label = \"Other\"\n",
+            "description = \"Other\"\n",
+            "icon = \"star\"\n",
+            "enabled = false\n",
+            "system_prompt = \"Other\"\n",
+            "account = \"other\"\n",
+            "provider = \"anthropic\"\n",
+            "model = \"other\"\n",
+            "effort = \"high\"\n",
+            "permissions { tools = []\n}\n",
+            "permissions { types = []\n}\n",
+            "permissions { change_types = []\n}\n",
+            "permissions { change_fields = { memo: [\"title\"] }\n}\n",
+            "permissions { approval_rule { operation = \"update\"\n type = \"memo\"\n fields = [\"title\"]\n daily_cap = 1\n}\n}\n",
+            "permissions { outbox { send_without_review = true\n}\n}\n",
+            "permissions { skills = []\n}\n",
+            "permissions { browser = true\n}\n",
+            "permissions { browser = true\n browser_secrets = [\"login\"]\n}\n",
+            "permissions { gmail_actions = true\n}\n",
+            "permissions { confirm { agents = false\n}\n}\n",
+            "permissions { web { search = false\n}\n}\n",
+            "permissions { scripts { run_code = true\n}\n}\n",
+            "permissions { scripts { run_saved = true\n}\n}\n",
+            "permissions { subagents { allow = true\n}\n}\n",
+        ] {
+            let after = format!("{field}{trigger}");
+            Agent::parse("helper", &after).unwrap();
+            for (before, after) in [(trigger, after.as_str()), (after.as_str(), trigger)] {
+                assert!(
+                    triggered_agent_changed(
+                        &json!({"name":"helper", "before":before, "after":after})
+                    ),
+                    "{field}"
+                );
+            }
+            assert!(
+                !triggered_agent_changed(&json!({"name":"helper", "before":"", "after":field})),
+                "{field}"
+            );
+        }
+        assert!(!triggered_agent_changed(
+            &json!({"name":"helper", "before":trigger, "after":format!("\n{trigger}\n")})
+        ));
+    }
+
+    #[test]
     fn trigger_sensitivity_compares_parsed_before_and_after_definitions() {
         let scheduled =
             "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n";
         let note = "trigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"open\\\"\"\n prompt = \"Read.\"\n}\n";
         let change = |before: Option<&str>, after: Option<&str>| json!({"name":"helper", "before":before, "after":after});
-        assert!(!triggers_changed(&change(
+        assert!(!triggered_agent_changed(&change(
             None,
             Some("label = \"Helper\"\n")
         )));
-        assert!(triggers_changed(&change(None, Some(scheduled))));
-        assert!(triggers_changed(&change(
+        assert!(triggered_agent_changed(&change(None, Some(scheduled))));
+        assert!(triggered_agent_changed(&change(
             Some(scheduled),
             Some("label = \"Helper\"\n")
         )));
-        assert!(triggers_changed(&change(Some(scheduled), None)));
-        assert!(!triggers_changed(&change(
+        assert!(triggered_agent_changed(&change(Some(scheduled), None)));
+        assert!(triggered_agent_changed(&change(
             Some(scheduled),
             Some(
                 "label = \"Renamed\"\n\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n"
@@ -806,18 +847,21 @@ mod tests {
             "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise everything.\"\n}\n",
         ] {
             assert!(
-                triggers_changed(&change(Some(scheduled), Some(after))),
+                triggered_agent_changed(&change(Some(scheduled), Some(after))),
                 "{after}"
             );
         }
-        assert!(triggers_changed(&change(
+        assert!(triggered_agent_changed(&change(
             Some(note),
             Some(
                 "enabled = false\n\ntrigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"closed\\\"\"\n prompt = \"Read.\"\n}\n"
             )
         )));
-        assert!(triggers_changed(&change(Some(note), Some("not valid WCL"))));
-        assert!(triggers_changed(&json!({"name":"helper"})));
+        assert!(triggered_agent_changed(&change(
+            Some(note),
+            Some("not valid WCL")
+        )));
+        assert!(triggered_agent_changed(&json!({"name":"helper"})));
     }
 
     #[test]
