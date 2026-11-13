@@ -446,6 +446,13 @@ impl Shared {
                             Ok(context) => context,
                             Err(error) => {
                                 eprintln!("recovering handler provenance: {error}");
+                                let held = writer.state().handler_recovery_subject(job.id).and_then(|subject| {
+                                    writer.state().record_unavailable_run_for("", &subject)?;
+                                    writer.state().finish_job(job.id, Err("held: provenance unavailable; release by editing the note as owner".into()), "")
+                                });
+                                if let Err(error) = held {
+                                    eprintln!("holding handler job: {error}");
+                                }
                                 continue;
                             }
                         };
@@ -467,7 +474,12 @@ impl Shared {
                                     if let Ok(subject) =
                                         writer.state().handler_recovery_subject(job.id)
                                     {
-                                        let _ = writer.state().record_stale_run_for(id, &subject);
+                                        let held = writer.state().record_stale_run_for(id, &subject).and_then(|_| {
+                                            writer.state().finish_job(job.id, Err("held: stale admission; release by editing the note as owner".into()), "")
+                                        });
+                                        if let Err(error) = held {
+                                            eprintln!("holding stale handler job: {error}");
+                                        }
                                     }
                                     return;
                                 }

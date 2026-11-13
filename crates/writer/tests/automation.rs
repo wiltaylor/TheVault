@@ -249,6 +249,15 @@ fn first_outbox_update_after_restart_publishes_before_post_commit_failure() {
 
 #[test]
 fn failed_owner_file_write_does_not_release_old_outbox_contents() {
+    failed_owner_file_write_keeps_hold(false);
+}
+
+#[test]
+fn failed_owner_file_write_does_not_release_legacy_outbox_contents() {
+    failed_owner_file_write_keeps_hold(true);
+}
+
+fn failed_owner_file_write_keeps_hold(legacy: bool) {
     let (_dir, writer) = setup();
     writer
         .upgrade_shipped_defaults(writer::Upkeep::Home)
@@ -261,6 +270,9 @@ fn failed_owner_file_write_does_not_release_old_outbox_contents() {
         .unwrap();
     writer.state().set_automation_stopped(true).unwrap();
     writer.state().set_automation_stopped(false).unwrap();
+    if legacy {
+        writer.state().remove_outbox_provenance(&item.id).unwrap();
+    }
     writer.set_commit_hook(Some(Box::new(|_| std::ops::ControlFlow::Break(()))));
     let mut changed = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
     changed["fields"]["to"] = serde_json::json!(["new@example.com"]);
@@ -280,6 +292,35 @@ fn failed_owner_file_write_does_not_release_old_outbox_contents() {
         writer::doc_to_json(&writer.read(&item.id).unwrap().doc)["fields"]["to"],
         serde_json::json!(["old@example.com"])
     );
+}
+
+#[test]
+fn owner_deleting_referenced_email_does_not_release_outbox() {
+    let (_dir, writer) = setup();
+    writer
+        .upgrade_shipped_defaults(writer::Upkeep::Home)
+        .unwrap();
+    let owner = Author::Session("owner".into());
+    let email = writer
+        .create(
+            "email",
+            &Input::Json(serde_json::json!({"fields":{"title":"Received"}})),
+            &owner,
+        )
+        .unwrap();
+    let item = writer.create("outbox", &Input::Json(serde_json::json!({"fields":{"title":"Reply", "kind":"email", "status":"ready", "to":["old@example.com"], "in_reply_to":email.id}})), &owner).unwrap();
+    writer.state().set_automation_stopped(true).unwrap();
+    writer.state().set_automation_stopped(false).unwrap();
+    writer
+        .delete(&email.id, Some(&email.version), &owner)
+        .unwrap();
+    let body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
+    assert!(body["fields"]["in_reply_to"].is_null());
+    assert!(writer.outbox_run_context(&item.id).is_err());
+    assert!(!matches!(
+        writer.history(&item.id).unwrap()[0].author,
+        Author::Session(_)
+    ));
 }
 
 #[test]

@@ -549,11 +549,30 @@ fn reconcile_delete(note: Value) -> Result[(), string] { Ok(()) }
         );
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(writer.state().failed_jobs().unwrap().is_empty());
+    let failed = writer.state().failed_jobs().unwrap();
+    assert!(!failed.is_empty());
+    assert!(failed.iter().all(|job| matches!(&job.status, state::JobStatus::Failed(message) if message.contains("held: stale admission"))));
+    assert!(
+        writer
+            .state()
+            .queued_jobs()
+            .unwrap()
+            .iter()
+            .all(|job| !failed.iter().any(|old| old.id == job.id))
+    );
 }
 
 #[test]
 fn legacy_handler_is_held_once_until_owner_edit_creates_fresh_work() {
+    unavailable_handler_is_held_once_until_owner_edit(false);
+}
+
+#[test]
+fn unreadable_handler_is_held_once_until_owner_edit_creates_fresh_work() {
+    unavailable_handler_is_held_once_until_owner_edit(true);
+}
+
+fn unavailable_handler_is_held_once_until_owner_edit(unreadable: bool) {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());
     let (writer, handlers) = open(dir.path(), false);
@@ -569,7 +588,10 @@ fn legacy_handler_is_held_once_until_owner_edit_creates_fresh_work() {
         )
         .unwrap();
     let old = writer.state().queued_jobs().unwrap().remove(0);
-    let legacy = writer.state().queue_jobs(&[old.payload]).unwrap()[0];
+    let legacy = writer
+        .state()
+        .queue_jobs_with_provenance(&[old.payload], if unreadable { "missing-run" } else { "" })
+        .unwrap()[0];
     writer
         .state()
         .finish_job(old.id, Ok(()), "fixture")
@@ -630,8 +652,9 @@ fn legacy_handler_is_held_once_until_owner_edit_creates_fresh_work() {
             .queued_jobs()
             .unwrap()
             .iter()
-            .any(|j| j.id == legacy)
+            .all(|j| j.id != legacy)
     );
+    assert!(writer.state().failed_jobs().unwrap().iter().any(|job| job.id == legacy && matches!(&job.status, state::JobStatus::Failed(message) if message.contains("held: provenance unavailable"))));
 }
 
 #[test]

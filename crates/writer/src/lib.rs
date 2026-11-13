@@ -1566,6 +1566,7 @@ impl Writer {
 
         // Steps 5 and 6, until every note the write changes has run its `before_*` handlers.
         let mut handled = HashSet::new();
+        let submitted: HashSet<_> = changes.iter().map(|change| change.id.clone()).collect();
         let mut authors = HashMap::new();
         let mut changes = self.run_before(changes, &mut handled, &mut authors, author)?;
         let mut inner = self.lock();
@@ -1601,6 +1602,14 @@ impl Writer {
         let mut changes = changes;
         let extra = self.hooks.side_effects(&changes)?;
         changes.extend(extra);
+        // Reference expansion is not an explicit owner edit of the affected note.
+        for change in &changes {
+            if !submitted.contains(&change.id) {
+                authors
+                    .entry(change.id.clone())
+                    .or_insert_with(|| Author::Task(SERVER_AUTHOR.to_owned()));
+            }
+        }
 
         // Handlers may have changed the notes, so what is written is rendered and checked again,
         // and the terms the notes add to open taxonomies are worked out from what they hold now.

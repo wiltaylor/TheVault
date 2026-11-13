@@ -231,7 +231,7 @@ impl Writer {
                 state.append_outbox_provenance(
                     &saved.id,
                     run_id,
-                    owner || saved.event == crate::Event::Create,
+                    saved.event == crate::Event::Create,
                 )
             })?;
             if owner {
