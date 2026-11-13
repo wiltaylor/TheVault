@@ -314,6 +314,14 @@ impl State {
     /// stepped backwards after issuance. The timestamp bound only saves work.
     pub fn agent_call_history(&self, note_id: &str) -> Result<Vec<Version>> {
         let conn = self.conn();
+        let cutoff: Option<i64> = conn.query_row(
+            "SELECT MIN(expires_ms - 86400000) FROM agent_call_ids WHERE note=?1 AND used=0",
+            [note_id],
+            |r| r.get(0),
+        )?;
+        let mut calls_stmt = conn.prepare("SELECT call FROM agent_call_ids WHERE note=?1 AND used=0")?;
+        let calls = calls_stmt.query_map([note_id], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {VERSION_COLUMNS} FROM versions WHERE note_id = ?1 AND (
                 at_ms >= (SELECT MIN(expires_ms - 86400000) FROM agent_call_ids
@@ -324,7 +332,16 @@ impl State {
              ) ORDER BY seq"
         ))?;
         let rows = stmt.query_map([note_id], version_row)?;
-        rows.map(|r| finish_version(r?)).collect()
+        let mut versions = Vec::new();
+        for row in rows {
+            let version = finish_version(row?)?;
+            if cutoff.is_some_and(|at| version.at_ms >= at)
+                || calls.iter().any(|call| version.content.contains(call))
+            {
+                versions.push(version);
+            }
+        }
+        Ok(versions)
     }
 
     /// One version of the note by its token.

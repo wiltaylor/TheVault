@@ -40,6 +40,26 @@ fn author() -> Author {
     Author::Session("test".into())
 }
 
+#[test]
+fn compressed_and_legacy_restore_are_exact_and_corruption_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = setup(dir.path());
+    let by = Author::Token("fixture".into());
+    let a = w.create("task", &Input::Wcl(format!("title = \"{}\"\n", "雪".repeat(10000))), &by).unwrap();
+    let b = w.update(&a.id, &Input::Wcl("title = \"changed\"\n".into()), Some(&a.version), &by).unwrap();
+    let restored = w.restore_version(&a.id, &a.version, Some(&b.version), &by).unwrap();
+    assert_eq!(restored.wcl.as_bytes(), a.wcl.as_bytes());
+    let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
+    conn.execute("UPDATE versions SET content=?1, content_bytes=NULL WHERE token=?2", rusqlite::params![b.wcl, b.version]).unwrap();
+    let old = w.restore_version(&a.id, &b.version, Some(&restored.version), &by).unwrap();
+    assert_eq!(old.wcl.as_bytes(), b.wcl.as_bytes());
+    let path = dir.path().join(format!("notes/task/{}.wcl", a.id));
+    let before = std::fs::read(&path).unwrap();
+    conn.execute("UPDATE versions SET content=x'56485302' WHERE token=?1", [&a.version]).unwrap();
+    assert!(w.restore_version(&a.id, &a.version, Some(&old.version), &by).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}
+
 fn create(w: &Writer, title: &str) -> Saved {
     w.create(
         "task",
