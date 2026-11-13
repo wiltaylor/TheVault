@@ -14,6 +14,8 @@ pub struct HistorySize {
     pub versions: u64,
     /// Retained UTF-8 content bytes, not SQLite allocation or filesystem blocks.
     pub content_bytes: u64,
+    /// Encoded payload bytes, excluding SQLite row/index overhead.
+    pub stored_content_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,16 +32,23 @@ pub struct StateSize {
 /// SQL rows form one snapshot; file lengths may change during concurrent writes.
 pub fn state_size(path: &Path, warning_threshold_bytes: u64) -> crate::Result<StateSize> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut stmt = conn.prepare(
-        "SELECT note_type, COUNT(*), SUM(length(CAST(content AS BLOB)))
-         FROM versions GROUP BY note_type ORDER BY note_type",
+    // Also works on pre-compression databases, without migrating them.
+    let has_sizes: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('versions') WHERE name='content_bytes')",
+        [], |r| r.get(0),
     )?;
+    let bytes = if has_sizes { "COALESCE(content_bytes, length(CAST(content AS BLOB)))" } else { "length(CAST(content AS BLOB))" };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT note_type, COUNT(*), SUM({bytes}), SUM(length(CAST(content AS BLOB)))
+         FROM versions GROUP BY note_type ORDER BY note_type"
+    ))?;
     let history = stmt
         .query_map([], |row| {
             Ok(HistorySize {
                 note_type: row.get(0)?,
                 versions: row.get(1)?,
                 content_bytes: row.get(2)?,
+                stored_content_bytes: row.get(3)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

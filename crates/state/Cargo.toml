@@ -8,6 +8,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+lz4_flex = { version = "=0.13.1", default-features = false, features = ["std"] }
 vocab.workspace = true
 schema.workspace = true
 argon2.workspace = true

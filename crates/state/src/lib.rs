@@ -181,7 +181,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 31;
+const SCHEMA_VERSION: i64 = 32;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -701,7 +701,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=30 => {
+        0..=31 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -837,6 +837,7 @@ fn migrate(conn: &mut Connection) -> Result<()> {
             if !has_expiry {
                 tx.execute_batch("ALTER TABLE tokens ADD COLUMN expires_ms INTEGER;")?;
             }
+            tx.execute_batch("ALTER TABLE versions ADD COLUMN content_bytes INTEGER;")?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())
