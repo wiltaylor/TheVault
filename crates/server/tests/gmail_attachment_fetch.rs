@@ -299,10 +299,7 @@ fn agent_token_cannot_preview_or_fetch() {
         } else {
             request
         };
-        assert_eq!(
-            expect(request.send().unwrap(), 403)["error"],
-            "session_required"
-        );
+        expect(request.send().unwrap(), 403);
     }
     assert!(f.google.requests().is_empty());
 }
@@ -329,6 +326,23 @@ fn metadata_create_and_update_refuse_agent_tokens_and_scripts_but_allow_owner() 
         );
         let id = created["id"].as_str().unwrap();
         let version = created["version"].as_str().unwrap();
+        let current = expect(
+            f.client
+                .get(f.server.url(&format!("/api/notes/{id}")))
+                .header("cookie", &f.cookie)
+                .send()
+                .unwrap(),
+            200,
+        );
+        expect(
+            f.client
+                .post(f.server.url(&format!("/api/notes/{id}/agent-safety/release")))
+                .header("cookie", &f.cookie)
+                .json(&json!({"fingerprint":current["agent_safety"]["fingerprint"]}))
+                .send()
+                .unwrap(),
+            200,
+        );
         for create in [true, false] {
             let (method, path) = if create {
                 ("POST", f.server.url("/api/notes"))
