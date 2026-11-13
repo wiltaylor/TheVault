@@ -105,7 +105,7 @@ use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Extension, Json};
 use schema::Agent;
-use script_core::Vault;
+use script_core::{RunContext, Vault};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use state::{Author, Scope};
@@ -241,6 +241,7 @@ pub async fn chat(
 /// confirmation switch is on, and [`ALWAYS_PROPOSE`] changes, as proposals in the durable thread
 /// for the user's Apply (TV-240). Unknown unattended origins drop held proposals. A model call that fails with a transient error is made
 /// again after each of `waits` (`crate::ai_retry`).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_unattended(
     w: Arc<Writer>,
     agent: &Agent,
@@ -249,6 +250,7 @@ pub(crate) async fn run_unattended(
     waits: crate::ai_retry::Waits,
     caller_scope: Option<Scope>,
     caller: Option<Author>,
+    run_context: RunContext,
 ) -> Unattended {
     let report: Report = Arc::default();
     let retry = CapacityRetry::new(waits, w.clone(), thread, report.clone());
@@ -279,6 +281,7 @@ pub(crate) async fn run_unattended(
         body,
         never,
         Some((report.clone(), retry)),
+        run_context,
     )
     .await;
     match started {
@@ -601,11 +604,12 @@ pub(crate) async fn start(
     body: ChatBody,
     stop: watch::Receiver<bool>,
 ) -> Result<(mpsc::Receiver<Sent>, Arc<AtomicBool>), ApiError> {
-    start_with(w, author, scope, body, stop, None).await
+    start_with(w, author, scope, body, stop, None, RunContext::default()).await
 }
 
 /// [`start`], for an unattended turn when `unattended` is given: where it reports, and how its
 /// model calls are retried.
+#[allow(clippy::too_many_arguments)]
 async fn start_with(
     w: Arc<Writer>,
     author: Author,
@@ -613,6 +617,7 @@ async fn start_with(
     body: ChatBody,
     stop: watch::Receiver<bool>,
     unattended: Option<(Report, CapacityRetry)>,
+    run_context: RunContext,
 ) -> Result<(mpsc::Receiver<Sent>, Arc<AtomicBool>), ApiError> {
     let (report, retry) = unattended.unzip();
     let account = match (
@@ -651,7 +656,7 @@ async fn start_with(
     } = body;
     let writer = w.clone();
     let by = author.clone();
-    let prepared = tokio::task::spawn_blocking(move || {
+    let prepared = blocking(&run_context, move || {
         prepare(
             &writer,
             &by,
@@ -683,6 +688,7 @@ async fn start_with(
         .is_some_and(crate::ai_ask::asks_on);
     let recommendation = prepared.origin.as_deref() == Some(scheduler::agents::MAIL_TRIAGE);
     let cfg = TurnCfg {
+        run_context,
         owner: author,
         author: actor,
         scope: if recommendation { Scope::Read } else { scope },
@@ -706,6 +712,7 @@ async fn start_with(
 
 /// Who a turn runs as and for whom, apart from its agent and thread.
 struct TurnCfg {
+    run_context: RunContext,
     /// Who started it: the caller, or the agent of an unattended run.
     owner: Author,
     /// The author of what its tools write.
@@ -764,6 +771,7 @@ fn spawn_turn(
     );
     let full_logins = crate::tasks::may_manage_login_secrets(&w, &cfg.owner).unwrap_or(false);
     let turn = Turn {
+        run_context: cfg.run_context,
         writer: w,
         author: cfg.author,
         owner: cfg.owner,
@@ -1688,7 +1696,19 @@ impl ToolOut {
     }
 }
 
+/// Capture before spawning. The guard is created and dropped on the blocking
+/// worker, never on a runtime thread across an await.
+fn blocking<F, T>(context: &RunContext, work: F) -> tokio::task::JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let context = context.clone();
+    tokio::task::spawn_blocking(move || context.scope(work))
+}
+
 struct Turn {
+    run_context: RunContext,
     writer: Arc<Writer>,
     author: Author,
     /// Who started the turn: the sub agent turns it starts are theirs to read and stop
@@ -1733,6 +1753,15 @@ struct Turn {
 }
 
 impl Turn {
+    /// Each blocking worker installs provenance only for synchronous work.
+    fn blocking<F, T>(&self, work: F) -> tokio::task::JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        blocking(&self.run_context, work)
+    }
+
     async fn run(
         self,
         agent: Agent,
@@ -1869,7 +1898,7 @@ impl Turn {
             )
         };
         let w = self.writer.clone();
-        let saved = tokio::task::spawn_blocking(move || {
+        let saved = self.blocking(move || {
             agent_threads::save(&w, &id, &label, None, |t| {
                 t.transcript.messages = messages.clone();
                 if context.is_some() {
@@ -1924,7 +1953,7 @@ impl Turn {
         let asks = self.asks;
         let skills = self.skills.section().map(str::to_owned);
         let uses_skills = crate::ai_skills::uses_skills(&agent);
-        let mut setup = match tokio::task::spawn_blocking(move || {
+        let mut setup = match self.blocking(move || {
             setup(
                 &w,
                 scope,
@@ -2249,7 +2278,7 @@ impl Turn {
                     let agent = setup.agent.clone();
                     let target = target.clone();
                     let call = c.clone();
-                    let got = tokio::task::spawn_blocking(move || {
+                    let got = self.blocking(move || {
                         crate::ai_scripts::call(&w, &agent, &target, &call)
                     })
                     .await
@@ -2463,7 +2492,7 @@ impl Turn {
                     let agent = setup.agent.clone();
                     let input = c.input.clone();
                     let sent = self.notified.clone();
-                    let got = tokio::task::spawn_blocking(move || {
+                    let got = self.blocking(move || {
                         crate::ai_notify::notify(&w, scope, &agent, &limits, &sent, &input)
                     })
                     .await
@@ -2497,7 +2526,7 @@ impl Turn {
                 let mut limits = setup.limits.clone();
                 limits.parent = self.sub.as_ref().map(|s| s.parent.clone());
                 let agent = setup.agent.clone();
-                let got = tokio::task::spawn_blocking(move || {
+                let got = self.blocking(move || {
                     run_tool(
                         &w,
                         &author,
@@ -2607,7 +2636,7 @@ impl Turn {
         seen.extend(messages.iter().cloned());
         let w = self.writer.clone();
         let agent = setup.agent.clone();
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             let opened = crate::ai_scripts::opened_skills(&seen);
             crate::ai_scripts::offered(&w, &agent, &opened)
         })
@@ -2628,7 +2657,7 @@ impl Turn {
         let w = self.writer.clone();
         let images = self.images.clone();
         let unloaded = messages.clone();
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             ai_assets::hydrate(&w, &mut messages, &images);
             messages
         })
@@ -2642,7 +2671,7 @@ impl Turn {
         let images = self.images.clone();
         let input = call.input.clone();
         let may_send = images_sent < ai_assets::IMAGE_LIMIT;
-        tokio::task::spawn_blocking(move || ai_assets::read_asset(&w, &input, may_send, &images))
+        self.blocking(move || ai_assets::read_asset(&w, &input, may_send, &images))
             .await
             .unwrap_or_else(|e| ai_assets::Read {
                 content: json!({ "error": e.to_string() }).to_string(),
@@ -2666,7 +2695,7 @@ impl Turn {
         let agent = setup.agent.clone();
         let browser = setup.browser.is_some();
         let may_send = images_sent < ai_assets::IMAGE_LIMIT;
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             if name == "use_skill" {
                 crate::ai_skills::use_skill(&w, &agent, &input, browser)
             } else {
@@ -2865,7 +2894,7 @@ impl Turn {
         };
         let w = self.writer.clone();
         let kept = compaction.clone();
-        tokio::task::spawn_blocking(move || {
+        self.blocking(move || {
             agent_threads::save(&w, &id, &label, None, |t| {
                 t.transcript.compaction = Some(kept.clone());
                 t.transcript.context = Some(context);
@@ -2967,7 +2996,7 @@ impl Turn {
         };
         let w = self.writer.clone();
         let id = cred.account.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        let _ = self.blocking(move || {
             crate::ai_settings::keep_usage(w.state(), &id, Some(&usage));
         })
         .await;
@@ -3154,7 +3183,7 @@ impl Turn {
         let by = author.clone();
         let sub_task = task.clone();
         let from = parent_thread.clone();
-        let ready = tokio::task::spawn_blocking(move || {
+        let ready = self.blocking(move || {
             let task = sub_task;
             let (mut agent, ignored, account, model) = match &named {
                 Some(name) => {
@@ -3241,6 +3270,7 @@ impl Turn {
             .map(str::to_owned);
         let (stop, stopped) = watch::channel(false);
         let cfg = TurnCfg {
+            run_context: self.run_context.clone(),
             owner: self.owner.clone(),
             author,
             scope: self.scope,
@@ -5360,6 +5390,56 @@ pub fn diff(before: &Value, after: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn blocking_turn_workers_share_late_restriction_and_job_provenance() {
+        let context = RunContext::default();
+        context.capture_stop_generation(2);
+        let mut workers = Vec::new();
+        let mut releases = Vec::new();
+        for _ in 0..2 {
+            let (release, wait) = std::sync::mpsc::channel();
+            releases.push(release);
+            workers.push(blocking(&context, move || {
+                let inherited = RunContext::current().unwrap();
+                wait.recv().unwrap();
+                inherited.capture_stop_generation(9);
+                let job = script_core::Job::new(script_core::Kind::Task, "child", "", "run");
+                assert_eq!(job.run_context, inherited);
+                assert!(job.run_context.is_restricted());
+                assert_eq!(job.run_context.stop_generation(), Some(2));
+                inherited
+            }));
+        }
+        tokio::task::yield_now().await;
+        assert!(RunContext::current().is_none());
+        context.restrict();
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for worker in workers {
+            assert_eq!(worker.await.unwrap(), context);
+        }
+        assert!(RunContext::current().is_none());
+    }
+
+    #[tokio::test]
+    async fn independent_turn_worker_is_unrestricted_after_failed_worker() {
+        let restricted = RunContext::default();
+        restricted.restrict();
+        assert!(blocking(&restricted, || panic!("test cleanup")).await.is_err());
+        let fresh = RunContext::default();
+        let observed = blocking(&fresh, || {
+            let context = RunContext::current().unwrap();
+            assert!(!context.is_restricted());
+            assert_eq!(context.stop_generation(), None);
+            context
+        })
+        .await
+        .unwrap();
+        assert_eq!(observed, fresh);
+        assert!(RunContext::current().is_none());
+    }
 
     #[test]
     fn selective_approval_never_releases_uncertain_storage_failure() {

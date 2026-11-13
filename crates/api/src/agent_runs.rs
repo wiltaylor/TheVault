@@ -185,6 +185,7 @@ impl scheduler::AgentRunner for TriggerRunner {
             self.waits.clone(),
             scope,
             caller.cloned(),
+            script_core::RunContext::current().unwrap_or_default(),
         ));
         crate::ai_turns::publish(&self.writer, &agent.name, thread, None, false);
         let outcome = done
