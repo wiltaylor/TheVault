@@ -15,6 +15,16 @@ use crate::required_scope;
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
     (
         "GET",
+        "/api/integrations/google/attachments/{id}",
+        "Owner-session deferred Gmail part metadata, no provider calls",
+    ),
+    (
+        "POST",
+        "/api/integrations/google/attachments/{id}",
+        "Owner-session bounded fetch of one selected Gmail attachment",
+    ),
+    (
+        "GET",
         "/api/classifiers",
         "Owner-session-only local classifier diagnostics, no provider calls",
     ),
