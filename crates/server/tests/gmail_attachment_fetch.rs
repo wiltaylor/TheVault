@@ -42,7 +42,7 @@ impl Fixture {
                 .json(&json!({"code":issued["code"]}))
                 .send()
                 .unwrap(),
-            200,
+            201,
         );
         redeemed["token"].as_str().unwrap().to_owned()
     }
