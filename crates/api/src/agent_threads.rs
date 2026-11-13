@@ -1539,26 +1539,26 @@ mod tests {
         let app = crate::owner_router(w, scheduler);
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
-        for (method, uri, body) in [
-            ("GET", "/api/search?q=quokka", ""),
-            ("GET", "/api/query?query=from%20article", ""),
-            ("POST", "/api/query", r#"{"query":"from article"}"#),
-        ] {
-            let request = axum::http::Request::builder()
-                .method(method)
-                .uri(uri)
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(body))
-                .unwrap();
-            let response = app.clone().oneshot(request).await.unwrap();
-            assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
-            let bytes = axum::body::to_bytes(response.into_body(), REDACTION_LIMIT)
-                .await
-                .unwrap();
-            let value: Value = serde_json::from_slice(&bytes).unwrap();
-            assert!(value["rows"].is_array(), "{value}");
-            assert_eq!(value["total"], 0);
-        }
+            for (method, uri, body) in [
+                ("GET", "/api/search?q=quokka", ""),
+                ("GET", "/api/query?query=from%20article", ""),
+                ("POST", "/api/query", r#"{"query":"from article"}"#),
+            ] {
+                let request = axum::http::Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap();
+                let response = app.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+                let bytes = axum::body::to_bytes(response.into_body(), REDACTION_LIMIT)
+                    .await
+                    .unwrap();
+                let value: Value = serde_json::from_slice(&bytes).unwrap();
+                assert!(value["rows"].is_array(), "{value}");
+                assert_eq!(value["total"], 0);
+            }
         });
     }
 
