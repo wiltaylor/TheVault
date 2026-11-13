@@ -310,7 +310,8 @@ async fn websocket(desktop: &Url, upstream: &str, mut req: Request) -> Response 
         let relay = tokio::io::copy_bidirectional(&mut client, &mut conn);
         if let Some(credential) = credential {
             use futures_util::StreamExt;
-            let guard = crate::auth::guard_stream(futures_util::stream::pending::<()>(), credential);
+            let guard =
+                crate::auth::guard_stream(futures_util::stream::pending::<()>(), credential);
             tokio::pin!(guard);
             tokio::select! {
                 _ = guard.next() => {},

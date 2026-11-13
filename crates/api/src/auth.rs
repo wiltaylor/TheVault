@@ -600,8 +600,16 @@ pub async fn authenticate(
     let trusted = req.extensions().get::<TrustedProxy>().is_some_and(|p| p.0);
     let secure_cookie = sessions.site_https || request_is_https(req.headers(), req.uri(), trusted);
     let credential = if let Some(value) = req.headers().get(header::AUTHORIZATION) {
-        value.to_str().ok().and_then(|v| v.strip_prefix("Bearer "))
-            .map(|secret| sessions.writer.state().stream_credential(secret.trim(), true))
+        value
+            .to_str()
+            .ok()
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|secret| {
+                sessions
+                    .writer
+                    .state()
+                    .stream_credential(secret.trim(), true)
+            })
     } else {
         session_id(req.headers()).map(|id| sessions.writer.state().stream_credential(&id, false))
     };
@@ -631,9 +639,10 @@ pub async fn authenticate(
     }
     if let Some(credential) = credential {
         let (parts, body) = res.into_parts();
-        res = Response::from_parts(parts, axum::body::Body::from_stream(guard_stream(
-            body.into_data_stream(), credential,
-        )));
+        res = Response::from_parts(
+            parts,
+            axum::body::Body::from_stream(guard_stream(body.into_data_stream(), credential)),
+        );
     }
     res
 }
@@ -652,7 +661,8 @@ where
 {
     use futures_util::StreamExt;
     let timer = tokio::time::interval(STREAM_CHECK_INTERVAL);
-    futures_util::stream::unfold((Box::pin(stream), credential, timer),
+    futures_util::stream::unfold(
+        (Box::pin(stream), credential, timer),
         |(mut stream, mut credential, mut timer)| async move {
             loop {
                 let item = tokio::select! {
@@ -663,14 +673,19 @@ where
                 };
                 let check = credential.clone();
                 if !tokio::task::spawn_blocking(move || check.is_valid())
-                    .await.ok().and_then(Result::ok).unwrap_or(false) {
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or(false)
+                {
                     return None;
                 }
                 if let Some(item) = item {
                     return item.map(|item| (item, (stream, credential, timer)));
                 }
             }
-        })
+        },
+    )
 }
 
 /// Middleware for [`crate::owner_router`]: every request is the owner's session.
@@ -784,7 +799,9 @@ mod tests {
 
     struct StreamClock(AtomicI64);
     impl state::Clock for StreamClock {
-        fn now_ms(&self) -> i64 { self.0.load(Ordering::SeqCst) }
+        fn now_ms(&self) -> i64 {
+            self.0.load(Ordering::SeqCst)
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -792,8 +809,11 @@ mod tests {
         use futures_util::StreamExt;
         let dir = tempfile::tempdir().unwrap();
         let clock = Arc::new(StreamClock(AtomicI64::new(1_000)));
-        let db = state::State::open_with_clock(&dir.path().join("state.db"), None, clock.clone()).unwrap();
-        let (_, secret) = db.create_token_with_expiry("one", Scope::Read, Some(10_000)).unwrap();
+        let db = state::State::open_with_clock(&dir.path().join("state.db"), None, clock.clone())
+            .unwrap();
+        let (_, secret) = db
+            .create_token_with_expiry("one", Scope::Read, Some(10_000))
+            .unwrap();
         db.create_token("other", Scope::Read).unwrap();
         let lease = db.stream_credential(&secret, true);
         let stream = guard_stream(futures_util::stream::repeat(()), lease.clone());
@@ -807,14 +827,23 @@ mod tests {
         db.revoke_token("one").unwrap();
         assert_eq!(stream.next().await, None);
 
-        let (_, secret) = db.create_token_with_expiry("expires", Scope::Read, Some(2_000)).unwrap();
-        let stream = guard_stream(futures_util::stream::pending::<()>(), db.stream_credential(&secret, true));
+        let (_, secret) = db
+            .create_token_with_expiry("expires", Scope::Read, Some(2_000))
+            .unwrap();
+        let stream = guard_stream(
+            futures_util::stream::pending::<()>(),
+            db.stream_credential(&secret, true),
+        );
         tokio::pin!(stream);
         clock.0.store(2_000, Ordering::SeqCst);
-        assert_eq!(tokio::time::timeout(STREAM_CHECK_INTERVAL, stream.next()).await.unwrap(), None);
+        tokio::time::advance(STREAM_CHECK_INTERVAL).await;
+        assert_eq!(stream.next().await, None);
 
         let (id, expiry) = db.create_session(None).unwrap();
-        let stream = guard_stream(futures_util::stream::repeat(()), db.stream_credential(&id, false));
+        let stream = guard_stream(
+            futures_util::stream::repeat(()),
+            db.stream_credential(&id, false),
+        );
         tokio::pin!(stream);
         assert_eq!(stream.next().await, Some(()));
         db.end_session(&id).unwrap();
