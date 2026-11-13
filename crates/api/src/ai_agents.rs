@@ -10,6 +10,7 @@
 //! a delete through [`Writer::delete_agent`], after checking the file is still the `before` the
 //! proposal showed.
 
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use schema::{ASSISTANT_AGENT, Agent};
@@ -532,9 +533,43 @@ pub(crate) fn proposer_of(w: &Writer, p: &Value) -> Result<Option<Agent>, ApplyE
     }
 }
 
+/// Whether an agent proposal adds, removes or changes a trigger definition. Parse the actual
+/// before and after files: no client metadata decides whether this sensitive change needs Apply.
+/// Trigger order is not a definition change. Invalid or incomplete files fail closed; the normal
+/// writer validation still reports their errors to a signed-in session.
+pub(crate) fn triggers_changed(p: &Value) -> bool {
+    fn definitions(agent: &Agent) -> BTreeMap<&str, &schema::Trigger> {
+        agent
+            .triggers
+            .iter()
+            .map(|trigger| (trigger.name.as_str(), trigger))
+            .collect()
+    }
+
+    let name = p["name"].as_str().unwrap_or_default();
+    let parse = |key: &str| p[key].as_str().map(|wcl| Agent::parse(name, wcl));
+    if p["op"] == "delete" {
+        return match parse("before") {
+            Some(Ok(before)) => !before.triggers.is_empty(),
+            _ => true,
+        };
+    }
+    match (parse("before"), parse("after")) {
+        (Some(Ok(before)), Some(Ok(after))) => {
+            definitions(&before) != definitions(&after)
+                || (before.enabled != after.enabled
+                    && (!before.triggers.is_empty() || !after.triggers.is_empty()))
+        }
+        (Some(Ok(before)), None) => !before.triggers.is_empty(),
+        (None, Some(Ok(after))) => !after.triggers.is_empty(),
+        _ => true,
+    }
+}
+
 /// Apply an `agent_proposal` (agents G20), when the agent file is still the proposal's `before`
-/// and the change stays within the proposing agent's permissions as they are now.
-pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
+/// and the change stays within the proposing agent's permissions as they are now. A trigger
+/// addition, removal or definition change needs a signed-in session, never a bearer token.
+pub(crate) fn apply_agent(w: &Writer, p: &Value, session: bool) -> Result<Value, ApplyError> {
     let name = p["name"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -548,6 +583,11 @@ pub(crate) fn apply_agent(w: &Writer, p: &Value) -> Result<Value, ApplyError> {
         return Err(ApplyError::Stale(format!(
             "the agent {name} changed since the proposal, so nothing was written"
         )));
+    }
+    if triggers_changed(p) && !session {
+        return Err(ApplyError::Refused(
+            "Agent trigger changes need a signed-in session Apply.".into(),
+        ));
     }
     if p["op"] == "delete" {
         w.delete_agent(name)?;
@@ -736,6 +776,48 @@ mod tests {
         assert!(p[0].contains("skills changes"), "{p:?}");
         assert!(escalation(&free, &free).is_empty());
         assert!(escalation(&free, &all).is_empty());
+    }
+
+    #[test]
+    fn trigger_sensitivity_compares_parsed_before_and_after_definitions() {
+        let scheduled =
+            "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n";
+        let note = "trigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"open\\\"\"\n prompt = \"Read.\"\n}\n";
+        let change = |before: Option<&str>, after: Option<&str>| json!({"name":"helper", "before":before, "after":after});
+        assert!(!triggers_changed(&change(
+            None,
+            Some("label = \"Helper\"\n")
+        )));
+        assert!(triggers_changed(&change(None, Some(scheduled))));
+        assert!(triggers_changed(&change(
+            Some(scheduled),
+            Some("label = \"Helper\"\n")
+        )));
+        assert!(triggers_changed(&change(Some(scheduled), None)));
+        assert!(!triggers_changed(&change(
+            Some(scheduled),
+            Some(
+                "label = \"Renamed\"\n\ntrigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise.\"\n}\n"
+            )
+        )));
+        for after in [
+            "trigger nightly {\n schedule = \"0 3 * * *\"\n prompt = \"Summarise.\"\n}\n",
+            "trigger nightly {\n schedule = \"0 2 * * *\"\n timezone = \"Europe/London\"\n prompt = \"Summarise.\"\n}\n",
+            "trigger nightly {\n schedule = \"0 2 * * *\"\n prompt = \"Summarise everything.\"\n}\n",
+        ] {
+            assert!(
+                triggers_changed(&change(Some(scheduled), Some(after))),
+                "{after}"
+            );
+        }
+        assert!(triggers_changed(&change(
+            Some(note),
+            Some(
+                "enabled = false\n\ntrigger arrived {\n on = [\"create\"]\n type = \"memo\"\n where = \"status == \\\"closed\\\"\"\n prompt = \"Read.\"\n}\n"
+            )
+        )));
+        assert!(triggers_changed(&change(Some(note), Some("not valid WCL"))));
+        assert!(triggers_changed(&json!({"name":"helper"})));
     }
 
     #[test]
