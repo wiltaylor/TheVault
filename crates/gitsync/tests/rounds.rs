@@ -48,6 +48,11 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
                 assets: vec![],
             });
             let mut files = BTreeMap::new();
+            manifest.types.push(gitsync::DefEntry {
+                name: "event".into(),
+                path: layout.type_def("event"),
+            });
+            files.insert(layout.type_def("event"), key.seal(MEMO.as_bytes()));
             files.insert(
                 layout.note(&id),
                 gitsync::pack::seal_note(&key, "event", text.as_bytes()),
