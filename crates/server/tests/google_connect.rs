@@ -599,11 +599,8 @@ fn disconnect_with_undecryptable_secret(name: &str) {
     expect(api.finish(&api.google.consent(&auth)), StatusCode::OK);
     let db = rusqlite::Connection::open(api.server.vault_path().join(".vault/state.db")).unwrap();
     assert_eq!(
-        db.execute(
-            "UPDATE secrets SET ciphertext=x'00' WHERE name=?1",
-            [name],
-        )
-        .unwrap(),
+        db.execute("UPDATE secrets SET ciphertext=x'00' WHERE name=?1", [name],)
+            .unwrap(),
         1
     );
     drop(db);
