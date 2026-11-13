@@ -582,6 +582,16 @@ impl Round<'_> {
                 let text = self.key.open(&path, &blob).map_err(Skip::new)?;
                 let text = String::from_utf8(text)
                     .map_err(|_| Skip::new(format!("definition {} is not text", d.name)))?;
+                // Names are normally supplied by the authenticated file identity. Do not
+                // accept an explicit declaration that contradicts that identity.
+                let doc = Doc::parse(&text, &path).map_err(Skip::new)?;
+                if let Some(name) = doc.field("name")
+                    && name.as_str() != Some(d.name.as_str())
+                {
+                    let reason = format!("definition {} declared name does not match", d.name);
+                    self.report.warnings.push(reason.clone());
+                    return Err(named(reason));
+                }
                 out.insert(d.name.clone(), text);
             }
             Ok(out)
