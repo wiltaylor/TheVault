@@ -296,6 +296,15 @@ fn failed_owner_file_write_keeps_hold(legacy: bool) {
 
 #[test]
 fn owner_deleting_referenced_email_does_not_release_outbox() {
+    owner_delete_keeps_outbox_hold(false);
+}
+
+#[test]
+fn owner_deleting_referenced_email_does_not_release_legacy_outbox() {
+    owner_delete_keeps_outbox_hold(true);
+}
+
+fn owner_delete_keeps_outbox_hold(legacy: bool) {
     let (_dir, writer) = setup();
     writer
         .upgrade_shipped_defaults(writer::Upkeep::Home)
@@ -311,12 +320,25 @@ fn owner_deleting_referenced_email_does_not_release_outbox() {
     let item = writer.create("outbox", &Input::Json(serde_json::json!({"fields":{"title":"Reply", "kind":"email", "status":"ready", "to":["old@example.com"], "in_reply_to":email.id}})), &owner).unwrap();
     writer.state().set_automation_stopped(true).unwrap();
     writer.state().set_automation_stopped(false).unwrap();
+    if legacy {
+        writer.state().remove_outbox_provenance(&item.id).unwrap();
+    }
     writer
         .delete(&email.id, Some(&email.version), &owner)
         .unwrap();
     let body = writer::doc_to_json(&writer.read(&item.id).unwrap().doc);
     assert!(body["fields"]["in_reply_to"].is_null());
     assert!(writer.outbox_run_context(&item.id).is_err());
+    if legacy {
+        assert!(
+            writer
+                .state()
+                .outbox_provenance(&item.id)
+                .unwrap()
+                .iter()
+                .any(String::is_empty)
+        );
+    }
     assert!(!matches!(
         writer.history(&item.id).unwrap().last().unwrap().author,
         Author::Session(_)
