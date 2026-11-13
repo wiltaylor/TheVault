@@ -34,6 +34,7 @@
 //! joins the write in progress, so it commits with it or not at all (D30).
 
 mod activity;
+mod automation;
 pub mod agent_safety;
 mod agent_threads;
 mod asset_use;
@@ -1309,6 +1310,7 @@ impl Writer {
         let _w = self.write_lock();
         let changes = check(self)?;
         let mut inner = self.lock();
+        let _automation = self.automation_commit()?;
         let generation = self.commit(changes)?;
         inner.index.advance(generation).map_err(Error::from)?;
         Ok(())
@@ -1643,6 +1645,7 @@ impl Writer {
                 None => Change::delete(path),
             });
         }
+        let automation = self.automation_commit()?;
         let generation = {
             let _acting = activity::acting_as(author);
             match inner.commit_hook.as_mut() {
@@ -1825,6 +1828,7 @@ impl Writer {
             };
             self.record_note(by, *act, id, &s.type_name, title.as_deref(), &s.version);
         }
+        drop(automation);
         self.announce(&saved, &|id| match authors.get(id).unwrap_or(author) {
             Author::Token(name) => Some(name.clone()),
             _ => None,
