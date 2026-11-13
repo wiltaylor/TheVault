@@ -9,7 +9,10 @@ impl State {
     pub fn hold_for_new_attachment(&self, id: &str) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM meta WHERE key=?1", [format!("agent_safety.legacy.{id}")])?;
+        tx.execute(
+            "DELETE FROM meta WHERE key=?1",
+            [format!("agent_safety.legacy.{id}")],
+        )?;
         let verdict = serde_json::json!({"status":"held", "reason":"content_changed", "fingerprint":"attachment-fetch-pending"}).to_string();
         tx.execute("INSERT INTO meta(key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [format!("agent_safety.note.{id}"), verdict])?;
         tx.execute("INSERT INTO agent_safety_index(id,fingerprint,held) VALUES (?1,'attachment-fetch-pending',1) ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,held=1", [id])?;

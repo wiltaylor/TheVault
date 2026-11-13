@@ -4,21 +4,35 @@ use tempfile::TempDir;
 #[test]
 fn new_attachment_removes_legacy_allowance_and_holds_durably_without_arrival() {
     struct FixedClock;
-    impl state::Clock for FixedClock { fn now_ms(&self) -> i64 { 1000 } }
+    impl state::Clock for FixedClock {
+        fn now_ms(&self) -> i64 {
+            1000
+        }
+    }
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("state.db");
     let state = State::open_with_clock(&path, None, std::sync::Arc::new(FixedClock)).unwrap();
-    state.activate_agent_safety(1, &["mail".to_owned()]).unwrap();
-    state.set_meta("agent_safety.pre_existing_mode", "legacy_allowed").unwrap();
+    state
+        .activate_agent_safety(1, &["mail".to_owned()])
+        .unwrap();
+    state
+        .set_meta("agent_safety.pre_existing_mode", "legacy_allowed")
+        .unwrap();
     state.hold_for_new_attachment("mail").unwrap();
     assert!(state.meta("agent_safety.legacy.mail").unwrap().is_none());
     assert!(state.agent_safety_clearances().unwrap().is_empty());
     let value = state.meta("agent_safety.note.mail").unwrap().unwrap();
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&value).unwrap()["status"], "held");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&value).unwrap()["status"],
+        "held"
+    );
     drop(state);
     let state = State::open_with_clock(&path, None, std::sync::Arc::new(FixedClock)).unwrap();
     assert!(state.meta("agent_safety.legacy.mail").unwrap().is_none());
-    assert_eq!(state.meta("agent_safety.note.mail").unwrap().unwrap(), value);
+    assert_eq!(
+        state.meta("agent_safety.note.mail").unwrap().unwrap(),
+        value
+    );
 }
 
 #[test]

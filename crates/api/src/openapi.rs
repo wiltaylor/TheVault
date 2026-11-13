@@ -13,8 +13,16 @@ use crate::required_scope;
 
 /// Every endpoint: method, path and a one-line summary.
 pub const ENDPOINTS: &[(&str, &str, &str)] = &[
-    ("GET", "/api/integrations/google/attachments/{id}", "Owner-session deferred Gmail part metadata, no provider calls"),
-    ("POST", "/api/integrations/google/attachments/{id}", "Owner-session bounded fetch of one selected Gmail attachment"),
+    (
+        "GET",
+        "/api/integrations/google/attachments/{id}",
+        "Owner-session deferred Gmail part metadata, no provider calls",
+    ),
+    (
+        "POST",
+        "/api/integrations/google/attachments/{id}",
+        "Owner-session bounded fetch of one selected Gmail attachment",
+    ),
     (
         "GET",
         "/api/agent-safety/backfill",
