@@ -218,6 +218,8 @@ impl Api {
 
     /// Change fields of note `id` as the user would, then let its handlers finish.
     fn edit(&self, id: &str, changes: Value) {
+        // Old held jobs remain in history. Fresh owner review must add no failures.
+        let old_failures = self.server.settle_handlers();
         let mut note = self.note(id);
         for (k, v) in changes.as_object().unwrap() {
             if v.is_null() {
@@ -227,17 +229,27 @@ impl Api {
             }
         }
         let client = Client::new();
-        let login = client.post(self.server.url("/api/login"))
-            .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
-        let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+        let login = client
+            .post(self.server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap();
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
         expect(
-            client.put(self.server.url(&format!("/api/notes/{id}"))).header("cookie", cookie)
+            client
+                .put(self.server.url(&format!("/api/notes/{id}")))
+                .header("cookie", cookie)
                 .json(&json!({ "note": note["note"], "base_version": note["version"] }))
                 .send()
                 .unwrap(),
             200,
         );
-        self.settle();
+        assert_eq!(self.server.settle_handlers(), old_failures);
     }
 
     /// Let every queued handler run finish, and fail on any that failed.
@@ -248,10 +260,23 @@ impl Api {
 
     fn settle_held(&self) {
         let failed = self.server.settle_handlers();
-        assert!(failed.iter().all(|e| e.starts_with(script::OUTSIDE_TEXT_REFUSAL)
-            || e.starts_with("held: stale admission")), "{failed:#?}");
-        let audit = expect(self.req("GET", "/api/activity?kind=run.outside_text_refused").send().unwrap(), 200);
-        assert!(audit.to_string().contains(script::OUTSIDE_TEXT_REFUSAL), "{audit}");
+        assert!(
+            failed
+                .iter()
+                .all(|e| e.starts_with(script::OUTSIDE_TEXT_REFUSAL)
+                    || e.starts_with("held: stale admission")),
+            "{failed:#?}"
+        );
+        let audit = expect(
+            self.req("GET", "/api/activity?kind=run.outside_text_refused")
+                .send()
+                .unwrap(),
+            200,
+        );
+        assert!(
+            audit.to_string().contains(script::OUTSIDE_TEXT_REFUSAL),
+            "{audit}"
+        );
     }
 
     fn sync(&self) {
@@ -354,7 +379,10 @@ fn restart_during_event_write(update: bool, unlinked: bool) {
     api.google.set_calendar_delay(None);
     api.settle_held();
     let fields = api.fields(&item);
-    assert_eq!(fields["status"], "sending", "unsealed recovery must remain held: {fields}");
+    assert_eq!(
+        fields["status"], "sending",
+        "unsealed recovery must remain held: {fields}"
+    );
     assert_eq!(
         api.google
             .requests()
@@ -488,7 +516,11 @@ fn restart_confirmed_delete(phase: u8) {
     .unwrap();
     api.server.restart();
     api.settle_held();
-    assert_eq!(api.fields(&item)["status"], "sending", "unsealed recovery cannot finish deletion");
+    assert_eq!(
+        api.fields(&item)["status"],
+        "sending",
+        "unsealed recovery cannot finish deletion"
+    );
     if phase == 2 {
         api.assert_trashed(&id);
     } else {
@@ -958,20 +990,16 @@ fn reviewed_event_rsvp_and_delete_reach_google_through_outbox() {
     let events = api.events();
     let id = events.keys().next().unwrap();
     let rsvp = api.draft_event(&fake, id, json!({ "my_response": "accepted" }));
-    api.settle();
     assert!(api.google.calendar_writes().is_empty());
     api.edit(&rsvp, json!({ "status": "ready" }));
-    api.settle();
     let sent = api.one_write_after(0);
     assert_eq!(sent.method, "PATCH");
     assert_eq!(sent.send_updates.as_deref(), Some("all"));
     assert_eq!(sent.body["attendees"][0]["responseStatus"], "accepted");
     assert!(api.gone(&rsvp));
     let deletion = api.draft_event(&fake, id, json!({ "event_action": "delete" }));
-    api.settle();
     assert!(api.google.requests().iter().all(|r| r.method != "DELETE"));
     api.edit(&deletion, json!({ "status": "ready" }));
-    api.settle();
     let deletes: Vec<_> = api
         .google
         .requests()

@@ -301,7 +301,10 @@ fn restart_unconfirmed_sms_holds_late_receipt_without_second_command() {
     api.server.restart();
     api.settle();
     let fields = api.fields(&id);
-    assert_eq!(fields["status"], "sending", "unsealed recovery stays held: {fields}");
+    assert_eq!(
+        fields["status"], "sending",
+        "unsealed recovery stays held: {fields}"
+    );
     assert_eq!(api.commands(&phone, "").len(), 1);
     let copy = api.copy(&phone, "sms:late", NUMBER, "Check once", NOW);
     api.report(
