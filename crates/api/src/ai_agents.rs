@@ -538,15 +538,16 @@ pub(crate) fn proposer_of(w: &Writer, p: &Value) -> Result<Option<Agent>, ApplyE
 /// Trigger order is not a definition change. Invalid or incomplete files fail closed; the normal
 /// writer validation still reports their errors to a signed-in session.
 pub(crate) fn triggers_changed(p: &Value) -> bool {
-    let name = p["name"].as_str().unwrap_or_default();
-    let parse = |key: &str| p[key].as_str().map(|wcl| Agent::parse(name, wcl));
-    let definitions = |agent: &Agent| {
+    fn definitions(agent: &Agent) -> BTreeMap<&str, &schema::Trigger> {
         agent
             .triggers
             .iter()
             .map(|trigger| (trigger.name.as_str(), trigger))
-            .collect::<BTreeMap<_, _>>()
-    };
+            .collect()
+    }
+
+    let name = p["name"].as_str().unwrap_or_default();
+    let parse = |key: &str| p[key].as_str().map(|wcl| Agent::parse(name, wcl));
     match (parse("before"), parse("after")) {
         (Some(Ok(before)), Some(Ok(after))) => definitions(&before) != definitions(&after),
         (Some(Ok(before)), None) => !before.triggers.is_empty(),
