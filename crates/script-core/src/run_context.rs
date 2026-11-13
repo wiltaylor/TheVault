@@ -131,7 +131,11 @@ impl RunContext {
             let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
             let root = self.root();
             let state = root.0.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(lease) = state.durable.iter().find(|lease| lease.belongs_to(database)) {
+            if let Some(lease) = state
+                .durable
+                .iter()
+                .find(|lease| lease.belongs_to(database))
+            {
                 return Ok(lease.id().to_owned());
             }
             (state.restricted, state.stop_generation)
@@ -140,7 +144,12 @@ impl RunContext {
         let lease = database.lease_run_provenance(restricted, generation)?;
         let id = lease.id().to_owned();
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
-        self.root().0.lock().unwrap_or_else(|e| e.into_inner()).durable.push(lease);
+        self.root()
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .durable
+            .push(lease);
         Ok(id)
     }
 
@@ -218,7 +227,11 @@ mod tests {
         let active = database.load_run_provenance(&id);
         assert!(!active.is_sealed());
         assert!(active.is_restricted());
-        assert!(database.automation_commit(active.stop_generation().unwrap()).is_err());
+        assert!(
+            database
+                .automation_commit(active.stop_generation().unwrap())
+                .is_err()
+        );
         drop(child);
         drop(database);
         let database = state::State::open(&path, None).unwrap();
@@ -277,13 +290,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
         let generation = database.admit_automation().unwrap();
-        let active = database.create_run_provenance(false, Some(generation)).unwrap();
+        let active = database
+            .create_run_provenance(false, Some(generation))
+            .unwrap();
         for id in ["missing", active.id()] {
             let recovered = RunContext::recover(&database, id);
             assert!(recovered.is_restricted());
-            assert!(database.automation_commit(recovered.stop_generation().unwrap()).is_err());
+            assert!(
+                database
+                    .automation_commit(recovered.stop_generation().unwrap())
+                    .is_err()
+            );
             recovered.capture_stop_generation(generation);
-            assert!(database.automation_commit(recovered.stop_generation().unwrap()).is_err());
+            assert!(
+                database
+                    .automation_commit(recovered.stop_generation().unwrap())
+                    .is_err()
+            );
         }
     }
 

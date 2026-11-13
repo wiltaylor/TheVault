@@ -127,7 +127,10 @@ fn failed_join_rolls_back_and_retry_keeps_both_histories() {
     assert!(s.join_run_provenance(a.id(), b.id()).is_err());
     let unchanged = s.load_run_provenance(a.id());
     assert!(unchanged.is_restricted()); // active, even though the update rolled back
-    assert!(s.automation_commit(unchanged.stop_generation().unwrap()).is_err());
+    assert!(
+        s.automation_commit(unchanged.stop_generation().unwrap())
+            .is_err()
+    );
     conn.execute_batch("DROP TRIGGER fail_link").unwrap();
     s.join_run_provenance(a.id(), b.id()).unwrap();
     s.seal_run_provenance(a.id()).unwrap();
@@ -173,13 +176,17 @@ fn final_snapshot_and_seal_are_one_transaction() {
     conn.execute_batch(
         "CREATE TRIGGER fail_seal BEFORE UPDATE OF sealed ON run_provenance
          BEGIN SELECT RAISE(ABORT, 'injected seal failure'); END;",
-    ).unwrap();
+    )
+    .unwrap();
     assert!(state::RunProvenanceLease::seal_all(&leases, true, Some(old)).is_err());
     for id in &ids {
         let recovered = s.load_run_provenance(id);
         assert!(!recovered.is_sealed());
         assert!(recovered.is_restricted());
-        assert!(s.automation_commit(recovered.stop_generation().unwrap()).is_err());
+        assert!(
+            s.automation_commit(recovered.stop_generation().unwrap())
+                .is_err()
+        );
     }
     conn.execute_batch("DROP TRIGGER fail_seal").unwrap();
     state::RunProvenanceLease::seal_all(&leases, true, Some(old)).unwrap();
@@ -205,7 +212,10 @@ fn crash_before_restriction_recovers_conservatively_and_sealed_clean_stays_clean
     let recovered = s.load_run_provenance(active.id());
     assert!(recovered.is_restricted());
     assert!(!recovered.is_sealed());
-    assert!(s.automation_commit(recovered.stop_generation().unwrap()).is_err());
+    assert!(
+        s.automation_commit(recovered.stop_generation().unwrap())
+            .is_err()
+    );
     drop(s.automation_commit(generation).unwrap());
     let clean = s.load_run_provenance(sealed.id());
     assert!(!clean.is_restricted());
@@ -217,7 +227,10 @@ fn crash_before_restriction_recovers_conservatively_and_sealed_clean_stays_clean
     let s = open(&path);
     for id in [active.id(), sealed.id()] {
         let recovered = s.load_run_provenance(id);
-        assert!(s.automation_commit(recovered.stop_generation().unwrap()).is_err());
+        assert!(
+            s.automation_commit(recovered.stop_generation().unwrap())
+                .is_err()
+        );
     }
 }
 

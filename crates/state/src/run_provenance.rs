@@ -72,7 +72,9 @@ pub struct RunProvenanceLease {
 
 impl std::fmt::Debug for RunProvenanceLease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunProvenanceLease").field("id", &self.id).finish()
+        f.debug_struct("RunProvenanceLease")
+            .field("id", &self.id)
+            .finish()
     }
 }
 
@@ -96,8 +98,13 @@ impl RunProvenanceLease {
         let Some(first) = leases.first() else {
             return Ok(());
         };
-        if leases.iter().any(|lease| !Arc::ptr_eq(&lease.conn, &first.conn)) {
-            return Err(Error::Corrupt("run provenance uses multiple State authorities".into()));
+        if leases
+            .iter()
+            .any(|lease| !Arc::ptr_eq(&lease.conn, &first.conn))
+        {
+            return Err(Error::Corrupt(
+                "run provenance uses multiple State authorities".into(),
+            ));
         }
         let mut conn = first.conn.lock().unwrap_or_else(|e| e.into_inner());
         let tx = conn.transaction()?;
@@ -112,7 +119,12 @@ impl RunProvenanceLease {
         for other in &roots {
             tx.execute(
                 "UPDATE run_provenance SET restricted=?2,stop_generation=?3,parent=?4 WHERE id=?1",
-                params![other, restricted, generation.map(Generation::stored), (other != root).then_some(root)],
+                params![
+                    other,
+                    restricted,
+                    generation.map(Generation::stored),
+                    (other != root).then_some(root)
+                ],
             )?;
         }
         seal_component(&tx, root)?;
@@ -224,10 +236,13 @@ impl State {
         }
         tx.execute("UPDATE run_provenance SET sealed=0 WHERE id=?1", [root])?;
         tx.commit()?;
-        Ok((snapshot, RunProvenanceLease {
-            id: id.to_owned(),
-            conn: self.conn.clone(),
-        }))
+        Ok((
+            snapshot,
+            RunProvenanceLease {
+                id: id.to_owned(),
+                conn: self.conn.clone(),
+            },
+        ))
     }
 
     /// Allocate host provenance before publishing a durable work reference.
