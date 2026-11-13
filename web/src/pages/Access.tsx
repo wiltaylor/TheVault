@@ -297,11 +297,19 @@ export function ConnectAgent() {
 function TokensPage() {
   const [expiry, setExpiry] = createSignal("");
   const [now, setNow] = createSignal(Date.now());
+  const [approximate, setApproximate] = createSignal(true);
+  let base = now();
+  let sampled = performance.now();
   onMount(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    const timer = setInterval(() => setNow(base + performance.now() - sampled), 30_000);
     onCleanup(() => clearInterval(timer));
   });
-  const [tokens, { refetch }] = createResource(api.tokens);
+  const [tokens, { refetch }] = createResource(() => api.tokens((serverNow) => {
+    base = serverNow ?? Date.now();
+    sampled = performance.now();
+    setNow(base);
+    setApproximate(serverNow === null);
+  }));
   const [name, setName] = createSignal("");
   const [scope, setScope] = createSignal<Scope>("read");
   const [created, setCreated] = createSignal<Token | null>(null);
@@ -320,6 +328,7 @@ function TokensPage() {
       }
       setCreated(await api.createToken(name().trim(), scope(), expires));
       setName("");
+      setExpiry("");
       await refetch();
     } catch (e) {
       setError(errorText(e));
@@ -431,9 +440,9 @@ function TokensPage() {
                       <td>{when(t.created)}</td>
                       <td>{t.last_used === null ? "Never" : when(t.last_used)}</td>
                       <td>{t.expires == null ? "No expiry" : <>
-                        {when(t.expires)}{t.expires <= now() ? " (Expired)" : ""}
+                        {when(t.expires)}{t.expires <= now() ? (approximate() ? " (Expired, approximate)" : " (Expired)") : ""}
                       </>}</td>
-                      <td>{now() - (t.last_used ?? t.created) >= 90 * 24 * 60 * 60 * 1000
+                      <td>{approximate() ? "Approximate: " : ""}{now() - (t.last_used ?? t.created) >= 90 * 24 * 60 * 60 * 1000
                         ? (t.last_used === null ? "Never used in 90 days" : "Inactive for 90 days or more")
                         : ""}</td>
                       <td>

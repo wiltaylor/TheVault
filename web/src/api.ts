@@ -1696,7 +1696,7 @@ async function send(path: string, init: RequestInit): Promise<Response> {
   return new Response(empty ? null : answer.body, { status: answer.status, headers: answer.headers });
 }
 
-async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal, onResponse?: (res: Response) => void): Promise<T> {
   const init: RequestInit = {
     method,
     credentials: "same-origin",
@@ -1716,6 +1716,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     init.body = JSON.stringify(body);
   }
   const res = await send(path, init);
+  onResponse?.(res);
   if (res.status === 204) {
     if (method !== "GET" && NOTE_WRITES.test(path)) noteWritten();
     return undefined as T;
@@ -2332,7 +2333,10 @@ export const api = {
     request<DeviceCommand>("POST", `/api/devices/${enc(id)}/commands`, { name, payload }),
   /** Every device file, with the commands each declares. */
   deviceFiles: async () => (await request<{ files: DeviceFileInfo[] }>("GET", "/api/device-files")).files,
-  tokens: async () => (await request<{ tokens: Token[] }>("GET", "/api/tokens")).tokens,
+  tokens: async (onTime?: (now: number | null) => void) => (await request<{ tokens: Token[] }>("GET", "/api/tokens", undefined, undefined, (res) => {
+    const now = Date.parse(res.headers.get("Date") ?? "");
+    onTime?.(Number.isFinite(now) ? now : null);
+  })).tokens,
   /** Create a token. The answer is the only time its secret is shown. */
   createToken: (name: string, scope: Scope, expires: number | null = null) =>
     request<Token>("POST", "/api/tokens", { name, scope, expires }),
