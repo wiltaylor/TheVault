@@ -399,6 +399,72 @@ fn the_export_and_import_queries_choose_what_arrives_with_its_id_and_author() {
 }
 
 #[test]
+fn peer_type_admission_refuses_capabilities_and_mismatched_names() {
+    for (declaration, refused) in [
+        ("handler before_create { script = \"fake\" }", true),
+        ("handler after_update { script = \"fake\" }", true),
+        ("handler after_create { script = \"fake\"\nfunction = run }", true),
+        ("handler after_create { script = \"fake\"\nallow_domains = [\"example.invalid\"] }", true),
+        ("handler after_create { script = \"fake\"\nsecrets = [\"fake_secret\"] }", true),
+        ("script = \"fake\"", true),
+        ("function = run", true),
+        ("allow_domains = [\"example.invalid\"]", true),
+        ("secrets = [\"fake_secret\"]", true),
+        ("name = \"different\"", true),
+        ("", false),
+    ] {
+        let repo = BareRepo::new();
+        let b = Instance::start("B");
+        let key = SyncKey::parse(&b.generate_key()).unwrap();
+        b.configure(&repo.url(), "", "from *", json!({}));
+        let layout = Layout::new(&key, "admission-peer");
+        let mut manifest = Manifest::new(Named {
+            vault_id: "admission-peer".into(),
+            name: "peer".into(),
+        });
+        let id = "01JB8Z4K2MQ7V3X9T5R6W8Y2ZA";
+        let text = "title = \"Peer\"\n";
+        let source = format!("label = \"Plain\"\n{declaration}\n");
+        manifest.types.push(gitsync::DefEntry {
+            name: "plain".into(),
+            path: layout.type_def("plain"),
+        });
+        manifest.notes.push(gitsync::NoteEntry {
+            id: id.into(),
+            note_type: "plain".into(),
+            origin: "admission-peer".into(),
+            hash: gitsync::pack::sha256_hex(text.as_bytes()),
+            path: layout.note(id),
+            assets: vec![],
+        });
+        let files = BTreeMap::from([
+            (layout.type_def("plain"), key.seal(&layout.type_def("plain"), source.as_bytes())),
+            (layout.note(id), gitsync::pack::seal_note(&key, &layout.note(id), "plain", text.as_bytes())),
+            (layout.manifest(), manifest.seal(&key)),
+        ]);
+        let tmp = tempfile::tempdir().unwrap();
+        let git = Git::new(tmp.path().join("repo"), Auth::None).unwrap();
+        git.ensure_bare_clone(&repo.url()).unwrap();
+        let tree = git.write_tree(&files).unwrap();
+        let commit = git.commit_tree(&tree, "synthetic type admission peer").unwrap();
+        git.force_push(&commit, &layout.branch()).unwrap();
+        let report = b.sync();
+        let path = b.server.vault_path().join("types/plain.wcl");
+        assert_eq!(path.exists(), !refused, "{declaration}: {report}");
+        if refused {
+            assert!(ids(&report, "created").is_empty(), "{report}");
+            assert!(!report["warnings"].as_array().unwrap().is_empty(), "{report}");
+        } else {
+            assert_eq!(ids(&report, "created"), vec![id]);
+            // A subsequent owner write succeeds without any script binding installed.
+            assert!(schema::TypeDef::parse("plain", &std::fs::read_to_string(path).unwrap())
+                .unwrap().handlers.is_empty());
+            b.call("POST", "/api/notes?type=plain", Some(json!({"wcl": "title = \"Local\"\n"})), 201);
+        }
+    }
+}
+
+#[test]
 fn definitions_are_created_where_missing_and_never_overwritten() {
     let repo = BareRepo::new();
     let a = Instance::start_seeded("A", |v| {
