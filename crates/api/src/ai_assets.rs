@@ -167,6 +167,11 @@ pub fn read_asset(w: &Writer, input: &Value, may_send_image: bool, images: &Imag
     };
     if !w.agent_may_read_asset(id) {
         if let Some(attachment) = w.agent_attachment_text(id) {
+            // This is a typed incoming-attachment snapshot. Clearance permits
+            // reading it, but does not grant authority to act on its contents.
+            if let Some(context) = script_core::RunContext::current() {
+                context.restrict();
+            }
             return Read {
                 content: json!({
                     "id": id, "filename": attachment["filename"],
@@ -467,6 +472,26 @@ pub fn note_assets(w: &Writer, note: &Value) -> Vec<Value> {
 mod tests {
     use super::*;
     use image::{ImageFormat, RgbImage};
+
+    #[test]
+    fn cleared_attachment_text_restricts_the_reading_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let w = Writer::open(vault, state).unwrap();
+        w.put_type("email", "label = \"Email\"\nfield attachments { kind = \"list\" items = \"asset\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+        w.activate_agent_safety().unwrap();
+        let asset = w.put_asset("invoice.csv", b"amount\n12\n".to_vec()).unwrap();
+        let note = w.create("email", &writer::Input::Json(json!({"fields":{"title":"Incoming", "attachments":[asset.id]}})), &state::Author::Session("owner".into())).unwrap();
+        let hash = w.agent_safety(&note.id).unwrap().fingerprint;
+        w.release_agent_safety(&note.id, &hash, &state::Author::Session("owner".into())).unwrap();
+        let context = script_core::RunContext::default();
+        let result = context.scope(|| read_asset(&w, &json!({"id":asset.id}), true, &Images::default()));
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("12"));
+        assert!(context.is_restricted());
+        assert!(!script_core::RunContext::default().is_restricted());
+    }
 
     fn png(width: u32, height: u32) -> Vec<u8> {
         let img = RgbImage::from_pixel(width, height, image::Rgb([200, 100, 50]));

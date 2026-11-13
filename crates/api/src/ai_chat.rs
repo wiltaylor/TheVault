@@ -5849,6 +5849,28 @@ mod tests {
     }
 
     #[test]
+    fn outside_text_delete_proposal_applies_only_in_a_fresh_owner_scope() {
+        let (_root, w, agent, id, _version) = selective_fixture(
+            "permissions { confirm { delete = false } }\n",
+        );
+        let owner = Author::Session("owner".into());
+        let context = RunContext::default();
+        context.restrict();
+        let held = context.scope(|| run_tool(
+            &w, &owner, Scope::Write, Direct::of(confirm_of(&agent), Scope::Write),
+            Held::Propose, &Limits::of(&agent), &agent,
+            &tool_call("propose_delete", json!({"id":id})), false, false,
+        ));
+        assert!(!held.is_error, "{}", held.content);
+        let (event, proposal) = held.proposal.unwrap();
+        assert!(context.scope(|| apply_change(&w, &owner, event, &proposal)).is_err());
+        assert!(w.read(&id).is_ok());
+        apply_change(&w, &owner, event, &proposal).unwrap();
+        assert!(w.read(&id).is_err());
+        assert!(context.is_restricted());
+    }
+
+    #[test]
     fn email_apply_without_agent_or_proposer_rechecks_agentmail_author() {
         let root = tempfile::tempdir().unwrap();
         let vault = store::Vault::init(root.path()).unwrap();

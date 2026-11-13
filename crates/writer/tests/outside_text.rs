@@ -185,3 +185,30 @@ fn action_matrix_keeps_local_processed_rules_but_classifies_google_and_calendar_
         ));
     }
 }
+
+#[test]
+fn gmail_and_calendar_mutations_require_fresh_authority_after_exposure() {
+    let (_dir, w) = setup();
+    w.put_type("email", "label = \"Email\"\nfield gmail_ref { kind = \"string\" }\nfield processed { kind = \"bool\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    w.put_type("event", "label = \"Event\"\nfield google_ref { kind = \"string\" }\nfield my_response { kind = \"string\" }\nfield attendees_raw { kind = \"list\" items = \"string\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+    for (kind, initial, edits, by) in [
+        ("email", serde_json::json!({"gmail_ref":"fixture", "processed":false}), serde_json::json!({"processed":true}), Author::AgentMail("reader".into())),
+        ("event", serde_json::json!({"google_ref":"fixture"}), serde_json::json!({"title":"Moved"}), Author::Handler("google_event".into())),
+        ("event", serde_json::json!({}), serde_json::json!({"my_response":"accepted"}), Author::Handler("google_event".into())),
+        ("event", serde_json::json!({}), serde_json::json!({"attendees_raw":["other@example.test"]}), Author::Handler("google_event".into())),
+    ] {
+        let note = w.create(kind, &Input::Json(serde_json::json!({"fields":initial})), &owner()).unwrap();
+        let mut replacement = writer::doc_to_json(&w.read(&note.id).unwrap().doc);
+        for (key, value) in edits.as_object().unwrap() {
+            replacement["fields"][key] = value.clone();
+        }
+        let input = Input::Json(replacement);
+        let context = RunContext::default();
+        context.restrict();
+        let error = context.scope(|| w.update(&note.id, &input, Some(&note.version), &by)).unwrap_err();
+        assert!(error.to_string().contains(script_core::OUTSIDE_TEXT_REFUSAL), "{error}");
+        assert_eq!(w.read(&note.id).unwrap().version, note.version);
+        w.update(&note.id, &input, Some(&note.version), &owner()).unwrap();
+        assert!(context.is_restricted());
+    }
+}

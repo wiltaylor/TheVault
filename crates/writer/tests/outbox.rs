@@ -102,6 +102,18 @@ fn late_outbox_restriction_remains_gated_after_reopen() {
 }
 
 #[test]
+fn restricted_sent_cleanup_cannot_delete_the_review_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let id = create(&w, &user(), email(json!({"status":"sending"}))).unwrap();
+    let context = script_core::RunContext::default();
+    context.restrict();
+    let error = context.scope(|| w.remove_sent_outbox(&id, None, &handler())).unwrap_err();
+    assert!(error.to_string().contains(script_core::OUTSIDE_TEXT_REFUSAL));
+    assert_eq!(status(&w, &id), "sending");
+}
+
+#[test]
 fn round3_outside_delete_then_api_recreate_does_not_restore_legacy() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
