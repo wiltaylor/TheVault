@@ -430,7 +430,7 @@ notify {
 "#;
 
 fn setup(fake: &FakeDecisions, config: &str) -> (TestServer, Client) {
-    let server = TestServer::start_seeded(|vault| {
+    let server = TestServer::start_with_args(|vault| {
         std::fs::create_dir_all(vault.join("types")).unwrap();
         std::fs::create_dir_all(vault.join("classifiers")).unwrap();
         std::fs::write(
@@ -445,7 +445,7 @@ template default { tab Main { slot title } }
         )
         .unwrap();
         std::fs::write(vault.join("classifiers/incoming.wcl"), config).unwrap();
-    });
+    }, &["--test-clock".as_ref(), "2026-11-13T12:00:00Z".as_ref()]);
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
