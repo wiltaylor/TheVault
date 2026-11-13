@@ -77,7 +77,15 @@ fn oversized_history_creates_updates_recovers_and_restores() {
     let restored = w
         .restore_version(&a.id, &a.version, Some(&current), &by)
         .unwrap();
-    assert!(restored.wcl == a.wcl);
+    // Restore is a new write: only its updated stamp may differ from the snapshot.
+    assert!(
+        restored
+            .wcl
+            .lines()
+            .filter(|line| !line.starts_with("updated "))
+            .eq(a.wcl.lines().filter(|line| !line.starts_with("updated ")))
+    );
+    assert!(w.version(&a.id, &a.version).unwrap().content == a.wcl);
     let conn = rusqlite::Connection::open(dir.path().join(".vault/state.db")).unwrap();
     let kind: String = conn
         .query_row(
