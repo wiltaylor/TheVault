@@ -15,7 +15,10 @@ fn setup(fake: &FakeDecisions) -> (TestServer, Client, String) {
     setup_with(fake, |_| {})
 }
 
-fn setup_with(fake: &FakeDecisions, seed: impl FnOnce(&std::path::Path)) -> (TestServer, Client, String) {
+fn setup_with(
+    fake: &FakeDecisions,
+    seed: impl FnOnce(&std::path::Path),
+) -> (TestServer, Client, String) {
     let server = TestServer::start_with_args(
         |vault| {
             std::fs::create_dir_all(vault.join("types")).unwrap();
@@ -412,11 +415,17 @@ fn history_restart_retains_uncertain_attempt_and_resumes_only_pending_items() {
 fn definition(s: &TestServer, condition: &str) {
     let path = s.vault_path().join("classifiers/scam.wcl");
     let source = std::fs::read_to_string(&path).unwrap();
-    let source = source.lines().map(|line| {
-        if line.starts_with("where ") {
-            format!("where = {}", serde_json::to_string(condition).unwrap())
-        } else { line.to_owned() }
-    }).collect::<Vec<_>>().join("\n");
+    let source = source
+        .lines()
+        .map(|line| {
+            if line.starts_with("where ") {
+                format!("where = {}", serde_json::to_string(condition).unwrap())
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     std::fs::write(path, source).unwrap();
 }
 
@@ -424,14 +433,29 @@ fn definition(s: &TestServer, condition: &str) {
 fn history_or_filter_cannot_escape_window_and_nonstandard_date_is_refused() {
     let fake = FakeDecisions::start();
     let (s, c, cookie) = setup_with(&fake, |vault| {
-        for (suffix, sent) in [("G", "2020-01-01T00:00:00Z"), ("H", "2026-11-13T00:00:00Z"), ("J", "2026-11-11T12:00:00Z"), ("K", "2027-01-01T00:00:00Z")] {
-            std::fs::write(vault.join(format!("notes/email/01JB8Z4K2MQ7V3X9T5R6W8Y2Z{suffix}.wcl")), format!("title = \"Outside history\"\nsent = \"{sent}\"\n")).unwrap();
+        for (suffix, sent) in [
+            ("G", "2020-01-01T00:00:00Z"),
+            ("H", "2026-11-13T00:00:00Z"),
+            ("J", "2026-11-11T12:00:00Z"),
+            ("K", "2027-01-01T00:00:00Z"),
+        ] {
+            std::fs::write(
+                vault.join(format!("notes/email/01JB8Z4K2MQ7V3X9T5R6W8Y2Z{suffix}.wcl")),
+                format!("title = \"Outside history\"\nsent = \"{sent}\"\n"),
+            )
+            .unwrap();
         }
     });
     definition(&s, "type == \"email\" || sent >= now() - days(2)");
     assert_eq!(preview(&s, &c, &cookie)["count"], 3);
     definition(&s, "sent >= now() - days(3)");
-    let r = post(&s, &c, &cookie, "preview", json!({"days":30,"estimated_usd_per_decision":0}));
+    let r = post(
+        &s,
+        &c,
+        &cookie,
+        "preview",
+        json!({"days":30,"estimated_usd_per_decision":0}),
+    );
     assert_eq!(r.status(), 400);
     assert!(r.text().unwrap().contains("standard sent-date filter"));
     assert!(fake.requests().is_empty());
@@ -457,10 +481,20 @@ fn history_refuses_more_than_five_thousand_eligible_items_even_at_zero_price() {
     let (s, c, cookie) = setup_with(&fake, |vault| {
         for i in 0..4998_u128 {
             let id = format!("{:026}", i + 1);
-            std::fs::write(vault.join(format!("notes/email/{id}.wcl")), "title = \"Cap fixture\"\nsent = \"2026-11-01T12:00:00Z\"\n").unwrap();
+            std::fs::write(
+                vault.join(format!("notes/email/{id}.wcl")),
+                "title = \"Cap fixture\"\nsent = \"2026-11-01T12:00:00Z\"\n",
+            )
+            .unwrap();
         }
     });
-    let r = post(&s, &c, &cookie, "preview", json!({"days":30,"estimated_usd_per_decision":0}));
+    let r = post(
+        &s,
+        &c,
+        &cookie,
+        "preview",
+        json!({"days":30,"estimated_usd_per_decision":0}),
+    );
     assert_eq!(r.status(), 400);
     assert!(r.text().unwrap().contains("5,000 items"));
     assert!(fake.requests().is_empty());
@@ -474,7 +508,9 @@ fn history_skips_notes_and_configuration_changed_after_approval() {
         fake.push(Reply::json(200, &response()).delay(Duration::from_secs(2)));
         fake.push(Reply::json(200, &response()));
         let p = preview(&s, &c, &cookie);
-        post(&s, &c, &cookie, "approve", approval(&p)).error_for_status().unwrap();
+        post(&s, &c, &cookie, "approve", approval(&p))
+            .error_for_status()
+            .unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         while fake.requests().is_empty() {
             assert!(Instant::now() < deadline);
@@ -486,11 +522,21 @@ fn history_skips_notes_and_configuration_changed_after_approval() {
             std::fs::write(path, format!("{source}\n// changed after approval\n")).unwrap();
         } else {
             let url = s.url(&format!("/api/notes/{}", IDS[1]));
-            let n: Value = c.get(&url).bearer_auth(s.admin_token()).send().unwrap().json().unwrap();
+            let n: Value = c
+                .get(&url)
+                .bearer_auth(s.admin_token())
+                .send()
+                .unwrap()
+                .json()
+                .unwrap();
             c.put(&url).bearer_auth(s.admin_token()).json(&json!({"base_version":n["version"],"note":{"fields":{"title":"Changed after approval"}}})).send().unwrap().error_for_status().unwrap();
         }
         let done = wait(&s, &c, &cookie, |p| p["status"] == "complete");
-        let expected = if change_config { "skipped_configuration_changed" } else { "skipped_note_changed" };
+        let expected = if change_config {
+            "skipped_configuration_changed"
+        } else {
+            "skipped_note_changed"
+        };
         assert_eq!(done["attempts"][1]["outcome"], expected, "{done}");
         assert_eq!(fake.requests().len(), if change_config { 1 } else { 2 });
     }
