@@ -185,11 +185,13 @@ fn browser_secret_foreground_proposal_apply_and_revocation_are_value_free() {
         .unwrap();
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
     api.agent("driver", DRIVER);
-    let (status, _) = api.apply(&proposal);
-    assert!(
-        !status.is_success(),
-        "revoked agent grant must refuse Apply"
-    );
+    // The proposal is applied, so Apply only replays its stored, value-free result (TV-242
+    // canonical replay). With the grant revoked nothing is filled again: the count below
+    // stays at one (TV-271).
+    let (status, replay) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(replay, done);
+    assert!(!replay.to_string().contains(password));
     assert_eq!(
         browser
             .requests()
@@ -205,8 +207,10 @@ fn browser_secret_foreground_proposal_apply_and_revocation_are_value_free() {
         .unwrap()
         .error_for_status()
         .unwrap();
-    let (status, _) = api.apply(&proposal);
-    assert!(!status.is_success());
+    // The same replay with the secret gone: no fill, no value.
+    let (status, replay) = api.apply(&proposal);
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(replay, done);
     assert_eq!(
         browser
             .requests()

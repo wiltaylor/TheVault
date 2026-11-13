@@ -775,6 +775,15 @@ fn apply_as_agent(
                 Some(done.clone()),
                 None,
             ),
+            // The one refusal proven to precede every write: the signed-in admin check of
+            // sensitive phone code runs inside `commit_checked`, before its changes exist.
+            // A token's refused attempt must not spend the proposal the admin can still
+            // apply after signing in (TV-271), so it waits again.
+            Err(ai_chat::ApplyError::Refused(why))
+                if !admin && why == crate::ai_script_changes::PHONE_ADMIN_MESSAGE =>
+            {
+                agent_threads::record_outcome(w, thread, id, Status::Pending, None, None)
+            }
             Err(e) => {
                 // The writer can commit before journal/index bookkeeping returns an error.
                 // Without a proven rollback every unsuccessful attempt is terminal. This

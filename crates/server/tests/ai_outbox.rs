@@ -797,7 +797,8 @@ fn the_draft_tools_need_write_and_follow_the_tools_list() {
 fn unattended_runs_are_offered_the_draft_tools() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
-    // Every confirmation on: no change tool is offered, but drafting is not one.
+    // Every confirmation on. Drafting is no change tool; of the change tools only the note
+    // proposals a trigger's thread keeps are offered (TV-146 A1, TV-240, TV-271).
     api.agent(
         "clerk",
         &CLERK
@@ -814,7 +815,8 @@ fn unattended_runs_are_offered_the_draft_tools() {
     for t in ["draft_email", "draft_sms", "draft_event"] {
         assert!(tools.contains(&t), "{t}: {tools:?}");
     }
-    assert!(!tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(tools.contains(&"propose_edit"), "{tools:?}");
+    assert!(!tools.contains(&"propose_agent_change"), "{tools:?}");
 }
 
 #[test]
