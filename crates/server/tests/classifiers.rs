@@ -8,6 +8,8 @@ use testkit::{FakeDecisions, Reply, TestServer};
 fn settings_are_session_only_and_repair_only_the_account_without_calls() {
     let fake = FakeDecisions::start();
     let (server, client) = setup(&fake, CONFIG);
+    // Startup normalizes definitions. The edit must preserve the bytes present at request time.
+    std::fs::write(server.vault_path().join("classifiers/incoming.wcl"), CONFIG).unwrap();
     std::fs::write(
         server.vault_path().join("classifiers/broken.wcl"),
         "not valid WCL",
@@ -152,7 +154,13 @@ fn provider_token_counts_survive_success_and_failure() {
     let note = create(&server, &client, "incoming");
     wait_trail(&server, note["id"].as_str().unwrap());
     let state = state::State::open(&server.vault_path().join(".vault/state.db"), None).unwrap();
-    assert_eq!(state.meta("classifier_last_outcome:incoming").unwrap().as_deref(), Some("provider_failed"));
+    assert_eq!(
+        state
+            .meta("classifier_last_outcome:incoming")
+            .unwrap()
+            .as_deref(),
+        Some("provider_failed")
+    );
     let rows = state.ai_usage_daily().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].purpose, "classifier");

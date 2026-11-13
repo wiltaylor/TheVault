@@ -61,18 +61,25 @@ fn local(w: &Writer) -> Result<Value, ApiError> {
     names.sort();
     let mut rows = Vec::new();
     for name in names {
-        let source = w
-            .vault()
-            .read_text(&format!("classifiers/{name}.wcl"))
-            .ok();
-        let config = source.as_ref().and_then(|source| Classifier::parse(&name, source).ok());
+        let source = w.vault().read_text(&format!("classifiers/{name}.wcl")).ok();
+        let config = source
+            .as_ref()
+            .and_then(|source| Classifier::parse(&name, source).ok());
         let mut row = json!({"name": name, "valid": config.is_some(), "reason": "invalid_definition",
             "last_outcome": w.state().meta(&format!("classifier_last_outcome:{name}"))?
                 .filter(|s| ["attempting", "succeeded", "setup_failed", "provider_failed", "write_failed", "held_too_large"].contains(&s.as_str()))
                 .unwrap_or_else(|| "not_recorded".into())});
-        if config.is_none() && source.as_ref().and_then(|s| schema::Doc::parse(s, "classifier").ok())
-            .and_then(|doc| doc.field("where").and_then(schema::Value::as_str).map(str::to_owned))
-            .is_some_and(|filter| query::parse_expr(&filter).is_err()) {
+        if config.is_none()
+            && source
+                .as_ref()
+                .and_then(|s| schema::Doc::parse(s, "classifier").ok())
+                .and_then(|doc| {
+                    doc.field("where")
+                        .and_then(schema::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .is_some_and(|filter| query::parse_expr(&filter).is_err())
+        {
             row["reason"] = json!("invalid_filter");
         }
         if let Some(config) = config {
