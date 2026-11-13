@@ -29,9 +29,7 @@ pub async fn serve(root: Arc<PathBuf>, req: Request) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     match tokio::task::spawn_blocking(move || read(&root, &rel)).await {
-        Ok(Some((name, bytes))) => {
-            file_response(&name, bytes, method == Method::HEAD)
-        }
+        Ok(Some((name, bytes))) => file_response(&name, bytes, method == Method::HEAD),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }

@@ -151,10 +151,7 @@ fn hsts_covers_api_success_errors_and_streams_only_with_site_setting() {
                 .get(server.url(path))
                 .header("x-forwarded-proto", "https");
             if authenticated {
-                request = request.header(
-                    AUTHORIZATION,
-                    format!("Bearer {}", server.admin_token()),
-                );
+                request = request.header(AUTHORIZATION, format!("Bearer {}", server.admin_token()));
             }
             let response = request.send().unwrap();
             assert_eq!(response.status().as_u16(), status, "{path}");
