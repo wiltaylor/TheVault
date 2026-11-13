@@ -400,6 +400,50 @@ fn mail_triage_confirmation_rechecks_processed_and_permissions() {
 }
 
 #[test]
+fn scam_history_writes_do_not_trigger_agents_but_owner_edits_do() {
+    let chat = FakeAnthropic::start();
+    let decisions = testkit::FakeDecisions::start();
+    let api = Api::start(&chat);
+    api.send("POST", "/api/integrations/ai/accounts", json!({
+        "name":"router", "kind":"openai_compatible", "base_url":decisions.base_url(), "key":testkit::FakeDecisions::KEY
+    }));
+    std::fs::remove_file(api.server.vault_path().join("classifiers/agent_safety.wcl")).unwrap();
+    std::fs::write(api.server.vault_path().join("classifiers/scam.wcl"), format!("account = \"router\"\n{}", include_str!("../../writer/defaults/classifiers/scam.wcl"))).unwrap();
+    api.agent("reader", "label = \"Reader\"\ntrigger changed { on = [\"update\"] type = \"email\" prompt = \"Read mail\" }\n");
+    let note = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"History","sent":"2025-12-25T12:00:00Z"}}}));
+    decisions.push(testkit::Reply::json(200, &json!({"id":"history","model":"jev","answers":{
+        "scam":{"type":"noul","noul":0.1},
+        "category":{"type":"choice","choice":"other","confidence":1.0,"probabilities":{"scam":0.0,"spam":0.0,"marketing":0.0,"personal":0.0,"transactional":0.0,"other":1.0}}
+    }})));
+    let cookie = mail_triage_login(&api);
+    let root = "/api/classifiers/scam/history";
+    let p: Value = api.client.post(api.server.url(&format!("{root}/preview"))).header("cookie", &cookie).json(&json!({"days":30,"estimated_usd_per_decision":0})).send().unwrap().error_for_status().unwrap().json().unwrap();
+    assert_eq!(p["count"], 1);
+    api.client.post(api.server.url(&format!("{root}/approve"))).header("cookie", &cookie).json(&json!({"fingerprint":p["fingerprint"],"days":30,"estimated_usd_per_decision":0,"approve":true})).send().unwrap().error_for_status().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let p: Value = api.client.get(api.server.url(root)).header("cookie", &cookie).send().unwrap().json().unwrap();
+        if p["status"] == "complete" {
+            assert_eq!(p["attempts"][0]["outcome"], "succeeded", "{p}");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    api.advance("PT35S");
+    assert!(chat.message_requests().is_empty());
+    let id = note["id"].as_str().unwrap();
+    let current = api.get(&format!("/api/notes/{id}"));
+    let mut doc = current["note"].clone();
+    doc["fields"]["title"] = json!("Owner edit");
+    chat.push(AnthropicMessage::text("Owner update received"));
+    api.send("PUT", &format!("/api/notes/{id}"), json!({"note":doc,"base_version":current["version"]}));
+    api.advance("PT35S");
+    assert_eq!(chat.message_requests().len(), 1, "ordinary updates still trigger");
+    assert_eq!(decisions.requests().len(), 1);
+}
+
+#[test]
 fn mail_triage_mark_old_preview_and_commit_start_zero_model_runs() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
