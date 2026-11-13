@@ -581,8 +581,8 @@ async fn revoke_with_deadline(
 mod disconnect_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn finish_and_disconnect_share_connection_exclusion() {
+    #[test]
+    fn finish_and_disconnect_share_connection_exclusion() {
         let dir = tempfile::tempdir().unwrap();
         let vault = store::Vault::init(dir.path()).unwrap();
         let state = state::State::open(
@@ -600,20 +600,22 @@ mod disconnect_tests {
         let scheduler =
             Scheduler::new(writer, host, Arc::new(scheduler::TestClock::new(0))).unwrap();
         let google = Arc::new(Google::new(scheduler));
-        let guard = google.connection.lock().await;
-        let finish = finish(
-            State(google.clone()),
-            Json(FinishBody {
-                url: "invalid".into(),
-            }),
-        );
-        let disconnect = disconnect(State(google.clone()));
-        tokio::pin!(finish, disconnect);
-        // Neither route can even begin its work while the other owns the connection.
-        assert!(futures_util::poll!(&mut finish).is_pending());
-        assert!(futures_util::poll!(&mut disconnect).is_pending());
-        drop(guard);
-        assert!(finish.await.is_err());
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let guard = google.connection.lock().await;
+            let finish = finish(
+                State(google.clone()),
+                Json(FinishBody {
+                    url: "invalid".into(),
+                }),
+            );
+            let disconnect = disconnect(State(google.clone()));
+            tokio::pin!(finish, disconnect);
+            // Neither route can even begin its work while the other owns the connection.
+            assert!(futures_util::poll!(&mut finish).is_pending());
+            assert!(futures_util::poll!(&mut disconnect).is_pending());
+            drop(guard);
+            assert!(finish.await.is_err());
+        });
     }
 
     #[tokio::test(start_paused = true)]
