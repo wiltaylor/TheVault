@@ -242,8 +242,7 @@ mod tests {
             "http://127.0.0.1:8080"
         );
         assert!(normalise_url("vault.example.net").is_err());
-        assert!(normalise_thevault-heavy: slot 1 taken at 17:34:10 UTC
-url("https://").is_err());
+        assert!(normalise_url("https://").is_err());
     }
 
     struct NoTokens;
