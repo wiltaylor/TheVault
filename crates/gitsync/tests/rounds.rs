@@ -68,18 +68,20 @@ fn calendar_peer_import_denies_metadata_on_create_replace_and_type_transition() 
                     assets: vec![],
                 });
                 let mut files = BTreeMap::new();
-                manifest.types.push(gitsync::DefEntry {
-                    name: ty.into(),
-                    path: layout.type_def(ty),
-                });
-                files.insert(
-                    layout.type_def(ty),
-                    key.seal(if ty == "event" {
-                        include_bytes!("../../writer/defaults/event.wcl").as_slice()
-                    } else {
-                        include_bytes!("../../writer/defaults/event_series.wcl").as_slice()
-                    }),
-                );
+                for (name, text) in [
+                    ("person", include_str!("../../writer/defaults/person.wcl")),
+                    ("event", include_str!("../../writer/defaults/event.wcl")),
+                    (
+                        "event_series",
+                        include_str!("../../writer/defaults/event_series.wcl"),
+                    ),
+                ] {
+                    manifest.types.push(gitsync::DefEntry {
+                        name: name.into(),
+                        path: layout.type_def(name),
+                    });
+                    files.insert(layout.type_def(name), key.seal(text.as_bytes()));
+                }
                 manifest.types.push(gitsync::DefEntry {
                     name: "memo".into(),
                     path: layout.type_def("memo"),
