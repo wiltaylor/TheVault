@@ -62,7 +62,10 @@ fn cleared_get_and_links_restrict_the_live_run_but_permission_checks_do_not() {
                 _ => assert_eq!(w.get(&mail.id).unwrap()["id"], mail.id),
             }
         });
-        assert_eq!(context.is_restricted(), matches!(operation, "get" | "links"));
+        assert_eq!(
+            context.is_restricted(),
+            matches!(operation, "get" | "links")
+        );
     }
 }
 
@@ -76,14 +79,30 @@ fn run_exposure_uses_typed_incoming_metadata_and_preserves_ownership_exclusions(
         .unwrap();
     for (kind, fields, restricted) in [
         ("email", serde_json::json!({}), true),
-        ("email", serde_json::json!({"labels":["system/SENT"]}), false),
-        ("email", serde_json::json!({"labels":["system/DRAFT"]}), false),
+        (
+            "email",
+            serde_json::json!({"labels":["system/SENT"]}),
+            false,
+        ),
+        (
+            "email",
+            serde_json::json!({"labels":["system/DRAFT"]}),
+            false,
+        ),
         ("message", serde_json::json!({"direction":"in"}), true),
         ("message", serde_json::json!({"direction":"out"}), false),
         ("call", serde_json::json!({"direction":"in"}), true),
         ("call", serde_json::json!({"direction":"out"}), false),
-        ("event", serde_json::json!({"organiser":"foreign@example.test"}), true),
-        ("event", serde_json::json!({"organiser":"OWNER@example.test"}), false),
+        (
+            "event",
+            serde_json::json!({"organiser":"foreign@example.test"}),
+            true,
+        ),
+        (
+            "event",
+            serde_json::json!({"organiser":"OWNER@example.test"}),
+            false,
+        ),
         ("event", serde_json::json!({}), false),
         ("memo", serde_json::json!({"title":"incoming email"}), false),
     ] {
