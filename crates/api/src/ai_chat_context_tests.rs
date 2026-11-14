@@ -23,7 +23,7 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
     )
     .unwrap();
     let w = Arc::new(Writer::open(vault, state).unwrap());
-    w.ensure_built_in_types().unwrap();
+    w.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
     let fake = FakeAnthropic::start();
     AiSeed::new()
         .account(TestAccount::anthropic(&fake).model("claude-test"))
@@ -37,7 +37,8 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
             &author,
         )
         .unwrap();
-    let draft = w.create("outbox", &writer::Input::Json(json!({"fields":{"title":"Held", "kind":"email", "status":"draft", "to":["nobody@example.test"], "subject":"Held"}})), &author).unwrap();
+    w.state().set_meta("outbox-legacy:keeper", "true").unwrap();
+    let draft = w.create("outbox", &writer::Input::Json(json!({"fields":{"title":"Held", "kind":"email", "status":"draft", "drafted_by":"keeper", "to":["nobody@example.test"], "subject":"Held"}})), &author).unwrap();
     let web = testkit::StandIn::start();
     web.route("/send", testkit::Reply::text(200, "unexpected"));
     let agent = w.agent("keeper").unwrap();
@@ -86,17 +87,21 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
     assert!(matches!(report.ended, Some(Ok(()))), "{:?}", report.ended);
     let requests = fake.message_requests();
     assert_eq!(requests.len(), 2);
-    let results = requests[1].json()["messages"]
+    let request = requests[1].json();
+    let results = request["messages"]
         .as_array()
         .unwrap()
         .last()
         .unwrap()["content"]
         .to_string();
     assert!(results.contains("draft"), "{results}");
-    assert!(
-        results.matches(script::OUTSIDE_TEXT_REFUSAL).count() >= 4,
-        "{results}"
-    );
+    let content = request["messages"].as_array().unwrap().last().unwrap()["content"]
+        .as_array()
+        .unwrap();
+    for id in ["delete", "send", "http", "task"] {
+        let result = content.iter().find(|r| r["tool_use_id"] == id).unwrap();
+        assert!(result.to_string().contains(script::OUTSIDE_TEXT_REFUSAL), "{id}: {result}");
+    }
     assert_eq!(w.read(&victim.id).unwrap().version, victim.version);
     assert_eq!(w.read(&draft.id).unwrap().version, draft.version);
     assert!(web.requests().is_empty());
