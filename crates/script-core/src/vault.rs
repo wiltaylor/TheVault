@@ -11,6 +11,11 @@ use vocab::{Archived, Author};
 /// Notes travel in the JSON form of the notes API: `{ id, type, version, note }`, where `note`
 /// is `{ fields, blocks }` (D32).
 pub trait Vault: Send + Sync {
+    /// Refuse new external work under a stopped or stale host context.
+    fn check_automation(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Note `id` as it is now.
     fn get(&self, id: &str) -> Result<Json, String>;
 

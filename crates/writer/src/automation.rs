@@ -8,6 +8,7 @@ use crate::{Result, Writer};
 
 thread_local! {
     static GENERATIONS: RefCell<Vec<Generation>> = const { RefCell::new(Vec::new()) };
+    static SMS_COMPLETION: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 struct Scope;
@@ -20,6 +21,70 @@ impl Drop for Scope {
 }
 
 impl Writer {
+    pub(crate) fn with_sms_completion<T>(&self, item: &str, work: impl FnOnce() -> T) -> T {
+        struct Restore(Option<String>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                SMS_COMPLETION.with(|s| *s.borrow_mut() = self.0.take());
+            }
+        }
+        let _restore = Restore(SMS_COMPLETION.with(|s| s.replace(Some(item.to_owned()))));
+        work()
+    }
+
+    /// The exception is checked against every final file, after before-handlers
+    /// and expansion. It never changes the run's admission or reaches callbacks.
+    pub(crate) fn completion_commit(
+        &self,
+        files: &[store::Change],
+    ) -> Result<Option<MutexGuard<'_, ()>>> {
+        let recovery = script_core::current_job(|job| {
+            (job.source == include_str!("../defaults/outbox_send.ws")
+                && matches!(job.function.as_str(), "reconcile_send" | "reconcile_delete"))
+            .then(|| job.outbox_recovery.clone())
+            .flatten()
+        }).flatten();
+        let sms = SMS_COMPLETION.with(|s| s.borrow().clone());
+        let item = recovery.as_ref().map(|r| r.item.as_str()).or(sms.as_deref());
+        let Some(item) = item else {
+            return self.automation_commit();
+        };
+        let path = crate::note_path("outbox", item);
+        let old = crate::Input::Wcl(self.vault.read_text(&path)?) .parse(&path)?;
+        let old_text = |key: &str| old.field(key).and_then(schema::Value::as_str).unwrap_or("");
+        if !matches!(old_text("status"), "sending" | "failed") {
+            return Err(state::Error::AutomationRefused.into());
+        }
+        for file in files {
+            let allowed = match file {
+                store::Change::Write { path: changed, contents } if changed == &path => {
+                    let next = crate::Input::Wcl(String::from_utf8_lossy(contents).into_owned()).parse(&path)?;
+                    let status = next.field("status").and_then(schema::Value::as_str).unwrap_or("");
+                    let allowed = ["sent_ref", "sent_at", "result", "error", "interrupted_at", "status", "updated", "event"];
+                    old.blocks == next.blocks
+                        && matches!(status, "sending" | "failed")
+                        && old.fields.iter().chain(&next.fields).all(|(key, _)| {
+                            allowed.contains(&key.as_str()) || old.field(key) == next.field(key)
+                        })
+                        && (old.field("event") == next.field("event") || next.field("event").is_none())
+                }
+                store::Change::Delete { path: changed } if changed == &path => {
+                    old_text("status") == "sending" && !old_text("sent_at").is_empty()
+                }
+                store::Change::Delete { path: changed } => recovery.as_ref().and_then(|r| r.delete_target.as_ref()).is_some_and(|target| {
+                    changed == &crate::note_path("event", target)
+                        && old_text("sent_ref") == target
+                        && !old_text("sent_at").is_empty()
+                }),
+                _ => false,
+            };
+            if !allowed {
+                return Err(state::Error::AutomationRefused.into());
+            }
+        }
+        self.state.automation_completion().map(Some).map_err(Into::into)
+    }
+
     /// Serialize durable publication and live registry insertion with recovery.
     /// The closure is host storage work only, never script/provider callbacks.
     pub fn publish_run_context<T>(

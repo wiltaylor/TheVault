@@ -33,27 +33,29 @@ pub struct Response {
 
 type Reply = Fault<Result<Response, String>>;
 
-pub fn module(client: Client, guarded: Client, ai: crate::Ai) -> Module {
+pub fn module(client: Client, guarded: Client, ai: crate::Ai, vault: std::sync::Arc<dyn crate::Vault>) -> Module {
     let mut m = Module::new("http");
     m.doc("HTTP to the hosts on this script's allowlist");
     let c = client.clone();
     let g = guarded.clone();
     let a = ai.clone();
+    let v = vault.clone();
     m.fn_named(
         "get",
         ["url", "headers"],
         move |url: String, headers: HashMap<String, String>| -> Reply {
-            Fault(call((&c, &g), &a, "GET", &url, headers, String::new()))
+            Fault(checked_call((&c, &g), &a, &*v, "GET", &url, headers, String::new()))
         },
     );
     let c = client.clone();
     let g = guarded.clone();
     let a = ai.clone();
+    let v = vault.clone();
     m.fn_named(
         "post",
         ["url", "headers", "body"],
         move |url: String, headers: HashMap<String, String>, body: String| -> Reply {
-            Fault(call((&c, &g), &a, "POST", &url, headers, body))
+            Fault(checked_call((&c, &g), &a, &*v, "POST", &url, headers, body))
         },
     );
     m.fn_named("base64", ["text"], |text: String| -> String {
@@ -75,10 +77,28 @@ pub fn module(client: Client, guarded: Client, ai: crate::Ai) -> Module {
               headers: HashMap<String, String>,
               body: String|
               -> Reply {
-            Fault(call((&client, &guarded), &ai, &method, &url, headers, body))
+            Fault(checked_call((&client, &guarded), &ai, &*vault, &method, &url, headers, body))
         },
     );
     m
+}
+
+fn checked_call(
+    clients: (&Client, &Client), ai: &crate::Ai, vault: &dyn crate::Vault,
+    method: &str, url: &str, headers: HashMap<String, String>, body: String,
+) -> Result<Result<Response, String>, HostError> {
+    let recovery = crate::current_job(|job| job.outbox_recovery.clone()).flatten();
+    if let Some(permit) = recovery {
+        let allowed = (method == "GET" && permit.status_url.as_deref() == Some(url) && body.is_empty())
+            || (method == "POST" && permit.token_url.as_deref() == Some(url)
+                && body.split('&').any(|part| part == "grant_type=refresh_token"));
+        if !allowed {
+            return Ok(Err("Outbox recovery refuses a new provider request".into()));
+        }
+    } else if let Err(error) = vault.check_automation() {
+        return Ok(Err(error));
+    }
+    call(clients, ai, method, url, headers, body)
 }
 
 /// `text` cut into lines of `width` characters joined by CRLF, the last one shorter. A `width`

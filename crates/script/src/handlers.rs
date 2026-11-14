@@ -621,7 +621,7 @@ impl Shared {
             {
                 continue;
             }
-            let context = match writer.outbox_run_context(&note.id) {
+            let context = match writer.outbox_recovery_context(&note.id) {
                 Ok(context) => context,
                 Err(error) => {
                     eprintln!("recovering Outbox send provenance: {error}");
@@ -676,7 +676,7 @@ impl Shared {
                     "secrets": handler.secrets,
                 })
                 .to_string();
-                let (result, _) = self.run_job(writer, &payload);
+                let (result, _) = self.run_recovery_job(writer, &payload);
                 if let Err(e) = result {
                     eprintln!("recovering interrupted Outbox send: {e}");
                 }
@@ -706,7 +706,7 @@ impl Shared {
             {
                 continue;
             }
-            let context = match writer.outbox_run_context(&note.id) {
+            let context = match writer.outbox_recovery_context(&note.id) {
                 Ok(context) => context,
                 Err(error) => {
                     eprintln!("recovering Outbox delete provenance: {error}");
@@ -721,7 +721,7 @@ impl Shared {
                     "secrets": handler.secrets,
                 })
                 .to_string();
-                let (result, _) = self.run_job(writer, &payload);
+                let (result, _) = self.run_recovery_job(writer, &payload);
                 if let Err(error) = result {
                     // A host deadline bypasses script Result handling.
                     if let Ok(current) = writer.read(&note.id) {
@@ -747,6 +747,14 @@ impl Shared {
 
     /// Run one queued `after_*` job.
     fn run_job(&self, writer: &Writer, payload: &str) -> (Result<(), String>, String) {
+        self.run_job_mode(writer, payload, false)
+    }
+
+    fn run_recovery_job(&self, writer: &Writer, payload: &str) -> (Result<(), String>, String) {
+        self.run_job_mode(writer, payload, true)
+    }
+
+    fn run_job_mode(&self, writer: &Writer, payload: &str, recovery: bool) -> (Result<(), String>, String) {
         let job = (|| {
             let p: Json = serde_json::from_str(payload).map_err(|e| e.to_string())?;
             // A crash can happen after creating the event but before linking `result` on
@@ -815,6 +823,45 @@ impl Shared {
                 false
             };
             let mut job = Job::new(Kind::After, &script, &source, &text("function"));
+            if recovery {
+                if source != include_str!("../../writer/defaults/outbox_send.ws") {
+                    return Err("recovery requires the shipped Outbox handler".into());
+                }
+                let fields = doc_to_json(&doc)["fields"].clone();
+                let target = ["sent_ref", "event", "result"].iter()
+                    .filter_map(|key| fields[*key].as_str())
+                    .find(|id| !id.is_empty()).map(str::to_owned);
+                let mut permit = script_core::OutboxRecovery {
+                    item: id.clone(), delete_target: None, status_url: None, token_url: None,
+                };
+                if text("function") == "reconcile_delete" {
+                    permit.delete_target = target.clone();
+                    if let Some(target) = target
+                        && let Ok(event) = writer.read(&target)
+                    {
+                        let event = doc_to_json(&event.doc);
+                        let ef = &event["fields"];
+                        let reference = ef["google_ref"].as_str().unwrap_or_default();
+                        if !reference.is_empty() {
+                            let settings: Json = Vault::secret(writer, "google_settings")?
+                                .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+                            let endpoint = |key: &str, fallback: &str| settings["endpoints"][key].as_str()
+                                .filter(|s| !s.is_empty()).unwrap_or(fallback).trim_end_matches('/').to_owned();
+                            let calendar = ef["calendar"].as_str().filter(|s| !s.is_empty())
+                                .or_else(|| settings["default_calendar"].as_str().filter(|s| !s.is_empty())).unwrap_or("primary");
+                            let encode = |s: &str| -> String {
+                                s.bytes().map(|b| {
+                                    if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { char::from(b).to_string() }
+                                    else { format!("%{b:02X}") }
+                                }).collect()
+                            };
+                            permit.status_url = Some(format!("{}/calendars/{}/events/{}", endpoint("calendar", "https://www.googleapis.com/calendar/v3"), encode(calendar), encode(reference)));
+                            permit.token_url = Some(endpoint("token", "https://oauth2.googleapis.com/token"));
+                        }
+                    }
+                }
+                job.outbox_recovery = Some(permit);
+            }
             // Bind privilege to the executing source, never to a user-claimable name.
             if type_name == "outbox"
                 && event == "after_update"
@@ -1050,6 +1097,10 @@ const MIGRATION_WRITE: &str =
     "a migration changes the note it is given by returning it; it cannot change other notes";
 
 impl Vault for HandlerVault {
+    fn check_automation(&self) -> Result<(), String> {
+        Vault::check_automation(&*bound(&self.binding)?)
+    }
+
     fn get(&self, id: &str) -> Result<Json, String> {
         Vault::get(&*bound(&self.binding)?, id)
     }

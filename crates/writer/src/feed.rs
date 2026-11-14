@@ -134,7 +134,7 @@ impl Writer {
         &self,
         files: Vec<Change>,
     ) -> Result<(u64, Option<MutexGuard<'_, ()>>)> {
-        let automation = self.automation_commit()?;
+        let automation = self.completion_commit(&files)?;
         let synced = synced_changes(&files);
         let existed = self.existed(&synced);
         let generation = self.vault.commit(files)?;
@@ -196,7 +196,7 @@ impl Writer {
         files: Vec<Change>,
         hook: &mut dyn FnMut(CommitStep) -> ControlFlow<()>,
     ) -> Result<(u64, Option<MutexGuard<'_, ()>>)> {
-        let automation = self.automation_commit()?;
+        let automation = self.completion_commit(&files)?;
         let synced = synced_changes(&files);
         let existed = self.existed(&synced);
         let generation = self.vault.commit_with_hook(files, hook)?;

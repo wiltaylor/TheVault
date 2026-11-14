@@ -272,12 +272,18 @@ impl Writer {
     /// Each recovered send/delete/receipt uses this item's context, not the job
     /// that happened to discover it. Retain live owners to avoid false recovery.
     pub fn outbox_run_context(&self, id: &str) -> state::Result<script_core::RunContext> {
+        let context = self.outbox_recovery_context(id)?;
+        self.check_outbox_context(id, &context)?;
+        Ok(context)
+    }
+
+    /// Recover provenance for recording an existing attempt, not admitting work.
+    pub fn outbox_recovery_context(&self, id: &str) -> state::Result<script_core::RunContext> {
         let mut contexts = self
             .outbox_contexts
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(context) = contexts.get(id) {
-            self.check_outbox_context(id, context)?;
             return Ok(context.clone());
         }
         let ids = self.state.outbox_provenance(id)?;
@@ -293,7 +299,6 @@ impl Writer {
             context.merge(&self.recover_run_context_for(&run_id, &format!("Outbox note {id}"))?);
         }
         contexts.insert(id.to_owned(), context.clone());
-        self.check_outbox_context(id, &context)?;
         Ok(context)
     }
 

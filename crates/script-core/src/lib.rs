@@ -173,6 +173,16 @@ impl Default for Limits {
 
 /// One script run.
 #[derive(Debug, Clone, PartialEq)]
+pub struct OutboxRecovery {
+    pub item: String,
+    pub delete_target: Option<String>,
+    /// Exact status URL and OAuth refresh URL. No redirects or other requests.
+    pub status_url: Option<String>,
+    pub token_url: Option<String>,
+}
+
+/// One script run.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Job {
     /// The script's name, the stem of `scripts/<name>.ws`. Changes the run makes are recorded as
     /// made by handler `<name>`.
@@ -205,6 +215,8 @@ pub struct Job {
     pub context: Json,
     /// Host-owned provenance shared with the caller and every descendant.
     run_context: RunContext,
+    /// Host-only, transient completion authority. Never inherited by child jobs.
+    pub outbox_recovery: Option<OutboxRecovery>,
 }
 
 impl Job {
@@ -238,6 +250,7 @@ impl Job {
             timeout: None,
             context: Json::Null,
             run_context: RunContext::current().unwrap_or_default(),
+            outbox_recovery: None,
         }
     }
 }

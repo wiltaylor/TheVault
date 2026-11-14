@@ -123,6 +123,7 @@ impl Extensions for Server {
                     self.http.clone(),
                     self.guarded_http.clone(),
                     self.ai.clone(),
+                    vault.clone(),
                 ),
                 ai_module::module(self.ai.clone()),
                 secrets_module(vault.clone()),

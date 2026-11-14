@@ -127,8 +127,10 @@ impl Writer {
         if self.read(item).is_err() {
             return Ok(());
         }
-        let context = self.outbox_run_context(item).map_err(|e| e.to_string())?;
-        context.scope_recovered(|| self.finish_outbox_sms_scoped(command, item, &payload))
+        let context = self.outbox_recovery_context(item).map_err(|e| e.to_string())?;
+        context.scope_recovered(|| {
+            self.with_sms_completion(item, || self.finish_outbox_sms_scoped(command, item, &payload))
+        })
     }
 
     fn finish_outbox_sms_scoped(
