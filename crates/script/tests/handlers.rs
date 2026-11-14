@@ -127,6 +127,30 @@ fn json_note(fields: serde_json::Value) -> Input {
 }
 
 #[test]
+fn before_create_has_no_ai_module_and_ai_call_cannot_compile() {
+    let dir = tempfile::tempdir().unwrap();
+    seed(dir.path());
+    std::fs::write(
+        dir.path().join("types/entry.wcl"),
+        format!("{ENTRY}{TEMPLATE}\nhandler before_create {{ script = \"before_ai\" }}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("scripts/before_ai.ws"),
+        "use ai\nfn before_create(note: Value) -> Result[Value, string] {\n    ai::complete(\"Never call a model before a write\", #{})\n    Ok(Value::Null)\n}\n",
+    )
+    .unwrap();
+    let (writer, _handlers) = open(dir.path(), false);
+    // Before handlers deliberately have no ai module, even on the home server.
+    let error = writer
+        .create("entry", &json_note(json!({"title":"Must not commit"})), &user())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ai"), "{error}");
+    assert!(error.contains("module"), "{error}");
+}
+
+#[test]
 fn current_handler_for_held_outbox_finishes_without_polling_forever() {
     let dir = tempfile::tempdir().unwrap();
     let (writer, handlers) = open(dir.path(), false);
