@@ -1485,7 +1485,7 @@ mod tests {
         let provider = testkit::StandIn::start();
         provider.route(
             "/token",
-            testkit::Reply::json(200, json!({"access_token":"fake"})),
+            testkit::Reply::json(200, &json!({"access_token":"fake"})),
         );
         provider.route(
             "/calendar/calendars/primary/events/recorded",
