@@ -144,6 +144,20 @@ build "$image_plain"
 check "image is linux/amd64" test "$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "$image_plain")" = linux/amd64
 echo "SIZE without clients: $(size_mb "$image_plain")"
 
+# The actual release binary refuses test-only startup flags before opening a vault.
+for flag in --test-secret-seams --test-clock; do
+  args=("$flag")
+  if [ "$flag" = --test-clock ]; then args+=("2026-01-01T00:00:00Z"); fi
+  set +e
+  out=$(timeout 30 docker run --rm --label "$run" --entrypoint vault-server \
+    "$image_plain" "${args[@]}" 2>&1)
+  code=$?
+  set -e
+  check "release vault-server $flag exits non-zero (exit $code)" test "$code" -ne 0
+  check "release vault-server $flag reports the test-build gate" \
+    grep -qF -- "$flag is accepted only by test builds" <<< "$out"
+done
+
 # 2. Empty /data and no password: one line, non-zero exit.
 dirs nopw
 set +e
