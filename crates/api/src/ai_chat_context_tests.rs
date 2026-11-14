@@ -8,6 +8,109 @@ use testkit::{AiSeed, AnthropicMessage, AnthropicReply, FakeAnthropic, TestAccou
 
 struct Probe(Arc<Mutex<Vec<(Author, RunContext)>>>);
 
+#[test]
+fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(dir.path()).unwrap();
+    std::fs::write(
+        dir.path().join("types/item.wcl"),
+        "label = \"Item\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n",
+    )
+    .unwrap();
+    let state = state::State::open(
+        &vault.server_dir().join("state.db"),
+        Some(state::SecretKey::generate()),
+    )
+    .unwrap();
+    let w = Arc::new(Writer::open(vault, state).unwrap());
+    w.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    let fake = FakeAnthropic::start();
+    AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model("claude-test"))
+        .store(w.state());
+    w.put_agent("keeper", "label = \"Keeper\"\npermissions {\n scripts { run_code = true }\n confirm { delete = false }\n outbox { send_without_review = true }\n}\n", |_| Vec::new()).unwrap();
+    let author = Author::Session("owner".into());
+    let victim = w
+        .create(
+            "item",
+            &writer::Input::Json(json!({"fields":{"title":"Keep"}})),
+            &author,
+        )
+        .unwrap();
+    w.state().set_meta("outbox-legacy:keeper", "true").unwrap();
+    let draft = w.create("outbox", &writer::Input::Json(json!({"fields":{"title":"Held", "kind":"email", "status":"draft", "drafted_by":"keeper", "to":["nobody@example.test"], "subject":"Held"}})), &author).unwrap();
+    let web = testkit::StandIn::start();
+    web.route("/send", testkit::Reply::text(200, "unexpected"));
+    let agent = w.agent("keeper").unwrap();
+    let host = Arc::new(script::Host::new(
+        w.clone(),
+        1,
+        script::Limits::default(),
+        script::Ai::of(&w),
+    ));
+    let scheduler =
+        scheduler::Scheduler::new(w.clone(), host, Arc::new(state::SystemClock)).unwrap();
+    crate::script_tools::register(&w, &scheduler);
+    let thread = crate::agent_threads::create_with(
+        &w,
+        "keeper",
+        Some("Marked"),
+        scheduler::DISPATCH_ORIGIN,
+        &[],
+    )
+    .unwrap();
+    w.state()
+        .set_meta(&format!("outside_text.thread.{}", thread.id), "1")
+        .unwrap();
+    fake.push(AnthropicMessage::new()
+        .tool_use("draft", "draft_email", json!({"to":["nobody@example.test"],"cc":[],"bcc":[],"attachments":[],"in_reply_to":"","subject":"Review me","body":"Draft only"}))
+        .tool_use("proposal", "propose_delete", json!({"id":victim.id}))
+        .tool_use("delete", "run_script", json!({"code":format!("use vault\nfn main() -> Result[Value, string] {{ vault::delete(\"{}\", \"{}\") }}\n", victim.id, victim.version), "function":null, "args":null}))
+        .tool_use("send", "run_script", json!({"code":"use vault\nfn main() -> Result[Value, string] { vault::create(\"outbox\", Value::Map(#{\"fields\": Value::Map(#{\"title\": Value::String(\"Send now\"), \"kind\": Value::String(\"email\"), \"status\": Value::String(\"ready\"), \"to\": Value::List([Value::String(\"nobody@example.test\")]), \"subject\": Value::String(\"Send now\")})})) }\n", "function":null, "args":null}))
+        .tool_use("http", "run_script", json!({"code":format!("use http\nfn main() -> Result[int, string] {{ Ok(http::get(\"{}\", #{{}})?.status) }}\n", web.url("/send")), "function":null, "args":null}))
+        .tool_use("task", "run_task", json!({"name":"google_gmail"})));
+    fake.push(AnthropicMessage::text("Review required."));
+    // No incoming note or inherited restriction: only the persisted thread marker grants it.
+    let context = RunContext::default();
+    assert!(!context.is_restricted());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let report = runtime.block_on(run_unattended(
+        w.clone(),
+        &agent,
+        &thread.id,
+        "Continue",
+        crate::ai_retry::Waits::instant(),
+        None,
+        None,
+        context,
+    ));
+    assert!(matches!(report.ended, Some(Ok(()))), "{:?}", report.ended);
+    let requests = fake.message_requests();
+    assert_eq!(requests.len(), 2);
+    let request = requests[1].json();
+    let results = request["messages"].as_array().unwrap().last().unwrap()["content"].to_string();
+    assert!(results.contains("draft"), "{results}");
+    let content = request["messages"].as_array().unwrap().last().unwrap()["content"]
+        .as_array()
+        .unwrap();
+    for id in ["delete", "http", "task"] {
+        let result = content.iter().find(|r| r["tool_use_id"] == id).unwrap();
+        assert!(
+            result.to_string().contains(script::OUTSIDE_TEXT_REFUSAL),
+            "{id}: {result}"
+        );
+    }
+    // A Ready creation is preserved as a draft, not sent, rather than discarded.
+    let send = content.iter().find(|r| r["tool_use_id"] == "send").unwrap();
+    let send: Value = serde_json::from_str(send["content"].as_str().unwrap()).unwrap();
+    assert_eq!(send["result"]["note"]["fields"]["status"], "draft");
+    assert_eq!(w.read(&victim.id).unwrap().version, victim.version);
+    assert_eq!(w.read(&draft.id).unwrap().version, draft.version);
+    assert!(web.requests().is_empty());
+    let saved = crate::agent_threads::Thread::read(&w, &thread.id).unwrap();
+    assert_eq!(saved.transcript.pending(), 1);
+}
+
 impl writer::Hooks for Probe {
     fn after(&self, saved: &[writer::Saved], author: &Author, _: &schema::Schema) {
         for change in saved {
