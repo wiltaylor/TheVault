@@ -41,8 +41,23 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
     let web = testkit::StandIn::start();
     web.route("/send", testkit::Reply::text(200, "unexpected"));
     let agent = w.agent("keeper").unwrap();
-    let thread =
-        crate::agent_threads::create_with(&w, "keeper", Some("Marked"), "owner", &[]).unwrap();
+    let host = Arc::new(script::Host::new(
+        w.clone(),
+        1,
+        script::Limits::default(),
+        script::Ai::of(&w),
+    ));
+    let scheduler =
+        scheduler::Scheduler::new(w.clone(), host, Arc::new(state::SystemClock)).unwrap();
+    crate::script_tools::register(&w, &scheduler);
+    let thread = crate::agent_threads::create_with(
+        &w,
+        "keeper",
+        Some("Marked"),
+        scheduler::DISPATCH_ORIGIN,
+        &[],
+    )
+    .unwrap();
     w.state()
         .set_meta(&format!("outside_text.thread.{}", thread.id), "1")
         .unwrap();
