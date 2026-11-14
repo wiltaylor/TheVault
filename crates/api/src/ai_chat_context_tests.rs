@@ -66,7 +66,7 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
         .tool_use("draft", "draft_email", json!({"to":["nobody@example.test"],"cc":[],"bcc":[],"attachments":[],"in_reply_to":"","subject":"Review me","body":"Draft only"}))
         .tool_use("proposal", "propose_delete", json!({"id":victim.id}))
         .tool_use("delete", "run_script", json!({"code":format!("use vault\nfn main() -> Result[Value, string] {{ vault::delete(\"{}\", \"{}\") }}\n", victim.id, victim.version), "function":null, "args":null}))
-        .tool_use("send", "run_script", json!({"code":format!("use vault\nfn main() -> Result[Value, string] {{ vault::update(\"{}\", Value::Map(#{{\"fields\": Value::Map(#{{\"status\": Value::String(\"sending\")}})}}), \"{}\") }}\n", draft.id, draft.version), "function":null, "args":null}))
+        .tool_use("send", "run_script", json!({"code":"use vault\nfn main() -> Result[Value, string] { vault::create(\"outbox\", Value::Map(#{\"fields\": Value::Map(#{\"title\": Value::String(\"Send now\"), \"kind\": Value::String(\"email\"), \"status\": Value::String(\"ready\"), \"to\": Value::List([Value::String(\"nobody@example.test\")]), \"subject\": Value::String(\"Send now\")})})) }\n", "function":null, "args":null}))
         .tool_use("http", "run_script", json!({"code":format!("use http\nfn main() -> Result[int, string] {{ Ok(http::get(\"{}\", #{{}})?.status) }}\n", web.url("/send")), "function":null, "args":null}))
         .tool_use("task", "run_task", json!({"name":"google_gmail"})));
     fake.push(AnthropicMessage::text("Review required."));
@@ -88,19 +88,17 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
     let requests = fake.message_requests();
     assert_eq!(requests.len(), 2);
     let request = requests[1].json();
-    let results = request["messages"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()["content"]
-        .to_string();
+    let results = request["messages"].as_array().unwrap().last().unwrap()["content"].to_string();
     assert!(results.contains("draft"), "{results}");
     let content = request["messages"].as_array().unwrap().last().unwrap()["content"]
         .as_array()
         .unwrap();
     for id in ["delete", "send", "http", "task"] {
         let result = content.iter().find(|r| r["tool_use_id"] == id).unwrap();
-        assert!(result.to_string().contains(script::OUTSIDE_TEXT_REFUSAL), "{id}: {result}");
+        assert!(
+            result.to_string().contains(script::OUTSIDE_TEXT_REFUSAL),
+            "{id}: {result}"
+        );
     }
     assert_eq!(w.read(&victim.id).unwrap().version, victim.version);
     assert_eq!(w.read(&draft.id).unwrap().version, draft.version);
