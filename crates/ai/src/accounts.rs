@@ -200,7 +200,8 @@ impl Accounts {
     /// The stored table, or an empty one when there is none.
     pub fn load(state: &state::State) -> Result<Accounts, AiError> {
         Ok(match state.get_secret(ACCOUNTS).map_err(state_error)? {
-            Some(text) => serde_json::from_str(&text).unwrap_or_default(),
+            Some(text) => serde_json::from_str(&text)
+                .map_err(|_| AiError::invalid("The stored AI accounts record is corrupt"))?,
             None => Accounts::default(),
         })
     }
@@ -208,6 +209,37 @@ impl Accounts {
     pub fn save(&self, state: &state::State) -> Result<(), AiError> {
         let text = serde_json::to_string(self).map_err(|e| AiError::invalid(e.to_string()))?;
         state.set_secret(ACCOUNTS, &text).map_err(state_error)
+    }
+
+    /// Only damaged ciphertext or invalid account JSON permits owner recovery.
+    pub fn unreadable(state: &state::State) -> Result<bool, AiError> {
+        match state.get_secret(ACCOUNTS) {
+            Ok(Some(text)) => Ok(serde_json::from_str::<Accounts>(&text).is_err()),
+            Ok(None) => Ok(false),
+            Err(state::Error::WrongKey { .. } | state::Error::Corrupt(_)) => {
+                for secret in state.list_secrets().map_err(state_error)? {
+                    if secret.name != ACCOUNTS
+                        && matches!(state.get_secret(&secret.name), Ok(Some(_)))
+                    {
+                        return Ok(true);
+                    }
+                }
+                Err(AiError::invalid(
+                    "the key file does not match this vault; restore the right VAULT_SECRET_KEY_FILE",
+                ))
+            }
+            Err(e) => Err(state_error(e)),
+        }
+    }
+
+    /// Recheck under the same lock as account changes. Never erase a readable table.
+    pub fn reset_unreadable(state: &state::State) -> Result<bool, AiError> {
+        let _one = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        if !Self::unreadable(state)? {
+            return Ok(false);
+        }
+        Self::default().save(state)?;
+        Ok(true)
     }
 
     /// Change the stored table with `f`, as one read, modify and write under a process-wide
@@ -605,6 +637,39 @@ fn window_label(minutes: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_only_replaces_unreadable_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let s = state::State::open(&path, Some(state::SecretKey::generate())).unwrap();
+        assert!(!Accounts::reset_unreadable(&s).unwrap());
+        s.set_secret(ACCOUNTS, "broken JSON").unwrap();
+        assert!(Accounts::load(&s).is_err());
+        assert!(Accounts::reset_unreadable(&s).unwrap());
+        assert!(Accounts::load(&s).unwrap().accounts.is_empty());
+        assert!(!Accounts::reset_unreadable(&s).unwrap());
+        let other = state::State::open(&path, Some(state::SecretKey::generate())).unwrap();
+        other.set_secret(ACCOUNTS, "{}").unwrap();
+        other
+            .set_secret("vault_secret", "also encrypted with the vault key")
+            .unwrap();
+        assert!(Accounts::unreadable(&s).is_err());
+        let error = Accounts::reset_unreadable(&s).unwrap_err();
+        assert_eq!(
+            error.message,
+            "the key file does not match this vault; restore the right VAULT_SECRET_KEY_FILE"
+        );
+        assert_eq!(other.get_secret(ACCOUNTS).unwrap().as_deref(), Some("{}"));
+        assert_eq!(
+            other.get_secret("vault_secret").unwrap().as_deref(),
+            Some("also encrypted with the vault key")
+        );
+        s.set_secret("another_secret", "readable").unwrap();
+        assert!(Accounts::unreadable(&s).unwrap());
+        assert!(Accounts::reset_unreadable(&s).unwrap());
+        assert!(Accounts::load(&s).unwrap().accounts.is_empty());
+    }
 
     fn input(name: &str, kind: Kind) -> AccountInput {
         AccountInput {

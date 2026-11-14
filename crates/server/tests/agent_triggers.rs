@@ -1010,6 +1010,11 @@ fn safety_rest_mutation_route_inventory() {
         ),
         (
             "post",
+            "/api/integrations/ai/accounts/reset",
+            "session-only confirmed recovery of unreadable accounts; no note content",
+        ),
+        (
+            "post",
             "/api/integrations/ai/accounts/{id}/chatgpt/disconnect",
             "credentials or configuration or input-only response, scope checked",
         ),

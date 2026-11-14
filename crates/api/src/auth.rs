@@ -331,6 +331,7 @@ pub fn is_human_only(method: &Method, path: &str) -> bool {
         || path == "/api/inbox/triage"
         || path == "/api/agent-safety/backfill"
         || path == "/api/classifiers"
+        || path == "/api/integrations/ai/accounts/reset"
         || path.starts_with("/api/classifiers/")
         || path.starts_with("/api/agent-safety/backfill/")
         || path.starts_with("/api/agent-safety/release/")

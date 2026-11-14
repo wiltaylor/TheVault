@@ -9,6 +9,7 @@ import {
   type AiTestResult,
   type AiUsage,
   api,
+  ApiError,
 } from "../api";
 import { Spinner } from "../components/SyncStatus";
 import { errorText } from "./TypeEditor";
@@ -842,10 +843,28 @@ export function ContextCard(props: { status: AiStatus; onStatus: (s: AiStatus) =
 export function Ai() {
   const [status, setStatus] = createSignal<AiStatus | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+  const [unreadable, setUnreadable] = createSignal(false);
+  const [confirmed, setConfirmed] = createSignal(false);
+  const [resetting, setResetting] = createSignal(false);
+  async function resetAccounts() {
+    if (!confirmed() || resetting()) return;
+    setResetting(true);
+    try {
+      await api.aiResetAccounts();
+      setStatus(await api.aiStatus());
+      setUnreadable(false);
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setResetting(false);
+    }
+  }
   void (async () => {
     try {
       setStatus(await api.aiStatus());
     } catch (e) {
+      setUnreadable(e instanceof ApiError && e.body.error === "unreadable_ai_accounts");
       setError(errorText(e));
     }
   })();
@@ -879,6 +898,11 @@ export function Ai() {
         <p class="error" role="alert">
           {error()}
         </p>
+      </Show>
+      <Show when={unreadable()}>
+        <p>Reset removes all AI accounts from the damaged record. Classifiers referring to them fail closed. Agents get no_account until an account exists, then run on the new default. Nothing is reset automatically.</p>
+        <label><input type="checkbox" checked={confirmed()} onChange={(e) => setConfirmed(e.currentTarget.checked)} /> I confirm that I want to remove the damaged AI accounts record.</label>
+        <button disabled={!confirmed() || resetting()} onClick={() => void resetAccounts()}>Reset AI accounts</button>
       </Show>
     </section>
   );
