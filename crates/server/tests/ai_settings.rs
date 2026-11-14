@@ -16,6 +16,25 @@ use testkit::{
 const REDIRECT: &str = "http://127.0.0.1:53683/auth/callback";
 
 #[test]
+fn migrated_accounts_load_with_the_strict_parser() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = store::Vault::init(dir.path()).unwrap();
+    let state = state::State::open(
+        &vault.server_dir().join("state.db"),
+        Some(state::SecretKey::generate()),
+    ).unwrap();
+    let w = writer::Writer::open(vault, state).unwrap();
+    w.state().set_secret("ai_anthropic_api_key", "migration-key").unwrap();
+    w.state().set_secret("ai_settings", r#"{"default_provider":"anthropic"}"#).unwrap();
+    let step = writer::UPGRADE_STEPS.iter().find(|s| s.id == "0010_ai_accounts").unwrap();
+    w.run_upgrade_steps(&[writer::UpgradeStep { id: "test_strict_accounts", run: step.run }]).unwrap();
+    let accounts = ai::Accounts::load(w.state()).unwrap();
+    assert_eq!(accounts.accounts.len(), 1);
+    assert_eq!(accounts.accounts[0].name, "Anthropic");
+    assert_eq!(accounts.default.as_deref(), Some(accounts.accounts[0].id.as_str()));
+}
+
+#[test]
 fn unreadable_accounts_reset_is_confirmed_session_only_and_audited() {
     let api = Api::start();
     let client = Client::new();

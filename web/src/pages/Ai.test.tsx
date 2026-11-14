@@ -111,6 +111,16 @@ const ANTHROPIC_MODELS = {
 
 const AUTH_URL = "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&state=s1";
 
+it("shows the vault key mismatch without offering reset", async () => {
+  const { ApiError } = await import("../api");
+  const message = "the key file does not match this vault; restore the right VAULT_SECRET_KEY_FILE";
+  aiStatus.mockRejectedValueOnce(new ApiError(400, { error: "invalid", message }));
+  render(() => <Ai />);
+  expect((await screen.findByRole("alert")).textContent).toContain(message);
+  expect(screen.queryByRole("button", { name: "Reset AI accounts" })).toBeNull();
+  expect(aiResetAccounts).not.toHaveBeenCalled();
+});
+
 it("requires explicit confirmation before resetting unreadable accounts and reopens settings", async () => {
   const { ApiError } = await import("../api");
   aiStatus.mockRejectedValueOnce(new ApiError(409, { error: "unreadable_ai_accounts", message: "The stored AI accounts cannot be read." }));

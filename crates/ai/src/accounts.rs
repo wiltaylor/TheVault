@@ -647,9 +647,12 @@ mod tests {
         assert!(!Accounts::reset_unreadable(&s).unwrap());
         let other = state::State::open(&path, Some(state::SecretKey::generate())).unwrap();
         other.set_secret(ACCOUNTS, "{}").unwrap();
+        other.set_secret("vault_secret", "also encrypted with the vault key").unwrap();
         assert!(Accounts::unreadable(&s).is_err());
-        assert!(Accounts::reset_unreadable(&s).is_err());
+        let error = Accounts::reset_unreadable(&s).unwrap_err();
+        assert_eq!(error.message, "the key file does not match this vault; restore the right VAULT_SECRET_KEY_FILE");
         assert_eq!(other.get_secret(ACCOUNTS).unwrap().as_deref(), Some("{}"));
+        assert_eq!(other.get_secret("vault_secret").unwrap().as_deref(), Some("also encrypted with the vault key"));
         s.set_secret("another_secret", "readable").unwrap();
         assert!(Accounts::unreadable(&s).unwrap());
         assert!(Accounts::reset_unreadable(&s).unwrap());
