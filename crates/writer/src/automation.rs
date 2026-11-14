@@ -18,7 +18,9 @@ mod completion_tests {
         let vault = store::Vault::init(dir.path()).unwrap();
         let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
         let writer = Writer::open(vault, state).unwrap();
-        writer.upgrade_shipped_defaults(crate::Upkeep::Home).unwrap();
+        writer
+            .upgrade_shipped_defaults(crate::Upkeep::Home)
+            .unwrap();
         let item = writer.create("outbox", &crate::Input::Json(json!({"fields": {
             "title": "Existing attempt", "kind": "sms", "status": "sending", "phone": "+61400000000"
         }})), &state::Author::Session("owner".into())).unwrap();
@@ -29,11 +31,31 @@ mod completion_tests {
         let author = state::Author::Handler("outbox_send".into());
         recovered.scope_recovered(|| {
             writer.with_sms_completion(&item.id, || {
-                assert!(writer.patch(&item.id, json!({"title":"New action"}), "", &author).is_err());
+                assert!(
+                    writer
+                        .patch(&item.id, json!({"title":"New action"}), "", &author)
+                        .is_err()
+                );
                 assert!(writer.delete(&item.id, None, &author).is_err());
-                writer.patch(&item.id, json!({"status":"failed", "error":"Interrupted"}), "", &author).unwrap();
+                writer
+                    .patch(
+                        &item.id,
+                        json!({"status":"failed", "error":"Interrupted"}),
+                        "",
+                        &author,
+                    )
+                    .unwrap();
             });
-            assert!(writer.patch(&item.id, json!({"error":"ordinary stale write"}), "", &author).is_err());
+            assert!(
+                writer
+                    .patch(
+                        &item.id,
+                        json!({"error":"ordinary stale write"}),
+                        "",
+                        &author
+                    )
+                    .is_err()
+            );
         });
         assert!(writer.state().automation_commit(generation).is_err());
         assert_eq!(recovered.stop_generation(), Some(generation));
