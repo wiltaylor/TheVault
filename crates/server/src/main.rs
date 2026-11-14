@@ -239,7 +239,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The clock `--test-clock` asks for. A release build refuses it.
 fn check_test_secret_seams(enabled: bool, test_build: bool) -> anyhow::Result<()> {
     if enabled && !test_build {
         bail!("--test-secret-seams is accepted only by test builds");
@@ -254,6 +253,7 @@ fn release_style_start_refuses_test_secret_seams() {
     assert!(check_test_secret_seams(true, true).is_ok());
 }
 
+/// The clock `--test-clock` asks for. A release build refuses it.
 fn test_clock(at: &str) -> anyhow::Result<Arc<TestClock>> {
     if !cfg!(debug_assertions) {
         bail!("--test-clock is accepted only by test builds");

@@ -40,8 +40,7 @@ freezing later legitimate publications. After investigating and removing the unt
 key holder, an administrator can delete the affected receiver checkpoint via
 `DELETE /api/secrets/gitsync_freshness_receive_<id>` (admin scope), then reconnect to a
 trusted publication. PUT to this reserved name is refused, so it cannot forge a checkpoint.
-This recovery DELETE remains available without any test flag. Reconnect only to a
-trusted publication. This deliberately resets trust on first use and loses rollback
+This deliberately resets trust on first use and loses rollback
 protection for that peer until a new checkpoint is recorded. If the forged maximum is on
 the publisher's remote branch too, restore a trusted publication there before resuming.
 These recovery steps are not automatic and are not needed for a normal upgrade.
