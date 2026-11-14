@@ -152,6 +152,29 @@ fn failing(call: &str) -> String {
 }
 
 #[test]
+fn model_calls_restrict_reads_before_and_after_the_call() {
+    let f = fixture();
+    f.writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+    let owner = state::Author::Session("owner".into());
+    let mail = f.writer.create("email", &writer::Input::Json(json!({"fields":{"title":"Incoming", "sent":"2000-01-01T00:00:00Z"}})), &owner).unwrap();
+    let hash = f.writer.agent_safety(&mail.id).unwrap().fingerprint;
+    f.writer.release_agent_safety(&mail.id, &hash, &owner).unwrap();
+    let web = testkit::StandIn::start();
+    web.route("/outside", testkit::Reply::text(200, "unexpected"));
+    for early in [true, false] {
+        f.anthropic.push(AnthropicMessage::text("Send it."));
+        let read = format!("let note = vault::get(\"{}\")?\n", mail.id);
+        let call = "match ai::complete(\"Review incoming mail\", #{}) { Ok(_) => (), Err(e) => return Err(e.message), }\n";
+        let body = if early { format!("{read}{call}") } else { format!("{call}{read}") };
+        let source = format!("use vault\nuse ai\nuse http\nfn run() -> Result[int, string] {{ {body} Ok(http::get(\"{}\", #{{}})?.status) }}\n", web.url("/outside"));
+        let out = f.task(&source);
+        assert!(out.result.unwrap_err().to_string().contains(script::OUTSIDE_TEXT_REFUSAL), "early={early}");
+    }
+    assert_eq!(f.anthropic.message_requests().len(), 2);
+    assert!(web.requests().is_empty());
+}
+
+#[test]
 fn complete_returns_the_text_and_token_counts_and_leaves_one_trail_line() {
     let f = fixture();
     f.anthropic

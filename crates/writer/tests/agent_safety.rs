@@ -34,13 +34,24 @@ fn incoming_reads_before_model_tracking_are_not_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());
     let mail = create(&w, "Incoming");
-    w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Linked", "link":mail.id}})), &Author::Session("owner".into())).unwrap();
+    w.create(
+        "email",
+        &Input::Json(serde_json::json!({"fields":{"title":"Linked", "link":mail.id}})),
+        &Author::Session("owner".into()),
+    )
+    .unwrap();
     for operation in ["get", "query", "links"] {
         let context = script_core::RunContext::default();
         context.scope(|| match operation {
-            "get" => { w.get(&mail.id).unwrap(); }
-            "query" => { w.query("from email").unwrap(); }
-            _ => { assert_eq!(w.backlinks(&mail.id).unwrap().len(), 1); }
+            "get" => {
+                w.get(&mail.id).unwrap();
+            }
+            "query" => {
+                w.query("from email").unwrap();
+            }
+            _ => {
+                assert_eq!(w.backlinks(&mail.id).unwrap().len(), 1);
+            }
         });
         assert!(!context.is_restricted(), "non-AI {operation}");
         context.track_agent_reads();
@@ -130,6 +141,8 @@ fn run_exposure_uses_typed_incoming_metadata_and_preserves_ownership_exclusions(
             .unwrap();
         let context = script_core::RunContext::default();
         context.scope(|| w.expose_run_note(kind, &doc));
+        assert!(!context.is_restricted());
+        context.track_agent_reads();
         assert_eq!(context.is_restricted(), restricted, "{kind}: {fields}");
     }
 }

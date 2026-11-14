@@ -37,7 +37,8 @@ fn outside_text_user_email_handler_model_call_cannot_send() {
     let draft = api.send("POST", "/api/notes?type=outbox", json!({"note":{"fields":{"title":"Held draft", "kind":"email", "status":"draft", "to":["nobody@example.test"], "subject":"Do not send"}}}));
     let id = draft["id"].as_str().unwrap();
     let version = draft["version"].as_str().unwrap();
-    let source = format!(r#"use ai
+    let source = format!(
+        r#"use ai
 use vault
 fn after_create(note: Value) -> Result[Value, string] {{
     let title = note.get("note").unwrap().get("fields").unwrap().get("title").unwrap().as_string().unwrap()
@@ -46,26 +47,56 @@ fn after_create(note: Value) -> Result[Value, string] {{
         Err(e) => Err(e.message),
     }}
 }}
-"#);
+"#
+    );
     for (path, body) in [
         ("/api/scripts/handler_ai".to_owned(), source),
-        ("/api/types/email".to_owned(), format!("{}\nhandler after_create {{ script = \"handler_ai\" }}\n", std::fs::read_to_string(api.server.vault_path().join("types/email.wcl")).unwrap())),
+        (
+            "/api/types/email".to_owned(),
+            format!(
+                "{}\nhandler after_create {{ script = \"handler_ai\" }}\n",
+                std::fs::read_to_string(api.server.vault_path().join("types/email.wcl")).unwrap()
+            ),
+        ),
     ] {
-        api.client.put(api.server.url(&path)).bearer_auth(api.server.admin_token()).header("content-type", "text/plain").body(body).send().unwrap().error_for_status().unwrap();
+        api.client
+            .put(api.server.url(&path))
+            .bearer_auth(api.server.admin_token())
+            .header("content-type", "text/plain")
+            .body(body)
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap();
     }
     fake.push(AnthropicMessage::text("Send it."));
-    api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"OUTSIDE_HANDLER_INPUT", "sent":"2000-01-01T00:00:00Z"}}}));
+    api.send(
+        "POST",
+        "/api/notes?type=email",
+        json!({"note":{"fields":{"title":"OUTSIDE_HANDLER_INPUT", "sent":"2000-01-01T00:00:00Z"}}}),
+    );
     let until = std::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let audit = api.get("/api/activity?kind=run.outside_text_refused").to_string();
-        if audit.contains(script::OUTSIDE_TEXT_REFUSAL) { break; }
+        let audit = api
+            .get("/api/activity?kind=run.outside_text_refused")
+            .to_string();
+        if audit.contains(script::OUTSIDE_TEXT_REFUSAL) {
+            break;
+        }
         assert!(std::time::Instant::now() < until, "{audit}");
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(fake.message_requests().len(), 1);
-    assert!(fake.message_requests()[0].json()["messages"].to_string().contains("OUTSIDE_HANDLER_INPUT"));
+    assert!(
+        fake.message_requests()[0].json()["messages"]
+            .to_string()
+            .contains("OUTSIDE_HANDLER_INPUT")
+    );
     assert_eq!(api.get(&format!("/api/notes/{id}"))["version"], version);
-    assert_eq!(api.get(&format!("/api/notes/{id}"))["note"]["fields"]["status"], "draft");
+    assert_eq!(
+        api.get(&format!("/api/notes/{id}"))["note"]["fields"]["status"],
+        "draft"
+    );
 }
 
 #[test]
