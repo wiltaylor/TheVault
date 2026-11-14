@@ -421,6 +421,36 @@ mod tests {
     }
 
     #[test]
+    fn directional_child_recovers_late_parent_restriction_and_oldest_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let database = state::State::open(&path, None).unwrap();
+        let old = database.admit_automation().unwrap();
+        database.set_automation_stopped(false).unwrap();
+        let newer = database.admit_automation().unwrap();
+        let parent = RunContext::default();
+        let child = parent.child();
+        child.capture_stop_generation(newer);
+        let parent_id = parent.persist(&database).unwrap();
+        let child_id = child.persist(&database).unwrap();
+        parent.capture_stop_generation(old);
+        parent.restrict();
+        child.capture_stop_generation(newer);
+        assert!(child.is_restricted());
+        assert_eq!(child.stop_generation(), Some(old));
+        drop(child);
+        drop(parent);
+        drop(database);
+        let database = state::State::open(&path, None).unwrap();
+        let parent = RunContext::recover(&database, &parent_id).unwrap();
+        let child = RunContext::recover(&database, &child_id).unwrap();
+        assert!(parent.is_restricted());
+        assert!(child.is_restricted());
+        assert_eq!(child.stop_generation(), Some(old));
+        assert_ne!(parent, child);
+    }
+
+    #[test]
     fn directional_child_join_preserves_both_parents_and_late_restriction() {
         let a = RunContext::default();
         let b = RunContext::default();
