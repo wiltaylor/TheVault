@@ -107,7 +107,7 @@ impl RunContext {
     // Caller holds JOIN. Propagate every change, including late joins, before
     // any action can read a child's policy. Child-local changes stay downstream.
     fn propagate(&self) {
-        let root = self.root();
+        for root in self.propagation_order() {
         let state = root.0.lock().unwrap_or_else(|e| e.into_inner());
         let values = (
             state.restricted,
@@ -126,8 +126,28 @@ impl RunContext {
             state.restricted |= state.agent_reads && state.observed_outside;
             state.stop_generation = oldest(state.stop_generation, values.3);
             drop(state);
-            child.propagate();
         }
+        }
+    }
+
+    // Reverse postorder visits each root once, after all reachable parents.
+    // A plain visited-set DFS of mutations could forward incomplete values at
+    // a diamond, before the second parent has contributed its exposure.
+    fn propagation_order(&self) -> Vec<Self> {
+        let mut seen = std::collections::HashSet::new();
+        let mut pending = vec![(self.root(), false)];
+        let mut order = Vec::new();
+        while let Some((node, expanded)) = pending.pop() {
+            if expanded {
+                order.push(node);
+            } else if seen.insert(Arc::as_ptr(&node.0)) {
+                let children = node.0.lock().unwrap_or_else(|e| e.into_inner()).children.clone();
+                pending.push((node, true));
+                pending.extend(children.into_iter().map(|child| (child.root(), false)));
+            }
+        }
+        order.reverse();
+        order
     }
 
     /// Host-created one-way descendant. It inherits present and future parent
@@ -175,8 +195,11 @@ impl RunContext {
     }
 
     /// Merge host-owned queue provenance without inheriting an unrelated caller.
-    pub fn merge(&self, other: &Self) {
-        self.join(other);
+    /// Retain the returned context: joining an ancestor and descendant selects
+    /// the descendant without changing the ancestor's isolation boundary.
+    #[must_use]
+    pub fn merge(&self, other: &Self) -> Self {
+        self.join(other)
     }
 
     /// Mark outside-text exposure. All existing clones observe this change.
@@ -405,7 +428,8 @@ mod tests {
         assert!(!database.load_run_provenance(&child_id).is_sealed());
         let joined = RunContext::default();
         joined.capture_stop_generation(old);
-        parent.merge(&joined);
+        let merged = parent.merge(&joined);
+        drop(merged);
         drop(joined);
         drop(parent);
         assert!(database.load_run_provenance(&child_id).is_sealed());
@@ -456,7 +480,7 @@ mod tests {
         let b = RunContext::default();
         let child = a.child();
         let other = b.child();
-        child.merge(&other);
+        let child = child.merge(&other);
         child.track_agent_reads();
         b.observe_outside_text();
         assert!(child.is_restricted());
@@ -478,7 +502,7 @@ mod tests {
         assert!(!recovered.is_restricted());
         let model = RunContext::default();
         model.track_agent_reads();
-        model.merge(&recovered);
+        let model = model.merge(&recovered);
         assert!(model.is_restricted());
         assert!(recovered.is_restricted());
         let late = RunContext::default();

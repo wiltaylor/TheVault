@@ -33,9 +33,11 @@ impl Writer {
             .unwrap_or_else(|e| e.into_inner());
         let id = context.persist(&self.state)?;
         let root = self.state.run_provenance_root(&id)?;
-        if let Some(previous) = contexts.get(&root) {
-            context.merge(previous);
-        }
+        let context = if let Some(previous) = contexts.get(&root) {
+            context.merge(previous)
+        } else {
+            context.clone()
+        };
         let result = publish(&self.state, &id)?;
         contexts.insert(root, context.clone());
         Ok(result)

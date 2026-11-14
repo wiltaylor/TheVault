@@ -460,6 +460,7 @@ impl Shared {
                             }
                         };
                         context.scope_recovered(|| {
+                            let mut context = context.clone();
                             let payload: Json =
                                 serde_json::from_str(&job.payload).unwrap_or(Json::Null);
                             if payload["type"] == "outbox"
@@ -502,7 +503,7 @@ impl Shared {
                                     return;
                                 }
                                 match writer.outbox_run_context(id) {
-                                    Ok(item) => context.merge(&item),
+                                    Ok(item) => context = context.merge(&item),
                                     Err(error) => {
                                         let held = writer.state().handler_recovery_subject(job.id).and_then(|subject| {
                                             writer.state().record_unavailable_run_for(id, &subject)?;
@@ -515,6 +516,7 @@ impl Shared {
                                     }
                                 }
                             }
+                            context.scope_recovered(|| {
                             if payload["type"] == "outbox" {
                                 let id = payload["id"].as_str().unwrap_or_default();
                                 match writer.state().outbox_deadline(id) {
@@ -585,6 +587,7 @@ impl Shared {
                                     .unwrap_or_else(|e| e.into_inner())
                                     .remove(&job.id);
                             }
+                            });
                         });
                         writer.prune_run_contexts();
                     }

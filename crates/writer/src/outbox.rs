@@ -198,7 +198,7 @@ impl Writer {
                 drop(removed);
                 return Ok(None);
             }
-            let context = script_core::RunContext::current().unwrap_or_default();
+            let mut context = script_core::RunContext::current().unwrap_or_default();
             let mut contexts = self
                 .outbox_contexts
                 .lock()
@@ -208,7 +208,7 @@ impl Writer {
                 // An explicit owner write authorizes a new attempt. It is not
                 // automation and must not inherit the previous item's admission.
             } else if let Some(old) = contexts.get(&saved.id) {
-                context.merge(old);
+                context = context.merge(old);
             } else if saved.event != crate::Event::Create {
                 // Older references stay durable even if recovery is unavailable.
                 // Do not cache a replacement that would hide them.
@@ -229,7 +229,7 @@ impl Writer {
                     .into());
                 }
                 for id in ids {
-                    context.merge(
+                    context = context.merge(
                         &self.recover_run_context_for(&id, &format!("Outbox note {}", saved.id))?,
                     );
                 }
@@ -288,9 +288,9 @@ impl Writer {
                 "Outbox provenance unavailable".into(),
             ));
         }
-        let context = script_core::RunContext::default();
+        let mut context = script_core::RunContext::default();
         for run_id in ids {
-            context.merge(&self.recover_run_context_for(&run_id, &format!("Outbox note {id}"))?);
+            context = context.merge(&self.recover_run_context_for(&run_id, &format!("Outbox note {id}"))?);
         }
         contexts.insert(id.to_owned(), context.clone());
         self.check_outbox_context(id, &context)?;

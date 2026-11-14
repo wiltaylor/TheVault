@@ -131,7 +131,8 @@ fn shared_registry_reuses_joined_aliases_and_seals_after_last_queue_reference() 
     let b = script_core::RunContext::default();
     let a_id = a.persist(w.state()).unwrap();
     let b_id = b.persist(w.state()).unwrap();
-    a.merge(&b);
+    let merged = a.merge(&b);
+    drop(merged);
     drop(a);
     drop(b);
     let jobs = w
