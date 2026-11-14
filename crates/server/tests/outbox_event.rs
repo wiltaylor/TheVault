@@ -393,7 +393,11 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
     );
     let held_failures = api.server.settle_handlers();
     assert!(!held_failures.is_empty());
-    assert!(held_failures.iter().all(|failure| failure.starts_with("held:")));
+    assert!(
+        held_failures
+            .iter()
+            .all(|failure| failure.starts_with("held:"))
+    );
     assert_eq!(
         api.google
             .requests()
