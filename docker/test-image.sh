@@ -150,9 +150,11 @@ for flag in --test-secret-seams --test-clock; do
   if [ "$flag" = --test-clock ]; then args+=("2026-01-01T00:00:00Z"); fi
   set +e
   out=$(timeout 30 docker run --rm --label "$run" --entrypoint vault-server \
-    "$image_plain" "${args[@]}" 2>&1)
+    "$image_plain" --vault /data --web /opt/thevault/web --listen 0.0.0.0:8080 \
+    "${args[@]}" 2>&1)
   code=$?
   set -e
+  printf 'release vault-server %s output (exit %s):\n%s\n' "$flag" "$code" "$out"
   check "release vault-server $flag exits non-zero (exit $code)" test "$code" -ne 0
   check "release vault-server $flag reports the test-build gate" \
     grep -qF -- "$flag is accepted only by test builds" <<< "$out"
