@@ -14,7 +14,7 @@ fn open(path: &std::path::Path) -> State {
 }
 
 #[test]
-fn schema_36_remembers_unknown_early_exposure_without_restricting_non_ai_runs() {
+fn schema_36_upgrade_does_not_invent_early_exposure() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
     let s = open(&path);
@@ -31,7 +31,7 @@ fn schema_36_remembers_unknown_early_exposure_without_restricting_non_ai_runs() 
     drop(conn);
     let s = open(&path);
     let restored = s.load_run_provenance(old.id());
-    assert!(restored.observed_outside_text());
+    assert!(!restored.observed_outside_text());
     assert!(!restored.is_restricted());
     let (snapshot, lease) = s.resume_run_provenance(old.id()).unwrap();
     state::RunProvenanceLease::seal_all_with_agent_reads(
@@ -41,7 +41,7 @@ fn schema_36_remembers_unknown_early_exposure_without_restricting_non_ai_runs() 
         true,
     )
     .unwrap();
-    assert!(s.load_run_provenance(old.id()).is_restricted());
+    assert!(!s.load_run_provenance(old.id()).is_restricted());
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn schema_35_recovery_tracks_reads_but_new_independent_runs_do_not() {
     drop(s);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE run_provenance DROP COLUMN agent_reads; PRAGMA user_version=35;",
+        "ALTER TABLE run_provenance DROP COLUMN agent_reads; ALTER TABLE run_provenance DROP COLUMN observed_outside; PRAGMA user_version=35;",
     )
     .unwrap();
     drop(conn);

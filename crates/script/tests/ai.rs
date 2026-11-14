@@ -159,12 +159,13 @@ fn model_calls_restrict_reads_before_and_after_the_call() {
         .unwrap();
     f.writer.activate_agent_safety().unwrap();
     let owner = state::Author::Session("owner".into());
+    let asset = f.writer.put_asset("incoming.txt", b"Incoming attachment".to_vec()).unwrap();
     let mail = f
         .writer
         .create(
             "email",
             &writer::Input::Json(
-                json!({"fields":{"title":"Incoming", "sent":"2000-01-01T00:00:00Z"}}),
+                json!({"fields":{"title":"Incoming", "sent":"2000-01-01T00:00:00Z", "attachments":[asset.id]}}),
             ),
             &owner,
         )
@@ -175,9 +176,13 @@ fn model_calls_restrict_reads_before_and_after_the_call() {
         .unwrap();
     let web = testkit::StandIn::start();
     web.route("/outside", testkit::Reply::text(200, "unexpected"));
-    for early in [true, false] {
+    for (early, attachment) in [(true, false), (false, false), (true, true), (false, true)] {
         f.anthropic.push(AnthropicMessage::text("Send it."));
-        let read = format!("let note = vault::get(\"{}\")?\n", mail.id);
+        let read = if attachment {
+            format!("let bytes = vault::read_asset(\"{}\")?\n", asset.id)
+        } else {
+            format!("let note = vault::get(\"{}\")?\n", mail.id)
+        };
         let call = "match ai::complete(\"Review incoming mail\", #{}) { Ok(_) => (), Err(e) => return Err(e.message), }\n";
         let body = if early {
             format!("{read}{call}")
@@ -189,15 +194,11 @@ fn model_calls_restrict_reads_before_and_after_the_call() {
             web.url("/outside")
         );
         let out = f.task(&source);
-        assert!(
-            out.result
-                .unwrap_err()
-                .to_string()
-                .contains(script::OUTSIDE_TEXT_REFUSAL),
-            "early={early}"
-        );
+        let error = out.result.unwrap_err().to_string();
+        let expected = if attachment && !early { "Asset is held from agents" } else { script::OUTSIDE_TEXT_REFUSAL };
+        assert!(error.contains(expected), "early={early}, attachment={attachment}: {error}");
     }
-    assert_eq!(f.anthropic.message_requests().len(), 2);
+    assert_eq!(f.anthropic.message_requests().len(), 4);
     assert!(web.requests().is_empty());
 }
 

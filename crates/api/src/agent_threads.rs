@@ -1478,6 +1478,9 @@ pub async fn fork(
         let cut = cut(&thread.transcript, b.at)?;
         let title = format!("{} (fork)", thread.title);
         let made = create(w, &thread.agent, Some(&title), "user")?;
+        if w.state().meta(&format!("outside_text.thread.{id}"))?.is_some() {
+            w.state().set_meta(&format!("outside_text.thread.{}", made.id), "1")?;
+        }
         let label = agent_label(w, &name);
         let t = save(w, &made.id, &label, Some(&author), move |t| {
             t.transcript = cut.clone()

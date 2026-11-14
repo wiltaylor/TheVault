@@ -412,8 +412,13 @@ impl Vault for Writer {
     }
 
     fn asset(&self, id: &str) -> Result<(Json, Vec<u8>), String> {
-        if agent_reading() && !self.agent_may_read_asset(id) {
-            return Err("Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.".into());
+        if !self.agent_may_read_asset(id) {
+            if agent_reading() {
+                return Err("Asset is held from agents. Attachments and original HTML of incoming messages are not available to agents. Do not retry.".into());
+            }
+            if let Some(context) = script_core::RunContext::current() {
+                context.observe_outside_text();
+            }
         }
         let (a, bytes) = Writer::asset(self, id).map_err(err)?;
         Ok((asset_json(&a), bytes))

@@ -850,9 +850,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                 |r| r.get(0),
             )?;
             if !has_observed_outside {
-                // Older contexts did not record pre-model reads. Do not infer clean input.
+                // Preserve sealed legacy admission. New reads start recording exposure.
                 tx.execute_batch(
-                    "ALTER TABLE run_provenance ADD COLUMN observed_outside INTEGER NOT NULL DEFAULT 1;",
+                    "ALTER TABLE run_provenance ADD COLUMN observed_outside INTEGER NOT NULL DEFAULT 0;",
                 )?;
             }
             let has_expiry: bool = tx.query_row(
