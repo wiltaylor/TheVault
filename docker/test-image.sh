@@ -26,15 +26,21 @@ failures=0
 images=()
 
 cleanup() {
+  local status=$?
+  trap - EXIT
+  set +e
   docker ps -aq --filter "label=$run" | xargs -r docker rm -f -v > /dev/null
+  # The containers write as uid 1000; when that is not this user, empty the folder as root
+  # before removing the image needed to do it.
+  if ! rm -rf "$tmp" 2> /dev/null && [ ${#images[@]} -gt 0 ]; then
+    docker run --rm --user 0 --entrypoint sh -v "$tmp:/t" "${images[0]}" \
+      -c 'rm -rf /t/* /t/.[!.]* /t/..?*' > /dev/null 2>&1 || true
+    rm -rf "$tmp"
+  fi
   if [ "${KEEP_IMAGES:-}" != 1 ] && [ ${#images[@]} -gt 0 ]; then
     docker rmi -f "${images[@]}" > /dev/null 2>&1 || true
   fi
-  # The containers write as uid 1000; when that is not this user, remove the files as root.
-  if ! rm -rf "$tmp" 2> /dev/null && [ ${#images[@]} -gt 0 ]; then
-    docker run --rm --user 0 --entrypoint rm -v "$tmp:/t" "${images[0]}" -rf /t/data /t/config > /dev/null 2>&1 || true
-    rm -rf "$tmp"
-  fi
+  exit "$status"
 }
 trap cleanup EXIT
 
