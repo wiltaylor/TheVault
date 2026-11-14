@@ -471,6 +471,19 @@ impl Shared {
                                     .stop_generation()
                                     .is_none_or(|g| writer.state().automation_commit(g).is_err())
                                 {
+                                    // Recovery already recorded the outcome. These old
+                                    // notifications cannot authorize another attempt.
+                                    let completed = writer.read(id).is_ok_and(|note| {
+                                        let body = doc_to_json(&note.doc);
+                                        body["fields"]["status"] == "failed"
+                                            || body["fields"]["sent_at"].as_str().is_some_and(|s| !s.is_empty())
+                                    });
+                                    if completed {
+                                        if let Err(error) = writer.state().finish_job(job.id, Ok(()), "outcome already recorded; stale notification not executed") {
+                                            eprintln!("finishing recovered notification: {error}");
+                                        }
+                                        return;
+                                    }
                                     if let Ok(subject) =
                                         writer.state().handler_recovery_subject(job.id)
                                     {
@@ -808,7 +821,16 @@ impl Shared {
                 None => Json::Null,
             };
             let script = text("script");
-            let source = script_source(writer, &script)?;
+            let stale_recovery = recovery && script_core::RunContext::current()
+                .and_then(|context| context.stop_generation())
+                .is_none_or(|generation| writer.state().automation_commit(generation).is_err());
+            // Recovery is a host operation, not authority given to an owner's
+            // replaceable script. Live custom recovery retains its old behavior.
+            let source = if stale_recovery {
+                include_str!("../../writer/defaults/outbox_send.ws").to_owned()
+            } else {
+                script_source(writer, &script)?
+            };
             let target_trashed = if type_name == "outbox" && script == "outbox_send" {
                 writer.read(&id).ok().is_some_and(|current| {
                     let body = doc_to_json(&current.doc);
@@ -823,10 +845,7 @@ impl Shared {
                 false
             };
             let mut job = Job::new(Kind::After, &script, &source, &text("function"));
-            if recovery {
-                if source != include_str!("../../writer/defaults/outbox_send.ws") {
-                    return Err("recovery requires the shipped Outbox handler".into());
-                }
+            if stale_recovery {
                 let fields = doc_to_json(&doc)["fields"].clone();
                 let target = ["sent_ref", "event", "result"].iter()
                     .filter_map(|key| fields[*key].as_str())
