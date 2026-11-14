@@ -192,7 +192,7 @@ fn accounts_of(s: &state::State) -> Result<Accounts, ApiError> {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "unreadable_ai_accounts",
-            "The stored AI accounts cannot be read. Reset AI accounts to remove this damaged record. Existing account references will no longer resolve.",
+            "The stored AI accounts cannot be read. Reset AI accounts to remove this damaged record. Classifiers fail closed. Agents get no_account until an account exists, then run on the new default.",
         ));
     }
     Accounts::load(s).map_err(api_error)

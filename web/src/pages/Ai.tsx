@@ -900,7 +900,7 @@ export function Ai() {
         </p>
       </Show>
       <Show when={unreadable()}>
-        <p>Reset removes all AI accounts from the damaged record. Agents and classifiers referring to them will have no matching account. Nothing is reset automatically.</p>
+        <p>Reset removes all AI accounts from the damaged record. Classifiers referring to them fail closed. Agents get no_account until an account exists, then run on the new default. Nothing is reset automatically.</p>
         <label><input type="checkbox" checked={confirmed()} onChange={(e) => setConfirmed(e.currentTarget.checked)} /> I confirm that I want to remove the damaged AI accounts record.</label>
         <button disabled={!confirmed() || resetting()} onClick={() => void resetAccounts()}>Reset AI accounts</button>
       </Show>

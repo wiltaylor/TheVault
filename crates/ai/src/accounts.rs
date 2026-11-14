@@ -216,7 +216,14 @@ impl Accounts {
         match state.get_secret(ACCOUNTS) {
             Ok(Some(text)) => Ok(serde_json::from_str::<Accounts>(&text).is_err()),
             Ok(None) => Ok(false),
-            Err(state::Error::WrongKey { .. } | state::Error::Corrupt(_)) => Ok(true),
+            Err(state::Error::WrongKey { .. } | state::Error::Corrupt(_)) => {
+                for secret in state.list_secrets().map_err(state_error)? {
+                    if secret.name != ACCOUNTS && matches!(state.get_secret(&secret.name), Ok(Some(_))) {
+                        return Ok(true);
+                    }
+                }
+                Err(AiError::invalid("the key file does not match this vault; restore the right VAULT_SECRET_KEY_FILE"))
+            }
             Err(e) => Err(state_error(e)),
         }
     }
@@ -640,6 +647,10 @@ mod tests {
         assert!(!Accounts::reset_unreadable(&s).unwrap());
         let other = state::State::open(&path, Some(state::SecretKey::generate())).unwrap();
         other.set_secret(ACCOUNTS, "{}").unwrap();
+        assert!(Accounts::unreadable(&s).is_err());
+        assert!(Accounts::reset_unreadable(&s).is_err());
+        assert_eq!(other.get_secret(ACCOUNTS).unwrap().as_deref(), Some("{}"));
+        s.set_secret("another_secret", "readable").unwrap();
         assert!(Accounts::unreadable(&s).unwrap());
         assert!(Accounts::reset_unreadable(&s).unwrap());
         assert!(Accounts::load(&s).unwrap().accounts.is_empty());
