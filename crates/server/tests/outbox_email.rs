@@ -31,7 +31,10 @@ fn ancestor_patch_cannot_release_ai_handler_outbox(restart: bool) {
     let fake = FakeAnthropic::start();
     fake.push(AnthropicMessage::text("draft only"));
     let pause = StandIn::start();
-    pause.route("/wait", Reply::text(200, "wait").delay(Duration::from_millis(50)));
+    pause.route(
+        "/wait",
+        Reply::text(200, "wait").delay(Duration::from_millis(50)),
+    );
     let mut api = Api::start();
     for (name, value) in AiSeed::new()
         .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
@@ -63,7 +66,8 @@ fn after_create(note: Value) -> Result[Value, string] {
     fields["title"] = Value::String("Ancestor patched")
     vault::update(id, Value::Map(#{"fields": Value::Map(fields)}), item.get("version").unwrap().as_string().unwrap())
 "#;
-    let task = format!(r#"use vault
+    let task = format!(
+        r#"use vault
 use http
 fn run() -> Result[Value, string] {{
     vault::create("email", Value::Map(#{{"fields": Value::Map(#{{"title": Value::String("Outside mail")}})}}))?
@@ -74,33 +78,80 @@ fn run() -> Result[Value, string] {{
     }}
     {patch}
 }}
-"#, pause.url("/wait"));
+"#,
+        pause.url("/wait")
+    );
     for (path, body) in [
         ("/api/scripts/child_draft", handler.to_owned()),
-        ("/api/types/email", format!("{}\nhandler after_create {{ script = \"child_draft\" }}\n", api.file("types/email.wcl"))),
+        (
+            "/api/types/email",
+            format!(
+                "{}\nhandler after_create {{ script = \"child_draft\" }}\n",
+                api.file("types/email.wcl")
+            ),
+        ),
         ("/api/scripts/ancestor_patch", task),
-        ("/api/tasks/ancestor_patch", format!("label = \"Ancestor patch\"\nscript = \"ancestor_patch\"\nallow_domains = [\"{}\"]\n", pause.host())),
+        (
+            "/api/tasks/ancestor_patch",
+            format!(
+                "label = \"Ancestor patch\"\nscript = \"ancestor_patch\"\nallow_domains = [\"{}\"]\n",
+                pause.host()
+            ),
+        ),
     ] {
         expect(api.req("PUT", path).body(body).send().unwrap(), 200);
     }
-    let run = expect(api.req("POST", "/api/tasks/ancestor_patch/run?wait=true").send().unwrap(), 200);
+    let run = expect(
+        api.req("POST", "/api/tasks/ancestor_patch/run?wait=true")
+            .send()
+            .unwrap(),
+        200,
+    );
     assert_eq!(run["outcome"], "succeeded", "{run:#}");
     let failures = api.server.settle_handlers();
     assert!(!failures.is_empty(), "restricted send must be refused");
     assert_eq!(fake.message_requests().len(), 1);
-    let id = api.query("from outbox limit 1")[0]["id"].as_str().unwrap().to_owned();
+    let id = api.query("from outbox limit 1")[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(api.fields(&id)["title"], "Ancestor patched");
     if restart {
         api.server.restart();
         // A new non-owner attempt must recover the child's durable restriction.
-        expect(api.req("PUT", "/api/scripts/ancestor_patch").body(format!("use vault\nfn run() -> Result[Value, string] {{ {patch} }}\n")).send().unwrap(), 200);
-        let run = expect(api.req("POST", "/api/tasks/ancestor_patch/run?wait=true").send().unwrap(), 200);
+        expect(
+            api.req("PUT", "/api/scripts/ancestor_patch")
+                .body(format!(
+                    "use vault\nfn run() -> Result[Value, string] {{ {patch} }}\n"
+                ))
+                .send()
+                .unwrap(),
+            200,
+        );
+        let run = expect(
+            api.req("POST", "/api/tasks/ancestor_patch/run?wait=true")
+                .send()
+                .unwrap(),
+            200,
+        );
         assert_eq!(run["outcome"], "succeeded", "{run:#}");
         assert!(!api.server.settle_handlers().is_empty());
     }
-    let audit = expect(api.req("GET", "/api/activity?kind=run.outside_text_refused").send().unwrap(), 200);
-    assert!(audit.to_string().contains(script::OUTSIDE_TEXT_REFUSAL), "{audit}");
-    assert!(api.google.requests_to("/gmail/v1/users/me/messages/send").is_empty());
+    let audit = expect(
+        api.req("GET", "/api/activity?kind=run.outside_text_refused")
+            .send()
+            .unwrap(),
+        200,
+    );
+    assert!(
+        audit.to_string().contains(script::OUTSIDE_TEXT_REFUSAL),
+        "{audit}"
+    );
+    assert!(
+        api.google
+            .requests_to("/gmail/v1/users/me/messages/send")
+            .is_empty()
+    );
 }
 
 fn expect(res: Response, status: u16) -> Value {

@@ -290,7 +290,8 @@ impl Writer {
         }
         let mut context = script_core::RunContext::default();
         for run_id in ids {
-            context = context.merge(&self.recover_run_context_for(&run_id, &format!("Outbox note {id}"))?);
+            context = context
+                .merge(&self.recover_run_context_for(&run_id, &format!("Outbox note {id}"))?);
         }
         contexts.insert(id.to_owned(), context.clone());
         self.check_outbox_context(id, &context)?;

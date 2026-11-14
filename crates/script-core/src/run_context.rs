@@ -108,25 +108,25 @@ impl RunContext {
     // any action can read a child's policy. Child-local changes stay downstream.
     fn propagate(&self) {
         for root in self.propagation_order() {
-        let state = root.0.lock().unwrap_or_else(|e| e.into_inner());
-        let values = (
-            state.restricted,
-            state.agent_reads,
-            state.observed_outside,
-            state.stop_generation,
-        );
-        let children = state.children.clone();
-        drop(state);
-        for child in children {
-            let child = child.root();
-            let mut state = child.0.lock().unwrap_or_else(|e| e.into_inner());
-            state.restricted |= values.0;
-            state.agent_reads |= values.1;
-            state.observed_outside |= values.2;
-            state.restricted |= state.agent_reads && state.observed_outside;
-            state.stop_generation = oldest(state.stop_generation, values.3);
+            let state = root.0.lock().unwrap_or_else(|e| e.into_inner());
+            let values = (
+                state.restricted,
+                state.agent_reads,
+                state.observed_outside,
+                state.stop_generation,
+            );
+            let children = state.children.clone();
             drop(state);
-        }
+            for child in children {
+                let child = child.root();
+                let mut state = child.0.lock().unwrap_or_else(|e| e.into_inner());
+                state.restricted |= values.0;
+                state.agent_reads |= values.1;
+                state.observed_outside |= values.2;
+                state.restricted |= state.agent_reads && state.observed_outside;
+                state.stop_generation = oldest(state.stop_generation, values.3);
+                drop(state);
+            }
         }
     }
 
@@ -141,7 +141,12 @@ impl RunContext {
             if expanded {
                 order.push(node);
             } else if seen.insert(Arc::as_ptr(&node.0)) {
-                let children = node.0.lock().unwrap_or_else(|e| e.into_inner()).children.clone();
+                let children = node
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .children
+                    .clone();
                 pending.push((node, true));
                 pending.extend(children.into_iter().map(|child| (child.root(), false)));
             }
