@@ -30,6 +30,25 @@ fn create(w: &Writer, title: &str) -> writer::Saved {
 }
 
 #[test]
+fn incoming_reads_before_model_tracking_are_not_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = open(dir.path());
+    let mail = create(&w, "Incoming");
+    w.create("email", &Input::Json(serde_json::json!({"fields":{"title":"Linked", "link":mail.id}})), &Author::Session("owner".into())).unwrap();
+    for operation in ["get", "query", "links"] {
+        let context = script_core::RunContext::default();
+        context.scope(|| match operation {
+            "get" => { w.get(&mail.id).unwrap(); }
+            "query" => { w.query("from email").unwrap(); }
+            _ => { assert_eq!(w.backlinks(&mail.id).unwrap().len(), 1); }
+        });
+        assert!(!context.is_restricted(), "non-AI {operation}");
+        context.track_agent_reads();
+        assert!(context.is_restricted(), "model after {operation}");
+    }
+}
+
+#[test]
 fn cleared_get_and_links_restrict_the_live_run_but_permission_checks_do_not() {
     let dir = tempfile::tempdir().unwrap();
     let w = open(dir.path());

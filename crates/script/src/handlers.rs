@@ -321,6 +321,9 @@ impl Shared {
             let arg = note_json(change, &event, version.as_deref(), &doc);
             let source = script_source(&writer, &h.script)?;
             let mut job = Job::new(Kind::Before, &h.script, &source, &h.function);
+            if writer.incoming_agent_note(&change.type_name, &doc) {
+                job.run_context().observe_outside_text();
+            }
             job.args = vec![arg];
             let returned = self.before.run(job).result.map_err(|e| {
                 let message = e.to_string();
@@ -806,12 +809,15 @@ impl Shared {
             let doc = Input::Wcl(text("wcl"))
                 .parse(&note_path(&type_name, &id))
                 .map_err(|e| e.to_string())?;
+            writer.expose_run_note(&type_name, &doc);
             let previous = match p.get("previous").and_then(Json::as_str) {
-                Some(wcl) => doc_to_json(
-                    &Input::Wcl(wcl.to_owned())
+                Some(wcl) => {
+                    let old = Input::Wcl(wcl.to_owned())
                         .parse(&note_path(&type_name, &id))
-                        .map_err(|e| e.to_string())?,
-                ),
+                        .map_err(|e| e.to_string())?;
+                    writer.expose_run_note(&type_name, &old);
+                    doc_to_json(&old)
+                }
                 None => Json::Null,
             };
             let script = text("script");

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS run_provenance (
     format INTEGER NOT NULL,
     restricted INTEGER NOT NULL,
     agent_reads INTEGER NOT NULL DEFAULT 0,
+    observed_outside INTEGER NOT NULL DEFAULT 0,
     sealed INTEGER NOT NULL DEFAULT 0,
     stop_generation INTEGER,
     parent TEXT
@@ -34,6 +35,7 @@ pub struct RunProvenance {
     id: String,
     restricted: bool,
     agent_reads: bool,
+    observed_outside: bool,
     generation: Option<Generation>,
     sealed: bool,
 }
@@ -51,6 +53,10 @@ impl RunProvenance {
         self.agent_reads
     }
 
+    pub fn observed_outside_text(&self) -> bool {
+        self.observed_outside
+    }
+
     pub fn stop_generation(&self) -> Option<Generation> {
         self.generation
     }
@@ -66,6 +72,7 @@ impl RunProvenance {
             id: id.to_owned(),
             restricted: true,
             agent_reads: true,
+            observed_outside: true,
             generation: Some(Generation::stale()),
             sealed: false,
         }
@@ -130,9 +137,20 @@ impl RunProvenanceLease {
     /// Seal the monotonic agent-read lineage with the rest of the live snapshot.
     pub fn seal_all_with_agent_reads(
         leases: &[Self],
+        restricted: bool,
+        generation: Option<Generation>,
+        agent_reads: bool,
+    ) -> Result<()> {
+        Self::seal_all_with_exposure(leases, restricted, generation, agent_reads, false)
+    }
+
+    /// Seal exposure observed before the first model call too.
+    pub fn seal_all_with_exposure(
+        leases: &[Self],
         mut restricted: bool,
         mut generation: Option<Generation>,
         mut agent_reads: bool,
+        mut observed_outside: bool,
     ) -> Result<()> {
         let Some(first) = leases.first() else {
             return Ok(());
@@ -161,19 +179,22 @@ impl RunProvenanceLease {
             let (root, snapshot) = resolve(&tx, &lease.id)?;
             restricted |= snapshot.restricted;
             agent_reads |= snapshot.agent_reads;
+            observed_outside |= snapshot.observed_outside;
             generation = oldest(generation, snapshot.generation);
             roots.insert(root);
         }
         let root = roots.first().expect("at least one lease");
+        restricted |= agent_reads && observed_outside;
         for other in &roots {
             tx.execute(
-                "UPDATE run_provenance SET restricted=?2,stop_generation=?3,parent=?4,agent_reads=?5 WHERE id=?1",
+                "UPDATE run_provenance SET restricted=?2,stop_generation=?3,parent=?4,agent_reads=?5,observed_outside=?6 WHERE id=?1",
                 params![
                     other,
                     restricted,
                     generation.map(Generation::stored),
                     (other != root).then_some(root),
-                    agent_reads
+                    agent_reads,
+                    observed_outside
                 ],
             )?;
         }
@@ -264,6 +285,7 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
         id: id.to_owned(),
         restricted: false,
         agent_reads: false,
+        observed_outside: false,
         generation: None,
         sealed: true,
     };
@@ -271,8 +293,8 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
         if !seen.insert(cursor.clone()) {
             return Err(Error::Corrupt("run provenance cycle".into()));
         }
-        let (format, restricted, generation, parent, sealed, agent_reads) = conn.query_row(
-            "SELECT format, restricted, stop_generation, parent, sealed, agent_reads FROM run_provenance WHERE id=?1",
+        let (format, restricted, generation, parent, sealed, agent_reads, observed_outside) = conn.query_row(
+            "SELECT format, restricted, stop_generation, parent, sealed, agent_reads, observed_outside FROM run_provenance WHERE id=?1",
             [&cursor],
             |r| {
                 Ok((
@@ -282,6 +304,7 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
                     r.get::<_, Option<String>>(3)?,
                     r.get::<_, i64>(4)?,
                     r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
                 ))
             },
         )?;
@@ -289,6 +312,7 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
             || !matches!(restricted, 0 | 1)
             || !matches!(sealed, 0 | 1)
             || !matches!(agent_reads, 0 | 1)
+            || !matches!(observed_outside, 0 | 1)
             || generation.is_some_and(|value| value > current)
         {
             return Err(Error::Corrupt("invalid run provenance format".into()));
@@ -301,6 +325,8 @@ fn resolve(conn: &Connection, id: &str) -> Result<(String, RunProvenance)> {
             .transpose()?;
         snapshot.restricted |= restricted == 1;
         snapshot.agent_reads |= agent_reads == 1;
+        snapshot.observed_outside |= observed_outside == 1;
+        snapshot.restricted |= snapshot.agent_reads && snapshot.observed_outside;
         snapshot.sealed &= sealed == 1;
         snapshot.generation = oldest(snapshot.generation, generation);
         match parent {
@@ -438,6 +464,7 @@ impl State {
             id,
             restricted,
             agent_reads: false,
+            observed_outside: false,
             generation,
             sealed: false,
         })
@@ -511,12 +538,13 @@ impl State {
         let (b_root, b) = resolve(&tx, b)?;
         if a_root != b_root {
             tx.execute(
-                "UPDATE run_provenance SET restricted=?2, stop_generation=?3, sealed=0, agent_reads=?4 WHERE id=?1",
+                "UPDATE run_provenance SET restricted=?2, stop_generation=?3, sealed=0, agent_reads=?4, observed_outside=?5 WHERE id=?1",
                 params![
                     a_root,
-                    a.restricted || b.restricted,
+                    a.restricted || b.restricted || ((a.agent_reads || b.agent_reads) && (a.observed_outside || b.observed_outside)),
                     oldest(a.generation, b.generation).map(Generation::stored),
-                    a.agent_reads || b.agent_reads
+                    a.agent_reads || b.agent_reads,
+                    a.observed_outside || b.observed_outside
                 ],
             )?;
             tx.execute(

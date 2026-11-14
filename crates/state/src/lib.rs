@@ -183,7 +183,7 @@ pub struct State {
     pin_changes: std::sync::atomic::AtomicU64,
 }
 
-const SCHEMA_VERSION: i64 = 36;
+const SCHEMA_VERSION: i64 = 37;
 
 const SCHEMA: &str = "
 CREATE TABLE versions (
@@ -704,7 +704,7 @@ impl State {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     match version {
-        0..=35 => {
+        0..=36 => {
             let tx = conn.transaction()?;
             if version == 0 {
                 tx.execute_batch(SCHEMA)?;
@@ -844,6 +844,17 @@ fn migrate(conn: &mut Connection) -> Result<()> {
                 )?;
             }
             tx.execute_batch(jobs::PROVENANCE_SCHEMA)?;
+            let has_observed_outside: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('run_provenance') WHERE name='observed_outside')",
+                [],
+                |r| r.get(0),
+            )?;
+            if !has_observed_outside {
+                // Older contexts did not record pre-model reads. Do not infer clean input.
+                tx.execute_batch(
+                    "ALTER TABLE run_provenance ADD COLUMN observed_outside INTEGER NOT NULL DEFAULT 1;",
+                )?;
+            }
             let has_expiry: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tokens') WHERE name='expires_ms')",
                 [],

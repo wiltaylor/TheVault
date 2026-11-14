@@ -15,6 +15,7 @@ pub struct RunContext(Arc<Mutex<State>>);
 struct State {
     restricted: bool,
     agent_reads: bool,
+    observed_outside: bool,
     stop_generation: Option<Generation>,
     parent: Option<RunContext>,
     durable: Vec<state::RunProvenanceLease>,
@@ -26,11 +27,12 @@ impl Drop for State {
         // so no live descendant can gain more provenance. No JOIN/State lock
         // is held during this database transaction. Failure leaves every row
         // unsealed and recovery restricted/stale, never a partial clean seal.
-        if let Err(error) = state::RunProvenanceLease::seal_all_with_agent_reads(
+        if let Err(error) = state::RunProvenanceLease::seal_all_with_exposure(
             &self.durable,
             self.restricted,
             self.stop_generation,
             self.agent_reads,
+            self.observed_outside,
         ) {
             eprintln!("sealing run provenance: {error}");
             for lease in &self.durable {
@@ -88,6 +90,8 @@ impl RunContext {
         let mut b = other.0.lock().unwrap_or_else(|e| e.into_inner());
         a.restricted |= b.restricted;
         a.agent_reads |= b.agent_reads;
+        a.observed_outside |= b.observed_outside;
+        a.restricted |= a.agent_reads && a.observed_outside;
         a.stop_generation = oldest(a.stop_generation, b.stop_generation);
         a.durable.append(&mut b.durable);
         b.parent = Some(root.clone());
@@ -121,11 +125,20 @@ impl RunContext {
     /// Independent import tasks and direct owner reads do not opt into this policy.
     pub fn track_agent_reads(&self) {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
-        self.root()
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .agent_reads = true;
+        let root = self.root();
+        let mut state = root.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.agent_reads = true;
+        state.restricted |= state.observed_outside;
+    }
+
+    /// Record a host-classified incoming read, even before this job first uses AI.
+    /// Independent non-AI imports keep working, but later model use cannot erase it.
+    pub fn observe_outside_text(&self) {
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        let root = self.root();
+        let mut state = root.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.observed_outside = true;
+        state.restricted |= state.agent_reads;
     }
 
     pub fn tracks_agent_reads(&self) -> bool {
@@ -211,6 +224,7 @@ impl RunContext {
         let context = Self(Arc::new(Mutex::new(State {
             restricted: snapshot.is_restricted(),
             agent_reads: snapshot.tracks_agent_reads(),
+            observed_outside: snapshot.observed_outside_text(),
             stop_generation: snapshot.stop_generation(),
             parent: None,
             durable: vec![lease],
@@ -272,6 +286,29 @@ fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
 #[cfg(test)]
 mod tests {
     use super::RunContext;
+
+    #[test]
+    fn pre_model_exposure_survives_join_and_recovery_without_restricting_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = state::State::open(&dir.path().join("state.db"), None).unwrap();
+        let import = RunContext::default();
+        import.observe_outside_text();
+        assert!(!import.is_restricted());
+        let id = import.persist(&database).unwrap();
+        drop(import);
+        let recovered = RunContext::recover(&database, &id).unwrap();
+        assert!(!recovered.is_restricted());
+        let model = RunContext::default();
+        model.track_agent_reads();
+        model.merge(&recovered);
+        assert!(model.is_restricted());
+        assert!(recovered.is_restricted());
+        let late = RunContext::default();
+        late.track_agent_reads();
+        late.observe_outside_text();
+        assert!(late.is_restricted());
+        assert!(!RunContext::default().is_restricted());
+    }
 
     #[test]
     fn agent_read_lineage_joins_late_and_survives_sealed_recovery() {

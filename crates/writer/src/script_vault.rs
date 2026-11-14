@@ -22,7 +22,10 @@ impl Writer {
         if self.incoming_agent_note(kind, doc)
             && let Some(context) = script_core::RunContext::current()
         {
-            context.restrict();
+            if agent_reading() {
+                context.track_agent_reads();
+            }
+            context.observe_outside_text();
         }
     }
 
@@ -84,7 +87,7 @@ fn run_page(w: &Writer, q: &query::Query, page: query::PageRequest) -> Result<qu
         let mut ctx = query::Context::new(index, schema);
         ctx.excluded_notes = excluded.as_ref();
         let read_notes = std::cell::RefCell::new(std::collections::HashSet::new());
-        if agent_reading() && script_core::RunContext::current().is_some() {
+        if script_core::RunContext::current().is_some() {
             ctx.read_notes = Some(&read_notes);
         }
         let result = query::run(q, &ctx, &page);
@@ -158,9 +161,7 @@ fn agent_saved(w: &Writer, s: Saved, author: &Author) -> Json {
         // not generated defaults, handler output or other unreviewed note content.
         return json!({"id":s.id,"type":s.type_name,"version":s.version,"held":true});
     }
-    if (agent_reading() || matches!(author, Author::Agent(_) | Author::AgentMail(_)))
-        && let Ok(doc) = Input::Wcl(s.wcl.clone()).parse("saved.wcl")
-    {
+    if let Ok(doc) = Input::Wcl(s.wcl.clone()).parse("saved.wcl") {
         w.expose_run_note(&s.type_name, &doc);
     }
     let mut value = saved(s);
@@ -194,14 +195,14 @@ fn link_rows(w: &Writer, sql: &str, id: &str) -> Result<Vec<Json>, String> {
         .map_err(err)?;
     if agent_reading() {
         rows.retain(|r| r["id"].as_str().is_some_and(|id| w.agent_may_read(id)));
-        for row in &rows {
-            if let Some(id) = row["id"].as_str() {
-                let note = w.read(id).map_err(err)?;
-                w.expose_run_note(&note.type_name, &note.doc);
-            }
-        }
         // Never reveal whether a particular reference set contains held notes.
         OMITTED.with(|n| n.set(1));
+    }
+    for row in &rows {
+        if let Some(id) = row["id"].as_str() {
+            let note = w.read(id).map_err(err)?;
+            w.expose_run_note(&note.type_name, &note.doc);
+        }
     }
     Ok(rows)
 }
@@ -254,9 +255,7 @@ impl Vault for Writer {
             return Err("Note is held from agents".into());
         }
         let n = self.read(id).map_err(err)?;
-        if agent_reading() {
-            self.expose_run_note(&n.type_name, &n.doc);
-        }
+        self.expose_run_note(&n.type_name, &n.doc);
         let mut value = json!({
             "id": n.id,
             "type": n.type_name,

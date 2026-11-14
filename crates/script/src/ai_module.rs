@@ -164,6 +164,7 @@ pub fn module(access: Ai) -> Module {
 }
 
 fn decide_call(access: &Ai, text: &str) -> Result<Result<DynValue, AiError>, HostError> {
+    track_model_input();
     let timeout = run::with(|r| r.remaining())?;
     let result = (|| {
         let input = serde_json::from_str::<::ai::decisions::Input>(text)
@@ -324,6 +325,7 @@ fn refused_early(
     options: &HashMap<String, String>,
     e: ::ai::AiError,
 ) -> Result<Result<Reply, AiError>, HostError> {
+    track_model_input();
     run::with(|r| r.remaining())?;
     let model = options.get("model").map(|m| m.trim()).unwrap_or_default();
     finish(None, model, Err(e), Duration::ZERO)
@@ -331,11 +333,18 @@ fn refused_early(
 
 /// Make one call. `Ok(Err(..))` is a failure the script sees; `Err(..)` faults the run, which
 /// only running out of time does.
+fn track_model_input() {
+    if let Some(context) = script_core::RunContext::current() {
+        context.track_agent_reads();
+    }
+}
+
 fn call(
     access: &Ai,
     messages: Vec<Message>,
     options: &HashMap<String, String>,
 ) -> Result<Result<Reply, AiError>, HostError> {
+    track_model_input();
     let deadline = run::with(|r| {
         r.remaining()?;
         Ok(r.deadline)
