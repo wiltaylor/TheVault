@@ -157,6 +157,7 @@ fn model_calls_restrict_reads_before_and_after_the_call() {
     f.writer
         .upgrade_shipped_defaults(writer::Upkeep::Home)
         .unwrap();
+    f.writer.activate_agent_safety().unwrap();
     let owner = state::Author::Session("owner".into());
     let mail = f
         .writer
