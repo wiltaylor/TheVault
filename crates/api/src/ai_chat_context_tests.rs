@@ -93,13 +93,17 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
     let content = request["messages"].as_array().unwrap().last().unwrap()["content"]
         .as_array()
         .unwrap();
-    for id in ["delete", "send", "http", "task"] {
+    for id in ["delete", "http", "task"] {
         let result = content.iter().find(|r| r["tool_use_id"] == id).unwrap();
         assert!(
             result.to_string().contains(script::OUTSIDE_TEXT_REFUSAL),
             "{id}: {result}"
         );
     }
+    // A Ready creation is preserved as a draft, not sent, rather than discarded.
+    let send = content.iter().find(|r| r["tool_use_id"] == "send").unwrap();
+    let send: Value = serde_json::from_str(send["content"].as_str().unwrap()).unwrap();
+    assert_eq!(send["result"]["note"]["fields"]["status"], "draft");
     assert_eq!(w.read(&victim.id).unwrap().version, victim.version);
     assert_eq!(w.read(&draft.id).unwrap().version, draft.version);
     assert!(web.requests().is_empty());
