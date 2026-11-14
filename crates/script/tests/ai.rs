@@ -159,7 +159,10 @@ fn model_calls_restrict_reads_before_and_after_the_call() {
         .unwrap();
     f.writer.activate_agent_safety().unwrap();
     let owner = state::Author::Session("owner".into());
-    let asset = f.writer.put_asset("incoming.txt", b"Incoming attachment".to_vec()).unwrap();
+    let asset = f
+        .writer
+        .put_asset("incoming.txt", b"Incoming attachment".to_vec())
+        .unwrap();
     let mail = f
         .writer
         .create(
@@ -195,8 +198,15 @@ fn model_calls_restrict_reads_before_and_after_the_call() {
         );
         let out = f.task(&source);
         let error = out.result.unwrap_err().to_string();
-        let expected = if attachment && !early { "Asset is held from agents" } else { script::OUTSIDE_TEXT_REFUSAL };
-        assert!(error.contains(expected), "early={early}, attachment={attachment}: {error}");
+        let expected = if attachment && !early {
+            "Asset is held from agents"
+        } else {
+            script::OUTSIDE_TEXT_REFUSAL
+        };
+        assert!(
+            error.contains(expected),
+            "early={early}, attachment={attachment}: {error}"
+        );
     }
     assert_eq!(f.anthropic.message_requests().len(), 4);
     assert!(web.requests().is_empty());

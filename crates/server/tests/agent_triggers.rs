@@ -175,8 +175,19 @@ fn outside_text_thread_answer_and_recovered_job_keep_action_guards() {
                 let response = api.request("POST", "/api/ai/chat", Some(json!({"agent":"keeper", "thread":thread,"messages":[{"role":"user","content":[{"type":"text","text":"Fork here"}]}]})));
                 assert!(response.text().unwrap().contains("event: done"));
                 let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
-                let at = read["messages"].as_array().unwrap().iter().position(|m| m["role"] == "user" && m["content"].to_string().contains("Fork here")).unwrap();
-                let fork = api.send("POST", &format!("/api/agents/keeper/threads/{thread}/fork"), json!({"at":at}));
+                let at = read["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .position(|m| {
+                        m["role"] == "user" && m["content"].to_string().contains("Fork here")
+                    })
+                    .unwrap();
+                let fork = api.send(
+                    "POST",
+                    &format!("/api/agents/keeper/threads/{thread}/fork"),
+                    json!({"at":at}),
+                );
                 selected_thread = Some(fork["id"].as_str().unwrap().to_owned());
             }
         }
@@ -197,7 +208,16 @@ fn outside_text_thread_answer_and_recovered_job_keep_action_guards() {
             assert!(events.contains("event: done"), "{events}");
         }
         let requests = fake.message_requests();
-        assert_eq!(requests.len(), if recovered { 2 } else if mode == "fork" { 4 } else { 3 });
+        assert_eq!(
+            requests.len(),
+            if recovered {
+                2
+            } else if mode == "fork" {
+                4
+            } else {
+                3
+            }
+        );
         let results = requests.last().unwrap().json()["messages"]
             .as_array()
             .unwrap()
@@ -216,7 +236,9 @@ fn outside_text_thread_answer_and_recovered_job_keep_action_guards() {
         assert_eq!(api.get(&format!("/api/notes/{victim}"))["version"], version);
         assert!(web.requests().is_empty());
         let threads = api.get("/api/agents/keeper/threads");
-        let thread = selected_thread.as_deref().unwrap_or_else(|| threads["threads"][0]["id"].as_str().unwrap());
+        let thread = selected_thread
+            .as_deref()
+            .unwrap_or_else(|| threads["threads"][0]["id"].as_str().unwrap());
         assert_eq!(
             api.get(&format!("/api/agents/keeper/threads/{thread}"))["pending"],
             1
