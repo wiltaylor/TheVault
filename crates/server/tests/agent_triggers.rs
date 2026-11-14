@@ -39,9 +39,29 @@ fn outside_text_thread_answer_and_recovered_job_keep_action_guards() {
         web.route("/outside", testkit::Reply::text(200, "unexpected"));
         let cookie = mail_triage_login(&api);
         let mail = api.send("POST", "/api/notes?type=email", json!({"note":{"fields":{"title":"INCOMING_RESTART_FIXTURE", "sent":"2000-01-01T00:00:00Z"}}}));
-        let preview: Value = safety_session(&api, &cookie, "/api/agent-safety/release/preview", json!({"ids":[mail["id"]]})).error_for_status().unwrap().json().unwrap();
-        safety_session(&api, &cookie, "/api/agent-safety/release/approve", json!({"preview":preview["preview"],"approve":true})).error_for_status().unwrap();
-        let trigger = if recovered { "trigger audit { on = [\"update\"] type = \"email\" prompt = \"Audit\" }" } else { "" };
+        let preview: Value = safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/release/preview",
+            json!({"ids":[mail["id"]]}),
+        )
+        .error_for_status()
+        .unwrap()
+        .json()
+        .unwrap();
+        safety_session(
+            &api,
+            &cookie,
+            "/api/agent-safety/release/approve",
+            json!({"preview":preview["preview"],"approve":true}),
+        )
+        .error_for_status()
+        .unwrap();
+        let trigger = if recovered {
+            "trigger audit { on = [\"update\"] type = \"email\" prompt = \"Audit\" }"
+        } else {
+            ""
+        };
         api.agent("keeper", &format!("label = \"Keeper\"\npermissions {{\n scripts {{ run_code = true }}\n confirm {{ delete = false }}\n outbox {{ send_without_review = true }}\n}}\n{trigger}\n"));
         let (victim, version) = api.memo("Do not delete", "open");
         let draft = api.send("POST", "/api/notes?type=outbox", json!({"note":{"fields":{"title":"Held draft", "kind":"email", "status":"draft", "to":["nobody@example.test"], "subject":"Do not send"}}}));
@@ -53,13 +73,23 @@ fn outside_text_thread_answer_and_recovered_job_keep_action_guards() {
             api.send("PUT", &format!("/api/notes/{}", mail["id"].as_str().unwrap()), json!({"base_version":current["version"],"note":{"fields":{"title":"INCOMING_RESTART_FIXTURE", "sent":"2000-01-01T00:00:00Z"}}}));
             api.server.restart();
         } else {
-            fake.push(AnthropicMessage::new().tool_use("read", "get_note", json!({"id":mail["id"]})).tool_use("ask", "ask_user", json!({"question":"Continue?"})));
-            let dispatch = api.send("POST", "/api/agents/keeper/dispatch", json!({"notes":[mail["id"]],"request":"Read this mail."}));
+            fake.push(
+                AnthropicMessage::new()
+                    .tool_use("read", "get_note", json!({"id":mail["id"]}))
+                    .tool_use("ask", "ask_user", json!({"question":"Continue?"})),
+            );
+            let dispatch = api.send(
+                "POST",
+                "/api/agents/keeper/dispatch",
+                json!({"notes":[mail["id"]],"request":"Read this mail."}),
+            );
             let thread = dispatch["thread"]["id"].as_str().unwrap();
             let until = std::time::Instant::now() + Duration::from_secs(30);
             loop {
                 let read = api.get(&format!("/api/agents/keeper/threads/{thread}"));
-                if read["question"] == "Continue?" { break; }
+                if read["question"] == "Continue?" {
+                    break;
+                }
                 assert!(std::time::Instant::now() < until, "{read}");
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -84,16 +114,32 @@ fn outside_text_thread_answer_and_recovered_job_keep_action_guards() {
         }
         let requests = fake.message_requests();
         assert_eq!(requests.len(), if recovered { 2 } else { 3 });
-        let results = requests.last().unwrap().json()["messages"].as_array().unwrap().last().unwrap()["content"].to_string();
+        let results = requests.last().unwrap().json()["messages"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["content"]
+            .to_string();
         assert!(results.contains("draft"), "{results}");
-        assert!(results.matches(script::OUTSIDE_TEXT_REFUSAL).count() >= 4, "{results}");
-        assert_eq!(api.get(&format!("/api/notes/{draft_id}"))["note"]["fields"]["status"], "draft");
+        assert!(
+            results.matches(script::OUTSIDE_TEXT_REFUSAL).count() >= 4,
+            "{results}"
+        );
+        assert_eq!(
+            api.get(&format!("/api/notes/{draft_id}"))["note"]["fields"]["status"],
+            "draft"
+        );
         assert_eq!(api.get(&format!("/api/notes/{victim}"))["version"], version);
         assert!(web.requests().is_empty());
         let threads = api.get("/api/agents/keeper/threads");
         let thread = threads["threads"][0]["id"].as_str().unwrap();
-        assert_eq!(api.get(&format!("/api/agents/keeper/threads/{thread}"))["pending"], 1);
-        let audit = api.get("/api/activity?kind=run.outside_text_refused").to_string();
+        assert_eq!(
+            api.get(&format!("/api/agents/keeper/threads/{thread}"))["pending"],
+            1
+        );
+        let audit = api
+            .get("/api/activity?kind=run.outside_text_refused")
+            .to_string();
         assert!(audit.contains("script_http"), "{audit}");
         assert!(audit.contains("task_start"), "{audit}");
     }
