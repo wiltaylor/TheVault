@@ -473,11 +473,15 @@ impl Shared {
                                 {
                                     // Recovery already recorded the outcome. These old
                                     // notifications cannot authorize another attempt.
-                                    let completed = writer.read(id).is_ok_and(|note| {
-                                        let body = doc_to_json(&note.doc);
-                                        body["fields"]["status"] == "failed"
-                                            || body["fields"]["sent_at"].as_str().is_some_and(|s| !s.is_empty())
-                                    });
+                                    let completed = match writer.read(id) {
+                                        Ok(note) => {
+                                            let body = doc_to_json(&note.doc);
+                                            body["fields"]["status"] == "failed"
+                                                || body["fields"]["sent_at"].as_str().is_some_and(|s| !s.is_empty())
+                                        }
+                                        Err(writer::Error::NotFound(_)) => true,
+                                        Err(_) => false,
+                                    };
                                     if completed {
                                         if let Err(error) = writer.state().finish_job(job.id, Ok(()), "outcome already recorded; stale notification not executed") {
                                             eprintln!("finishing recovered notification: {error}");
