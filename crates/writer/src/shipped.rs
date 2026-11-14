@@ -1107,7 +1107,7 @@ fn person_correspondence(w: &Writer) -> Result<()> {
 }
 
 /// The secret holding Settings > AI (crates/ai's `ai_settings`, ai D7).
-const AI_SETTINGS: &str = state::secret_names::AI_SETTINGS;
+const AI_SETTINGS: &str = state::AI_SETTINGS;
 
 /// Step `0006_assistant_settings` (agents G6): the chat panel's system prompt and its
 /// confirmation and internet switches (ai D17, D22, D28) moved from `ai_settings` to the built-in
@@ -1205,7 +1205,7 @@ fn assistant_settings(w: &Writer) -> Result<()> {
 }
 
 /// The secret holding the AI accounts (crates/ai's `ai_accounts`, accounts A4).
-const AI_ACCOUNTS: &str = state::secret_names::AI_ACCOUNTS;
+const AI_ACCOUNTS: &str = state::AI_ACCOUNTS;
 
 /// The secrets of before accounts, by provider: the API keys and the ChatGPT sign-in.
 const OLD_AI_SECRETS: [(&str, &str); 3] = [
@@ -1624,7 +1624,7 @@ fn calendar_of_token_key(key: &str) -> String {
 }
 
 /// The secret the write-back now reads besides the three credentials (google-sync D21).
-const SETTINGS_SECRET: &str = state::secret_names::GOOGLE_SETTINGS;
+const SETTINGS_SECRET: &str = state::GOOGLE_SETTINGS;
 
 /// Give every handler of the vault's `event` type that names `google_event` the
 /// `google_settings` secret, as one planned type change that edits no note.
