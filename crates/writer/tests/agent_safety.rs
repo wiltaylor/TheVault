@@ -47,7 +47,7 @@ fn incoming_reads_before_model_tracking_are_not_forgotten() {
                 w.get(&mail.id).unwrap();
             }
             "query" => {
-                w.query("from email").unwrap();
+                w.query("from email", 100).unwrap();
             }
             _ => {
                 assert_eq!(w.backlinks(&mail.id).unwrap().len(), 1);
