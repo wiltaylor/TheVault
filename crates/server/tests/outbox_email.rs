@@ -14,6 +14,95 @@ use testkit::{FakeGoogle, TestServer};
 const SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
 const RECONNECT: &str = "Reconnect Google in Settings > Integrations to send email.";
 
+#[test]
+fn ancestor_patch_cannot_release_ai_handler_outbox_live() {
+    ancestor_patch_cannot_release_ai_handler_outbox(false);
+}
+
+#[test]
+fn ancestor_patch_cannot_release_ai_handler_outbox_after_restart() {
+    ancestor_patch_cannot_release_ai_handler_outbox(true);
+}
+
+fn ancestor_patch_cannot_release_ai_handler_outbox(restart: bool) {
+    use std::time::Duration;
+    use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, Reply, StandIn, TestAccount};
+
+    let fake = FakeAnthropic::start();
+    fake.push(AnthropicMessage::text("draft only"));
+    let pause = StandIn::start();
+    pause.route("/wait", Reply::text(200, "wait").delay(Duration::from_millis(50)));
+    let mut api = Api::start();
+    for (name, value) in AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
+        .secrets()
+    {
+        api.put_secret(&name, &value);
+    }
+    let handler = r#"use ai
+use vault
+fn after_create(note: Value) -> Result[Value, string] {
+    let title = note.get("note").unwrap().get("fields").unwrap().get("title").unwrap().as_string().unwrap()
+    match ai::chat([ChatMessage { role: "user", text: title }], #{}) {
+        Ok(reply) => vault::create("outbox", Value::Map(#{"fields": Value::Map(#{
+            "title": Value::String("Child draft"), "kind": Value::String("email"),
+            "status": Value::String("draft"), "subject": Value::String(reply.text),
+            "to": Value::List([Value::String("nobody@example.test")])
+        })})),
+        Err(e) => Err(e.message),
+    }
+}
+"#;
+    let patch = r#"
+    let rows = vault::query("from outbox limit 1")?
+    let id = rows[0].get("id").unwrap().as_string().unwrap()
+    let item = vault::get(id)?
+    let note = item.get("note").unwrap()
+    let fields = note.get("fields").unwrap().as_map().unwrap()
+    fields["status"] = Value::String("ready")
+    fields["title"] = Value::String("Ancestor patched")
+    vault::update(id, Value::Map(#{"fields": Value::Map(fields)}), item.get("version").unwrap().as_string().unwrap())
+"#;
+    let task = format!(r#"use vault
+use http
+fn run() -> Result[Value, string] {{
+    vault::create("email", Value::Map(#{{"fields": Value::Map(#{{"title": Value::String("Outside mail")}})}}))?
+    let attempts = 0
+    while vault::query("from outbox limit 1")?.len() == 0 && attempts < 200 {{
+        http::get("{}", #{{}})?
+        attempts += 1
+    }}
+    {patch}
+}}
+"#, pause.url("/wait"));
+    for (path, body) in [
+        ("/api/scripts/child_draft", handler.to_owned()),
+        ("/api/types/email", format!("{}\nhandler after_create {{ script = \"child_draft\" }}\n", api.file("types/email.wcl"))),
+        ("/api/scripts/ancestor_patch", task),
+        ("/api/tasks/ancestor_patch", format!("label = \"Ancestor patch\"\nscript = \"ancestor_patch\"\nallow_domains = [\"{}\"]\n", pause.host())),
+    ] {
+        expect(api.req("PUT", path).body(body).send().unwrap(), 200);
+    }
+    let run = expect(api.req("POST", "/api/tasks/ancestor_patch/run?wait=true").send().unwrap(), 200);
+    assert_eq!(run["outcome"], "succeeded", "{run:#}");
+    let failures = api.server.settle_handlers();
+    assert!(!failures.is_empty(), "restricted send must be refused");
+    assert_eq!(fake.message_requests().len(), 1);
+    let id = api.query("from outbox limit 1")[0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(api.fields(&id)["title"], "Ancestor patched");
+    if restart {
+        api.server.restart();
+        // A new non-owner attempt must recover the child's durable restriction.
+        expect(api.req("PUT", "/api/scripts/ancestor_patch").body(format!("use vault\nfn run() -> Result[Value, string] {{ {patch} }}\n")).send().unwrap(), 200);
+        let run = expect(api.req("POST", "/api/tasks/ancestor_patch/run?wait=true").send().unwrap(), 200);
+        assert_eq!(run["outcome"], "succeeded", "{run:#}");
+        assert!(!api.server.settle_handlers().is_empty());
+    }
+    let audit = expect(api.req("GET", "/api/activity?kind=run.outside_text_refused").send().unwrap(), 200);
+    assert!(audit.to_string().contains(script::OUTSIDE_TEXT_REFUSAL), "{audit}");
+    assert!(api.google.requests_to("/gmail/v1/users/me/messages/send").is_empty());
+}
+
 fn expect(res: Response, status: u16) -> Value {
     let got = res.status().as_u16();
     let text = res.text().unwrap();

@@ -393,6 +393,40 @@ mod tests {
     use super::RunContext;
 
     #[test]
+    fn merge_retains_the_descendant_in_both_orders() {
+        let parent = RunContext::default();
+        let child = parent.child();
+        child.restrict();
+        for context in [parent.merge(&child), child.merge(&parent)] {
+            assert_eq!(context, child);
+            assert!(context.is_restricted());
+        }
+        assert!(!parent.is_restricted());
+    }
+
+    #[test]
+    fn fan_out_propagates_once_per_root_through_shared_descendants() {
+        let parent = RunContext::default();
+        let children: Vec<_> = (0..128).map(|_| parent.child()).collect();
+        let mut shared = children[0].child();
+        for child in &children[1..] {
+            shared = shared.merge(&child.child());
+        }
+        let leaf = shared.child();
+        children[0].track_agent_reads();
+        children[127].observe_outside_text();
+        parent.observe_outside_text();
+        assert!(leaf.is_restricted());
+        assert!(!parent.is_restricted());
+        assert!(!children[127].is_restricted());
+        let _join = super::JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        let order = parent.propagation_order();
+        assert_eq!(order.len(), 131);
+        assert!(std::sync::Arc::ptr_eq(&order[129].0, &shared.root().0));
+        assert!(std::sync::Arc::ptr_eq(&order[130].0, &leaf.root().0));
+    }
+
+    #[test]
     fn directional_children_isolate_exposure_and_inherit_late_parent_changes() {
         let parent = RunContext::default();
         let child = parent.child();
