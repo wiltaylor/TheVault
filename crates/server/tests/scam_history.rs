@@ -433,6 +433,20 @@ fn definition(s: &TestServer, condition: &str) {
 fn history_or_filter_cannot_escape_window_and_nonstandard_date_is_refused() {
     let fake = FakeDecisions::start();
     let (s, c, cookie) = setup_with(&fake, |vault| {
+        std::fs::write(vault.join("types/message.wcl"), "label = \"Message\"\nfield sent { kind = \"datetime\" }\nfield direction { kind = \"string\" }\ntemplate default { tab Main { slot title } }\n").unwrap();
+        std::fs::create_dir_all(vault.join("notes/message")).unwrap();
+        std::fs::write(
+            vault.join("notes/message/01JB8Z4K2MQ7V3X9T5R6W8Y2ZM.wcl"),
+            "title = \"Outgoing history\"\nsent = \"2026-11-01T12:00:00Z\"\ndirection = \"out\"\n",
+        )
+        .unwrap();
+        for (suffix, label) in [("N", "SENT"), ("P", "DRAFT")] {
+            std::fs::write(
+                vault.join(format!("notes/email/01JB8Z4K2MQ7V3X9T5R6W8Y2Z{suffix}.wcl")),
+                format!("title = \"Outgoing history\"\nsent = \"2026-11-01T12:00:00Z\"\nlabels = [\"system/{label}\"]\n"),
+            )
+            .unwrap();
+        }
         for (suffix, sent) in [
             ("G", "2020-01-01T00:00:00Z"),
             ("H", "2026-11-13T00:00:00Z"),
@@ -447,6 +461,8 @@ fn history_or_filter_cannot_escape_window_and_nonstandard_date_is_refused() {
         }
     });
     definition(&s, "type == \"email\" || sent >= now() - days(2)");
+    // The OR predicate admits all three outgoing fixtures after replacing the date
+    // clause with true. Only the independent incoming guard excludes them.
     assert_eq!(preview(&s, &c, &cookie)["count"], 3);
     definition(&s, "sent >= now() - days(3)");
     let r = post(
@@ -472,6 +488,33 @@ fn history_excludes_outgoing_messages() {
         }
     });
     assert_eq!(preview(&s, &c, &cookie)["count"], 4);
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn history_allows_exactly_five_thousand_eligible_items_at_zero_price() {
+    let fake = FakeDecisions::start();
+    let (s, c, cookie) = setup_with(&fake, |vault| {
+        for i in 0..4997_u128 {
+            let id = format!("{:026}", i + 1);
+            std::fs::write(
+                vault.join(format!("notes/email/{id}.wcl")),
+                "title = \"Cap fixture\"\nsent = \"2026-11-01T12:00:00Z\"\n",
+            )
+            .unwrap();
+        }
+    });
+    let r = post(
+        &s,
+        &c,
+        &cookie,
+        "preview",
+        json!({"days":30,"estimated_usd_per_decision":0}),
+    );
+    assert!(r.status().is_success(), "{}", r.text().unwrap());
+    let p: Value = r.json().unwrap();
+    assert_eq!(p["count"], 5000);
+    assert_eq!(p["estimated_usd"], 0.0);
     assert!(fake.requests().is_empty());
 }
 
