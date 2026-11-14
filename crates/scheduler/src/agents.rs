@@ -315,7 +315,7 @@ mod persistence_retry_tests {
         let scheduler = Scheduler::new(writer.clone(), host, clock.clone()).unwrap();
         let runner = Arc::new(Runner(Mutex::new(Vec::new())));
         scheduler.set_agent_runner(runner.clone());
-        let mut context = script::RunContext::default();
+        let context = script::RunContext::default();
         context.restrict();
         let generation = writer.state().admit_automation().unwrap();
         context.capture_stop_generation(generation);
@@ -1161,7 +1161,7 @@ impl Scheduler {
                 "legacy trigger held for owner action".into(),
             ));
         }
-        let context = script::RunContext::default();
+        let mut context = script::RunContext::default();
         for id in ids {
             let recovered = self.writer.recover_run_context_for(&id, &subject)?;
             context = context.merge(&recovered);
