@@ -329,6 +329,50 @@ fn restart_unconfirmed_sms_accepts_late_receipt_without_second_command() {
 }
 
 #[test]
+fn resume_preserves_pending_sms_and_applies_late_receipt_once() {
+    for delivered in [false, true] {
+        let api = Api::start();
+        let phone = api.phone();
+        let id = api.create(&api.admin, "outbox", sms(json!({}), &["Check once"]));
+        api.settle();
+        let cid = api.commands(&phone, "?status=pending")[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if delivered {
+            api.report(&phone, &cid, json!({"status": "delivered"}));
+        }
+        let state =
+            state::State::open(&api.server.vault_path().join(".vault/state.db"), None).unwrap();
+        state.set_automation_stopped(true).unwrap();
+        let before = api.note(&id);
+        state.set_automation_stopped(false).unwrap();
+
+        // Observe more than two queue polling intervals after Resume. No receipt or
+        // owner edit may conceal an erroneous startup-mode interruption meanwhile.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            assert_eq!(api.note(&id), before);
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert_eq!(api.fields(&id)["status"], "sending");
+        assert_eq!(api.commands(&phone, "").len(), 1);
+
+        let receipt = json!({"status": "done", "result": {"device_ref": "sms:late"}});
+        api.report(&phone, &cid, receipt.clone());
+        api.settle();
+        let completed = api.note(&id);
+        assert_eq!(completed["note"]["fields"]["sent_ref"], "sms:late");
+        assert_eq!(completed["note"]["fields"]["sent_at"], NOW);
+        assert_ne!(completed["version"], before["version"]);
+        api.report(&phone, &cid, receipt);
+        api.settle();
+        assert_eq!(api.note(&id), completed, "duplicate receipt wrote the item");
+        assert_eq!(api.commands(&phone, "").len(), 1);
+    }
+}
+
+#[test]
 fn new_claim_preserves_sms_waiting_for_phone() {
     let api = Api::start();
     let phone = api.phone();

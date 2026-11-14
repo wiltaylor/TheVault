@@ -471,7 +471,7 @@ impl Shared {
                 && !control.stopped
             {
                 if recovered_generation != Some(control.generation) {
-                    self.recover_sends(&writer, true);
+                    self.recover_sends(&writer, recovered_generation.is_none());
                     self.recover_deletes(&writer);
                     recovered_generation = Some(control.generation);
                 }
