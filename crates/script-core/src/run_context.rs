@@ -18,6 +18,9 @@ struct State {
     observed_outside: bool,
     stop_generation: Option<Generation>,
     parent: Option<RunContext>,
+    // Strong downstream ownership delays sealing until no ancestor can change
+    // this child's inherited state. Never retain an upstream directional edge.
+    children: Vec<RunContext>,
     durable: Vec<state::RunProvenanceLease>,
 }
 
@@ -79,12 +82,66 @@ impl RunContext {
         }
     }
 
-    fn join(&self, other: &Self) {
+    // Caller holds JOIN. Directional edges form a DAG between union roots.
+    fn reaches(&self, target: &Self) -> bool {
+        let mut pending = vec![self.clone()];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(node) = pending.pop() {
+            let root = node.root();
+            if Arc::ptr_eq(&root.0, &target.0) {
+                return true;
+            }
+            if seen.insert(Arc::as_ptr(&root.0)) {
+                pending.extend(root.0.lock().unwrap_or_else(|e| e.into_inner()).children.clone());
+            }
+        }
+        false
+    }
+
+    // Caller holds JOIN. Propagate every change, including late joins, before
+    // any action can read a child's policy. Child-local changes stay downstream.
+    fn propagate(&self) {
+        let root = self.root();
+        let state = root.0.lock().unwrap_or_else(|e| e.into_inner());
+        let values = (state.restricted, state.agent_reads, state.observed_outside, state.stop_generation);
+        let children = state.children.clone();
+        drop(state);
+        for child in children {
+            let child = child.root();
+            let mut state = child.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.restricted |= values.0;
+            state.agent_reads |= values.1;
+            state.observed_outside |= values.2;
+            state.restricted |= state.agent_reads && state.observed_outside;
+            state.stop_generation = oldest(state.stop_generation, values.3);
+            drop(state);
+            child.propagate();
+        }
+    }
+
+    /// Host-created one-way descendant. It inherits present and future parent
+    /// provenance but its own exposure, model use and restriction stay local.
+    /// Persist this child, not its parent, when publishing an after-handler job.
+    pub fn child(&self) -> Self {
+        let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
+        let root = self.root();
+        let child = Self::default();
+        root.0.lock().unwrap_or_else(|e| e.into_inner()).children.push(child.clone());
+        root.propagate();
+        child
+    }
+
+    fn join(&self, other: &Self) -> Self {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
         let root = self.root();
         let other = other.root();
-        if Arc::ptr_eq(&root.0, &other.0) {
-            return;
+        // Joining an ancestor into its child would erase the isolation boundary
+        // (and create an ownership cycle). Scope entry uses the deeper context.
+        if root.reaches(&other) {
+            return other;
+        }
+        if other.reaches(&root) {
+            return root;
         }
         let mut a = root.0.lock().unwrap_or_else(|e| e.into_inner());
         let mut b = other.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -94,7 +151,12 @@ impl RunContext {
         a.restricted |= a.agent_reads && a.observed_outside;
         a.stop_generation = oldest(a.stop_generation, b.stop_generation);
         a.durable.append(&mut b.durable);
+        a.children.append(&mut b.children);
         b.parent = Some(root.clone());
+        drop(b);
+        drop(a);
+        root.propagate();
+        root
     }
 
     /// Merge host-owned queue provenance without inheriting an unrelated caller.
@@ -110,6 +172,7 @@ impl RunContext {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .restricted = true;
+        self.propagate();
     }
 
     pub fn is_restricted(&self) -> bool {
@@ -129,6 +192,8 @@ impl RunContext {
         let mut state = root.0.lock().unwrap_or_else(|e| e.into_inner());
         state.agent_reads = true;
         state.restricted |= state.observed_outside;
+        drop(state);
+        root.propagate();
     }
 
     /// Record a host-classified incoming read, even before this job first uses AI.
@@ -139,6 +204,8 @@ impl RunContext {
         let mut state = root.0.lock().unwrap_or_else(|e| e.into_inner());
         state.observed_outside = true;
         state.restricted |= state.agent_reads;
+        drop(state);
+        root.propagate();
     }
 
     pub fn tracks_agent_reads(&self) -> bool {
@@ -157,6 +224,8 @@ impl RunContext {
         let root = self.root();
         let mut state = root.0.lock().unwrap_or_else(|e| e.into_inner());
         state.stop_generation = oldest(state.stop_generation, Some(generation));
+        drop(state);
+        root.propagate();
     }
 
     pub fn stop_generation(&self) -> Option<Generation> {
@@ -227,6 +296,7 @@ impl RunContext {
             observed_outside: snapshot.observed_outside_text(),
             stop_generation: snapshot.stop_generation(),
             parent: None,
+            children: Vec::new(),
             durable: vec![lease],
         })));
         if snapshot
@@ -246,7 +316,7 @@ impl RunContext {
     /// Join explicit provenance with the synchronous caller before a worker boundary.
     pub fn inherit_current(self) -> Self {
         if let Some(parent) = Self::current() {
-            parent.join(&self);
+            return parent.join(&self);
         }
         self
     }
@@ -255,10 +325,7 @@ impl RunContext {
     /// Never return an async future from this closure or hold this scope over await.
     /// Unrelated nested contexts join permanently, including existing clones.
     pub fn scope<T>(&self, f: impl FnOnce() -> T) -> T {
-        if let Some(parent) = Self::current() {
-            parent.join(self);
-        }
-        self.scope_recovered(f)
+        self.clone().inherit_current().scope_recovered(f)
     }
 
     /// Host recovery boundary for an independently recorded queue/Outbox item.
@@ -286,6 +353,72 @@ fn oldest(a: Option<Generation>, b: Option<Generation>) -> Option<Generation> {
 #[cfg(test)]
 mod tests {
     use super::RunContext;
+
+    #[test]
+    fn directional_children_isolate_exposure_and_inherit_late_parent_changes() {
+        let parent = RunContext::default();
+        let child = parent.child();
+        let sibling = parent.child();
+        child.observe_outside_text();
+        parent.scope(|| child.scope(|| child.track_agent_reads()));
+        assert!(child.is_restricted());
+        assert!(!parent.is_restricted());
+        assert!(!parent.tracks_agent_reads());
+        assert!(!sibling.is_restricted());
+        // An explicit ancestor must not escape the ambient child's restriction.
+        child.scope(|| parent.scope(|| assert!(RunContext::current().unwrap().is_restricted())));
+        assert!(!parent.is_restricted());
+        parent.restrict();
+        assert!(sibling.is_restricted());
+    }
+
+    #[test]
+    fn directional_children_seal_after_late_parent_joins_and_reopen_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let database = state::State::open(&path, None).unwrap();
+        let old = database.admit_automation().unwrap();
+        database.set_automation_stopped(false).unwrap();
+        let parent = RunContext::default();
+        let child = parent.child();
+        let child_id = child.persist(&database).unwrap();
+        let parent_id = parent.persist(&database).unwrap();
+        child.track_agent_reads();
+        child.observe_outside_text();
+        assert!(!parent.is_restricted());
+        drop(child);
+        assert!(!database.load_run_provenance(&child_id).is_sealed());
+        let joined = RunContext::default();
+        joined.capture_stop_generation(old);
+        parent.merge(&joined);
+        drop(joined);
+        drop(parent);
+        assert!(database.load_run_provenance(&child_id).is_sealed());
+        drop(database);
+        let database = state::State::open(&path, None).unwrap();
+        let parent = RunContext::recover(&database, &parent_id).unwrap();
+        let child = RunContext::recover(&database, &child_id).unwrap();
+        assert!(!parent.is_restricted());
+        assert!(child.is_restricted());
+        assert_eq!(child.stop_generation(), Some(old));
+        assert_eq!(parent.stop_generation(), Some(old));
+        assert_ne!(parent, child);
+    }
+
+    #[test]
+    fn directional_child_join_preserves_both_parents_and_late_restriction() {
+        let a = RunContext::default();
+        let b = RunContext::default();
+        let child = a.child();
+        let other = b.child();
+        child.merge(&other);
+        child.track_agent_reads();
+        b.observe_outside_text();
+        assert!(child.is_restricted());
+        assert!(other.is_restricted());
+        assert!(!a.is_restricted());
+        assert!(!b.is_restricted());
+    }
 
     #[test]
     fn pre_model_exposure_survives_join_and_recovery_without_restricting_imports() {
