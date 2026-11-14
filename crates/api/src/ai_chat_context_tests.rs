@@ -12,7 +12,11 @@ struct Probe(Arc<Mutex<Vec<(Author, RunContext)>>>);
 fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
     let dir = tempfile::tempdir().unwrap();
     let vault = store::Vault::init(dir.path()).unwrap();
-    std::fs::write(dir.path().join("types/item.wcl"), "label = \"Item\"\n").unwrap();
+    std::fs::write(
+        dir.path().join("types/item.wcl"),
+        "label = \"Item\"\ntemplate default { tab \"Main\" { slot \"title\" } }\n",
+    )
+    .unwrap();
     let state = state::State::open(
         &vault.server_dir().join("state.db"),
         Some(state::SecretKey::generate()),
