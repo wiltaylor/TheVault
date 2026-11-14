@@ -442,7 +442,77 @@ pub const UPGRADE_STEPS: &[UpgradeStep] = &[
         id: "0014_outbox_legacy_limits",
         run: outbox_legacy_limits,
     },
+    UpgradeStep {
+        id: "0015_outbox_sent_copy_account",
+        run: outbox_sent_copy_account,
+    },
 ];
+
+fn outbox_sent_copy_account(w: &Writer) -> Result<()> {
+    let schema = w.schema();
+    let Some(ty) = schema.type_def(OUTBOX_TYPE) else {
+        return Ok(());
+    };
+    if !w.is_built_in_def(ty) {
+        return Ok(());
+    }
+    let path = type_path(OUTBOX_TYPE);
+    let current = store::parse_data_only(crate::builtin::DEFAULT_OUTBOX_TYPE, &path)?;
+    let pick = |i: &Item| {
+        block(i, "handler").is_some_and(|b| {
+            b.items.iter().any(|i| {
+                matches!(i, Item::Field(f) if f.name == "function"
+                    && matches!(&f.expr, Expr::Utf8(s) if s == "copy_sent"))
+            })
+        })
+    };
+    let new = current
+        .items
+        .iter()
+        .find(|i| pick(i))
+        .expect("sent-copy handler");
+    // Compare the whole handler, including event, domains and secrets. Never widen a
+    // user-edited handler's secret access.
+    let old_text = crate::builtin::DEFAULT_OUTBOX_TYPE.replace(", \"google_account\"", "");
+    let old = store::parse_data_only(&old_text, &path)?;
+    let old = old
+        .items
+        .iter()
+        .find(|i| pick(i))
+        .expect("old sent-copy handler");
+    let mut ast = store::parse_data_only(&w.vault.read_text(&path)?, &path)?;
+    let mut changed = false;
+    for item in &mut ast.items {
+        if !pick(item) || canonical_item(item) == canonical_item(new) {
+            continue;
+        }
+        if canonical_item(item) != canonical_item(old) {
+            eprintln!("step 0015_outbox_sent_copy_account left a user-changed handler alone");
+            continue;
+        }
+        *item = new.clone();
+        changed = true;
+    }
+    if !changed {
+        return Ok(());
+    }
+    let change = TypeChange {
+        wcl: store::to_canonical(&ast),
+        ..TypeChange::default()
+    };
+    let plan = w.plan_type_change(OUTBOX_TYPE, &change)?;
+    if plan.changes.is_empty() {
+        w.apply_type_change(
+            OUTBOX_TYPE,
+            &change,
+            &plan.token,
+            &Author::Task(SERVER_AUTHOR.to_owned()),
+        )?;
+    } else {
+        eprintln!("step 0015_outbox_sent_copy_account left handlers alone: it would edit notes");
+    }
+    Ok(())
+}
 
 fn outbox_legacy_limits(w: &Writer) -> Result<()> {
     for (name, source) in w.definitions("agents")? {

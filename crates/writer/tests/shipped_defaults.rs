@@ -126,7 +126,8 @@ fn the_oldest_starter_vault_gains_the_person_fields_and_the_device_files() {
             "0011_email_template",
             "0012_email_gmail_handlers",
             "0013_email_gmail_restore",
-            "0014_outbox_legacy_limits"
+            "0014_outbox_legacy_limits",
+            "0015_outbox_sent_copy_account"
         ]
     );
     let fields: Vec<&str> = done
@@ -487,7 +488,8 @@ fn a_0_1_5_vault_moves_every_email_into_emails_and_keeps_the_users_fields() {
             "0011_email_template",
             "0012_email_gmail_handlers",
             "0013_email_gmail_restore",
-            "0014_outbox_legacy_limits"
+            "0014_outbox_legacy_limits",
+            "0015_outbox_sent_copy_account"
         ]
     );
     // Seeding added postal addresses after the step had moved the email addresses out of it.
@@ -691,7 +693,8 @@ fn a_0_1_6_vault_ends_with_lists_of_dicts_and_an_image_photo() {
                 "0011_email_template",
                 "0012_email_gmail_handlers",
                 "0013_email_gmail_restore",
-                "0014_outbox_legacy_limits"
+                "0014_outbox_legacy_limits",
+                "0015_outbox_sent_copy_account"
             ],
             "{name}"
         );
@@ -883,7 +886,8 @@ fn a_0_1_6_vault_gains_the_google_types_and_the_gmail_label_taxonomy() {
             "0011_email_template",
             "0012_email_gmail_handlers",
             "0013_email_gmail_restore",
-            "0014_outbox_legacy_limits"
+            "0014_outbox_legacy_limits",
+            "0015_outbox_sent_copy_account"
         ]
     );
     // One more for step 0007's Correspondence tab on the person type, one for each of the
@@ -1349,7 +1353,8 @@ fn a_0_1_7_vault_moves_its_google_sync_note_into_secrets_and_loses_the_type() {
             "0011_email_template",
             "0012_email_gmail_handlers",
             "0013_email_gmail_restore",
-            "0014_outbox_legacy_limits"
+            "0014_outbox_legacy_limits",
+            "0015_outbox_sent_copy_account"
         ]
     );
 
@@ -1449,7 +1454,8 @@ fn a_0_1_7_vault_with_the_type_and_no_note_just_loses_the_type_even_without_a_ke
             "0011_email_template",
             "0012_email_gmail_handlers",
             "0013_email_gmail_restore",
-            "0014_outbox_legacy_limits"
+            "0014_outbox_legacy_limits",
+            "0015_outbox_sent_copy_account"
         ]
     );
     assert!(w.schema().type_def("google_sync").is_none());
@@ -1486,7 +1492,8 @@ fn without_the_secrets_key_a_settings_note_is_kept_and_the_step_runs_again_on_th
                 "0011_email_template",
                 "0012_email_gmail_handlers",
                 "0013_email_gmail_restore",
-                "0014_outbox_legacy_limits"
+                "0014_outbox_legacy_limits",
+                "0015_outbox_sent_copy_account"
             ]
         );
         assert!(w.schema().type_def("google_sync").is_some());
@@ -2278,6 +2285,39 @@ fn without_handlers(text: &str) -> String {
     out
 }
 
+#[test]
+fn sent_copy_account_upgrade_preserves_user_handlers_and_is_idempotent() {
+    let path = "types/outbox.wcl";
+    let current = store::canonical(writer::DEFAULT_OUTBOX_TYPE, path).unwrap();
+    let (prefix, suffix) = writer::DEFAULT_OUTBOX_TYPE
+        .rsplit_once(", \"google_account\"")
+        .unwrap();
+    let old = format!("{prefix}{suffix}");
+    for edited in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        open(root).upgrade_shipped_defaults(Upkeep::Home).unwrap();
+        assert_eq!(read(root, path).unwrap(), current);
+        let source = if edited {
+            old.replace("\"google_settings\"", "\"custom_settings\"")
+        } else {
+            old.clone()
+        };
+        let before = store::canonical(&source, path).unwrap();
+        std::fs::write(root.join(path), &before).unwrap();
+        let w = open(root);
+        run_step_again(&w, "0015_outbox_sent_copy_account");
+        let after = read(root, path).unwrap();
+        assert_eq!(after, if edited { before } else { current.clone() });
+        let step = writer::UPGRADE_STEPS
+            .iter()
+            .find(|s| s.id == "0015_outbox_sent_copy_account")
+            .unwrap();
+        (step.run)(&w).unwrap();
+        assert_eq!(read(root, path).unwrap(), after);
+    }
+}
+
 fn run_step_again(w: &Writer, id: &'static str) -> Vec<String> {
     let step = writer::UPGRADE_STEPS.iter().find(|s| s.id == id).unwrap();
     let test_id: &'static str = Box::leak(format!("test_{id}").into_boxed_str());
@@ -2328,6 +2368,7 @@ fn the_outbox_template_ticket_180_shipped_is_replaced_and_no_note_changes() {
     );
     // The start after the steps brings the old `multiple` attachments to the list form.
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    run_step_again(&w, "0015_outbox_sent_copy_account");
     assert_eq!(read(root, path).unwrap(), current);
     assert_eq!(read(root, &note_path).unwrap(), before);
     let schema = w.schema();
@@ -2433,6 +2474,7 @@ fn the_outbox_statuses_become_draft_ready_sending_and_failed() {
     );
     // The start after the steps brings the old `multiple` attachments to the list form.
     w.upgrade_shipped_defaults(Upkeep::Home).unwrap();
+    run_step_again(&w, "0015_outbox_sent_copy_account");
     assert_eq!(read(root, path).unwrap(), current);
     assert_eq!(outbox_status(&w, &draft), "draft");
     assert_eq!(outbox_status(&w, &review), "draft");
