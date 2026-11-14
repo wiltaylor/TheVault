@@ -216,7 +216,7 @@ if [ ${#found[@]} -eq 1 ]; then
     grep -qE "/backups/0\.0\.1-to-${version//./\\.}-[0-9]{8}T[0-9]{6}Z\.sqlar$" <<< "${found[0]}"
   names=$(sqlar_names "${found[0]}")
   check "the backup holds state.db" grep -qx '.vault/state.db' <<< "$names"
-  check "the backup leaves the secret key out" sh -c "! grep -q '^key/' <<< '$names'"
+  check "the backup leaves the secret key out" bash -c "! grep -q '^key/' <<< '$names'"
   check "the backup path is logged" sh -c "docker logs '$run-upgrade' 2>&1 | grep -qF 'backups/$(basename "${found[0]}")'"
 fi
 check "login still works after the upgrade" test "$(login "$port" "$password")" = 200
