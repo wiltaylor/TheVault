@@ -404,3 +404,39 @@ GitHub mode preflight requires the remote `sign-only.yml` workflow to exist
 and be active. Missing or disabled workflows fail clearly before building or
 dispatching. The script never enables a workflow. Choose `none` when apps
 must be omitted, or provision custodian keys for a later signed release.
+# Target disk housekeeping
+
+The lead runs this hook after a merge is accepted and after publication, not
+while a card or release still uses its tree. Export a fresh card inventory from
+`terrarium card ls --json` into a file containing `CARD-ID column` lines (include
+archived cards if their trees remain). The script never calls Terrarium. Unknown
+cards, unknown releases, active cards, `terrarium*` and `thevault-heavy*` stay.
+
+On thevault-dev, from the checked-out repository:
+
+```sh
+bash scripts/target-cleanup.sh --cards /path/to/card-states --dry-run
+bash scripts/target-cleanup.sh --cards /path/to/card-states --apply
+```
+
+After publication, add `--published-release rel-VERSION` for each published,
+no-longer-used release tree and `--current-release rel-CURRENT` to both commands.
+Only explicitly listed release basenames are eligible. Never list a tree still
+used by a release job. Check the dry-run list before applying. The script prints
+`df` before and after. Report deleted paths and sizes to meta/lead per the
+leftover policy. This is a lead-run hook, not an automatic daemon integration.
+
+Before creating a new build tree, and before each build, use the free-space
+guard. It defaults to 300 GiB free on `/src` and names the cleanup command when
+it refuses. For example:
+
+```sh
+bash scripts/target-build.sh sh /src/thevault-heavy.sh sh -c 'cd /src/CARD && cargo build --locked'
+```
+
+`TARGET_MIN_FREE_GIB` changes the floor. `TARGET_CLEANUP_ROOT` changes the root
+for both scripts for isolated tests. Do not use that override for normal target
+housekeeping. Cleanup accepts only immediate tree basenames and refuses symlinks
+and mounted roots. Stop writers before applying cleanup. It is not a substitute
+for coordination with active jobs.
+
