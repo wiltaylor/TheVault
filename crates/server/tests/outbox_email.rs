@@ -94,7 +94,7 @@ fn run() -> Result[Value, string] {{
         (
             "/api/tasks/ancestor_patch",
             format!(
-                "label = \"Ancestor patch\"\nscript = \"ancestor_patch\"\nallow_domains = [\"{}\"]\n",
+                "label = \"Ancestor patch\"\nscript = \"ancestor_patch\"\nschedule = \"0 0 * * *\"\npaused = true\ntimeout = \"PT1M\"\nallow_domains = [\"{}\"]\n",
                 pause.host()
             ),
         ),
