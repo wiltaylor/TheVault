@@ -34,16 +34,19 @@ const MODEL: &str = "claude-opus-5";
 fn outside_text_user_email_handler_model_call_cannot_send() {
     let fake = FakeAnthropic::start();
     let api = Api::start(&fake);
+    let provider = testkit::StandIn::start();
+    provider.route("/send", testkit::Reply::text(200, "unexpected"));
+    let send_url = provider.url("/send");
     let draft = api.send("POST", "/api/notes?type=outbox", json!({"note":{"fields":{"title":"Held draft", "kind":"email", "status":"draft", "to":["nobody@example.test"], "subject":"Do not send"}}}));
     let id = draft["id"].as_str().unwrap();
     let version = draft["version"].as_str().unwrap();
     let source = format!(
         r#"use ai
-use vault
-fn after_create(note: Value) -> Result[Value, string] {{
+use http
+fn after_create(note: Value) -> Result[int, string] {{
     let title = note.get("note").unwrap().get("fields").unwrap().get("title").unwrap().as_string().unwrap()
     match ai::chat([ChatMessage {{ role: "user", text: title }}], #{{}}) {{
-        Ok(_) => vault::update("{id}", Value::Map(#{{"fields": Value::Map(#{{"status": Value::String("sending")}})}}), "{version}"),
+        Ok(reply) => Ok(http::post("{send_url}", reply.text, #{{}})?.status),
         Err(e) => Err(e.message),
     }}
 }}
@@ -87,6 +90,7 @@ fn after_create(note: Value) -> Result[Value, string] {{
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(fake.message_requests().len(), 1);
+    assert!(provider.requests().is_empty());
     assert!(
         fake.message_requests()[0].json()["messages"]
             .to_string()
