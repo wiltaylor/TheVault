@@ -50,6 +50,36 @@ const AFTER_WORKERS: usize = 2;
 /// How long the queue thread sleeps before looking at `state.db` again without being woken.
 const POLL: Duration = Duration::from_secs(1);
 
+fn recovery_segment(value: &str) -> bool {
+    let mut decoded = value.as_bytes().to_vec();
+    loop {
+        if decoded.is_empty() || decoded == b"." || decoded == b".." {
+            return false;
+        }
+        let mut next = Vec::new();
+        let mut i = 0;
+        while i < decoded.len() {
+            if decoded[i] == b'%'
+                && i + 2 < decoded.len()
+                && let (Some(a), Some(b)) = (
+                    char::from(decoded[i + 1]).to_digit(16),
+                    char::from(decoded[i + 2]).to_digit(16),
+                )
+            {
+                next.push((a * 16 + b) as u8);
+                i += 3;
+            } else {
+                next.push(decoded[i]);
+                i += 1;
+            }
+        }
+        if next == decoded {
+            return true;
+        }
+        decoded = next;
+    }
+}
+
 /// The `after_*` handler scripts that may run longer than [`Limits::timeout`], with their wall
 /// clock limit: the Outbox's send handler uploads a message of up to 25 MB to Gmail (outbox X3,
 /// X4).
@@ -431,14 +461,18 @@ impl Shared {
 
     /// The queue thread: run queued jobs, oldest first, until the writer is gone.
     fn run_queue(&self) {
-        if let Ok(writer) = self.writer() {
-            self.recover_sends(&writer, true);
-            self.recover_deletes(&writer);
-        }
+        let mut recovered_generation = None;
         loop {
             let Ok(writer) = self.writer() else {
                 return;
             };
+            let control = writer.state().automation_state();
+            if let Ok(control) = control && !control.stopped {
+                if recovered_generation != Some(control.generation) {
+                    self.recover_sends(&writer, true);
+                    self.recover_deletes(&writer);
+                    recovered_generation = Some(control.generation);
+                }
             match writer.state().queued_jobs() {
                 Ok(jobs) => {
                     for job in jobs {
@@ -590,6 +624,7 @@ impl Shared {
                 }
                 Err(e) => eprintln!("reading the handler queue: {e}"),
             }
+            }
             drop(writer);
             let (flag, cv) = &self.wake;
             let mut woken = flag.lock().unwrap_or_else(|e| e.into_inner());
@@ -618,6 +653,9 @@ impl Shared {
     // The queue is serial, but SMS receipts and event write-back jobs are asynchronous.
     // Preserve those live waits before a claim, not across a server restart.
     fn recover_sends(&self, writer: &Writer, startup: bool) {
+        if writer.state().automation_completion().is_err() {
+            return;
+        }
         let Ok(notes) = writer.list_with(Some("outbox"), writer::Archived::Include) else {
             return;
         };
@@ -704,6 +742,9 @@ impl Shared {
     // Runs before replay and before a new claim, on the single queue thread. Recovery
     // reads Google but never repeats DELETE without a user's ready transition.
     fn recover_deletes(&self, writer: &Writer) {
+        if writer.state().automation_completion().is_err() {
+            return;
+        }
         let Ok(notes) = writer.list_with(Some("outbox"), writer::Archived::Include) else {
             return;
         };
@@ -830,6 +871,9 @@ impl Shared {
                 None => Json::Null,
             };
             let script = text("script");
+            if recovery && writer.state().automation_completion().is_err() {
+                return Ok(None);
+            }
             let stale_recovery = recovery
                 && script_core::RunContext::current()
                     .and_then(|context| context.stop_generation())
@@ -908,6 +952,9 @@ impl Shared {
                                     })
                                     .collect()
                             };
+                            if !recovery_segment(calendar) || !recovery_segment(reference) {
+                                return Err("Outbox recovery refuses an invalid resource segment".into());
+                            }
                             permit.status_url = Some(format!(
                                 "{}/calendars/{}/events/{}",
                                 endpoint("calendar", "https://www.googleapis.com/calendar/v3"),
@@ -1156,6 +1203,10 @@ const MIGRATION_WRITE: &str =
     "a migration changes the note it is given by returning it; it cannot change other notes";
 
 impl Vault for HandlerVault {
+    fn check_outbox_recovery(&self) -> Result<(), String> {
+        Vault::check_outbox_recovery(&*bound(&self.binding)?)
+    }
+
     fn check_automation(&self) -> Result<(), String> {
         Vault::check_automation(&*bound(&self.binding)?)
     }
@@ -1412,6 +1463,64 @@ mod tests {
                     .any(|entry| entry.kind == kind && entry.subject.as_deref() == Some(reference))
             );
         }
+    }
+
+    #[test]
+    fn recovery_refuses_raw_and_encoded_dot_segments() {
+        for id in ["", ".", "..", "%2e", "%2E%2e", ".%2e", "%252e%252e"] {
+            assert!(!recovery_segment(id), "{id}");
+        }
+        for id in ["primary", "calendar@example.com", "recorded-event", "a.b"] {
+            assert!(recovery_segment(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn restart_during_stop_defers_recovery_until_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = testkit::StandIn::start();
+        provider.route("/token", testkit::Reply::json(200, json!({"access_token":"fake"})));
+        provider.route("/calendar/calendars/primary/events/recorded", testkit::Reply::text(404, "gone"));
+        let key = state::SecretKey::generate();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), Some(key.clone())).unwrap();
+        let writer = Writer::open(vault, state).unwrap();
+        writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
+        for name in ["google_client_id", "google_client_secret", "google_refresh_token"] {
+            writer.state().set_secret(name, "fake").unwrap();
+        }
+        writer.state().set_secret("google_settings", &json!({"endpoints": {
+            "token":provider.url("/token"),"calendar":provider.url("/calendar")
+        }}).to_string()).unwrap();
+        let event = writer.create("event", &Input::Json(json!({"fields": {
+            "title":"Recorded", "google_ref":"recorded", "calendar":"primary"
+        }})), &Author::Session("owner".into())).unwrap();
+        let item = writer.create("outbox", &Input::Json(json!({"fields": {
+            "title":"Delete recorded", "kind":"event", "status":"sending", "event_action":"delete",
+            "event":event.id,"sent_ref":event.id
+        }})), &Author::Session("owner".into())).unwrap();
+        writer.state().set_automation_stopped(true).unwrap();
+        drop(writer);
+        let path = dir.path().join("types/outbox.wcl");
+        let definition = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, definition.replace("allow_domains = [", &format!("allow_domains = [\"{}\", ", provider.host()))).unwrap();
+        let vault = store::Vault::open(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), Some(key)).unwrap();
+        let writer = Arc::new(Writer::open(vault, state).unwrap());
+        let handlers = Handlers::on_device(Limits::default());
+        handlers.bind(&writer);
+        handlers.shared.recover_sends(&writer, true);
+        handlers.shared.recover_deletes(&writer);
+        assert!(provider.requests().is_empty());
+        assert_eq!(writer.read(&item.id).unwrap().version, item.version);
+        assert_eq!(writer.read(&event.id).unwrap().version, event.version);
+        writer.state().set_automation_stopped(false).unwrap();
+        handlers.shared.recover_deletes(&writer);
+        assert!(writer.read(&item.id).is_err());
+        assert!(writer.read(&event.id).is_err());
+        assert_eq!(provider.requests().len(), 2);
+        handlers.shared.recover_deletes(&writer);
+        assert_eq!(provider.requests().len(), 2);
     }
 
     #[test]

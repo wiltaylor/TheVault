@@ -104,7 +104,11 @@ impl State {
 
     /// Hold only across local mutation, never callbacks, handlers or network I/O.
     pub fn automation_completion(&self) -> Result<MutexGuard<'_, ()>> {
-        self.automation_lock()
+        let gate = self.automation_lock()?;
+        if self.automation_state()?.stopped {
+            return Err(Error::AutomationRefused);
+        }
+        Ok(gate)
     }
 
     /// Hold only across local mutation, never callbacks, handlers or network I/O.

@@ -113,6 +113,11 @@ impl Writer {
     /// Finish the Outbox item of `command`, a `send_sms` the phone reported `done` or `failed`
     /// (outbox X6). Any other command, and a command whose item has moved on, is left alone.
     pub fn finish_outbox_sms(&self, command: &DeviceCommand) -> Result<(), String> {
+        // The receipt stays in the durable command row. The handler queue's
+        // post-Resume sweep applies it without asking the phone to send again.
+        if self.state().automation_state().map_err(|e| e.to_string())?.stopped {
+            return Ok(());
+        }
         if command.name != SEND_SMS
             || !matches!(command.status, CommandStatus::Done | CommandStatus::Failed)
         {
@@ -331,6 +336,10 @@ mod tests {
                     updated_ms: Some(1),
                 };
                 ambient.scope(|| {
+                    writer.state().set_automation_stopped(true).unwrap();
+                    writer.finish_outbox_sms(&command).unwrap();
+                    assert_eq!(writer.read(&item.id).unwrap().version, item.version);
+                    writer.state().set_automation_stopped(false).unwrap();
                     writer.finish_outbox_sms(&command).unwrap();
                     assert_eq!(script_core::RunContext::current(), Some(ambient.clone()));
                 });

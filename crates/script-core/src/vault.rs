@@ -16,6 +16,11 @@ pub trait Vault: Send + Sync {
         Ok(())
     }
 
+    /// Completion may retain an old admission, but never bypass an active Stop.
+    fn check_outbox_recovery(&self) -> Result<(), String> {
+        self.check_automation()
+    }
+
     /// Note `id` as it is now.
     fn get(&self, id: &str) -> Result<Json, String>;
 

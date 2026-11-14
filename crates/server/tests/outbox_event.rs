@@ -376,6 +376,15 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
     api.google.fail_calendar_writes(None);
     // TV-313 requires an owner session to release the old admission. An admin
     // bearer edit must not authorize stale work after restart.
+    let deletes = api.google.requests().iter().filter(|r| r.method == "DELETE").count();
+    let mut held = api.note(&item);
+    held["note"]["fields"]["status"] = json!("ready");
+    expect(api.req("PUT", &format!("/api/notes/{item}"))
+        .json(&json!({"note":held["note"],"base_version":held["version"]}))
+        .send().unwrap(), 200);
+    assert!(!api.server.settle_handlers().is_empty());
+    assert_eq!(api.google.requests().iter().filter(|r| r.method == "DELETE").count(), deletes);
+    assert!(!api.gone(&id));
     let client = Client::new();
     let login = client
         .post(api.server.url("/api/login"))
@@ -402,6 +411,7 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
     api.settle();
     assert!(api.gone(&item));
     api.assert_trashed(&id);
+    assert_eq!(api.google.event("primary", "standup").unwrap()["status"], "cancelled");
 }
 
 #[test]

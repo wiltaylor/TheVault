@@ -31,6 +31,9 @@ mod completion_tests {
         let author = state::Author::Handler("outbox_send".into());
         recovered.scope_recovered(|| {
             writer.with_sms_completion(&item.id, || {
+                writer.state().set_automation_stopped(true).unwrap();
+                assert!(writer.patch(&item.id, json!({"status":"failed"}), "", &author).is_err());
+                writer.state().set_automation_stopped(false).unwrap();
                 assert!(
                     writer
                         .patch(&item.id, json!({"title":"New action"}), "", &author)

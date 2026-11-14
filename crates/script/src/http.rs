@@ -115,6 +115,9 @@ fn checked_call(
 ) -> Result<Result<Response, String>, HostError> {
     let recovery = crate::current_job(|job| job.outbox_recovery.clone()).flatten();
     if let Some(permit) = recovery {
+        if let Err(error) = vault.check_outbox_recovery() {
+            return Ok(Err(error));
+        }
         let allowed =
             (method == "GET" && permit.status_url.as_deref() == Some(url) && body.is_empty())
                 || (method == "POST"

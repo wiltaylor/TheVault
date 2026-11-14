@@ -92,6 +92,20 @@ fn stale_recovery_allows_only_its_status_read_and_oauth_refresh() {
         );
     }
     assert_eq!(provider.requests().len(), 2);
+    f.writer.state().set_automation_stopped(true).unwrap();
+    for (method, path, body) in [
+        ("GET", "/events/recorded", ""),
+        ("POST", "/token", "grant_type=refresh_token"),
+    ] {
+        let source = format!("use http\nfn run() -> bool {{ http::request({method:?}, {:?}, #{{}}, {body:?}).is_ok() }}", provider.url(path));
+        let mut job = Job::new(Kind::After, "stopped-probe", &source, "run");
+        job.allow_domains = vec![provider.host()];
+        job.set_run_context(recovered.clone());
+        job.outbox_recovery = Some(permit.clone());
+        assert_eq!(f.host.run(job).result.unwrap(), json!(false));
+    }
+    assert_eq!(provider.requests().len(), 2);
+    f.writer.state().set_automation_stopped(false).unwrap();
     // No marker is inherited merely from the same stale context.
     let source = format!(
         "use http\nfn run() -> bool {{ http::get({:?}, #{{}}).is_ok() }}",
