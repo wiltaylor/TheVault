@@ -46,7 +46,7 @@ use http
 fn after_create(note: Value) -> Result[int, string] {{
     let title = note.get("note").unwrap().get("fields").unwrap().get("title").unwrap().as_string().unwrap()
     match ai::chat([ChatMessage {{ role: "user", text: title }}], #{{}}) {{
-        Ok(reply) => Ok(http::post("{send_url}", reply.text, #{{}})?.status),
+        Ok(reply) => Ok(http::post("{send_url}", #{{}}, reply.text)?.status),
         Err(e) => Err(e.message),
     }}
 }}
