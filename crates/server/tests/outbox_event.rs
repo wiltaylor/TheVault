@@ -377,15 +377,28 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
     // TV-313 requires an owner session to release the old admission. An admin
     // bearer edit must not authorize stale work after restart.
     let client = Client::new();
-    let login = client.post(api.server.url("/api/login"))
-        .json(&json!({"password": testkit::PASSWORD})).send().unwrap();
-    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+    let login = client
+        .post(api.server.url("/api/login"))
+        .json(&json!({"password": testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
     let mut note = api.note(&item);
     note["note"]["fields"]["status"] = json!("ready");
-    expect(client.put(api.server.url(&format!("/api/notes/{item}")))
-        .header("cookie", cookie)
-        .json(&json!({"note": note["note"], "base_version": note["version"]}))
-        .send().unwrap(), 200);
+    expect(
+        client
+            .put(api.server.url(&format!("/api/notes/{item}")))
+            .header("cookie", cookie)
+            .json(&json!({"note": note["note"], "base_version": note["version"]}))
+            .send()
+            .unwrap(),
+        200,
+    );
     api.settle();
     assert!(api.gone(&item));
     api.assert_trashed(&id);

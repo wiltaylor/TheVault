@@ -771,7 +771,12 @@ impl Shared {
         self.run_job_mode(writer, payload, true)
     }
 
-    fn run_job_mode(&self, writer: &Writer, payload: &str, recovery: bool) -> (Result<(), String>, String) {
+    fn run_job_mode(
+        &self,
+        writer: &Writer,
+        payload: &str,
+        recovery: bool,
+    ) -> (Result<(), String>, String) {
         let job = (|| {
             let p: Json = serde_json::from_str(payload).map_err(|e| e.to_string())?;
             // A crash can happen after creating the event but before linking `result` on
@@ -825,9 +830,10 @@ impl Shared {
                 None => Json::Null,
             };
             let script = text("script");
-            let stale_recovery = recovery && script_core::RunContext::current()
-                .and_then(|context| context.stop_generation())
-                .is_none_or(|generation| writer.state().automation_commit(generation).is_err());
+            let stale_recovery = recovery
+                && script_core::RunContext::current()
+                    .and_then(|context| context.stop_generation())
+                    .is_none_or(|generation| writer.state().automation_commit(generation).is_err());
             // Recovery is a host operation, not authority given to an owner's
             // replaceable script. Live custom recovery retains its old behavior.
             let source = if stale_recovery {
@@ -851,11 +857,16 @@ impl Shared {
             let mut job = Job::new(Kind::After, &script, &source, &text("function"));
             if stale_recovery {
                 let fields = doc_to_json(&doc)["fields"].clone();
-                let target = ["sent_ref", "event", "result"].iter()
+                let target = ["sent_ref", "event", "result"]
+                    .iter()
                     .filter_map(|key| fields[*key].as_str())
-                    .find(|id| !id.is_empty()).map(str::to_owned);
+                    .find(|id| !id.is_empty())
+                    .map(str::to_owned);
                 let mut permit = script_core::OutboxRecovery {
-                    item: id.clone(), delete_target: None, status_url: None, token_url: None,
+                    item: id.clone(),
+                    delete_target: None,
+                    status_url: None,
+                    token_url: None,
                 };
                 if text("function") == "reconcile_delete" {
                     permit.delete_target = target.clone();
@@ -867,19 +878,44 @@ impl Shared {
                         let reference = ef["google_ref"].as_str().unwrap_or_default();
                         if !reference.is_empty() {
                             let settings: Json = Vault::secret(writer, "google_settings")?
-                                .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-                            let endpoint = |key: &str, fallback: &str| settings["endpoints"][key].as_str()
-                                .filter(|s| !s.is_empty()).unwrap_or(fallback).trim_end_matches('/').to_owned();
-                            let calendar = ef["calendar"].as_str().filter(|s| !s.is_empty())
-                                .or_else(|| settings["default_calendar"].as_str().filter(|s| !s.is_empty())).unwrap_or("primary");
-                            let encode = |s: &str| -> String {
-                                s.bytes().map(|b| {
-                                    if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { char::from(b).to_string() }
-                                    else { format!("%{b:02X}") }
-                                }).collect()
+                                .and_then(|s| serde_json::from_str(&s).ok())
+                                .unwrap_or_default();
+                            let endpoint = |key: &str, fallback: &str| {
+                                settings["endpoints"][key]
+                                    .as_str()
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or(fallback)
+                                    .trim_end_matches('/')
+                                    .to_owned()
                             };
-                            permit.status_url = Some(format!("{}/calendars/{}/events/{}", endpoint("calendar", "https://www.googleapis.com/calendar/v3"), encode(calendar), encode(reference)));
-                            permit.token_url = Some(endpoint("token", "https://oauth2.googleapis.com/token"));
+                            let calendar = ef["calendar"]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .or_else(|| {
+                                    settings["default_calendar"]
+                                        .as_str()
+                                        .filter(|s| !s.is_empty())
+                                })
+                                .unwrap_or("primary");
+                            let encode = |s: &str| -> String {
+                                s.bytes()
+                                    .map(|b| {
+                                        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                                            char::from(b).to_string()
+                                        } else {
+                                            format!("%{b:02X}")
+                                        }
+                                    })
+                                    .collect()
+                            };
+                            permit.status_url = Some(format!(
+                                "{}/calendars/{}/events/{}",
+                                endpoint("calendar", "https://www.googleapis.com/calendar/v3"),
+                                encode(calendar),
+                                encode(reference)
+                            ));
+                            permit.token_url =
+                                Some(endpoint("token", "https://oauth2.googleapis.com/token"));
                         }
                     }
                 }

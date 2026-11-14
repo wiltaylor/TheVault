@@ -33,7 +33,12 @@ pub struct Response {
 
 type Reply = Fault<Result<Response, String>>;
 
-pub fn module(client: Client, guarded: Client, ai: crate::Ai, vault: std::sync::Arc<dyn crate::Vault>) -> Module {
+pub fn module(
+    client: Client,
+    guarded: Client,
+    ai: crate::Ai,
+    vault: std::sync::Arc<dyn crate::Vault>,
+) -> Module {
     let mut m = Module::new("http");
     m.doc("HTTP to the hosts on this script's allowlist");
     let c = client.clone();
@@ -44,7 +49,15 @@ pub fn module(client: Client, guarded: Client, ai: crate::Ai, vault: std::sync::
         "get",
         ["url", "headers"],
         move |url: String, headers: HashMap<String, String>| -> Reply {
-            Fault(checked_call((&c, &g), &a, &*v, "GET", &url, headers, String::new()))
+            Fault(checked_call(
+                (&c, &g),
+                &a,
+                &*v,
+                "GET",
+                &url,
+                headers,
+                String::new(),
+            ))
         },
     );
     let c = client.clone();
@@ -77,21 +90,38 @@ pub fn module(client: Client, guarded: Client, ai: crate::Ai, vault: std::sync::
               headers: HashMap<String, String>,
               body: String|
               -> Reply {
-            Fault(checked_call((&client, &guarded), &ai, &*vault, &method, &url, headers, body))
+            Fault(checked_call(
+                (&client, &guarded),
+                &ai,
+                &*vault,
+                &method,
+                &url,
+                headers,
+                body,
+            ))
         },
     );
     m
 }
 
 fn checked_call(
-    clients: (&Client, &Client), ai: &crate::Ai, vault: &dyn crate::Vault,
-    method: &str, url: &str, headers: HashMap<String, String>, body: String,
+    clients: (&Client, &Client),
+    ai: &crate::Ai,
+    vault: &dyn crate::Vault,
+    method: &str,
+    url: &str,
+    headers: HashMap<String, String>,
+    body: String,
 ) -> Result<Result<Response, String>, HostError> {
     let recovery = crate::current_job(|job| job.outbox_recovery.clone()).flatten();
     if let Some(permit) = recovery {
-        let allowed = (method == "GET" && permit.status_url.as_deref() == Some(url) && body.is_empty())
-            || (method == "POST" && permit.token_url.as_deref() == Some(url)
-                && body.split('&').any(|part| part == "grant_type=refresh_token"));
+        let allowed =
+            (method == "GET" && permit.status_url.as_deref() == Some(url) && body.is_empty())
+                || (method == "POST"
+                    && permit.token_url.as_deref() == Some(url)
+                    && body
+                        .split('&')
+                        .any(|part| part == "grant_type=refresh_token"));
         if !allowed {
             return Ok(Err("Outbox recovery refuses a new provider request".into()));
         }

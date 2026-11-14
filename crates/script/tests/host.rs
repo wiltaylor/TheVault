@@ -57,10 +57,17 @@ fn stale_recovery_allows_only_its_status_read_and_oauth_refresh() {
     // Recover while the durable owner is unsealed, as after a crash.
     let recovered = script::RunContext::recover(f.writer.state(), &id).unwrap();
     assert!(recovered.is_restricted());
-    assert!(f.writer.state().automation_commit(recovered.stop_generation().unwrap()).is_err());
+    assert!(
+        f.writer
+            .state()
+            .automation_commit(recovered.stop_generation().unwrap())
+            .is_err()
+    );
     let permit = script::OutboxRecovery {
-        item: "recorded-item".into(), delete_target: Some("recorded-event".into()),
-        status_url: Some(provider.url("/events/recorded")), token_url: Some(provider.url("/token")),
+        item: "recorded-item".into(),
+        delete_target: Some("recorded-event".into()),
+        status_url: Some(provider.url("/events/recorded")),
+        token_url: Some(provider.url("/token")),
     };
     for (method, path, body, allowed) in [
         ("DELETE", "/events/recorded", "", false),
@@ -70,16 +77,26 @@ fn stale_recovery_allows_only_its_status_read_and_oauth_refresh() {
         ("GET", "/events/recorded", "", true),
         ("POST", "/token", "grant_type=refresh_token", true),
     ] {
-        let source = format!("use http\nfn run() -> bool {{ http::request({method:?}, {:?}, #{{}}, {body:?}).is_ok() }}", provider.url(path));
+        let source = format!(
+            "use http\nfn run() -> bool {{ http::request({method:?}, {:?}, #{{}}, {body:?}).is_ok() }}",
+            provider.url(path)
+        );
         let mut job = Job::new(Kind::After, "probe", &source, "run");
         job.allow_domains = vec![provider.host()];
         job.set_run_context(recovered.clone());
         job.outbox_recovery = Some(permit.clone());
-        assert_eq!(f.host.run(job).result.unwrap(), json!(allowed), "{method} {path}");
+        assert_eq!(
+            f.host.run(job).result.unwrap(),
+            json!(allowed),
+            "{method} {path}"
+        );
     }
     assert_eq!(provider.requests().len(), 2);
     // No marker is inherited merely from the same stale context.
-    let source = format!("use http\nfn run() -> bool {{ http::get({:?}, #{{}}).is_ok() }}", provider.url("/events/recorded"));
+    let source = format!(
+        "use http\nfn run() -> bool {{ http::get({:?}, #{{}}).is_ok() }}",
+        provider.url("/events/recorded")
+    );
     let mut job = Job::new(Kind::After, "ordinary", &source, "run");
     job.allow_domains = vec![provider.host()];
     job.set_run_context(recovered);

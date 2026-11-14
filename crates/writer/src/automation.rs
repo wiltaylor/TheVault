@@ -6,6 +6,43 @@ use state::automation::Generation;
 
 use crate::{Result, Writer};
 
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    use script_core::Vault as _;
+    use serde_json::json;
+
+    #[test]
+    fn completion_cannot_authorize_other_writes_or_refresh_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = store::Vault::init(dir.path()).unwrap();
+        let state = state::State::open(&vault.server_dir().join("state.db"), None).unwrap();
+        let writer = Writer::open(vault, state).unwrap();
+        writer.upgrade_shipped_defaults(crate::Upkeep::Home).unwrap();
+        let item = writer.create("outbox", &crate::Input::Json(json!({"fields": {
+            "title": "Existing attempt", "kind": "sms", "status": "sending", "phone": "+61400000000"
+        }})), &state::Author::Session("owner".into())).unwrap();
+        let active = script_core::RunContext::default();
+        let run_id = active.persist(writer.state()).unwrap();
+        let recovered = script_core::RunContext::recover(writer.state(), &run_id).unwrap();
+        let generation = recovered.stop_generation().unwrap();
+        let author = state::Author::Handler("outbox_send".into());
+        recovered.scope_recovered(|| {
+            writer.with_sms_completion(&item.id, || {
+                assert!(writer.patch(&item.id, json!({"title":"New action"}), "", &author).is_err());
+                assert!(writer.delete(&item.id, None, &author).is_err());
+                writer.patch(&item.id, json!({"status":"failed", "error":"Interrupted"}), "", &author).unwrap();
+            });
+            assert!(writer.patch(&item.id, json!({"error":"ordinary stale write"}), "", &author).is_err());
+        });
+        assert!(writer.state().automation_commit(generation).is_err());
+        assert_eq!(recovered.stop_generation(), Some(generation));
+        let current = writer.get(&item.id).unwrap();
+        assert_eq!(current["note"]["fields"]["title"], "Existing attempt");
+        assert_eq!(current["note"]["fields"]["error"], "Interrupted");
+    }
+}
+
 thread_local! {
     static GENERATIONS: RefCell<Vec<Generation>> = const { RefCell::new(Vec::new()) };
     static SMS_COMPLETION: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -43,46 +80,73 @@ impl Writer {
                 && matches!(job.function.as_str(), "reconcile_send" | "reconcile_delete"))
             .then(|| job.outbox_recovery.clone())
             .flatten()
-        }).flatten();
+        })
+        .flatten();
         let sms = SMS_COMPLETION.with(|s| s.borrow().clone());
-        let item = recovery.as_ref().map(|r| r.item.as_str()).or(sms.as_deref());
+        let item = recovery
+            .as_ref()
+            .map(|r| r.item.as_str())
+            .or(sms.as_deref());
         let Some(item) = item else {
             return self.automation_commit();
         };
         let path = crate::note_path("outbox", item);
-        let old = crate::Input::Wcl(self.vault.read_text(&path)?) .parse(&path)?;
+        let old = crate::Input::Wcl(self.vault.read_text(&path)?).parse(&path)?;
         let old_text = |key: &str| old.field(key).and_then(schema::Value::as_str).unwrap_or("");
         if !matches!(old_text("status"), "sending" | "failed") {
             return Err(state::Error::AutomationRefused.into());
         }
         for file in files {
             let allowed = match file {
-                store::Change::Write { path: changed, contents } if changed == &path => {
-                    let next = crate::Input::Wcl(String::from_utf8_lossy(contents).into_owned()).parse(&path)?;
-                    let status = next.field("status").and_then(schema::Value::as_str).unwrap_or("");
-                    let allowed = ["sent_ref", "sent_at", "result", "error", "interrupted_at", "status", "updated", "event"];
+                store::Change::Write {
+                    path: changed,
+                    contents,
+                } if changed == &path => {
+                    let next = crate::Input::Wcl(String::from_utf8_lossy(contents).into_owned())
+                        .parse(&path)?;
+                    let status = next
+                        .field("status")
+                        .and_then(schema::Value::as_str)
+                        .unwrap_or("");
+                    let allowed = [
+                        "sent_ref",
+                        "sent_at",
+                        "result",
+                        "error",
+                        "interrupted_at",
+                        "status",
+                        "updated",
+                        "event",
+                    ];
                     old.blocks == next.blocks
                         && matches!(status, "sending" | "failed")
                         && old.fields.iter().chain(&next.fields).all(|(key, _)| {
                             allowed.contains(&key.as_str()) || old.field(key) == next.field(key)
                         })
-                        && (old.field("event") == next.field("event") || next.field("event").is_none())
+                        && (old.field("event") == next.field("event")
+                            || next.field("event").is_none())
                 }
                 store::Change::Delete { path: changed } if changed == &path => {
                     old_text("status") == "sending" && !old_text("sent_at").is_empty()
                 }
-                store::Change::Delete { path: changed } => recovery.as_ref().and_then(|r| r.delete_target.as_ref()).is_some_and(|target| {
-                    changed == &crate::note_path("event", target)
-                        && old_text("sent_ref") == target
-                        && !old_text("sent_at").is_empty()
-                }),
+                store::Change::Delete { path: changed } => recovery
+                    .as_ref()
+                    .and_then(|r| r.delete_target.as_ref())
+                    .is_some_and(|target| {
+                        changed == &crate::note_path("event", target)
+                            && old_text("sent_ref") == target
+                            && !old_text("sent_at").is_empty()
+                    }),
                 _ => false,
             };
             if !allowed {
                 return Err(state::Error::AutomationRefused.into());
             }
         }
-        self.state.automation_completion().map(Some).map_err(Into::into)
+        self.state
+            .automation_completion()
+            .map(Some)
+            .map_err(Into::into)
     }
 
     /// Serialize durable publication and live registry insertion with recovery.
