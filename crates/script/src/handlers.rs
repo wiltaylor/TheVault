@@ -401,29 +401,29 @@ impl Shared {
             // Publish the durable rows and live contexts atomically relative to
             // the queue worker's lookup. No context lock is held during work.
             let mut contexts = self.contexts.lock().unwrap_or_else(|e| e.into_inner());
-            let context = RunContext::current().unwrap_or_default().child();
-            let queued = writer.publish_run_context(&context, |state, run_id| {
-                state.queue_jobs_with_provenance(&queue, run_id)
-            });
-            match queued {
-                Ok(ids) => {
-                    for id in ids {
-                        contexts.insert(id, context.clone());
+            let parent = RunContext::current().unwrap_or_default();
+            for payload in &queue {
+                let context = parent.child();
+                let queued = writer.publish_run_context(&context, |state, run_id| {
+                    state.queue_jobs_with_provenance(std::slice::from_ref(payload), run_id)
+                });
+                match queued {
+                    Ok(ids) => {
+                        for id in ids {
+                            contexts.insert(id, context.clone());
+                        }
                     }
-                }
-                Err(e) => {
-                    eprintln!("queueing after_* handlers: {e}");
-                    for payload in &queue {
+                    Err(e) => {
+                        eprintln!("queueing after_* handlers: {e}");
                         let _ = writer
                             .state()
                             .record_failed_job(payload, "handler provenance publication failed");
+                        writer.state().record_activity(state::NewActivity::server(
+                            "handler.queue_failed",
+                            "automation",
+                            "Handler provenance publication failed; handler was not executed",
+                        ));
                     }
-                    writer.state().record_activity(state::NewActivity::server(
-                        "handler.queue_failed",
-                        "automation",
-                        "Handler provenance publication failed; handlers were not executed",
-                    ));
-                    return;
                 }
             }
         }

@@ -92,7 +92,13 @@ impl RunContext {
                 return true;
             }
             if seen.insert(Arc::as_ptr(&root.0)) {
-                pending.extend(root.0.lock().unwrap_or_else(|e| e.into_inner()).children.clone());
+                pending.extend(
+                    root.0
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .children
+                        .clone(),
+                );
             }
         }
         false
@@ -103,7 +109,12 @@ impl RunContext {
     fn propagate(&self) {
         let root = self.root();
         let state = root.0.lock().unwrap_or_else(|e| e.into_inner());
-        let values = (state.restricted, state.agent_reads, state.observed_outside, state.stop_generation);
+        let values = (
+            state.restricted,
+            state.agent_reads,
+            state.observed_outside,
+            state.stop_generation,
+        );
         let children = state.children.clone();
         drop(state);
         for child in children {
@@ -126,7 +137,11 @@ impl RunContext {
         let _join = JOIN.lock().unwrap_or_else(|e| e.into_inner());
         let root = self.root();
         let child = Self::default();
-        root.0.lock().unwrap_or_else(|e| e.into_inner()).children.push(child.clone());
+        root.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .children
+            .push(child.clone());
         root.propagate();
         child
     }

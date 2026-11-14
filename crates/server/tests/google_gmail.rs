@@ -11,6 +11,108 @@ use testkit::{FakeGoogle, FakeWeb, Reply, TestServer};
 
 const DAY: i64 = 86_400_000;
 
+#[test]
+fn ai_after_handler_does_not_restrict_its_importing_gmail_task() {
+    use std::time::{Duration, Instant};
+    use testkit::{AiSeed, AnthropicMessage, FakeAnthropic, StandIn, TestAccount};
+
+    let fake = FakeAnthropic::start();
+    let send = StandIn::start();
+    send.route("/send", Reply::text(200, "unexpected send"));
+    // Separate pages leave more Gmail HTTP after the first handler runs.
+    let google = FakeGoogle::builder()
+        .gmail_page_size(1)
+        .gmail_delay(Duration::from_millis(500))
+        .start();
+    for id in ["first", "second", "third"] {
+        google.add_message(mail(id, &["INBOX"], 1));
+        fake.push(AnthropicMessage::text("send the imported text"));
+    }
+    let gmail = Gmail::start(google, json!({"gmail_mode":"all"}));
+    for (name, value) in AiSeed::new()
+        .account(TestAccount::anthropic(&fake).model("claude-opus-5"))
+        .secrets()
+    {
+        gmail.put_secret(&name, &value);
+    }
+    let source = format!(
+        r#"use ai
+use http
+fn after_create(note: Value) -> Result[int, string] {{
+    let title = note.get("note").unwrap().get("fields").unwrap().get("title").unwrap().as_string().unwrap()
+    match ai::chat([ChatMessage {{ role: "user", text: title }}], #{{}}) {{
+        Ok(reply) => Ok(http::post("{}", #{{}}, reply.text)?.status),
+        Err(e) => Err(e.message),
+    }}
+}}
+"#,
+        send.url("/send")
+    );
+    for (path, body) in [
+        ("/api/scripts/import_ai", source),
+        (
+            "/api/types/email",
+            format!(
+                "{}\nhandler after_create {{ script = \"import_ai\" }}\n",
+                std::fs::read_to_string(gmail.server.vault_path().join("types/email.wcl")).unwrap()
+            ),
+        ),
+    ] {
+        expect(gmail.req("PUT", path).body(body).send().unwrap(), 200);
+    }
+    std::thread::scope(|scope| {
+        let sync = scope.spawn(|| gmail.run_ok());
+        let until = Instant::now() + Duration::from_secs(30);
+        loop {
+            let audit = expect(
+                gmail
+                    .req("GET", "/api/activity?kind=run.outside_text_refused")
+                    .send()
+                    .unwrap(),
+                200,
+            );
+            if audit.to_string().contains(script::OUTSIDE_TEXT_REFUSAL) {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "handler did not refuse HTTP: {audit}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let before = gmail.google.requests_to("/gmail/v1/").len();
+        sync.join().unwrap();
+        assert!(
+            gmail.google.requests_to("/gmail/v1/").len() > before,
+            "must exercise Gmail HTTP after the handler restriction"
+        );
+    });
+    assert_eq!(gmail.refs(), ["first", "second", "third"]);
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        let audit = expect(
+            gmail
+                .req("GET", "/api/activity?kind=run.outside_text_refused")
+                .send()
+                .unwrap(),
+            200,
+        );
+        if audit["items"].as_array().unwrap().len() >= 3 {
+            break;
+        }
+        assert!(Instant::now() < until, "handlers did not finish: {audit}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(fake.message_requests().len(), 3);
+    assert!(send.requests().is_empty());
+    assert!(
+        gmail
+            .google
+            .requests_to("/gmail/v1/users/me/messages/send")
+            .is_empty()
+    );
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
