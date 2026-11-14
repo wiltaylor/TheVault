@@ -365,7 +365,18 @@ fn resume_preserves_pending_sms_and_applies_late_receipt_once() {
         assert_eq!(completed["note"]["fields"]["sent_ref"], "sms:late");
         assert_eq!(completed["note"]["fields"]["sent_at"], NOW);
         assert_ne!(completed["version"], before["version"]);
-        api.report(&phone, &cid, receipt);
+        let duplicate = expect(
+            api.req(
+                &phone.client,
+                "POST",
+                &format!("/api/devices/{}/commands/{cid}/result", phone.id),
+            )
+            .json(&receipt)
+            .send()
+            .unwrap(),
+            409,
+        );
+        assert_eq!(duplicate["error"], "command_closed");
         api.settle();
         assert_eq!(api.note(&id), completed, "duplicate receipt wrote the item");
         assert_eq!(api.commands(&phone, "").len(), 1);

@@ -391,7 +391,9 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
             .unwrap(),
         200,
     );
-    assert!(!api.server.settle_handlers().is_empty());
+    let held_failures = api.server.settle_handlers();
+    assert!(!held_failures.is_empty());
+    assert!(held_failures.iter().all(|failure| failure.starts_with("held:")));
     assert_eq!(
         api.google
             .requests()
@@ -424,7 +426,7 @@ fn review_restart_during_delete_keeps_manual_retry_available() {
             .unwrap(),
         200,
     );
-    api.settle();
+    assert_eq!(api.server.settle_handlers(), held_failures);
     assert!(api.gone(&item));
     api.assert_trashed(&id);
     assert_eq!(
