@@ -467,30 +467,32 @@ impl Shared {
                 return;
             };
             let control = writer.state().automation_state();
-            if let Ok(control) = control && !control.stopped {
+            if let Ok(control) = control
+                && !control.stopped
+            {
                 if recovered_generation != Some(control.generation) {
                     self.recover_sends(&writer, true);
                     self.recover_deletes(&writer);
                     recovered_generation = Some(control.generation);
                 }
-            match writer.state().queued_jobs() {
-                Ok(jobs) => {
-                    for job in jobs {
-                        let context = match self.handler_context(&writer, job.id) {
-                            Ok(context) => context,
-                            Err(error) => {
-                                eprintln!("recovering handler provenance: {error}");
-                                let held = writer.state().handler_recovery_subject(job.id).and_then(|subject| {
+                match writer.state().queued_jobs() {
+                    Ok(jobs) => {
+                        for job in jobs {
+                            let context = match self.handler_context(&writer, job.id) {
+                                Ok(context) => context,
+                                Err(error) => {
+                                    eprintln!("recovering handler provenance: {error}");
+                                    let held = writer.state().handler_recovery_subject(job.id).and_then(|subject| {
                                     writer.state().record_unavailable_run_for("", &subject)?;
                                     writer.state().finish_job(job.id, Err("held: provenance unavailable; release by editing the note as owner".into()), "")
                                 });
-                                if let Err(error) = held {
-                                    eprintln!("holding handler job: {error}");
+                                    if let Err(error) = held {
+                                        eprintln!("holding handler job: {error}");
+                                    }
+                                    continue;
                                 }
-                                continue;
-                            }
-                        };
-                        context.scope_recovered(|| {
+                            };
+                            context.scope_recovered(|| {
                             let payload: Json =
                                 serde_json::from_str(&job.payload).unwrap_or(Json::Null);
                             if payload["type"] == "outbox"
@@ -619,11 +621,11 @@ impl Shared {
                                     .remove(&job.id);
                             }
                         });
-                        writer.prune_run_contexts();
+                            writer.prune_run_contexts();
+                        }
                     }
+                    Err(e) => eprintln!("reading the handler queue: {e}"),
                 }
-                Err(e) => eprintln!("reading the handler queue: {e}"),
-            }
             }
             drop(writer);
             let (flag, cv) = &self.wake;
@@ -953,7 +955,9 @@ impl Shared {
                                     .collect()
                             };
                             if !recovery_segment(calendar) || !recovery_segment(reference) {
-                                return Err("Outbox recovery refuses an invalid resource segment".into());
+                                return Err(
+                                    "Outbox recovery refuses an invalid resource segment".into()
+                                );
                             }
                             permit.status_url = Some(format!(
                                 "{}/calendars/{}/events/{}",
@@ -1479,22 +1483,48 @@ mod tests {
     fn restart_during_stop_defers_recovery_until_resume() {
         let dir = tempfile::tempdir().unwrap();
         let provider = testkit::StandIn::start();
-        provider.route("/token", testkit::Reply::json(200, json!({"access_token":"fake"})));
-        provider.route("/calendar/calendars/primary/events/recorded", testkit::Reply::text(404, "gone"));
+        provider.route(
+            "/token",
+            testkit::Reply::json(200, json!({"access_token":"fake"})),
+        );
+        provider.route(
+            "/calendar/calendars/primary/events/recorded",
+            testkit::Reply::text(404, "gone"),
+        );
         let key = state::SecretKey::generate();
         let vault = store::Vault::init(dir.path()).unwrap();
-        let state = state::State::open(&vault.server_dir().join("state.db"), Some(key.clone())).unwrap();
+        let state =
+            state::State::open(&vault.server_dir().join("state.db"), Some(key.clone())).unwrap();
         let writer = Writer::open(vault, state).unwrap();
-        writer.upgrade_shipped_defaults(writer::Upkeep::Home).unwrap();
-        for name in ["google_client_id", "google_client_secret", "google_refresh_token"] {
+        writer
+            .upgrade_shipped_defaults(writer::Upkeep::Home)
+            .unwrap();
+        for name in [
+            "google_client_id",
+            "google_client_secret",
+            "google_refresh_token",
+        ] {
             writer.state().set_secret(name, "fake").unwrap();
         }
-        writer.state().set_secret("google_settings", &json!({"endpoints": {
-            "token":provider.url("/token"),"calendar":provider.url("/calendar")
-        }}).to_string()).unwrap();
-        let event = writer.create("event", &Input::Json(json!({"fields": {
-            "title":"Recorded", "google_ref":"recorded", "calendar":"primary"
-        }})), &Author::Session("owner".into())).unwrap();
+        writer
+            .state()
+            .set_secret(
+                "google_settings",
+                &json!({"endpoints": {
+                    "token":provider.url("/token"),"calendar":provider.url("/calendar")
+                }})
+                .to_string(),
+            )
+            .unwrap();
+        let event = writer
+            .create(
+                "event",
+                &Input::Json(json!({"fields": {
+                    "title":"Recorded", "google_ref":"recorded", "calendar":"primary"
+                }})),
+                &Author::Session("owner".into()),
+            )
+            .unwrap();
         let item = writer.create("outbox", &Input::Json(json!({"fields": {
             "title":"Delete recorded", "kind":"event", "status":"sending", "event_action":"delete",
             "event":event.id,"sent_ref":event.id
@@ -1503,7 +1533,14 @@ mod tests {
         drop(writer);
         let path = dir.path().join("types/outbox.wcl");
         let definition = std::fs::read_to_string(&path).unwrap();
-        std::fs::write(&path, definition.replace("allow_domains = [", &format!("allow_domains = [\"{}\", ", provider.host()))).unwrap();
+        std::fs::write(
+            &path,
+            definition.replace(
+                "allow_domains = [",
+                &format!("allow_domains = [\"{}\", ", provider.host()),
+            ),
+        )
+        .unwrap();
         let vault = store::Vault::open(dir.path()).unwrap();
         let state = state::State::open(&vault.server_dir().join("state.db"), Some(key)).unwrap();
         let writer = Arc::new(Writer::open(vault, state).unwrap());

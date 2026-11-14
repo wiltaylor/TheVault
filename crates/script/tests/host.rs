@@ -97,7 +97,10 @@ fn stale_recovery_allows_only_its_status_read_and_oauth_refresh() {
         ("GET", "/events/recorded", ""),
         ("POST", "/token", "grant_type=refresh_token"),
     ] {
-        let source = format!("use http\nfn run() -> bool {{ http::request({method:?}, {:?}, #{{}}, {body:?}).is_ok() }}", provider.url(path));
+        let source = format!(
+            "use http\nfn run() -> bool {{ http::request({method:?}, {:?}, #{{}}, {body:?}).is_ok() }}",
+            provider.url(path)
+        );
         let mut job = Job::new(Kind::After, "stopped-probe", &source, "run");
         job.allow_domains = vec![provider.host()];
         job.set_run_context(recovered.clone());

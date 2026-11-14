@@ -204,7 +204,10 @@ fn grow(t: &mut Taxonomy, path: &str) -> Result<bool, String> {
 /// The write path itself: every change a script makes goes through `writer` (D30).
 impl Vault for Writer {
     fn check_outbox_recovery(&self) -> Result<(), String> {
-        self.state().automation_completion().map(|_| ()).map_err(err)
+        self.state()
+            .automation_completion()
+            .map(|_| ())
+            .map_err(err)
     }
 
     fn check_automation(&self) -> Result<(), String> {

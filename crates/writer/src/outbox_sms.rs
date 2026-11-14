@@ -115,7 +115,12 @@ impl Writer {
     pub fn finish_outbox_sms(&self, command: &DeviceCommand) -> Result<(), String> {
         // The receipt stays in the durable command row. The handler queue's
         // post-Resume sweep applies it without asking the phone to send again.
-        if self.state().automation_state().map_err(|e| e.to_string())?.stopped {
+        if self
+            .state()
+            .automation_state()
+            .map_err(|e| e.to_string())?
+            .stopped
+        {
             return Ok(());
         }
         if command.name != SEND_SMS

@@ -32,7 +32,11 @@ mod completion_tests {
         recovered.scope_recovered(|| {
             writer.with_sms_completion(&item.id, || {
                 writer.state().set_automation_stopped(true).unwrap();
-                assert!(writer.patch(&item.id, json!({"status":"failed"}), "", &author).is_err());
+                assert!(
+                    writer
+                        .patch(&item.id, json!({"status":"failed"}), "", &author)
+                        .is_err()
+                );
                 writer.state().set_automation_stopped(false).unwrap();
                 assert!(
                     writer
