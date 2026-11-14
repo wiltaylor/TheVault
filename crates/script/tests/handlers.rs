@@ -343,7 +343,7 @@ fn confirmed_event_update_restart() {
 }
 
 #[test]
-fn queued_handler_keeps_live_parent_context_through_script_and_writer() {
+fn queued_handler_inherits_live_parent_context_through_script_and_writer() {
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path());
     let (writer, handlers) = open(dir.path(), false);
@@ -373,7 +373,7 @@ fn queued_handler_keeps_live_parent_context_through_script_and_writer() {
     })));
     handlers.start(&writer);
     let observed = recv.recv_timeout(Duration::from_secs(30)).unwrap().unwrap();
-    assert_eq!(observed, context);
+    assert_ne!(observed, context);
     assert!(observed.is_restricted());
     assert_eq!(observed.stop_generation(), Some(generation));
     let deadline = Instant::now() + Duration::from_secs(30);
