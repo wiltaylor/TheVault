@@ -12,6 +12,7 @@ struct Probe(Arc<Mutex<Vec<(Author, RunContext)>>>);
 fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
     let dir = tempfile::tempdir().unwrap();
     let vault = store::Vault::init(dir.path()).unwrap();
+    std::fs::write(dir.path().join("types/item.wcl"), "label = \"Item\"\n").unwrap();
     let state = state::State::open(
         &vault.server_dir().join("state.db"),
         Some(state::SecretKey::generate()),
@@ -25,13 +26,22 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
         .store(w.state());
     w.put_agent("keeper", "label = \"Keeper\"\npermissions {\n scripts { run_code = true }\n confirm { delete = false }\n outbox { send_without_review = true }\n}\n", |_| Vec::new()).unwrap();
     let author = Author::Session("owner".into());
-    let victim = w.create("note", &writer::Input::Json(json!({"fields":{"title":"Keep"}})), &author).unwrap();
+    let victim = w
+        .create(
+            "item",
+            &writer::Input::Json(json!({"fields":{"title":"Keep"}})),
+            &author,
+        )
+        .unwrap();
     let draft = w.create("outbox", &writer::Input::Json(json!({"fields":{"title":"Held", "kind":"email", "status":"draft", "to":["nobody@example.test"], "subject":"Held"}})), &author).unwrap();
     let web = testkit::StandIn::start();
     web.route("/send", testkit::Reply::text(200, "unexpected"));
     let agent = w.agent("keeper").unwrap();
-    let thread = crate::agent_threads::create_with(&w, "keeper", Some("Marked"), "owner", &[]).unwrap();
-    w.state().set_meta(&format!("outside_text.thread.{}", thread.id), "1").unwrap();
+    let thread =
+        crate::agent_threads::create_with(&w, "keeper", Some("Marked"), "owner", &[]).unwrap();
+    w.state()
+        .set_meta(&format!("outside_text.thread.{}", thread.id), "1")
+        .unwrap();
     fake.push(AnthropicMessage::new()
         .tool_use("draft", "draft_email", json!({"to":["nobody@example.test"],"cc":[],"bcc":[],"attachments":[],"in_reply_to":"","subject":"Review me","body":"Draft only"}))
         .tool_use("proposal", "propose_delete", json!({"id":victim.id}))
@@ -44,13 +54,30 @@ fn run_unattended_marked_thread_without_incoming_source_keeps_action_guards() {
     let context = RunContext::default();
     assert!(!context.is_restricted());
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let report = runtime.block_on(run_unattended(w.clone(), &agent, &thread.id, "Continue", crate::ai_retry::Waits::instant(), None, None, context));
+    let report = runtime.block_on(run_unattended(
+        w.clone(),
+        &agent,
+        &thread.id,
+        "Continue",
+        crate::ai_retry::Waits::instant(),
+        None,
+        None,
+        context,
+    ));
     assert!(matches!(report.ended, Some(Ok(()))), "{:?}", report.ended);
     let requests = fake.message_requests();
     assert_eq!(requests.len(), 2);
-    let results = requests[1].json()["messages"].as_array().unwrap().last().unwrap()["content"].to_string();
+    let results = requests[1].json()["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["content"]
+        .to_string();
     assert!(results.contains("draft"), "{results}");
-    assert!(results.matches(script::OUTSIDE_TEXT_REFUSAL).count() >= 4, "{results}");
+    assert!(
+        results.matches(script::OUTSIDE_TEXT_REFUSAL).count() >= 4,
+        "{results}"
+    );
     assert_eq!(w.read(&victim.id).unwrap().version, victim.version);
     assert_eq!(w.read(&draft.id).unwrap().version, draft.version);
     assert!(web.requests().is_empty());

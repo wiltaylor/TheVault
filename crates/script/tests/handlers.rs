@@ -143,7 +143,11 @@ fn before_create_has_no_ai_module_and_ai_call_cannot_compile() {
     let (writer, _handlers) = open(dir.path(), false);
     // Before handlers deliberately have no ai module, even on the home server.
     let error = writer
-        .create("entry", &json_note(json!({"title":"Must not commit"})), &user())
+        .create(
+            "entry",
+            &json_note(json!({"title":"Must not commit"})),
+            &user(),
+        )
         .unwrap_err()
         .to_string();
     assert!(error.contains("ai"), "{error}");
