@@ -8,24 +8,68 @@ use testkit::{FakeDecisions, Reply, TestServer};
 fn reset_accounts_does_not_rebind_a_classifier_to_a_reused_name() {
     let fake = FakeDecisions::start();
     let (server, client) = setup(&fake, CONFIG);
-    let login = client.post(server.url("/api/login"))
-        .json(&json!({"password":testkit::PASSWORD})).send().unwrap();
-    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap();
+    let login = client
+        .post(server.url("/api/login"))
+        .json(&json!({"password":testkit::PASSWORD}))
+        .send()
+        .unwrap();
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
     let table: Value = serde_json::from_str(&server.secret("ai_accounts").unwrap()).unwrap();
-    let id = table["accounts"].as_array().unwrap().iter().find(|a| a["name"] == "router").unwrap()["id"].as_str().unwrap();
-    std::fs::write(server.vault_path().join("classifiers/incoming.wcl"), CONFIG.replace("\"router\"", &format!("{id:?}"))).unwrap();
+    let id = table["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "router")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    std::fs::write(
+        server.vault_path().join("classifiers/incoming.wcl"),
+        CONFIG.replace("\"router\"", &format!("{id:?}")),
+    )
+    .unwrap();
     server.seed_secret("ai_accounts", "broken JSON");
-    client.post(server.url("/api/integrations/ai/accounts/reset"))
-        .header("cookie", cookie).json(&json!({"confirm":true})).send().unwrap().error_for_status().unwrap();
+    client
+        .post(server.url("/api/integrations/ai/accounts/reset"))
+        .header("cookie", cookie)
+        .json(&json!({"confirm":true}))
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     for recreate in [false, true] {
         if recreate {
-            client.post(server.url("/api/integrations/ai/accounts"))
-                .header("cookie", cookie).json(&json!({"name":"router","kind":"openai_compatible","base_url":fake.base_url()}))
-                .send().unwrap().error_for_status().unwrap();
+            client
+                .post(server.url("/api/integrations/ai/accounts"))
+                .header("cookie", cookie)
+                .json(
+                    &json!({"name":"router","kind":"openai_compatible","base_url":fake.base_url()}),
+                )
+                .send()
+                .unwrap()
+                .error_for_status()
+                .unwrap();
         }
-        let diagnostics: Value = client.get(server.url("/api/classifiers"))
-            .header("cookie", cookie).send().unwrap().error_for_status().unwrap().json().unwrap();
-        let row = diagnostics["classifiers"].as_array().unwrap().iter().find(|c| c["name"] == "incoming").unwrap();
+        let diagnostics: Value = client
+            .get(server.url("/api/classifiers"))
+            .header("cookie", cookie)
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
+        let row = diagnostics["classifiers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "incoming")
+            .unwrap();
         assert_eq!(row["reason"], "missing_account");
         assert!(row.get("resolved_account_id").is_none());
     }
