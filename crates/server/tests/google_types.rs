@@ -422,10 +422,32 @@ fn a_thread_page_queries_its_emails_oldest_first() {
 fn the_types_take_what_the_syncs_will_write() {
     let api = Api::new();
     // An email's Gmail labels: a system one, and a new nested one under a new parent.
-    let email = api.create(
-        "email",
-        json!({ "title": "Receipt", "labels": ["system/STARRED", "Shopping"], "gmail_ref": "m1" }),
+    // Gmail metadata is writable by the owner session, not a bearer token.
+    let login = api
+        .client
+        .post(api.server.url("/api/login"))
+        .json(&json!({ "password": testkit::PASSWORD }))
+        .send()
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let cookie = login.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let made = expect(
+        api.client
+            .post(api.server.url("/api/notes?type=email"))
+            .header("cookie", cookie)
+            .json(&json!({ "note": { "fields": {
+                "title": "Receipt", "labels": ["system/STARRED", "Shopping"], "gmail_ref": "m1"
+            } } }))
+            .send()
+            .unwrap(),
+        StatusCode::CREATED,
     );
+    let email = made["id"].as_str().unwrap().to_owned();
     api.create(
         "email",
         json!({ "title": "Order", "labels": ["Shopping/Orders"] }),

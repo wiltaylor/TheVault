@@ -14,6 +14,9 @@ pub const FORMAT: u32 = 2;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub format: u32,
+    /// Monotonic publication number. Zero denotes a pre-freshness peer.
+    #[serde(default)]
+    pub sequence: u64,
     pub instance: Instance,
     pub notes: Vec<NoteEntry>,
     pub assets: Vec<AssetEntry>,
@@ -62,6 +65,8 @@ pub struct AssetEntry {
 pub struct DefEntry {
     pub name: String,
     pub path: String,
+    /// SHA256 of the published plaintext. Required, including on older format-2 peers.
+    pub sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +79,7 @@ impl Manifest {
     pub fn new(instance: Instance) -> Self {
         Self {
             format: FORMAT,
+            sequence: 1,
             instance,
             notes: Vec::new(),
             assets: Vec::new(),
@@ -107,6 +113,8 @@ impl Manifest {
                 "legacy manifest refused; upgrade every peer and republish".into(),
             ));
         }
-        serde_json::from_slice(&json).map_err(|e| Error::Malformed(format!("manifest: {e}")))
+        serde_json::from_slice(&json).map_err(|e| {
+            Error::Malformed(format!("manifest: {e}; upgrade every peer and republish"))
+        })
     }
 }

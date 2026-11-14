@@ -1465,7 +1465,10 @@ impl Writer {
             .as_ref()
             .and_then(created_of)
             .unwrap_or_else(|| now.clone());
-        if !matches!(author, Author::Handler(_) | Author::Task(_)) {
+        if !matches!(
+            author,
+            Author::Handler(_) | Author::Task(_) | Author::GmailSentCopy(_)
+        ) {
             let issues = computed_writes(ty, &doc, computed_from.or(old_doc.as_ref()));
             if !issues.is_empty() {
                 return Err(Error::Invalid(Invalid { file: path, issues }));
@@ -1922,6 +1925,7 @@ impl Writer {
             self.check_outbox_owner(&doc, author)?;
         }
         self.check_calendar_write(change, author)?;
+        self.check_gmail_metadata_write(change, author)?;
         let archived = change.doc.as_ref().is_some_and(note::is_archived);
         let stamps = change.doc.as_ref().map(|d| {
             (
@@ -1934,6 +1938,7 @@ impl Writer {
         let original = change.doc.clone();
         self.hooks.before(change, author).map_err(Error::Rejected)?;
         self.check_calendar_write(change, author)?;
+        self.check_gmail_metadata_write(change, author)?;
         if change.doc == original {
             return Ok(());
         }
@@ -1950,6 +1955,51 @@ impl Writer {
             .type_def(&change.type_name)
             .ok_or_else(|| Error::UnknownType(change.type_name.clone()))?;
         change.doc = Some(note::arrange(ty, doc, &created, &updated));
+        Ok(())
+    }
+
+    fn check_gmail_metadata_write(&self, change: &NoteChange, author: &Author) -> Result<()> {
+        if let Author::GmailSentCopy(id) = author
+            && change.event == Event::Create
+            && self.state.trash_entry(&change.id)?.is_none()
+            && change.type_name == "email"
+            && change
+                .doc
+                .as_ref()
+                .and_then(|doc| doc.field("gmail_ref"))
+                .and_then(schema::Value::as_str)
+                == Some(id.as_str())
+        {
+            return Ok(());
+        }
+        if matches!(author, Author::Session(_))
+            || matches!(author, Author::Task(name) if name == "google_gmail")
+            || change.doc.is_none()
+        {
+            return Ok(());
+        }
+        let old = if change.event == Event::Create {
+            // A create with a trash entry is a restore (as at commit). Compare
+            // against its own stored content, including after before_* hooks.
+            self.state
+                .trash_entry(&change.id)?
+                .map(|entry| {
+                    Input::Wcl(entry.content).parse(&note_path(&entry.note_type, &change.id))
+                })
+                .transpose()?
+        } else {
+            let (ty, text) = self.existing(&change.id)?;
+            Some(Input::Wcl(text).parse(&note_path(&ty, &change.id))?)
+        };
+        for name in ["gmail_ref", "gmail_account", "gmail_deferred_parts"] {
+            let field = |doc: Option<&schema::Doc>| doc.and_then(|d| d.field(name)).cloned();
+            if field(change.doc.as_ref()) != field(old.as_ref()) {
+                return Err(Error::Rejected(
+                    "only the owner session or Gmail import may change Gmail attachment metadata"
+                        .into(),
+                ));
+            }
+        }
         Ok(())
     }
 

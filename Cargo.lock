@@ -184,6 +184,7 @@ dependencies = [
  "tempfile",
  "testkit",
  "tokio",
+ "tower",
  "tracing",
  "ulid",
  "vocab",
@@ -3207,6 +3208,7 @@ dependencies = [
  "tempfile",
  "testkit",
  "tokio",
+ "vocab",
  "writer",
  "wscript",
 ]

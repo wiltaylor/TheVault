@@ -5,6 +5,9 @@
 /// bases. A device refuses to sync with a server whose protocol is newer than it knows (D27).
 pub const SYNC_PROTOCOL: u32 = 1;
 
+/// Largest Gmail attachment downloaded automatically by the import task.
+pub const GMAIL_IMPORT_ATTACHMENT_BYTES: usize = 700 * 1024;
+
 /// The version of the vault file format in `docs/vault-format.md`. A device refuses to sync with a
 /// server whose format is newer than it knows, since it could write notes the server reads wrong
 /// (D27). Raise it with any change an older reader would misread.
@@ -49,6 +52,8 @@ pub enum Author {
     Token(String),
     /// A named wscript handler.
     Handler(String),
+    /// Transient host capability for the shipped Gmail sent-copy handler and message id.
+    GmailSentCopy(String),
     /// A named scheduled task (D10).
     Task(String),
     /// A named agent (agents G11): every change an agent's tools make, whether it applies them
@@ -66,6 +71,7 @@ impl Author {
             Author::Session(n) => ("session", n),
             Author::Token(n) => ("token", n),
             Author::Handler(n) => ("handler", n),
+            Author::GmailSentCopy(_) => ("handler", "google_gmail"),
             Author::Task(n) => ("task", n),
             Author::Agent(n) | Author::AgentMail(n) => ("agent", n),
         }

@@ -736,6 +736,22 @@ impl Shared {
                 false
             };
             let mut job = Job::new(Kind::After, &script, &source, &text("function"));
+            // Bind privilege to the executing source, never to a user-claimable name.
+            if type_name == "outbox"
+                && event == "after_update"
+                && script == "google_gmail"
+                && text("function") == "copy_sent"
+                && source == include_str!("../../writer/defaults/google/google_gmail.ws")
+            {
+                let body = doc_to_json(&doc);
+                let fields = &body["fields"];
+                if fields["kind"] == "email"
+                    && fields["status"] == "sending"
+                    && let Some(id) = fields["sent_ref"].as_str().filter(|id| !id.is_empty())
+                {
+                    job.author = Some(Author::GmailSentCopy(id.to_owned()));
+                }
+            }
             job.args = vec![json!({
                 "id": id,
                 "type": type_name,

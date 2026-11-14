@@ -23,10 +23,12 @@ fn sample() -> Manifest {
     m.types.push(DefEntry {
         name: "task".into(),
         path: "f/d/t".into(),
+        sha256: "ef".repeat(32),
     });
     m.taxonomies.push(DefEntry {
         name: "tags".into(),
         path: "f/d/g".into(),
+        sha256: "ab".repeat(32),
     });
     m.bytes = 1234;
     m

@@ -191,9 +191,29 @@ paused        = true
         self.server.secret_json("google_gmail_state")
     }
 
+    fn owner_req(&self, method: &str, path: &str) -> RequestBuilder {
+        // Historical import fixtures carry protected Gmail metadata and need an owner session.
+        let login = self
+            .client
+            .post(self.server.url("/api/login"))
+            .json(&json!({"password":testkit::PASSWORD}))
+            .send()
+            .unwrap();
+        assert_eq!(login.status(), 200);
+        let cookie = login.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        self.client
+            .request(method.parse().unwrap(), self.server.url(path))
+            .header("cookie", cookie)
+    }
+
     fn create(&self, type_name: &str, fields: Value) -> String {
         let made = expect(
-            self.req("POST", &format!("/api/notes?type={type_name}"))
+            self.owner_req("POST", &format!("/api/notes?type={type_name}"))
                 .json(&json!({ "note": { "fields": fields } }))
                 .send()
                 .unwrap(),
@@ -1424,7 +1444,7 @@ fn old_email(gmail: &Gmail, gmail_ref: &str, texts: &[&str], extra: Value) -> St
         .collect();
     let made = expect(
         gmail
-            .req("POST", "/api/notes?type=email")
+            .owner_req("POST", "/api/notes?type=email")
             .json(&json!({ "note": { "fields": fields, "blocks": [{ "kind": "content", "labels": ["body"], "blocks": blocks }] } }))
             .send()
             .unwrap(),
