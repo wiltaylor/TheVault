@@ -62,6 +62,12 @@ dirs() {
   if [ "$(id -u)" != 1000 ]; then chmod 0777 "$tmp/$1/data" "$tmp/$1/config"; fi
 }
 
+# Change fixtures in the main vault as the uid that created them.
+main_data_sh() {
+  docker run --rm --label "$run" --user 1000 --entrypoint sh \
+    -v "$tmp/main/data:/data" "$image_plain" -c "$1"
+}
+
 # Start a detached container named $run-$1 from image $2 on /data and /config of $3, publishing
 # 8080 to a port Docker picks; prints the port.
 start() {
@@ -200,7 +206,7 @@ check "the server stops on docker stop with exit 0 (got $(docker inspect -f '{{.
   test "$(docker inspect -f '{{.State.ExitCode}}' "$run-first")" = 0
 
 # 4. The vault last ran an older version: one backup, then none.
-echo 0.0.1 > "$tmp/main/data/.vault/server-version"
+main_data_sh 'echo 0.0.1 > /data/.vault/server-version'
 port=$(start upgrade "$image_plain" main)
 check "the upgraded server answers" wait_health "$port"
 mapfile -t found < <(backups main)
@@ -222,11 +228,12 @@ check "a second start logs no backup" sh -c "! docker logs '$run-again' 2>&1 | g
 stop again
 
 # Only the newest five upgrade backups stay.
-for i in 1 2 3 4 5; do
-  : > "$tmp/main/data/backups/0.0.0-to-0.0.$i-20000101T00000${i}Z.sqlar"
-  touch -d "2000-01-01 00:00:0$i" "$tmp/main/data/backups/0.0.0-to-0.0.$i-20000101T00000${i}Z.sqlar"
-done
-echo 0.0.2 > "$tmp/main/data/.vault/server-version"
+main_data_sh 'for i in 1 2 3 4 5; do
+  file="/data/backups/0.0.0-to-0.0.$i-20000101T00000${i}Z.sqlar"
+  : > "$file"
+  touch -d "2000-01-01 00:00:0$i" "$file"
+done'
+main_data_sh 'echo 0.0.2 > /data/.vault/server-version'
 port=$(start prune "$image_plain" main)
 check "the pruning start answers" wait_health "$port"
 check "five backups stay" test "$(backups main | wc -l)" -eq 5
@@ -234,7 +241,7 @@ check "the two oldest went" sh -c "! ls '$tmp/main/data/backups' | grep -qE '0\.
 stop prune
 
 # A vault from a newer version starts, without a backup.
-echo 99.0.0 > "$tmp/main/data/.vault/server-version"
+main_data_sh 'echo 99.0.0 > /data/.vault/server-version'
 port=$(start newer "$image_plain" main)
 check "a vault from a newer version starts" wait_health "$port"
 check "a vault from a newer version gets no backup" test "$(backups main | wc -l)" -eq 5
